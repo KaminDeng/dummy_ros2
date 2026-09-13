@@ -1,0 +1,225 @@
+<?xml version="1.0" ?>
+<robot name="dummy-ros2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="$(find dummy-ros2_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.trans" />
+<link name="base_link">
+  <inertial>
+    <origin xyz="-0.019286443307707055 0.0005817485706867557 0.05546290448958129" rpy="0 0 0"/>
+    <mass value="3.4054232030550327"/>
+    <inertia ixx="0.006318" iyy="0.00644" izz="0.006723" ixy="-1.1e-05" iyz="-0.000164" ixz="-2e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="link1_1_1">
+  <inertial>
+    <origin xyz="-0.005744742318232344 0.005464327027038366 0.012045619429015192" rpy="0 0 0"/>
+    <mass value="0.4000119946706078"/>
+    <inertia ixx="0.000172" iyy="0.000152" izz="0.00025" ixy="5.8e-05" iyz="-3.9e-05" ixz="2.7e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.019225 0.000523 -0.100684" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link1_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.019225 0.000523 -0.100684" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link1_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="link2_1_1">
+  <inertial>
+    <origin xyz="0.022476329402049397 0.0015836740439541114 0.0701478637986927" rpy="0 0 0"/>
+    <mass value="0.9644194016592866"/>
+    <inertia ixx="0.003808" iyy="0.003848" izz="0.000499" ixy="-1e-05" iyz="1.3e-05" ixz="0.000274"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.034725 -0.034477 -0.129184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link2_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.034725 -0.034477 -0.129184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link2_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="link3_1_1">
+  <inertial>
+    <origin xyz="-0.010730263185093621 -0.022369081214190782 0.036467614070683996" rpy="0 0 0"/>
+    <mass value="0.3817226974329336"/>
+    <inertia ixx="0.000328" iyy="0.00037" izz="0.000146" ixy="-2.4e-05" iyz="6.8e-05" ixz="6.5e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.001925 -0.034477 -0.275184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link3_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.001925 -0.034477 -0.275184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link3_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="link4_1_1">
+  <inertial>
+    <origin xyz="-0.004221306676286125 0.09021372117053507 0.00026828289249919424" rpy="0 0 0"/>
+    <mass value="0.44370009904209484"/>
+    <inertia ixx="0.001103" iyy="0.00012" izz="0.001078" ixy="-3.2e-05" iyz="-1e-06" ixz="1e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.016625 -0.024477 -0.327184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link4_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.016625 -0.024477 -0.327184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link4_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="link5_1_1">
+  <inertial>
+    <origin xyz="-0.0007044959912857188 0.04181588666040692 1.9856549020258463e-05" rpy="0 0 0"/>
+    <mass value="0.1329416987985629"/>
+    <inertia ixx="0.000148" iyy="3.5e-05" izz="0.00016" ixy="3e-05" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.000175 -0.151477 -0.327184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link5_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.000175 -0.151477 -0.327184" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link5_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="link6_1_1">
+  <inertial>
+    <origin xyz="8.866549679534264e-08 0.001500477150790519 2.701463612808652e-07" rpy="0 0 0"/>
+    <mass value="0.00918018258883941"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.018331 -0.228477 -0.327078" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link6_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.018331 -0.228477 -0.327078" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find dummy-ros2_description)/meshes/link6_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<joint name="Joint1" type="revolute">
+  <origin xyz="-0.019225 -0.000523 0.100684" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="link1_1_1"/>
+  <axis xyz="0.0 -0.0 -1.0"/>
+  <limit
+    lower="-3.14"
+    upper="3.14"
+    effort="150"
+    velocity="3.15" />
+</joint>
+
+<joint name="Joint2" type="revolute">
+  <origin xyz="-0.0155 0.035 0.0285" rpy="0 0 0"/>
+  <parent link="link1_1_1"/>
+  <child link="link2_1_1"/>
+  <axis xyz="-1.0 -0.0 0.0"/>
+  <limit
+    lower="-3.14"
+    upper="3.14"
+    effort="150"
+    velocity="3.15" />
+</joint>
+
+<joint name="Joint3" type="revolute">
+  <origin xyz="0.03665 0.0 0.146" rpy="0 0 0"/>
+  <parent link="link2_1_1"/>
+  <child link="link3_1_1"/>
+  <axis xyz="-1.0 0.0 -0.0"/>
+  <limit
+    lower="-3.14"
+    upper="3.14"
+    effort="150"
+    velocity="3.15" />
+</joint>
+
+<joint name="Joint4" type="revolute">
+  <origin xyz="-0.01855 -0.01 0.052" rpy="0 0 0"/>
+  <parent link="link3_1_1"/>
+  <child link="link4_1_1"/>
+  <axis xyz="0.0 -1.0 0.0"/>
+  <limit
+    lower="-3.14"
+    upper="3.14"
+    effort="150"
+    velocity="3.15" />
+</joint>
+
+<joint name="Joint5" type="revolute">
+  <origin xyz="0.0168 0.127 0.0" rpy="0 0 0"/>
+  <parent link="link4_1_1"/>
+  <child link="link5_1_1"/>
+  <axis xyz="-1.0 0.0 -0.0"/>
+  <limit
+    lower="-3.14"
+    upper="3.14"
+    effort="150"
+    velocity="3.15" />
+</joint>
+
+<joint name="Joint6" type="revolute">
+  <origin xyz="-0.018506 0.077 -0.000106" rpy="0 0 0"/>
+  <parent link="link5_1_1"/>
+  <child link="link6_1_1"/>
+  <axis xyz="-0.0 -1.0 0.0"/>
+  <limit
+    lower="-3.14"
+    upper="3.14"
+    effort="150"
+    velocity="3.15" />
+</joint>
+
+</robot>

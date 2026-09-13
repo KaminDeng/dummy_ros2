@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dummy-ros2">
+  <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+  <xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.xacro" />
+  <xacro:include filename="dummy-ros2.ros2_control.xacro" />
+
+  <!-- Gazebo Sim needs a fixed base so gravity does not drop the arm out of view. -->
+  <link name="world" />
+  <joint name="world_joint" type="fixed">
+    <parent link="world" />
+    <child link="base_link" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+
+  <xacro:dummy-ros2_ros2_control
+    name="GazeboSimSystem"
+    initial_positions_file="$(arg initial_positions_file)"
+    hardware_plugin="gz_ros2_control/GazeboSimSystem" />
+
+  <gazebo>
+    <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find dummy_moveit_config)/config/ros2_controllers.yaml</parameters>
+      <controller_manager_prefix_node_name>controller_manager</controller_manager_prefix_node_name>
+      <hold_joints>true</hold_joints>
+      <position_proportional_gain>0.5</position_proportional_gain>
+    </plugin>
+  </gazebo>
+</robot>
