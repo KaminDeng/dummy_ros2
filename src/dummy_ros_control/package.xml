@@ -6,6 +6,10 @@
   <maintainer email="maintainer@example.invalid">Dummy ROS maintainers</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>controller_interface</depend>
+  <depend>joint_trajectory_controller</depend>
+  <depend>pluginlib</depend>
+  <depend>trajectory_msgs</depend>
   <test_depend>ament_cmake</test_depend>
   <export>
     <build_type>ament_cmake</build_type>

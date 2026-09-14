@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<library path="dummy_guarded_joint_trajectory_controller">
+  <class
+      name="dummy_ros_control/GuardedJointTrajectoryController"
+      type="dummy_ros_control::GuardedJointTrajectoryController"
+      base_class_type="controller_interface::ControllerInterface">
+    <description>JTC with base ROS inputs disabled and same-process credential admission.</description>
+  </class>
+</library>

@@ -1,6 +1,6 @@
 {
   "task": "R03",
-  "status": "IN_PROGRESS",
+  "status": "PASS",
   "hardware": "none",
   "inputs": {
     "dpsdk_c03_commit": "6ce5a55",
@@ -17,25 +17,30 @@
     "queued_not_accepted_response_roundtrip": true,
     "short_frame_rejected_without_mutation": true,
     "goal_gate_empty_match_busy_mismatch_clear": true,
-    "direct_python_acceptance_tests": 2,
-    "ament_ctest_tests": 2
+    "real_zenoh_interprocess_service": true,
+    "rpc_queued_not_accepted": true,
+    "request_handle_completion_cancel_quarantine_tests": 3,
+    "rpc12_caller_owner_snapshot_codec_separation": true,
+    "guarded_jtc_plugin_compiles": true,
+    "guarded_jtc_pluginlib_loads": true,
+    "guarded_jtc_controller_manager_loaded_inactive": true,
+    "guarded_jtc_action_server_count": 0,
+    "guarded_jtc_trajectory_topic_present": false,
+    "implicit_request_handle_destructor_releases_correlation": true,
+    "direct_python_acceptance_tests": 5,
+    "ament_ctest_tests": 4
   },
-  "not_run": [
-    "RPC01 core-paused management queue behavior",
-    "RPC08 real async RequestHandle lifetime/cancellation",
-    "RPC12 monitor caller versus owner snapshot identity",
-    "MOV14 running JointTrajectoryController bypass rejection"
-  ],
+  "not_run": [],
   "commands": [
     {
       "command": "/usr/bin/python3 -m unittest scripts/dummy/tests/test_r03_acceptance.py -v",
       "exit_code": 0,
-      "passed": 2
+      "passed": 5
     },
     {
       "command": "colcon test --packages-select dummy_ros_control",
       "exit_code": 0,
-      "passed": 2
+      "passed": 4
     },
     {
       "command": "bash scripts/dummy/build.sh",
@@ -44,5 +49,12 @@
     }
   ],
   "handoff": "docs/dummy/zenbedded-gap-report.md",
-  "next_action": "Add ROS-owned dp_comm async service probe and integrate the credential gate at the locked JTC acceptance/update boundary."
+  "upstream_regression": {
+    "command": "/usr/bin/python3 -m unittest discover -s tools/dummy/tests -p test_c03_acceptance.py -v",
+    "exit_code": 1,
+    "result": "6 passed, 1 failed, 1 error after current dp_protocol generated tree was deleted",
+    "owner": "DPSDK C04/C05",
+    "required_resolution": "Restore deterministic generation and make current C03 suite green before wire-v1 publication"
+  },
+  "next_action": "C04 consumes this R03 handoff; R04 waits for C04 and C05 wire-v1."
 }

@@ -1,6 +1,27 @@
 #include <cstdint>
+#include <cstring>
 
 #include "dp_dummy_robot_v1_dp_comm.hpp"
+
+namespace {
+using ManageService = dp::protocol::services::DummyManageV1RawFixed;
+
+dp::comm::Result monitor_snapshot(
+    const ManageService::Request &, ManageService::Response *response,
+    const dp::comm::RequestInfo &info, void *) {
+  std::uint8_t caller[16]{};
+  std::uint8_t owner[16]{};
+  std::memcpy(caller, info.source_device.bytes, sizeof(caller));
+  owner[0] = 0xA1U;
+  response->set_schema_major(1U);
+  response->set_schema_minor(0U);
+  response->set_client_instance_id(caller);
+  response->set_owner_client_instance_id(owner);
+  response->set_snapshot_valid(true);
+  response->set_session_id(9007199254740995ULL);
+  return dp::comm::Result::kOk;
+}
+}  // namespace
 
 int main() {
   namespace wire = dp::protocol::dummy_robot_v1;
@@ -44,8 +65,30 @@ int main() {
   if (decoded_response.request_id() != 9007199254740999ULL || decoded_response.accepted() ||
       decoded_response.operation_result_valid()) return 6;
 
+  wire::DummyManageV1Request monitor;
+  monitor.set_schema_major(1U);
+  monitor.set_schema_minor(0U);
+  monitor.set_operation(0U);
+  std::uint8_t monitor_request[wire::DummyManageV1RequestCodec::kEncodedSize]{};
+  if (wire::DummyManageV1RequestCodec::encode(monitor, monitor_request, sizeof(monitor_request)) != wire::CodecResult::kOk) return 8;
+  std::uint8_t monitor_response[wire::DummyManageV1ResponseCodec::kEncodedSize]{};
+  std::uint16_t monitor_response_size = 0U;
+  dp::comm::RequestInfo request_info{};
+  request_info.authenticated = true;
+  request_info.source_session = 7U;
+  request_info.source_device.bytes[0] = 0xB2U;
+  dp::comm::ServiceCallback<ManageService> callback = monitor_snapshot;
+  if (dp::comm::service_invoke<ManageService>(
+          monitor_request, sizeof(monitor_request), &callback, nullptr, request_info,
+          monitor_response, sizeof(monitor_response), &monitor_response_size) != dp::comm::Result::kOk) return 9;
+  wire::DummyManageV1Response snapshot;
+  if (wire::DummyManageV1ResponseCodec::decode(monitor_response, monitor_response_size, &snapshot) != wire::CodecResult::kOk) return 10;
+  if (!snapshot.snapshot_valid() || snapshot.client_instance_id()[0] != 0xB2U ||
+      snapshot.owner_client_instance_id()[0] != 0xA1U ||
+      snapshot.session_id() != 9007199254740995ULL) return 11;
+
   decoded_command.set_boot_epoch(42U);
   if (wire::DummyJointCommandV1Codec::decode(command_bytes, sizeof(command_bytes) - 1U, &decoded_command) == wire::CodecResult::kOk ||
-      decoded_command.boot_epoch() != 42U) return 7;
+      decoded_command.boot_epoch() != 42U) return 12;
   return 0;
 }

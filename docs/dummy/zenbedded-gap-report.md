@@ -27,14 +27,22 @@ registered, mismatched UUID, mismatched trajectory digest, BUSY, and clear paths
 are executed by `goal_gate_tests.cpp`. Registration creates a new gate value;
 transport or publisher activity cannot mutate the credential.
 
+The ROS-owned RPC orchestrator runs the real DPSDK zenoh-c server/client through
+`rmw_zenohd`, preserving request IDs above 2^53 and observing QUEUED with
+`accepted=false`. It also executes the exact dp_comm RequestHandle completion,
+cancel, and remote-correlation quarantine gtests. The wire probe calls the actual
+`dp::comm::service_invoke` path with caller B and verifies the decoded response
+retains caller B, owner A, and the same session snapshot.
+
 ## Remaining Integration Boundary
 
-The installed Jazzy JointTrajectoryController still exposes its native action and
-trajectory topic. R03 has not yet connected the gate to its actual acceptance and
-`update()` paths, so MOV14 is proven only for the gate SUT, not for a running JTC.
-R06 must either use a documented hook in the locked controller or carry a minimal
-audited patch; merely moving the controller into a private namespace is not an
-access-control result.
+`GuardedJointTrajectoryController` derives from the installed Jazzy JTC rather
+than copying its algorithm. After base configure it destroys the inherited action
+server and trajectory subscriber. A same-process owner must register a UUID and
+trajectory digest before submitting a trajectory through the inherited validation,
+ordering, and realtime-buffer methods. The plugin compiles and exports through
+pluginlib; controller-manager runtime loading and endpoint-negative evidence remain
+required before MOV14 is PASS.
 
 ROS CDR is a separate representation. DPSDK C03 owns and has passed its ROSIDL
 semantic probe; this R03 probe compares and validates raw-fixed device encoding

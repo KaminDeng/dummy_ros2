@@ -4,14 +4,34 @@
 from pathlib import Path
 import subprocess
 import tempfile
+import json
+import hashlib
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[3]
 DPSDK = Path("../dpsdk")
+C03_INCLUDE = ROOT / "contracts/dummy_robot_v1/c03_prototype/generated/include"
 
 
 class R03AcceptanceTest(unittest.TestCase):
+    def test_c03_prototype_is_pinned_and_not_mislabeled_wire_v1(self):
+        provenance = json.loads(
+            (ROOT / "contracts/dummy_robot_v1/c03_prototype/PROVENANCE.json").read_text()
+        )
+        self.assertEqual("a69183442440a75f6c2c4b79d9c07acb0c8b787b", provenance["source_commit"])
+        self.assertEqual("c03_prototype_not_wire_release", provenance["stage"])
+        self.assertFalse(provenance["real_hardware_activation_allowed"])
+        self.assertIsNone(provenance["wire_release_id"])
+        generated = ROOT / "contracts/dummy_robot_v1/c03_prototype/generated"
+        listing = "\n".join(
+            f"{path.relative_to(generated)}:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+            for path in sorted(item for item in generated.rglob("*") if item.is_file())
+        )
+        self.assertEqual(
+            provenance["generated_tree_listing_sha256"], hashlib.sha256(listing.encode()).hexdigest()
+        )
+
     def compile_and_run(self, source: Path) -> None:
         self.assertTrue(source.is_file(), f"missing R03 SUT: {source}")
         with tempfile.TemporaryDirectory(prefix="dummy_r03_") as temporary:
@@ -20,7 +40,7 @@ class R03AcceptanceTest(unittest.TestCase):
                 [
                     "g++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
                     "-I", str(ROOT / "src/dummy_ros_control/include"),
-                    "-I", str(DPSDK / "libraries/dp_protocol/generated/include"),
+                    "-I", str(C03_INCLUDE),
                     "-I", str(DPSDK / "libraries/dp_comm/include"),
                     str(source), "-o", str(binary),
                 ],
@@ -38,6 +58,52 @@ class R03AcceptanceTest(unittest.TestCase):
 
     def test_mov14_unregistered_goal_and_wrong_digest_are_rejected(self):
         self.compile_and_run(ROOT / "src/dummy_ros_control/test/goal_gate_tests.cpp")
+
+    def test_rpc01_and_rpc08_use_real_dp_comm_transport_and_handles(self):
+        probe = ROOT / "scripts/dummy/r03_rpc_probe.py"
+        self.assertTrue(probe.is_file(), "R03 RPC orchestrator is missing")
+        with tempfile.TemporaryDirectory(prefix="dummy_r03_rpc_") as temporary:
+            report = Path(temporary) / "report.json"
+            completed = subprocess.run(
+                ["/usr/bin/python3", str(probe), "--report", str(report)],
+                cwd=ROOT, capture_output=True, text=True, check=False, timeout=35,
+            )
+            self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+            observed = json.loads(report.read_text())
+            self.assertTrue(observed["interprocess_service_passed"])
+            self.assertTrue(observed["queued_not_accepted"])
+            self.assertTrue(observed["large_uint64_preserved"])
+            self.assertEqual(3, observed["request_handle_tests_passed"])
+        destructor_probe = ROOT / "build_dummy/dummy_ros_control/request_handle_destructor_tests"
+        self.assertTrue(destructor_probe.is_file(), "RequestHandle destructor probe was not built")
+        completed = subprocess.run(
+            [str(destructor_probe)], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
+    def test_guarded_jtc_plugin_closes_base_action_and_topic_inputs(self):
+        header = ROOT / "src/dummy_ros_control/include/dummy_ros_control/guarded_joint_trajectory_controller.hpp"
+        source = ROOT / "src/dummy_ros_control/src/guarded_joint_trajectory_controller.cpp"
+        plugins = ROOT / "src/dummy_ros_control/dummy_ros_control_plugins.xml"
+        self.assertTrue(header.is_file())
+        self.assertTrue(source.is_file())
+        self.assertTrue(plugins.is_file())
+        implementation = source.read_text()
+        self.assertIn("joint_command_subscriber_.reset()", implementation)
+        self.assertIn("action_server_.reset()", implementation)
+        self.assertIn("add_new_trajectory_msg", implementation)
+        self.assertIn("GuardedJointTrajectoryController", plugins.read_text())
+        loader = ROOT / "build_dummy/dummy_ros_control/guarded_plugin_load_tests"
+        self.assertTrue(loader.is_file(), "pluginlib load probe was not built")
+        environment = dict(__import__("os").environ)
+        prefix = ROOT / "install_dummy/dummy_ros_control"
+        environment["AMENT_PREFIX_PATH"] = f"{prefix}:/opt/ros/jazzy"
+        environment["LD_LIBRARY_PATH"] = f"{prefix}/lib:/opt/ros/jazzy/lib"
+        completed = subprocess.run(
+            [str(loader)], cwd=ROOT, env=environment,
+            capture_output=True, text=True, check=False
+        )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
 
 if __name__ == "__main__":

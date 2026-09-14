@@ -1,0 +1,1253 @@
+{
+  "format": "raw_fixed_little_endian_no_padding",
+  "payloads": {
+    "DummyDeviceStatusV1": {
+      "encoded_size": 297,
+      "fields": [
+        {
+          "count": 1,
+          "name": "schema_major",
+          "offset": 0,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "schema_minor",
+          "offset": 2,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 16,
+          "name": "device_id",
+          "offset": 4,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "boot_epoch",
+          "offset": 20,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "session_id",
+          "offset": 28,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 16,
+          "name": "client_instance_id",
+          "offset": 36,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "reference_epoch",
+          "offset": 52,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "motion_epoch",
+          "offset": 56,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "management_epoch",
+          "offset": 60,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "profile_id",
+          "offset": 64,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "core_state",
+          "offset": 68,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "fault_reason",
+          "offset": 70,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "control_mode",
+          "offset": 72,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "reference_kind",
+          "offset": 73,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "drive_request",
+          "offset": 74,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "drive_evidence",
+          "offset": 75,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "configured_mask",
+          "offset": 76,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "real_motion_permitted",
+          "offset": 77,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "permit_remaining_us",
+          "offset": 78,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "capabilities",
+          "offset": 86,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "operation_id",
+          "offset": 94,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "operation_status",
+          "offset": 102,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "operation_result_code",
+          "offset": 104,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "operation_result_valid",
+          "offset": 106,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "command_reject_count",
+          "offset": 107,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "can_error_count",
+          "offset": 111,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "deadline_miss_count",
+          "offset": 115,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 32,
+          "name": "contract_sha256",
+          "offset": 119,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "model_sha256",
+          "offset": 151,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "profile_sha256",
+          "offset": 183,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "activation_profile_sha256",
+          "offset": 215,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "motion_supported",
+          "offset": 247,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "hold_ready",
+          "offset": 248,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 32,
+          "name": "firmware_sha256",
+          "offset": 249,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 16,
+          "name": "board_name_ascii",
+          "offset": 281,
+          "size": 16,
+          "type": "uint8"
+        }
+      ],
+      "interface_id": 4131
+    },
+    "DummyJointCommandV1": {
+      "encoded_size": 125,
+      "fields": [
+        {
+          "count": 1,
+          "name": "schema_major",
+          "offset": 0,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "schema_minor",
+          "offset": 2,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 16,
+          "name": "device_id",
+          "offset": 4,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "boot_epoch",
+          "offset": 20,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "session_id",
+          "offset": 28,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 16,
+          "name": "client_instance_id",
+          "offset": 36,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "reference_epoch",
+          "offset": 52,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "motion_epoch",
+          "offset": 56,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "profile_id",
+          "offset": 60,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "producer_seq",
+          "offset": 64,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "freshness_ticket",
+          "offset": 68,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "configured_mask",
+          "offset": 76,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "position_rad",
+          "offset": 77,
+          "size": 48,
+          "type": "float64"
+        }
+      ],
+      "interface_id": 4132
+    },
+    "DummyJointStateV1": {
+      "encoded_size": 356,
+      "fields": [
+        {
+          "count": 1,
+          "name": "schema_major",
+          "offset": 0,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "schema_minor",
+          "offset": 2,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 16,
+          "name": "device_id",
+          "offset": 4,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "boot_epoch",
+          "offset": 20,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "session_id",
+          "offset": 28,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 16,
+          "name": "client_instance_id",
+          "offset": 36,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "reference_epoch",
+          "offset": 52,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "motion_epoch",
+          "offset": 56,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "management_epoch",
+          "offset": 60,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "profile_id",
+          "offset": 64,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "state_seq",
+          "offset": 68,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "produced_at_us",
+          "offset": 72,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "freshness_ticket",
+          "offset": 80,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "configured_mask",
+          "offset": 88,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "position_valid_mask",
+          "offset": 89,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "velocity_valid_mask",
+          "offset": 90,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "planner_finish_mask",
+          "offset": 91,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "hold_valid_mask",
+          "offset": 92,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "accepted_seq_valid",
+          "offset": 93,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "accepted_producer_seq",
+          "offset": 94,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "applied_seq_valid",
+          "offset": 98,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "applied_producer_seq",
+          "offset": 99,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "tx_group_seq_valid",
+          "offset": 103,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "tx_group_producer_seq",
+          "offset": 104,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "submitted_axis_mask",
+          "offset": 108,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "sent_axis_mask",
+          "offset": 109,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "feedback_seq",
+          "offset": 110,
+          "size": 24,
+          "type": "uint32"
+        },
+        {
+          "count": 6,
+          "name": "can_rx_age_us",
+          "offset": 134,
+          "size": 24,
+          "type": "uint32"
+        },
+        {
+          "count": 6,
+          "name": "position_rad",
+          "offset": 158,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 6,
+          "name": "estimated_velocity_rad_s",
+          "offset": 206,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 6,
+          "name": "hold_position_rad",
+          "offset": 254,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 1,
+          "name": "core_state",
+          "offset": 302,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "fault_reason",
+          "offset": 304,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "hold_ready",
+          "offset": 306,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "raw_position_valid_mask",
+          "offset": 307,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "raw_motor_position_rev",
+          "offset": 308,
+          "size": 48,
+          "type": "float64"
+        }
+      ],
+      "interface_id": 4133
+    },
+    "DummyManageV1Request": {
+      "encoded_size": 233,
+      "fields": [
+        {
+          "count": 1,
+          "name": "schema_major",
+          "offset": 0,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "schema_minor",
+          "offset": 2,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 16,
+          "name": "device_id",
+          "offset": 4,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "expected_boot_epoch",
+          "offset": 20,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "expected_session_id",
+          "offset": 28,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "expected_reference_epoch",
+          "offset": 36,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "expected_motion_epoch",
+          "offset": 40,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "expected_management_epoch",
+          "offset": 44,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "expected_profile_id",
+          "offset": 48,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 16,
+          "name": "client_instance_id",
+          "offset": 52,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "request_id",
+          "offset": 68,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "request_seq",
+          "offset": 76,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "freshness_ticket",
+          "offset": 80,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "queried_operation_id",
+          "offset": 88,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "queried_request_id",
+          "offset": 96,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "operation",
+          "offset": 104,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "requested_control_mode",
+          "offset": 106,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "configured_mask",
+          "offset": 107,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "operator_confirmed",
+          "offset": 108,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 32,
+          "name": "permit_sha256",
+          "offset": 109,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "compiled_policy_sha256",
+          "offset": 141,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "permit_remaining_us",
+          "offset": 173,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "terminal_producer_seq",
+          "offset": 181,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 6,
+          "name": "terminal_position_rad",
+          "offset": 185,
+          "size": 48,
+          "type": "float64"
+        }
+      ],
+      "interface_id": 4135
+    },
+    "DummyManageV1Response": {
+      "encoded_size": 618,
+      "fields": [
+        {
+          "count": 1,
+          "name": "schema_major",
+          "offset": 0,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "schema_minor",
+          "offset": 2,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 16,
+          "name": "device_id",
+          "offset": 4,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 16,
+          "name": "client_instance_id",
+          "offset": 20,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 16,
+          "name": "owner_client_instance_id",
+          "offset": 36,
+          "size": 16,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "request_id",
+          "offset": 52,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "receipt",
+          "offset": 60,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "core_request_id",
+          "offset": 61,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "accepted",
+          "offset": 69,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "result_code",
+          "offset": 70,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "operation_result_valid",
+          "offset": 72,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "operation_id",
+          "offset": 73,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "operation_status",
+          "offset": 81,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "snapshot_valid",
+          "offset": 83,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "info_valid",
+          "offset": 84,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "status_valid",
+          "offset": 85,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "boot_epoch",
+          "offset": 86,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "session_id",
+          "offset": 94,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "reference_epoch",
+          "offset": 102,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "motion_epoch",
+          "offset": 106,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "management_epoch",
+          "offset": 110,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "profile_id",
+          "offset": 114,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "state_seq",
+          "offset": 118,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "produced_at_us",
+          "offset": 122,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "freshness_ticket",
+          "offset": 130,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "configured_mask",
+          "offset": 138,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "position_valid_mask",
+          "offset": 139,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "velocity_valid_mask",
+          "offset": 140,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "planner_finish_mask",
+          "offset": 141,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "hold_valid_mask",
+          "offset": 142,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "accepted_seq_valid",
+          "offset": 143,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "accepted_producer_seq",
+          "offset": 144,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "applied_seq_valid",
+          "offset": 148,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "applied_producer_seq",
+          "offset": 149,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "tx_group_seq_valid",
+          "offset": 153,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "tx_group_producer_seq",
+          "offset": 154,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "submitted_axis_mask",
+          "offset": 158,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "sent_axis_mask",
+          "offset": 159,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "feedback_seq",
+          "offset": 160,
+          "size": 24,
+          "type": "uint32"
+        },
+        {
+          "count": 6,
+          "name": "can_rx_age_us",
+          "offset": 184,
+          "size": 24,
+          "type": "uint32"
+        },
+        {
+          "count": 6,
+          "name": "position_rad",
+          "offset": 208,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 6,
+          "name": "estimated_velocity_rad_s",
+          "offset": 256,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 6,
+          "name": "hold_position_rad",
+          "offset": 304,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 1,
+          "name": "core_state",
+          "offset": 352,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "fault_reason",
+          "offset": 354,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "hold_ready",
+          "offset": 356,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "raw_position_valid_mask",
+          "offset": 357,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "raw_motor_position_rev",
+          "offset": 358,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 1,
+          "name": "control_mode",
+          "offset": 406,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "reference_kind",
+          "offset": 407,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "drive_request",
+          "offset": 408,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "drive_evidence",
+          "offset": 409,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "real_motion_permitted",
+          "offset": 410,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "permit_remaining_us",
+          "offset": 411,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "capabilities",
+          "offset": 419,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "operation_result_code",
+          "offset": 427,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "command_reject_count",
+          "offset": 429,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "can_error_count",
+          "offset": 433,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "deadline_miss_count",
+          "offset": 437,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 32,
+          "name": "contract_sha256",
+          "offset": 441,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "model_sha256",
+          "offset": 473,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "profile_sha256",
+          "offset": 505,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "activation_profile_sha256",
+          "offset": 537,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "motion_supported",
+          "offset": 569,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 32,
+          "name": "firmware_sha256",
+          "offset": 570,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 16,
+          "name": "board_name_ascii",
+          "offset": 602,
+          "size": 16,
+          "type": "uint8"
+        }
+      ],
+      "interface_id": 4136
+    }
+  }
+}

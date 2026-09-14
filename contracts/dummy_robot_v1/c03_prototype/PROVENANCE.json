@@ -1,0 +1,8 @@
+{
+  "stage": "c03_prototype_not_wire_release",
+  "source_repository": "../dpsdk/libraries/dp_protocol",
+  "source_commit": "a69183442440a75f6c2c4b79d9c07acb0c8b787b",
+  "generated_tree_listing_sha256": "93c459d02c5d6bff0b529d93e971de807f5d45c65a01ec20069bdc7e26ed986c",
+  "real_hardware_activation_allowed": false,
+  "wire_release_id": null
+}
