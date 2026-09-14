@@ -1,0 +1,5 @@
+{
+  "suite": "R03",
+  "hardware": "none",
+  "cases": ["GEN01", "GEN02", "GEN03", "RPC01", "RPC08", "MOV14", "RPC12"]
+}

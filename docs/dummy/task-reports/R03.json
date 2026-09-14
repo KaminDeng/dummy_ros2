@@ -1,0 +1,48 @@
+{
+  "task": "R03",
+  "status": "IN_PROGRESS",
+  "hardware": "none",
+  "inputs": {
+    "dpsdk_c03_commit": "6ce5a55",
+    "upstream_repository": "https://github.com/ros-controls/zephyr-zenoh-integration.git",
+    "upstream_commit": "96a7a912a250780bc15c086deb65210296d6fb11",
+    "upstream_checkout_present": false,
+    "upstream_patch_published": false
+  },
+  "passed": {
+    "generated_encoded_sizes": [125, 356, 297, 233, 618],
+    "dp_comm_service_interface_ids": [4135, 4136],
+    "uint64_values_above_2_pow_53_roundtrip": true,
+    "joint6_3pi_roundtrip": true,
+    "queued_not_accepted_response_roundtrip": true,
+    "short_frame_rejected_without_mutation": true,
+    "goal_gate_empty_match_busy_mismatch_clear": true,
+    "direct_python_acceptance_tests": 2,
+    "ament_ctest_tests": 2
+  },
+  "not_run": [
+    "RPC01 core-paused management queue behavior",
+    "RPC08 real async RequestHandle lifetime/cancellation",
+    "RPC12 monitor caller versus owner snapshot identity",
+    "MOV14 running JointTrajectoryController bypass rejection"
+  ],
+  "commands": [
+    {
+      "command": "/usr/bin/python3 -m unittest scripts/dummy/tests/test_r03_acceptance.py -v",
+      "exit_code": 0,
+      "passed": 2
+    },
+    {
+      "command": "colcon test --packages-select dummy_ros_control",
+      "exit_code": 0,
+      "passed": 2
+    },
+    {
+      "command": "bash scripts/dummy/build.sh",
+      "exit_code": 0,
+      "packages_built": 4
+    }
+  ],
+  "handoff": "docs/dummy/zenbedded-gap-report.md",
+  "next_action": "Add ROS-owned dp_comm async service probe and integrate the credential gate at the locked JTC acceptance/update boundary."
+}
