@@ -1,0 +1,55 @@
+{
+  "task": "R01",
+  "status": "PASS",
+  "hardware": "none",
+  "contract": {
+    "release_id": "dummy-model-v1",
+    "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634",
+    "manifest_file_sha256": "b417b4f3171a07815456afc359b9ff29d7a1cab07b1f063bae4dc9750bdf52cd",
+    "legacy_fk_source_sha256": "a0efaf04f70f0d6f683b5154e29dfb1ddbe1adbd3fbb5b5e2bd9abd9389c1ca3"
+  },
+  "results": {
+    "contract_payload_hashes": "PASS",
+    "joint_limits_and_multiturn": "PASS",
+    "initial_and_named_pose_bounds": "PASS",
+    "kdl_fk_fixed_cases": 4,
+    "kdl_fk_random_cases": 128,
+    "moveit_home_state_valid": true,
+    "moveit_reset_state_valid": true,
+    "legacy_rest_state_valid": false
+  },
+  "commands": [
+    {
+      "command": "bash scripts/dummy/build.sh",
+      "exit_code": 0,
+      "packages_built": 3
+    },
+    {
+      "command": "colcon --log-base log_dummy test --build-base build_dummy --install-base install_dummy --packages-select dummy_moveit_config --event-handlers console_direct+",
+      "exit_code": 0,
+      "test_files": 3,
+      "assertions": 8
+    },
+    {
+      "command": "check_urdf src/dummy-ros2_description/urdf/dummy_reference_chain.urdf",
+      "exit_code": 0
+    },
+    {
+      "command": "ros2 service call /check_state_validity moveit_msgs/srv/GetStateValidity <home/reset/legacy-rest requests>",
+      "exit_code": 0,
+      "responses": ["home valid=true", "reset valid=true", "legacy-rest valid=false"]
+    }
+  ],
+  "source_files": {
+    "cad_urdf_sha256": "7107dcce132273529a2198f14a4ecde2204e38f48db6e2484bad64e5d7c59daf",
+    "reference_chain_sha256": "bdf39048898442b9bf84e4d3120607c77f299df10a4f2f1c0dc8162cc3b163ed",
+    "srdf_sha256": "106aa56348c1917c4e8f593eb843d4357c839e2c3250513b69fde3b358fcb9ac"
+  },
+  "limitations": [
+    "CAD mesh offsets and inertia are not physically validated.",
+    "The reference-chain URDF proves mathematical FK only and has no collision geometry.",
+    "MoveIt move_group reproducibly exits with SIGSEGV during Ctrl-C teardown; track under R02 runtime lifecycle evidence.",
+    "No serial, CAN, J-Link, firmware, or motor operation was performed."
+  ],
+  "next_task": "R02 native Gazebo control and simulation clock"
+}

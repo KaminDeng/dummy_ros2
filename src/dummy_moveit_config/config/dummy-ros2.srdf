@@ -16,7 +16,7 @@
     <group_state name="home" group="dummy_arm">
         <joint name="Joint1" value="0"/>
         <joint name="Joint2" value="0"/>
-        <joint name="Joint3" value="0"/>
+        <joint name="Joint3" value="1.5707963267948966"/>
         <joint name="Joint4" value="0"/>
         <joint name="Joint5" value="0"/>
         <joint name="Joint6" value="0"/>

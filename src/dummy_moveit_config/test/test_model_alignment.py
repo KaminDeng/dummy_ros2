@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Verify ROS joint configuration against the C02 model contract."""
+
+from __future__ import annotations
+
+import math
+from pathlib import Path
+import unittest
+import xml.etree.ElementTree as element_tree
+
+import yaml
+
+
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
+CONTRACT = WORKSPACE_ROOT / "contracts/dummy_robot_v1"
+DESCRIPTION = WORKSPACE_ROOT / "src/dummy-ros2_description"
+MOVEIT = WORKSPACE_ROOT / "src/dummy_moveit_config"
+
+
+class ModelAlignmentTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.model = yaml.safe_load((CONTRACT / "model/model.yaml").read_text())
+        cls.joints = {joint["name"]: joint for joint in cls.model["joints"]}
+        cls.urdf = element_tree.parse(DESCRIPTION / "urdf/dummy-ros2.xacro").getroot()
+
+    def test_urdf_limits_match_contract_without_wrapping_joint6(self):
+        urdf_joints = {
+            joint.attrib["name"]: joint
+            for joint in self.urdf.findall("joint")
+            if joint.attrib["name"].startswith("Joint")
+        }
+        self.assertEqual(set(self.joints), set(urdf_joints))
+        for name, contract_joint in self.joints.items():
+            limit = urdf_joints[name].find("limit")
+            lower, upper = contract_joint["model_limits_rad"]
+            self.assertAlmostEqual(lower, float(limit.attrib["lower"]), places=12, msg=name)
+            self.assertAlmostEqual(upper, float(limit.attrib["upper"]), places=12, msg=name)
+        self.assertAlmostEqual(-4.0 * math.pi, float(urdf_joints["Joint6"].find("limit").attrib["lower"]), places=12)
+        self.assertAlmostEqual(4.0 * math.pi, float(urdf_joints["Joint6"].find("limit").attrib["upper"]), places=12)
+
+    def test_r01_tests_are_registered_with_ament(self):
+        cmake = (MOVEIT / "CMakeLists.txt").read_text()
+        self.assertIn("test_model_alignment.py", cmake)
+        self.assertIn("test_reference_chain_fk.py", cmake)
+
+    def test_initial_positions_are_complete_and_within_contract_limits(self):
+        positions = yaml.safe_load((MOVEIT / "config/initial_positions.yaml").read_text())["initial_positions"]
+        self.assertEqual(set(self.joints), set(positions))
+        for name, position in positions.items():
+            lower, upper = self.joints[name]["model_limits_rad"]
+            self.assertGreaterEqual(position, lower, name)
+            self.assertLessEqual(position, upper, name)
+
+    def test_all_srdf_group_states_are_complete_and_within_limits(self):
+        srdf = element_tree.parse(MOVEIT / "config/dummy-ros2.srdf").getroot()
+        states = srdf.findall("group_state")
+        self.assertGreaterEqual(len(states), 2)
+        for state in states:
+            positions = {joint.attrib["name"]: float(joint.attrib["value"]) for joint in state.findall("joint")}
+            self.assertEqual(set(self.joints), set(positions), state.attrib["name"])
+            for name, position in positions.items():
+                lower, upper = self.joints[name]["model_limits_rad"]
+                self.assertGreaterEqual(position, lower, f"{state.attrib['name']}:{name}")
+                self.assertLessEqual(position, upper, f"{state.attrib['name']}:{name}")
+
+
+if __name__ == "__main__":
+    unittest.main()

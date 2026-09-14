@@ -1,0 +1,95 @@
+<?xml version="1.0"?>
+<!-- Mathematical FK reference only. Visual and collision meshes remain in dummy-ros2.xacro. -->
+<robot name="dummy_reference_chain">
+  <link name="reference_base"/>
+  <link name="reference_joint1"/>
+  <link name="reference_link1"/>
+  <link name="reference_joint2"/>
+  <link name="reference_link2"/>
+  <link name="reference_joint3"/>
+  <link name="reference_link3"/>
+  <link name="reference_joint4"/>
+  <link name="reference_link4"/>
+  <link name="reference_joint5"/>
+  <link name="reference_link5"/>
+  <link name="reference_joint6"/>
+  <link name="reference_tool"/>
+
+  <joint name="Joint1" type="revolute">
+    <parent link="reference_base"/>
+    <child link="reference_joint1"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.9670597283903604" upper="2.9670597283903604" effort="1" velocity="0.25"/>
+  </joint>
+  <joint name="Joint1_dh" type="fixed">
+    <parent link="reference_joint1"/>
+    <child link="reference_link1"/>
+    <origin xyz="0.035 0 0.109" rpy="-1.5707963267948966 0 0"/>
+  </joint>
+
+  <joint name="Joint2" type="revolute">
+    <parent link="reference_link1"/>
+    <child link="reference_joint2"/>
+    <origin xyz="0 0 0" rpy="0 0 -1.5707963267948966"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2740903539558606" upper="1.5707963267948966" effort="1" velocity="0.25"/>
+  </joint>
+  <joint name="Joint2_dh" type="fixed">
+    <parent link="reference_joint2"/>
+    <child link="reference_link2"/>
+    <origin xyz="0.146 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="Joint3" type="revolute">
+    <parent link="reference_link2"/>
+    <child link="reference_joint3"/>
+    <origin xyz="0 0 0" rpy="0 0 1.5707963267948966"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0.6108652381980153" upper="3.141592653589793" effort="1" velocity="0.25"/>
+  </joint>
+  <joint name="Joint3_dh" type="fixed">
+    <parent link="reference_joint3"/>
+    <child link="reference_link3"/>
+    <origin xyz="-0.052 0 0" rpy="1.5707963267948966 0 0"/>
+  </joint>
+
+  <joint name="Joint4" type="revolute">
+    <parent link="reference_link3"/>
+    <child link="reference_joint4"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.141592653589793" upper="3.141592653589793" effort="1" velocity="0.25"/>
+  </joint>
+  <joint name="Joint4_dh" type="fixed">
+    <parent link="reference_joint4"/>
+    <child link="reference_link4"/>
+    <origin xyz="0 0 0.115" rpy="-1.5707963267948966 0 0"/>
+  </joint>
+
+  <joint name="Joint5" type="revolute">
+    <parent link="reference_link4"/>
+    <child link="reference_joint5"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.0943951023931953" upper="2.0943951023931953" effort="1" velocity="0.25"/>
+  </joint>
+  <joint name="Joint5_dh" type="fixed">
+    <parent link="reference_joint5"/>
+    <child link="reference_link5"/>
+    <origin xyz="0 0 0" rpy="1.5707963267948966 0 0"/>
+  </joint>
+
+  <joint name="Joint6" type="revolute">
+    <parent link="reference_link5"/>
+    <child link="reference_joint6"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-12.566370614359172" upper="12.566370614359172" effort="1" velocity="0.25"/>
+  </joint>
+  <joint name="Joint6_dh" type="fixed">
+    <parent link="reference_joint6"/>
+    <child link="reference_tool"/>
+    <origin xyz="0 0 0.072" rpy="0 0 0"/>
+  </joint>
+</robot>

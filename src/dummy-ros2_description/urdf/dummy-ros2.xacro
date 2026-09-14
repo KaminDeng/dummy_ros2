@@ -156,8 +156,8 @@
   <child link="link1_1_1"/>
   <axis xyz="0.0 -0.0 -1.0"/>
   <limit
-    lower="-3.14"
-    upper="3.14"
+    lower="-2.9670597283903604"
+    upper="2.9670597283903604"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -168,8 +168,8 @@
   <child link="link2_1_1"/>
   <axis xyz="-1.0 -0.0 0.0"/>
   <limit
-    lower="-3.14"
-    upper="3.14"
+    lower="-1.2740903539558606"
+    upper="1.5707963267948966"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -180,8 +180,8 @@
   <child link="link3_1_1"/>
   <axis xyz="-1.0 0.0 -0.0"/>
   <limit
-    lower="-3.14"
-    upper="3.14"
+    lower="0.6108652381980153"
+    upper="3.141592653589793"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -192,8 +192,8 @@
   <child link="link4_1_1"/>
   <axis xyz="0.0 -1.0 0.0"/>
   <limit
-    lower="-3.14"
-    upper="3.14"
+    lower="-3.141592653589793"
+    upper="3.141592653589793"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -204,8 +204,8 @@
   <child link="link5_1_1"/>
   <axis xyz="-1.0 0.0 -0.0"/>
   <limit
-    lower="-3.14"
-    upper="3.14"
+    lower="-2.0943951023931953"
+    upper="2.0943951023931953"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -216,8 +216,8 @@
   <child link="link6_1_1"/>
   <axis xyz="-0.0 -1.0 0.0"/>
   <limit
-    lower="-3.14"
-    upper="3.14"
+    lower="-12.566370614359172"
+    upper="12.566370614359172"
     effort="150"
     velocity="3.15" />
 </joint>
