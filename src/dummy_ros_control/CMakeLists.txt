@@ -68,6 +68,10 @@ if(BUILD_TESTING)
   ament_target_dependencies(guarded_plugin_load_tests controller_interface hardware_interface pluginlib)
   add_test(NAME guarded_plugin_load_tests COMMAND guarded_plugin_load_tests)
 
+  add_executable(guarded_lifecycle_probe test/guarded_lifecycle_probe.cpp)
+  target_link_libraries(guarded_lifecycle_probe dummy_guarded_zenbedded_system)
+  add_test(NAME guarded_lifecycle_probe COMMAND guarded_lifecycle_probe)
+
   add_executable(request_handle_destructor_tests test/request_handle_destructor_tests.cpp)
   target_include_directories(request_handle_destructor_tests PRIVATE
     "${DPSDK_ROOT}/libraries/dp_comm/include")
