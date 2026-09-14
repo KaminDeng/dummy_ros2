@@ -1,0 +1,97 @@
+{
+  "abi_catalog": {
+    "encoded_sizes": {},
+    "stage": "model_only"
+  },
+  "format": "dummy_model_release_v1",
+  "generator_version": "aba7cec9e738076d8fa396b95a468169e2b54c7c947b966fdbf5bdfc97b37cc4",
+  "patched_upstream": {
+    "parent_commit": null,
+    "patch_sha256": null
+  },
+  "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634",
+  "payloads": [
+    {
+      "path": "enums/dummy_enum_values_v1.json",
+      "sha256": "97ef4b52ad34afec8c94e74e45a3c427ee8bd7b4eeac7a1dcc8bc4c4078a7e12"
+    },
+    {
+      "path": "evidence/fk_random_cases.json",
+      "sha256": "8422881c141e350bf5f9bd001e0f3518a6f99f49335a44c4aea1b20936e74cbe"
+    },
+    {
+      "path": "evidence/source_hashes.json",
+      "sha256": "b602eaea81e93ec6c7bf8d65e303bece52cb4d4700d80558fe67266d9fc4bdfb"
+    },
+    {
+      "path": "fixtures/can_golden.json",
+      "sha256": "2e03cc58215e934adacd9485fbd790f890ed9bc28b12ee5550a618d528ace9e6"
+    },
+    {
+      "path": "fixtures/fk_cases.json",
+      "sha256": "fdd4e563fbac24d16ce85187cd1755664fb5a47c800764a513404ea5bbb35d64"
+    },
+    {
+      "path": "idl/DummyDeviceStatusV1.msg",
+      "sha256": "0512857fb959d5f3db0189930e705ade5addc574235d61507043df5836f62d9b"
+    },
+    {
+      "path": "idl/DummyJointCommandV1.msg",
+      "sha256": "08243121628086a2c4cece5a651c14883ab82231db135f9959ec9b8662736a97"
+    },
+    {
+      "path": "idl/DummyJointStateV1.msg",
+      "sha256": "7e91ee5d0b550c891c50e32f0d5e0a96d765478f50fea1f9d220d6a7342eb6ed"
+    },
+    {
+      "path": "idl/DummyManageV1.srv",
+      "sha256": "71c4f4178b8f7ff2fa7d668e20d224df8beefddadd1822a7fdfbf72b2d9248c8"
+    },
+    {
+      "path": "metadata/dummy_robot_v1.yaml",
+      "sha256": "0c3cb3cf6c808f3e45fa8be30518e60708bb7bc031767a129523b5013e829cc4"
+    },
+    {
+      "path": "model/dummy_model.hpp",
+      "sha256": "e490b268d86af26790d9d2f3c83f0801aa331e70fb843f24c70dc54da3e1b13c"
+    },
+    {
+      "path": "model/geometry_reference.yaml",
+      "sha256": "4bf97f5ba919e7aac4599b8066423f825c6052df225257445f13fc679cf9133d"
+    },
+    {
+      "path": "model/model.yaml",
+      "sha256": "dcf36ac3588e5e23c277c8b0fcc960efab4fc963f770c373686055e101d7c593"
+    },
+    {
+      "path": "profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac"
+    },
+    {
+      "path": "profiles/f405_j1_passive.yaml",
+      "sha256": "6553078601365a93cba86ab8a2a7f0b4a244cf7b196dccae759df834690df98c"
+    },
+    {
+      "path": "profiles/gazebo_6dof.yaml",
+      "sha256": "699f78969aee46961e353459a0d360f733a3c55d85eb420a13d48a8481f9ba7f"
+    },
+    {
+      "path": "profiles/profile_schema.json",
+      "sha256": "23d033d6711a0bfae96bd141f078f142ec1577098fc6637f5f79e3dad0e9567a"
+    },
+    {
+      "path": "profiles/sil_6dof.yaml",
+      "sha256": "59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2"
+    },
+    {
+      "path": "profiles/sil_j1.yaml",
+      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c"
+    }
+  ],
+  "release_id": "dummy-model-v1",
+  "source_hashes": {
+    "legacy_fk": "a0efaf04f70f0d6f683b5154e29dfb1ddbe1adbd3fbb5b5e2bd9abd9389c1ca3",
+    "legacy_robot": "c270028ccefb47adb87f53295cbc8a57fc627b3d2c97afebfbd22269d368be73"
+  },
+  "stage": "model"
+}

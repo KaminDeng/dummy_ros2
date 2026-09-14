@@ -1,0 +1,62 @@
+profile_name: dummy_robot_v1
+namespace: dummy_robot_v1
+schema: {major: 1, minor: 0}
+deployment: {product_name: dummy_robot, node_name: ref_control}
+zenoh:
+  route_template: dpsdk/{product}/{device_id}/{node}/{endpoint}
+  endpoints:
+    command: command_v1
+    state: state_v1
+    status: status_v1
+    manage: manage_v1
+profiles:
+  sil_6dof: 1
+  sil_j1: 2
+  f405_j1_passive: 100
+  f405_j1_bench: 101
+  f405_6dof_future_disabled: 200
+security:
+  operator_confirmed_is_authentication: false
+  statement: operator_confirmed only records explicit intent on a controlled development network
+operation_semantics:
+  GET_INFO: {permission: read_only, allowed_states: [BOOT, DISARMED, REFERENCE_READY, ENABLING_HOLD, ENABLED_HOLD, RUNNING, COMPLETING, STOPPING, DISARM_REQUESTED, FAULT_LATCHED], expected_epochs: {boot: zero_or_current}, epoch_effects: [], result: immediate_info, failure_codes: [INCOMPATIBLE_SCHEMA, BAD_ARGUMENT]}
+  GET_STATUS: {permission: read_only, allowed_states: [BOOT, DISARMED, REFERENCE_READY, ENABLING_HOLD, ENABLED_HOLD, RUNNING, COMPLETING, STOPPING, DISARM_REQUESTED, FAULT_LATCHED], expected_epochs: {boot: current}, epoch_effects: [], result: immediate_status, failure_codes: [INCOMPATIBLE_SCHEMA, STALE, BAD_ARGUMENT]}
+  SELECT_CONTROL_MODE: {permission: operator_confirmed, allowed_states: [DISARMED, REFERENCE_READY], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management], result: owner_result, failure_codes: [BUSY, BAD_STATE, BAD_MANAGEMENT_EPOCH, BAD_ARGUMENT]}
+  GRANT_SESSION: {permission: operator_confirmed, allowed_states: [DISARMED, REFERENCE_READY], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management, session], result: owner_result, failure_codes: [BUSY, BAD_STATE, BAD_MANAGEMENT_EPOCH, UNAUTHORIZED]}
+  CAPTURE_BENCH_REFERENCE: {permission: operator_confirmed, allowed_states: [DISARMED, REFERENCE_READY], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management, reference, motion], result: ram_reference_without_motion, failure_codes: [BUSY, RX_STALE, BAD_STATE, BAD_MANAGEMENT_EPOCH, UNAUTHORIZED]}
+  ENABLE_HOLD: {permission: current_owner_with_permit, allowed_states: [REFERENCE_READY], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management, motion], result: enabling_hold_then_owner_result, failure_codes: [BAD_REFERENCE, BAD_PROFILE, PERMIT_EXPIRED, RX_STALE, FIRST_SAMPLE_TIMEOUT, POLICY_DENIED]}
+  BEGIN_MOTION: {permission: current_owner_with_permit, allowed_states: [ENABLED_HOLD], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management, motion], result: running_after_first_sample, failure_codes: [BUSY, BAD_MOTION, STALE, PERMIT_EXPIRED, FIRST_SAMPLE_TIMEOUT]}
+  CANCEL_MOTION: {permission: current_owner_or_operator_confirmed, allowed_states: [RUNNING, COMPLETING], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management, motion], result: stopping_then_new_hold, failure_codes: [BAD_MOTION, STOP_FAILED, RESULT_UNCONFIRMED, RX_STALE]}
+  STOP_AND_DISARM: {permission: lowering_privilege, allowed_states: [DISARMED, REFERENCE_READY, ENABLING_HOLD, ENABLED_HOLD, RUNNING, COMPLETING, STOPPING, DISARM_REQUESTED, FAULT_LATCHED], expected_epochs: {boot: current}, epoch_effects: [management, motion, session], result: bounded_stop_disable_then_disarmed_or_fault, failure_codes: [STOP_FAILED, RESULT_UNCONFIRMED, RX_STALE, TX_FAILED]}
+  REVOKE_SESSION: {permission: lowering_privilege, allowed_states: [DISARMED, REFERENCE_READY, ENABLING_HOLD, ENABLED_HOLD, RUNNING, COMPLETING, STOPPING, DISARM_REQUESTED, FAULT_LATCHED], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management, motion, session], result: bounded_stop_disable_then_disarmed_or_fault, failure_codes: [STOP_FAILED, RESULT_UNCONFIRMED, RX_STALE, TX_FAILED]}
+  CLEAR_FAULT: {permission: operator_confirmed, allowed_states: [FAULT_LATCHED], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management], result: clear_only_without_authorization, failure_codes: [FAULT, BAD_STATE, UNAUTHORIZED]}
+  GET_OPERATION: {permission: original_client, allowed_states: [DISARMED, REFERENCE_READY, ENABLING_HOLD, ENABLED_HOLD, RUNNING, COMPLETING, STOPPING, DISARM_REQUESTED, FAULT_LATCHED], expected_epochs: {boot: current}, epoch_effects: [], result: exact_cached_result, failure_codes: [NOT_FOUND, RESULT_EXPIRED, UNAUTHORIZED]}
+  GET_STATE_SNAPSHOT: {permission: read_only, allowed_states: [DISARMED, REFERENCE_READY, ENABLING_HOLD, ENABLED_HOLD, RUNNING, COMPLETING, STOPPING, DISARM_REQUESTED, FAULT_LATCHED], expected_epochs: {boot: current}, epoch_effects: [], result: causal_owner_snapshot, failure_codes: [INVALID_SNAPSHOT, STALE, BAD_ARGUMENT]}
+  COMPLETE_MOTION: {permission: current_owner_with_permit, allowed_states: [RUNNING], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management, motion], result: completing_then_new_hold, failure_codes: [BAD_MOTION, COMPLETION_TIMEOUT, TRACKING_ERROR, RX_STALE]}
+  SET_BENCH_PERMIT: {permission: operator_confirmed, allowed_states: [REFERENCE_READY, ENABLED_HOLD], expected_epochs: {boot: current, session: current, reference: current, motion: current, management: current}, epoch_effects: [management], result: install_single_use_absolute_deadline, failure_codes: [BAD_PROFILE, POLICY_DENIED, PERMIT_EXPIRED, REPLAY_REJECTED]}
+capability_bits:
+  JOINT_POSITION_CONTRACT: 0
+  NATIVE_JOINT_CLIENT: 1
+  ROS_POSITION_ADAPTER: 2
+  BENCH_REFERENCE_CAPTURE: 3
+  CAUSAL_STATE_SNAPSHOT: 4
+  BOUNDED_LOCAL_STOP: 5
+  COMPLETE_HOLD_HANDSHAKE: 6
+  SINGLE_USE_BENCH_PERMIT: 7
+  SIX_AXIS_SOFTWARE_PROFILE: 8
+  CANONICAL_FLASH_IDENTITY: 9
+unavailable_on_current_legacy_motor:
+  MOTOR_BOOT_OBSERVABLE: 32
+  PHYSICAL_DISABLE_CONFIRMATION: 33
+  MEASURED_EFFORT: 34
+messages:
+  - dpsdk_interfaces/msg/DummyDeviceStatusV1
+  - dpsdk_interfaces/msg/DummyJointCommandV1
+  - dpsdk_interfaces/msg/DummyJointStateV1
+services:
+  - dpsdk_interfaces/srv/DummyManageV1
+static_requirements:
+  message_bytes: 618
+  service_slots: 1
+  request_slots: 1
+  response_slots: 1

@@ -1,0 +1,91 @@
+contract_version: dummy_robot_v1
+artifact_kind: design_seed_not_runtime_config
+source: dummy_code.zip / DummyRobot constructor / S21,S23
+joint_names:
+- Joint1
+- Joint2
+- Joint3
+- Joint4
+- Joint5
+- Joint6
+axis_mask_definition: bit0=Joint1; differs from legacy node-index completion bitmap
+physical_calibration_verified: false
+joints:
+- name: Joint1
+  slot: 0
+  can_node: 1
+  direction: -1
+  gear_ratio: 30
+  legacy_limits_deg:
+  - -170
+  - 170
+  model_limits_rad:
+  - -2.9670597283903604
+  - 2.9670597283903604
+  legacy_init_deg: 0
+  physical_direction_verified: false
+- name: Joint2
+  slot: 1
+  can_node: 2
+  direction: 1
+  gear_ratio: 30
+  legacy_limits_deg:
+  - -73
+  - 90
+  model_limits_rad:
+  - -1.2740903539558606
+  - 1.5707963267948966
+  legacy_init_deg: -73
+  physical_direction_verified: false
+- name: Joint3
+  slot: 2
+  can_node: 3
+  direction: -1
+  gear_ratio: 30
+  legacy_limits_deg:
+  - 35
+  - 180
+  model_limits_rad:
+  - 0.6108652381980153
+  - 3.141592653589793
+  legacy_init_deg: 180
+  physical_direction_verified: false
+- name: Joint4
+  slot: 3
+  can_node: 4
+  direction: 1
+  gear_ratio: 24
+  legacy_limits_deg:
+  - -180
+  - 180
+  model_limits_rad:
+  - -3.141592653589793
+  - 3.141592653589793
+  legacy_init_deg: 0
+  physical_direction_verified: false
+- name: Joint5
+  slot: 4
+  can_node: 5
+  direction: -1
+  gear_ratio: 30
+  legacy_limits_deg:
+  - -120
+  - 120
+  model_limits_rad:
+  - -2.0943951023931953
+  - 2.0943951023931953
+  legacy_init_deg: 0
+  physical_direction_verified: false
+- name: Joint6
+  slot: 5
+  can_node: 6
+  direction: -1
+  gear_ratio: 50
+  legacy_limits_deg:
+  - -720
+  - 720
+  model_limits_rad:
+  - -12.566370614359172
+  - 12.566370614359172
+  legacy_init_deg: 0
+  physical_direction_verified: false

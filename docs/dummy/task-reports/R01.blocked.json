@@ -1,6 +1,12 @@
 {
   "task": "R01",
-  "status": "BLOCKED",
+  "status": "SUPERSEDED",
+  "superseded_by": {
+    "dpsdk_commit": "99ebc36",
+    "bundle_path": "contracts/dummy_robot_v1",
+    "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634",
+    "verification": "PASS"
+  },
   "checked_at": "2026-09-14",
   "ros_workspace_commit": "16da75dc0204e97c8d060e4c73b2c5fc8b2c6322",
   "dpsdk_root": "../dpsdk",

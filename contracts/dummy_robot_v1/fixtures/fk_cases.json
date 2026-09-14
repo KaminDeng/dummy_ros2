@@ -1,0 +1,14 @@
+{
+  "format": "dummy_legacy_fk_cases_v1",
+  "source_sha256": "a0efaf04f70f0d6f683b5154e29dfb1ddbe1adbd3fbb5b5e2bd9abd9389c1ca3",
+  "joint_unit": "degree",
+  "position_unit": "meter",
+  "rotation_layout": "row_major_3x3",
+  "physical_calibration_verified": false,
+  "cases": [
+    {"name": "home", "joints": [0, 0, 0, 0, 0, 0], "position": [-0.0170000084, 1.11464038e-08, 0.442000002], "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1]},
+    {"name": "legacy_rest", "joints": [0, -73, 180, 0, 0, 0], "position": [0.0894118249, -1.75979409e-09, 0.146740615], "rotation": [-0.292371601, 4.18014103e-08, 0.956304789, -4.18014103e-08, 1, -5.64913591e-08, -0.956304789, -5.64913591e-08, -0.292371601]},
+    {"name": "asymmetric", "joints": [10, -40, 95, 20, -15, 45], "position": [0.0527647138, 0.00283199735, 0.383634239], "rotation": [0.217622042, -0.721605599, 0.657210767, 0.950293839, 0.310267031, 0.0259970929, -0.222670466, 0.618885756, 0.753258348]},
+    {"name": "joint6_multiturn", "joints": [0, 0, 0, 0, 0, 540], "position": [-0.0170000084, 1.11464038e-08, 0.442000002], "rotation": [-1, 9.7752411e-07, 0, -9.7752411e-07, -1, 0, 0, 0, 1]}
+  ]
+}
