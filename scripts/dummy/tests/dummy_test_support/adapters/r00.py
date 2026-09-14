@@ -114,7 +114,7 @@ def run_r00_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
             "dpsdk_process_started": False,
             "serial_open_count": 0,
             "required_packages": package_checks,
-            "new_build_required": True,
+            "r02_runtime_required": True,
         }
         status = "NOT_RUN"
         reason = "R00 does not reuse archived build/install output; Gazebo runtime starts after a new build."

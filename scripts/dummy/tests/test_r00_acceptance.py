@@ -31,22 +31,23 @@ class R00AcceptanceTest(unittest.TestCase):
 
         self.assertIn("<build_type>ament_cmake</build_type>", package_xml)
 
-    def run_case(self, case_id: str) -> tuple[int, dict[str, object]]:
+    def run_case(self, case_id: str | None) -> tuple[int, dict[str, object]]:
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_path = Path(temporary_directory) / "report.json"
+            command = [
+                "python3",
+                str(VERIFY),
+                "--suite",
+                "R00",
+                "--hardware",
+                "none",
+                "--report",
+                str(report_path),
+            ]
+            if case_id is not None:
+                command.extend(("--case", case_id))
             completed = subprocess.run(
-                [
-                    "python3",
-                    str(VERIFY),
-                    "--suite",
-                    "R00",
-                    "--case",
-                    case_id,
-                    "--hardware",
-                    "none",
-                    "--report",
-                    str(report_path),
-                ],
+                command,
                 cwd=WORKSPACE_ROOT,
                 check=False,
                 capture_output=True,
@@ -94,6 +95,14 @@ class R00AcceptanceTest(unittest.TestCase):
             observations["denied_probes"],
             ["ttyACM0", "socketcan", "jlink"],
         )
+
+    def test_ros01_requires_r02_runtime_evidence_after_a_clean_build(self):
+        return_code, report = self.run_case(None)
+
+        self.assertEqual(return_code, 3)
+        result = next(case for case in report["cases"] if case["case_id"] == "ROS01")
+        self.assertEqual(result["status"], "NOT_RUN")
+        self.assertTrue(result["observations"]["r02_runtime_required"])
 
 
 if __name__ == "__main__":
