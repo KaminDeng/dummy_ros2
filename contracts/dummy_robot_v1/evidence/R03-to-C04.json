@@ -1,0 +1,31 @@
+{
+  "handoff": "R03-to-C04",
+  "status": "READY_FOR_C04",
+  "ros_commit": "2f9ebf1",
+  "c03_prototype": {
+    "source_commit": "a69183442440a75f6c2c4b79d9c07acb0c8b787b",
+    "path": "contracts/dummy_robot_v1/c03_prototype",
+    "generated_tree_listing_sha256": "93c459d02c5d6bff0b529d93e971de807f5d45c65a01ec20069bdc7e26ed986c",
+    "wire_release": false
+  },
+  "passed_cases": ["GEN01", "GEN02", "GEN03", "RPC01", "RPC08", "RPC12", "MOV14"],
+  "commands": [
+    "/usr/bin/python3 -m unittest scripts/dummy/tests/test_r03_acceptance.py -v",
+    "colcon --log-base log_dummy test --build-base build_dummy --install-base install_dummy --packages-select dummy_ros_control --event-handlers console_direct+",
+    "bash scripts/dummy/build.sh"
+  ],
+  "runtime_observations": {
+    "guarded_controller_state": "inactive",
+    "guarded_action_servers": 0,
+    "guarded_trajectory_topic_present": false,
+    "zenoh_interprocess_service": "PASS",
+    "implicit_request_handle_destructor": "PASS"
+  },
+  "upstream_status": {
+    "owner": "DPSDK C04/C05",
+    "current_c03_exit_code": 0,
+    "current_c03_result": "Generated tree restored; seven tests passed in full run and GEN08 passed on explicit rerun",
+    "transient_issue": "A prior concurrent configure deleted the tracked generated tree; it was restored by the DPSDK owner",
+    "required_before_c05": "C04 must consume this handoff and rerun complete compatibility before publishing wire-v1"
+  }
+}

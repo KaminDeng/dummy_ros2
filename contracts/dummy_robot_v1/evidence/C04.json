@@ -1,0 +1,5 @@
+{
+  "suite": "C04",
+  "cases": ["GEN01", "GEN02", "GEN03", "GEN05", "GEN06", "GEN08", "RPC01", "RPC12", "NEGATIVE", "GEN02_ADAPTER"],
+  "hardware": "none"
+}

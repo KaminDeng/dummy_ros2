@@ -7,7 +7,11 @@
     "upstream_repository": "https://github.com/ros-controls/zephyr-zenoh-integration.git",
     "upstream_commit": "96a7a912a250780bc15c086deb65210296d6fb11",
     "upstream_checkout_present": false,
-    "upstream_patch_published": false
+    "upstream_patch_published": false,
+    "wire_release": "dummy-wire-v1",
+    "wire_payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
+    "c04_commit": "803eff5",
+    "c05_commit": "2c9392a"
   },
   "passed": {
     "generated_encoded_sizes": [125, 356, 297, 233, 618],

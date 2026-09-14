@@ -19,8 +19,10 @@ class R01ContractTest(unittest.TestCase):
         self.assertTrue(manifest_path.is_file(), "C02 model-v1 mirror is missing")
         manifest = json.loads(manifest_path.read_text())
 
-        self.assertEqual("dummy-model-v1", manifest["release_id"])
-        self.assertEqual("model", manifest["stage"])
+        self.assertIn(
+            (manifest["release_id"], manifest["stage"]),
+            (("dummy-model-v1", "model"), ("dummy-wire-v1", "wire")),
+        )
         payloads = manifest["payloads"]
         paths = [entry["path"] for entry in payloads]
         self.assertEqual(sorted(paths), paths)

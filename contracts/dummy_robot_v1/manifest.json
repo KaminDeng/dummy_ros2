@@ -1,19 +1,49 @@
 {
   "abi_catalog": {
-    "encoded_sizes": {},
-    "stage": "model_only"
+    "encoded_sizes": {
+      "command": 125,
+      "request": 233,
+      "response": 618,
+      "state": 356,
+      "status": 297
+    },
+    "stage": "wire-v1"
   },
-  "format": "dummy_model_release_v1",
+  "format": "dummy_wire_release_v1",
   "generator_version": "aba7cec9e738076d8fa396b95a468169e2b54c7c947b966fdbf5bdfc97b37cc4",
   "patched_upstream": {
     "parent_commit": null,
     "patch_sha256": null
   },
-  "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634",
+  "payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
   "payloads": [
+    {
+      "path": "codec/dp_dummy_robot_v1.hpp",
+      "sha256": "e9c04f74bd73edcf5721401c3f2c35217ed9eed528e808fea0870fa56dcc8951"
+    },
+    {
+      "path": "codec/dp_dummy_robot_v1_dp_comm.hpp",
+      "sha256": "b7959cff2853c32a4405aeff13b0ee1b4fdf1e9e5eb05f1b797a8598bb4e6743"
+    },
+    {
+      "path": "codec/dp_dummy_robot_v1_static_requirements.h",
+      "sha256": "b72871ece7fe611e8111f99deefac7d1f9f08f994470b06dad166b008c89fce0"
+    },
+    {
+      "path": "codec/wire_layout.json",
+      "sha256": "100c1b18642f3409badb973de3d96f8ad963c25d8d1cb8022da61df302b1994b"
+    },
     {
       "path": "enums/dummy_enum_values_v1.json",
       "sha256": "97ef4b52ad34afec8c94e74e45a3c427ee8bd7b4eeac7a1dcc8bc4c4078a7e12"
+    },
+    {
+      "path": "evidence/C04.json",
+      "sha256": "ad5155bcbfe0906549417fc01dd4fa18957cf467935b9c4702eddd9215a2b176"
+    },
+    {
+      "path": "evidence/R03-to-C04.json",
+      "sha256": "50fa4b30a5d06c833e27a05a841e38f4697c02791d90a40208f7dd302697273f"
     },
     {
       "path": "evidence/fk_random_cases.json",
@@ -22,6 +52,10 @@
     {
       "path": "evidence/source_hashes.json",
       "sha256": "b602eaea81e93ec6c7bf8d65e303bece52cb4d4700d80558fe67266d9fc4bdfb"
+    },
+    {
+      "path": "evidence/wire-v1-validation.md",
+      "sha256": "a804e3969189a2325e6e007df41e1bc32abfa6cb75c7dbfd62c8683c2700245b"
     },
     {
       "path": "fixtures/can_golden.json",
@@ -64,6 +98,18 @@
       "sha256": "dcf36ac3588e5e23c277c8b0fcc960efab4fc963f770c373686055e101d7c593"
     },
     {
+      "path": "policy/f405_j1_activation.template.json",
+      "sha256": "56f6406680f24701a587e96c487f747b1b5c4a04fb3e2426d13b72d558b6f037"
+    },
+    {
+      "path": "policy/f405_j1_policy.template.json",
+      "sha256": "f36a529448bfe7bd8dc15c9bc12de95a63129b29d2bb19b8792b59088b72eaff"
+    },
+    {
+      "path": "policy/validate_activation.py",
+      "sha256": "f9069e07c810713ae67a8546352b964dc12c114e803e738b41a2f12b73091c06"
+    },
+    {
       "path": "profiles/f405_j1_bench.yaml",
       "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac"
     },
@@ -88,10 +134,11 @@
       "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c"
     }
   ],
-  "release_id": "dummy-model-v1",
+  "r03_commit": "2f9ebf1",
+  "release_id": "dummy-wire-v1",
   "source_hashes": {
     "legacy_fk": "a0efaf04f70f0d6f683b5154e29dfb1ddbe1adbd3fbb5b5e2bd9abd9389c1ca3",
     "legacy_robot": "c270028ccefb47adb87f53295cbc8a57fc627b3d2c97afebfbd22269d368be73"
   },
-  "stage": "model"
+  "stage": "wire"
 }

@@ -9,7 +9,7 @@ find_package(trajectory_msgs REQUIRED)
 
 set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root")
 get_filename_component(ROS_WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v1/c03_prototype/generated/include")
+set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v1/codec")
 if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v1.hpp")
   message(FATAL_ERROR "ROS C03 prototype mirror does not contain the Dummy generated codec")
 endif()

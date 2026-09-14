@@ -11,26 +11,15 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 DPSDK = Path("../dpsdk")
-C03_INCLUDE = ROOT / "contracts/dummy_robot_v1/c03_prototype/generated/include"
+C03_INCLUDE = ROOT / "contracts/dummy_robot_v1/codec"
 
 
 class R03AcceptanceTest(unittest.TestCase):
-    def test_c03_prototype_is_pinned_and_not_mislabeled_wire_v1(self):
-        provenance = json.loads(
-            (ROOT / "contracts/dummy_robot_v1/c03_prototype/PROVENANCE.json").read_text()
-        )
-        self.assertEqual("a69183442440a75f6c2c4b79d9c07acb0c8b787b", provenance["source_commit"])
-        self.assertEqual("c03_prototype_not_wire_release", provenance["stage"])
-        self.assertFalse(provenance["real_hardware_activation_allowed"])
-        self.assertIsNone(provenance["wire_release_id"])
-        generated = ROOT / "contracts/dummy_robot_v1/c03_prototype/generated"
-        listing = "\n".join(
-            f"{path.relative_to(generated)}:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-            for path in sorted(item for item in generated.rglob("*") if item.is_file())
-        )
-        self.assertEqual(
-            provenance["generated_tree_listing_sha256"], hashlib.sha256(listing.encode()).hexdigest()
-        )
+    def test_c05_wire_release_is_pinned_to_the_r03_handoff(self):
+        manifest = json.loads((ROOT / "contracts/dummy_robot_v1/manifest.json").read_text())
+        self.assertEqual("dummy-wire-v1", manifest["release_id"])
+        self.assertEqual("wire", manifest["stage"])
+        self.assertEqual("2f9ebf1", manifest["r03_commit"])
 
     def compile_and_run(self, source: Path) -> None:
         self.assertTrue(source.is_file(), f"missing R03 SUT: {source}")
