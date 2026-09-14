@@ -2,7 +2,7 @@
 
 | Task | Status | Evidence | Remaining condition |
 | --- | --- | --- | --- |
-| R00 | IN_PROGRESS | 5 R00 acceptance tests and 3 original static tests pass; clean 3-package build succeeds. | ROS01 is NOT_RUN (runner exit 3); it needs the R02 headless Gazebo execution path. |
+| R00 | PASS | R00 acceptance and original static tests pass; isolated build succeeds; ROS01 was closed by R02 headless Gazebo runtime without DPSDK/physical IO. | None for R00; runtime details remain in R02. |
 | R01 | PASS | C02 hashes verified; joint limits/named poses aligned; PyKDL matches 4 fixed + 128 random legacy FK samples; MoveIt validates final `home` and `reset`. | CAD/inertia/physical collision accuracy remains explicitly unverified. |
 | R02 | PASS_WITH_LIMITATION | Headless Gazebo 8.15 spawns the model and one controller manager; six-axis state and nonzero FJT feedback are real; pause/resume follows `/clock`; primitive collisions load. | `move_group` reproducibly exits -11 on Ctrl-C; collision boxes and position servo are simulation-only approximations. |
 | R03 | PASS | Pinned codec, real zenoh-c RPC, explicit/implicit RequestHandle, caller/owner, credential gate, pluginlib load, and controller-manager endpoint-negative probes pass. | DPSDK current C03 regeneration is broken; R03's immutable prototype remains auditable but is not wire-v1. |
