@@ -1,0 +1,5 @@
+{
+  "suite": "R06",
+  "hardware": "none",
+  "cases": ["AUTH02", "FRE05", "EN01", "EN02", "EN03", "EN04", "EN05", "MOV01", "MOV02", "MOV03", "MOV04", "MOV05", "MOV06", "MOV07", "MOV13", "MOV14", "MOV15", "MOV16", "MOV17", "STOP01", "STOP02", "STOP09", "ROS06"]
+}

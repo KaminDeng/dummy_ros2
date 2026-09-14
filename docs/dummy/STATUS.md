@@ -8,7 +8,8 @@
 | R03 | PASS | C05 `dummy-wire-v1` pins R03 commit `2f9ebf1`; codec, real zenoh-c RPC, RequestHandle, caller/owner, credential gate, pluginlib, and endpoint-negative probes pass. | None for R03. |
 | R04 | PASS | C05 wire codec, nonblocking system plugin, actual JTC update sink, dp_comm command/state worker, identity/age/mask, 1000-update backpressure, inactive management and async stop latch pass. | Live management/action lifecycle is R06; interprocess SIL is R07. |
 | R05 | PASS_WITH_LIMITATION | Same YAML generates Gazebo/MoveIt scene; collision target rejected; Cartesian fraction 0 not executed; nearby pose IK succeeds; public FJT gate proves BUSY/cancel/third-goal and limit rejection. | Internal JTC bypass closure belongs to R06; `move_group` Ctrl-C teardown still exits -11. |
-| R06-R08 | NOT_STARTED | No device action lifecycle, SIL, or release tests executed. | Ordered dependencies remain. |
+| R06 | IN_PROGRESS | Immutable coordinator unit tests cover prime, Complete→HOLD→second goal, cancel/abort/BUSY/late-result and receipt/result separation. | Live D05/D06 motion core is NOT_STARTED; device-backed cases remain NOT_RUN. |
+| R07-R08 | NOT_STARTED | No SIL or release tests executed. | Ordered dependencies remain. |
 | Hardware/J1 | NOT_RUN | `--hardware none` enforced; no probe, upload, reset, or motion performed. | Requires separate human-gated procedure. |
 
 The detailed R00 report is `docs/dummy/task-reports/R00.json`; build evidence is

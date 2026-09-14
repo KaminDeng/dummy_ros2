@@ -1,0 +1,49 @@
+{
+  "task": "R06",
+  "status": "IN_PROGRESS",
+  "hardware": "none",
+  "contract": {
+    "release_id": "dummy-wire-v1",
+    "payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a"
+  },
+  "passed_unit_behaviors": [
+    "EN01 Enable accepted enters PRIME_HOLD and starts producer",
+    "EN02 wrong/non-continuous first HOLD sample rejected",
+    "EN03 correct HOLD sample reaches HOLD",
+    "MOV01 Begin prime sample reaches RUNNING",
+    "MOV02 wrong epoch first motion sample rejected",
+    "MOV03 new goal rejected while prime/running",
+    "MOV04 Complete stable then new HOLD first sample, success, and second goal",
+    "MOV07 success withheld until completion HOLD sample",
+    "STOP01 cancel disables producer, waits stop/HOLD, then CANCELED",
+    "STOP02 stop failure becomes ABORTED fault",
+    "STOP09 internal abort uses stop barrier and preserves ABORTED terminal",
+    "late inner success after STOPPING is rejected",
+    "QUEUED receipt, accepted operation, and terminal result are distinct"
+  ],
+  "not_run": [
+    "AUTH02 live non-owner rejection through D core",
+    "EN04 live first-sample timeout",
+    "EN05 live operation/core handshake",
+    "MOV05 early Complete rejection by D core",
+    "MOV06 live completion timeout",
+    "MOV13/MOV14 device-backed active guarded JTC bypass",
+    "MOV15 full wire input validation through public device action",
+    "MOV16 live Begin prime handshake",
+    "MOV17 live terminal sequence freeze/acceptance",
+    "FRE05 live controller-manager write with frozen JTC",
+    "two complete live device-backed actions"
+  ],
+  "dependency": {
+    "owner": "DPSDK D05/D06",
+    "current_status": "NOT_STARTED",
+    "condition": "Core must implement BeginMotion, CompleteMotion, CancelMotion, stop/HOLD and operation query semantics"
+  },
+  "commands": [
+    {
+      "command": "/usr/bin/python3 -m unittest scripts/dummy/tests/test_r06_acceptance.py -v",
+      "exit_code": 0,
+      "tests": 3
+    }
+  ]
+}
