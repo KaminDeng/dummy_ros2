@@ -1,0 +1,5 @@
+{
+  "suite": "R05",
+  "hardware": "none",
+  "cases": ["MOD06", "ROS02", "ROS03", "ROS04", "ROS05", "ROS06", "ROS11"]
+}

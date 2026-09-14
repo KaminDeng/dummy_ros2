@@ -11,13 +11,23 @@
     "scene_dimensions_m": [0.08, 0.5, 0.5],
     "scene_pose_xyz_m": [0.35, 0.0, 0.25],
     "scene_revision": "dummy_scene_v1"
+    ,"valid_joint_plan": {
+      "error_code": 1,
+      "trajectory_points": 15,
+      "executed": false
+    },
+    "unreachable_cartesian_fraction": 0.0,
+    "out_of_bounds_guard": {
+      "rejected": true,
+      "service_request_sent": false,
+      "raw_moveit_observation_before_guard": "non-deterministically returned SUCCESS(1) once and FAILURE(99999) once for Joint1=5 rad"
+    }
   },
   "not_run": [
     "ROS04 collision-blocked or detoured planning result",
-    "ROS05 partial Cartesian fraction and no-execution guarantee",
     "ROS06 second-goal BUSY, cancel, third-goal execution",
     "ROS11 locked JTC cancel-deceleration behavior",
-    "joint and pose targets through MoveIt with scene revision"
+    "pose target through MoveIt with scene revision"
   ],
   "commands": [
     {
@@ -33,6 +43,11 @@
       "command": "ros2 service call /get_planning_scene moveit_msgs/srv/GetPlanningScene '{components: {components: 16}}'",
       "exit_code": 0,
       "result": "planning_barrier returned with matching box and pose"
+    },
+    {
+      "command": "/usr/bin/python3 src/dummy_bringup/scripts/planning_probe.py --report build_dummy/reports/R05.planning.json",
+      "exit_code": 0,
+      "result": "valid joint plan 15 points; Cartesian fraction 0; no feedback motion"
     }
   ],
   "known_limitations": [
