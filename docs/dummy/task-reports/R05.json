@@ -7,7 +7,7 @@
     "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634"
   },
   "completed_cases": {
-    "ROS04_scene_presence": "PASS: Gazebo world and /get_planning_scene WORLD_OBJECT_GEOMETRY contain planning_barrier",
+    "ROS04_scene_presence": "PASS: Gazebo world is generated from scene.yaml; /get_planning_scene WORLD_OBJECT_GEOMETRY contains planning_barrier",
     "scene_dimensions_m": [0.08, 0.5, 0.5],
     "scene_pose_xyz_m": [0.35, 0.0, 0.25],
     "scene_revision": "dummy_scene_v1"
@@ -36,7 +36,7 @@
     }
   ],
   "known_limitations": [
-    "Gazebo scene object and MoveIt scene object share a checked-in YAML mapping, but planning collision response is not yet exercised.",
+    "Gazebo world is generated from the checked-in YAML during build; planning collision response is not yet exercised.",
     "move_group exits -11 on Ctrl-C teardown in this environment; active service calls succeeded.",
     "No hardware IO or DPSDK device process was opened."
   ],

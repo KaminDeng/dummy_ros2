@@ -7,7 +7,7 @@
 | R02 | PASS_WITH_LIMITATION | Headless Gazebo 8.15 spawns the model and one controller manager; six-axis state and nonzero FJT feedback are real; pause/resume follows `/clock`; primitive collisions load. | `move_group` reproducibly exits -11 on Ctrl-C; collision boxes and position servo are simulation-only approximations. |
 | R03 | IN_PROGRESS | ROS-owned C++ codec and goal-registration-gate probes pass against DPSDK C03 generated headers. | Register/build package, publish report, and hand probe evidence to C04; running JTC hook remains R06 scope. |
 | R04 | BLOCKED | DPSDK C04/C05 wire interoperability and release are NOT_STARTED. | Await C04 cross-owner probe and C05 wire-v1; do not build device plugin on an unfrozen seed. |
-| R05 | IN_PROGRESS | Versioned scene in Gazebo and actual MoveIt PlanningScene verified via service. | Collision planning, Cartesian fraction, FJT cancel/BUSY and two-goal lifecycle NOT_RUN. |
+| R05 | IN_PROGRESS | Versioned YAML generates Gazebo world during build; actual MoveIt PlanningScene verified via service. | Collision planning, Cartesian fraction, FJT cancel/BUSY and two-goal lifecycle NOT_RUN. |
 | R06-R08 | NOT_STARTED | No device action lifecycle, SIL, or release tests executed. | Ordered dependencies remain. |
 | Hardware/J1 | NOT_RUN | `--hardware none` enforced; no probe, upload, reset, or motion performed. | Requires separate human-gated procedure. |
 

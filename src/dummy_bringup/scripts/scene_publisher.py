@@ -32,8 +32,14 @@ def quaternion_from_rpy(roll: float, pitch: float, yaw: float) -> tuple[float, f
 def load_scene(path: Path) -> PlanningScene:
     data = yaml.safe_load(path.read_text())
     frame_id = data["frame_id"]
+    if frame_id != "world":
+        raise ValueError("scene objects must use the world frame")
     objects = []
+    identifiers: set[str] = set()
     for item in data["objects"]:
+        if item["id"] in identifiers:
+            raise ValueError(f"duplicate scene object: {item['id']}")
+        identifiers.add(item["id"])
         if item["shape"] != "box" or len(item["size"]) != 3 or len(item["pose_xyz_rpy"]) != 6:
             raise ValueError(f"unsupported scene object: {item['id']}")
         if any(not math.isfinite(value) for value in (*item["size"], *item["pose_xyz_rpy"])):

@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as element_tree
 
@@ -50,6 +51,32 @@ class R05SceneContractTest(unittest.TestCase):
         self.assertEqual("planning_barrier", planning_scene.world.collision_objects[0].id)
         request = ApplyPlanningScene.Request(scene=planning_scene)
         self.assertGreater(len(serialize_message(request)), 0)
+
+    def test_world_is_generated_from_the_canonical_scene(self):
+        sys.path.insert(0, str(ROOT / "src/dummy_bringup/scripts"))
+        from generate_world import render_world
+
+        generated = element_tree.fromstring(render_world(SCENE))
+        committed = element_tree.parse(WORLD).getroot()
+        self.assertEqual(
+            element_tree.tostring(generated, encoding="unicode"),
+            element_tree.tostring(committed, encoding="unicode"),
+        )
+        self.assertIn("generate_world.py", (ROOT / "scripts/dummy/build.sh").read_text())
+
+    def test_both_scene_consumers_reject_duplicate_identifiers(self):
+        sys.path.insert(0, str(ROOT / "src/dummy_bringup/scripts"))
+        from generate_world import render_world
+        from scene_publisher import load_scene
+
+        invalid = SCENE.read_text().replace("objects:\n", "objects:\n" + SCENE.read_text().split("objects:\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "duplicate.yaml"
+            path.write_text(invalid)
+            with self.assertRaises(ValueError):
+                render_world(path)
+            with self.assertRaises(ValueError):
+                load_scene(path)
 
 
 if __name__ == "__main__":
