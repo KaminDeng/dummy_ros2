@@ -39,6 +39,12 @@ class VerifySuitesTest(unittest.TestCase):
         self.assertEqual(3, code)
         self.assertEqual("NOT_RUN", report["status"])
 
+    def test_r04_runs_nonblocking_plugin_suite(self):
+        code, report = self.run_suite("R04")
+        self.assertEqual(0, code)
+        self.assertEqual("PASS", report["status"])
+        self.assertEqual(4, report["executed_test_count"])
+
 
 if __name__ == "__main__":
     unittest.main()

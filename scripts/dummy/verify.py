@@ -39,6 +39,10 @@ SUITES = {
         "fixture": "R03.json",
         "modules": ("scripts/dummy/tests/test_r03_acceptance.py",),
     },
+    "R04": {
+        "fixture": "R04.json",
+        "modules": ("scripts/dummy/tests/test_r04_acceptance.py",),
+    },
     "R05": {
         "fixture": "R05.json",
         "modules": ("scripts/dummy/tests/test_r05_acceptance.py",),

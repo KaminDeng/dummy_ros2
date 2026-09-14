@@ -1,0 +1,59 @@
+{
+  "task": "R04",
+  "status": "PASS",
+  "hardware": "none",
+  "contract": {
+    "release_id": "dummy-wire-v1",
+    "payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
+    "c04_commit": "803eff5",
+    "c05_commit": "2c9392a"
+  },
+  "passed": {
+    "FRE01_half_open_ticket_window": true,
+    "FRE04_transport_replay_does_not_advance_generation": true,
+    "FRE05_write_without_update_does_not_advance_generation": true,
+    "FRE06_equal_hold_update_advances_generation": true,
+    "RPC09_original_request_anchor_enforced": true,
+    "FRE09_stale_state_rejected": true,
+    "FRE10_old_sequence_and_boot_rejected": true,
+    "ROS07_invalid_axis_and_state_rejected": true,
+    "ROS08_management_access_independent_of_active": true,
+    "ROS09_bounded_queue_drop_count": true,
+    "wire_state_codec_and_identity_validation": true,
+    "hardware_pluginlib_load": true,
+    "guarded_jtc_update_sink_compiles": true,
+    "guarded_jtc_update_sink_shared_channel": true,
+    "dp_comm_command_publish_subscribe": true,
+    "dp_comm_state_publish_subscribe": true,
+    "on_error_async_stop_latch": true,
+    "blocked_worker_updates": 1000,
+    "bounded_queue_capacity": 4,
+    "bounded_queue_drops": 996,
+    "direct_acceptance_tests": 4,
+    "dummy_ros_control_ctests": 10
+  },
+  "not_run": [],
+  "commands": [
+    {
+      "command": "/usr/bin/python3 scripts/dummy/verify.py --suite R04 --hardware none --report build_dummy/reports/R04.json",
+      "exit_code": 0,
+      "tests": 4
+    },
+    {
+      "command": "colcon test --packages-select dummy_ros_control",
+      "exit_code": 0,
+      "tests": 10
+    },
+    {
+      "command": "bash scripts/dummy/build.sh",
+      "exit_code": 0,
+      "packages": 5
+    }
+  ],
+  "limitations": [
+    "The hardware plugin has no device authorization side effects.",
+    "Invalid velocity axes are represented as NaN and are not claimed as zero velocity.",
+    "No USB, CAN, serial, J-Link, firmware, or motor operation was performed."
+  ],
+  "next_action": "R06 integrates the completed data plane with the device management/action lifecycle; R07 performs interprocess SIL."
+}

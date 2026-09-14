@@ -7,3 +7,11 @@
     <description>JTC with base ROS inputs disabled and same-process credential admission.</description>
   </class>
 </library>
+<library path="dummy_guarded_zenbedded_system">
+  <class
+      name="dummy_ros_control/GuardedZenbeddedSystem"
+      type="dummy_ros_control::GuardedZenbeddedSystem"
+      base_class_type="hardware_interface::SystemInterface">
+    <description>Nonblocking guarded wire-v1 hardware system.</description>
+  </class>
+</library>
