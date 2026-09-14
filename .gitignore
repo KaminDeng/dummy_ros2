@@ -1,0 +1,8 @@
+build/
+install/
+log/
+build_dummy/
+install_dummy/
+log_dummy/
+__pycache__/
+*.pyc

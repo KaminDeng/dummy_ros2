@@ -1,0 +1,58 @@
+{
+  "task": "R00",
+  "status": "IN_PROGRESS",
+  "hardware": "none",
+  "source": {
+    "ros_workspace_commit": "0dc69ac6948dfc8ddbd6ee584431770f01c73a9a",
+    "dpsdk_commit": "323e5fa929cb4ac60583bd97ab374f5486f133a3",
+    "dummy_reference_commit": "3a9d17464308e1532b3d648a80da6db899cc1f01",
+    "contract_release": "NOT_AVAILABLE: C02 model-v1 has not been published",
+    "profile": "NOT_AVAILABLE: C02 model-v1 has not been published"
+  },
+  "commands": [
+    {
+      "command": "python3 -m unittest discover -s scripts/dummy/tests -p test_r00_acceptance.py -v",
+      "exit_code": 0,
+      "passed": 5,
+      "failed": 0,
+      "not_run": 0
+    },
+    {
+      "command": "python3 -m unittest src/dummy_moveit_config/test/test_jazzy_simulation_contract.py -v",
+      "exit_code": 0,
+      "passed": 3,
+      "failed": 0,
+      "not_run": 0,
+      "scope": "static configuration only"
+    },
+    {
+      "command": "bash scripts/dummy/build.sh",
+      "exit_code": 0,
+      "packages_built": 3
+    },
+    {
+      "command": "python3 scripts/dummy/verify.py --suite R00 --hardware none --report build_dummy/reports/R00.json",
+      "exit_code": 3,
+      "passed": 3,
+      "failed": 0,
+      "not_run": 1
+    }
+  ],
+  "cases": {
+    "AUD01": "PASS",
+    "AUD02": "PASS",
+    "AUD03": "PASS",
+    "ROS01": "NOT_RUN"
+  },
+  "artifacts": [
+    "build_dummy/reports/environment.json",
+    "build_dummy/reports/R00.json",
+    "build_dummy/reports/R00.junit.xml",
+    "build_dummy/reports/R00.log"
+  ],
+  "blocking_conditions": [
+    "C02 model-v1 manifest/hash is not available to begin R01.",
+    "ROS01 Gazebo runtime remains a required R02 execution result."
+  ],
+  "next_independent_task": "Consume C02 model-v1 and execute R01 mathematical-model alignment."
+}

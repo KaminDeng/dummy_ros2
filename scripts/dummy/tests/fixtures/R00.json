@@ -1,0 +1,5 @@
+{
+  "suite": "R00",
+  "hardware": "none",
+  "cases": ["AUD01", "AUD02", "AUD03", "ROS01"]
+}
