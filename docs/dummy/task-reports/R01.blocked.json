@@ -1,0 +1,41 @@
+{
+  "task": "R01",
+  "status": "BLOCKED",
+  "checked_at": "2026-09-14",
+  "ros_workspace_commit": "16da75dc0204e97c8d060e4c73b2c5fc8b2c6322",
+  "dpsdk_root": "../dpsdk",
+  "dpsdk_commit": "74b9da55878f0b99c600f49115f49beba5419964",
+  "required_contract": {
+    "release_id": "dummy-model-v1",
+    "stage": "model",
+    "required_paths": [
+      "robot_profiles/dummy/model.yaml",
+      "robot_profiles/dummy/geometry_reference.yaml",
+      "robot_profiles/dummy/profiles/gazebo_6dof.yaml",
+      "generated/dummy_robot_v1/manifest.json"
+    ]
+  },
+  "observed": {
+    "all_required_paths_missing": true,
+    "dummy_ros_idl_missing": true,
+    "all_local_dpsdk_branches_checked": [
+      "feat/dummy-dpsdk-ros2-v3",
+      "feat/ros-like-comm-api",
+      "master"
+    ],
+    "unreachable_commits_checked_for_contract_paths": true
+  },
+  "owner": "DPSDK contract owner",
+  "unblock_condition": "Publish and hash-verify C02 dummy-model-v1 bundle, then copy it read-only to ROS_WS/contracts/dummy_robot_v1/.",
+  "prohibited_workaround": "Do not hand-author a replacement model, profile, manifest, or wire contract in ROS_WS.",
+  "next_tasks": {
+    "R01": "starts after C02",
+    "R02": "blocked by R01",
+    "R03": "blocked by C03",
+    "R04": "blocked by R03 and C04",
+    "R05": "blocked by R02",
+    "R06": "blocked by R04 and R05",
+    "R07": "blocked by R06, D06, D07, and C05",
+    "R08": "blocked by R07"
+  }
+}
