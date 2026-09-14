@@ -66,12 +66,15 @@ if(BUILD_TESTING)
 
   add_executable(guarded_plugin_load_tests test/guarded_plugin_load_tests.cpp)
   ament_target_dependencies(guarded_plugin_load_tests controller_interface hardware_interface pluginlib)
-  add_test(NAME guarded_plugin_load_tests COMMAND guarded_plugin_load_tests)
+  set(DUMMY_PLUGIN_TEST_PREFIX "${CMAKE_BINARY_DIR}/plugin-test-prefix")
+  add_test(NAME guarded_plugin_load_tests COMMAND bash -c
+    "cmake --install '${CMAKE_BINARY_DIR}' --prefix '${DUMMY_PLUGIN_TEST_PREFIX}' >/dev/null && AMENT_PREFIX_PATH='${DUMMY_PLUGIN_TEST_PREFIX}:/opt/ros/jazzy' LD_LIBRARY_PATH='${DUMMY_PLUGIN_TEST_PREFIX}/lib:/opt/ros/jazzy/lib' exec '${CMAKE_CURRENT_BINARY_DIR}/guarded_plugin_load_tests'")
 
   add_executable(guarded_lifecycle_probe test/guarded_lifecycle_probe.cpp)
   target_link_libraries(guarded_lifecycle_probe dummy_guarded_zenbedded_system)
   ament_target_dependencies(guarded_lifecycle_probe hardware_interface pluginlib)
-  add_test(NAME guarded_lifecycle_probe COMMAND guarded_lifecycle_probe)
+  add_test(NAME guarded_lifecycle_probe COMMAND bash -c
+    "cmake --install '${CMAKE_BINARY_DIR}' --prefix '${DUMMY_PLUGIN_TEST_PREFIX}' >/dev/null && AMENT_PREFIX_PATH='${DUMMY_PLUGIN_TEST_PREFIX}:/opt/ros/jazzy' LD_LIBRARY_PATH='${DUMMY_PLUGIN_TEST_PREFIX}/lib:/opt/ros/jazzy/lib' exec '${CMAKE_CURRENT_BINARY_DIR}/guarded_lifecycle_probe'")
 
   add_executable(request_handle_destructor_tests test/request_handle_destructor_tests.cpp)
   target_include_directories(request_handle_destructor_tests PRIVATE
