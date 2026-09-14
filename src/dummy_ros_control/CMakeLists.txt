@@ -70,6 +70,7 @@ if(BUILD_TESTING)
 
   add_executable(guarded_lifecycle_probe test/guarded_lifecycle_probe.cpp)
   target_link_libraries(guarded_lifecycle_probe dummy_guarded_zenbedded_system)
+  ament_target_dependencies(guarded_lifecycle_probe hardware_interface pluginlib)
   add_test(NAME guarded_lifecycle_probe COMMAND guarded_lifecycle_probe)
 
   add_executable(request_handle_destructor_tests test/request_handle_destructor_tests.cpp)
