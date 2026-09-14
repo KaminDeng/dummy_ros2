@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import tempfile
 import unittest
 import xml.etree.ElementTree as element_tree
 
@@ -28,8 +29,8 @@ def frame(origin: element_tree.Element) -> PyKDL.Frame:
     return PyKDL.Frame(PyKDL.Rotation.RPY(*rpy), PyKDL.Vector(*xyz))
 
 
-def load_chain() -> PyKDL.Chain:
-    root = element_tree.parse(REFERENCE_CHAIN).getroot()
+def load_chain(path: Path = REFERENCE_CHAIN) -> PyKDL.Chain:
+    root = element_tree.parse(path).getroot()
     chain = PyKDL.Chain()
     for joint in root.findall("joint"):
         origin = frame(joint.find("origin"))
@@ -61,6 +62,18 @@ def solve(chain: PyKDL.Chain, joints: list[float]) -> tuple[list[float], list[fl
 
 
 class ReferenceChainFkTest(unittest.TestCase):
+    def test_literal_legacy_axis3_row_diverges_from_actual_fk(self):
+        source = REFERENCE_CHAIN.read_text().replace(
+            '<origin xyz="-0.052 0 0" rpy="1.5707963267948966 0 0"/>',
+            '<origin xyz="0 0 0.052" rpy="1.5707963267948966 0 0"/>',
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            wrong_path = Path(temporary) / "wrong_axis3.urdf"
+            wrong_path.write_text(source)
+            position, _ = solve(load_chain(wrong_path), [0.0] * 6)
+        expected = json.loads(FIXED_CASES.read_text())["cases"][0]["position"]
+        self.assertGreater(max(abs(a - b) for a, b in zip(position, expected)), 0.00005)
+
     def test_fixed_and_random_evidence_match_kdl(self):
         self.assertTrue(REFERENCE_CHAIN.is_file(), "reference-chain URDF is missing")
         chain = load_chain()

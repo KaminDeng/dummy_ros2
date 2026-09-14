@@ -52,6 +52,19 @@ class ModelAlignmentTest(unittest.TestCase):
             self.assertGreaterEqual(position, lower, name)
             self.assertLessEqual(position, upper, name)
 
+    def test_joint1_bench_mapping_applies_anchor_once_and_round_trips(self):
+        joint = self.joints["Joint1"]
+        anchor = 2.0
+        position = 0.1
+        motor_rev = anchor + joint["direction"] * joint["gear_ratio"] * position / (2.0 * math.pi)
+        restored = joint["direction"] * 2.0 * math.pi * (motor_rev - anchor) / joint["gear_ratio"]
+        self.assertAlmostEqual(2.0 - 3.0 / (2.0 * math.pi), motor_rev, places=12)
+        self.assertAlmostEqual(position, restored, places=12)
+
+    def test_all_zero_pose_is_rejected_by_joint3_contract_range(self):
+        lower, _ = self.joints["Joint3"]["model_limits_rad"]
+        self.assertGreater(lower, 0.0)
+
     def test_all_srdf_group_states_are_complete_and_within_limits(self):
         srdf = element_tree.parse(MOVEIT / "config/dummy-ros2.srdf").getroot()
         states = srdf.findall("group_state")
@@ -63,6 +76,13 @@ class ModelAlignmentTest(unittest.TestCase):
                 lower, upper = self.joints[name]["model_limits_rad"]
                 self.assertGreaterEqual(position, lower, f"{state.attrib['name']}:{name}")
                 self.assertLessEqual(position, upper, f"{state.attrib['name']}:{name}")
+
+    def test_alignment_report_does_not_claim_physical_collision_accuracy(self):
+        report = " ".join(
+            (WORKSPACE_ROOT / "docs/dummy/model_alignment.md").read_text().split()
+        )
+        self.assertIn("simulation-only approximations", report)
+        self.assertIn("does not establish real collision clearance", report)
 
 
 if __name__ == "__main__":
