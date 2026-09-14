@@ -1,0 +1,44 @@
+{
+  "task": "R05",
+  "status": "IN_PROGRESS",
+  "hardware": "none",
+  "contract": {
+    "model_release": "dummy-model-v1",
+    "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634"
+  },
+  "completed_cases": {
+    "ROS04_scene_presence": "PASS: Gazebo world and /get_planning_scene WORLD_OBJECT_GEOMETRY contain planning_barrier",
+    "scene_dimensions_m": [0.08, 0.5, 0.5],
+    "scene_pose_xyz_m": [0.35, 0.0, 0.25],
+    "scene_revision": "dummy_scene_v1"
+  },
+  "not_run": [
+    "ROS04 collision-blocked or detoured planning result",
+    "ROS05 partial Cartesian fraction and no-execution guarantee",
+    "ROS06 second-goal BUSY, cancel, third-goal execution",
+    "ROS11 locked JTC cancel-deceleration behavior",
+    "joint and pose targets through MoveIt with scene revision"
+  ],
+  "commands": [
+    {
+      "command": "bash scripts/dummy/build.sh",
+      "exit_code": 0,
+      "packages_built": 4
+    },
+    {
+      "command": "ros2 launch dummy_bringup gazebo_6dof.launch.py gui:=false rviz:=false",
+      "result": "scene_publisher.py exited 0 after apply_planning_scene"
+    },
+    {
+      "command": "ros2 service call /get_planning_scene moveit_msgs/srv/GetPlanningScene '{components: {components: 16}}'",
+      "exit_code": 0,
+      "result": "planning_barrier returned with matching box and pose"
+    }
+  ],
+  "known_limitations": [
+    "Gazebo scene object and MoveIt scene object share a checked-in YAML mapping, but planning collision response is not yet exercised.",
+    "move_group exits -11 on Ctrl-C teardown in this environment; active service calls succeeded.",
+    "No hardware IO or DPSDK device process was opened."
+  ],
+  "next_action": "Exercise collision-aware MoveIt planning, Cartesian fraction, and native FJT cancel/BUSY/third-goal behavior."
+}

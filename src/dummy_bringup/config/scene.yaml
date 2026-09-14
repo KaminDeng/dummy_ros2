@@ -1,0 +1,7 @@
+scene_revision: dummy_scene_v1
+frame_id: world
+objects:
+  - id: planning_barrier
+    shape: box
+    size: [0.08, 0.50, 0.50]
+    pose_xyz_rpy: [0.35, 0.0, 0.25, 0.0, 0.0, 0.0]
