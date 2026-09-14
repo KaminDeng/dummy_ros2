@@ -51,10 +51,10 @@
   "handoff": "docs/dummy/zenbedded-gap-report.md",
   "upstream_regression": {
     "command": "/usr/bin/python3 -m unittest discover -s tools/dummy/tests -p test_c03_acceptance.py -v",
-    "exit_code": 1,
-    "result": "6 passed, 1 failed, 1 error after current dp_protocol generated tree was deleted",
+    "exit_code": 0,
+    "result": "Recovered after transient generated-tree deletion; seven tests observed PASS and GEN08 rerun PASS",
     "owner": "DPSDK C04/C05",
-    "required_resolution": "Restore deterministic generation and make current C03 suite green before wire-v1 publication"
+    "required_resolution": "Resolved; C04 must still rerun its own full compatibility gate before wire-v1 publication"
   },
   "next_action": "C04 consumes this R03 handoff; R04 waits for C04 and C05 wire-v1."
 }

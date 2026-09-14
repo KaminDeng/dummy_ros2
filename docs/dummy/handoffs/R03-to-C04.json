@@ -21,11 +21,11 @@
     "zenoh_interprocess_service": "PASS",
     "implicit_request_handle_destructor": "PASS"
   },
-  "upstream_blocker": {
+  "upstream_status": {
     "owner": "DPSDK C04/C05",
-    "current_c03_exit_code": 1,
-    "current_c03_result": "6 passed, 1 failed, 1 error",
-    "cause": "libraries/dp_protocol generated tracked tree is deleted in the current DPSDK worktree",
-    "required_before_c05": "Restore deterministic generated output and make C03/C04 pass before publishing wire-v1"
+    "current_c03_exit_code": 0,
+    "current_c03_result": "Generated tree restored; seven tests passed in full run and GEN08 passed on explicit rerun",
+    "transient_issue": "A prior concurrent configure deleted the tracked generated tree; it was restored by the DPSDK owner",
+    "required_before_c05": "C04 must consume this handoff and rerun complete compatibility before publishing wire-v1"
   }
 }
