@@ -1,0 +1,48 @@
+{
+  "task": "R02",
+  "status": "PASS_WITH_LIMITATION",
+  "hardware": "none",
+  "runtime": {
+    "gazebo_version": "8.15.0",
+    "entity_spawned": true,
+    "controller_manager_count": 1,
+    "active_controllers": ["dummy_arm_controller", "joint_state_broadcaster"],
+    "joint_names": ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"],
+    "initial_joint3_rad": 1.5707963267948966,
+    "trajectory_goal_status": "SUCCEEDED",
+    "first_joint1_rad": 0.0,
+    "final_joint1_rad": -0.19999999999999998,
+    "clock_paused_no_message_timeout_seconds": 2,
+    "clock_after_resume_seconds": 455.308,
+    "dpsdk_process_started": false,
+    "physical_io_opened": false
+  },
+  "collision": {
+    "first_run_mesh_collision_creation_failed": true,
+    "resolution": "Seven simulation-only AABB boxes computed from all STL vertices and visual origins.",
+    "final_run_collision_creation_errors": 0,
+    "physical_accuracy_verified": false
+  },
+  "commands": [
+    {
+      "command": "ros2 launch dummy_bringup gazebo_6dof.launch.py gui:=false rviz:=false",
+      "result": "entity and one gz_ros2_control controller manager started"
+    },
+    {
+      "command": "ros2 action send_goal /dummy_arm_controller/follow_joint_trajectory control_msgs/action/FollowJointTrajectory <six-axis goal>",
+      "exit_code": 0,
+      "result": "SUCCEEDED"
+    },
+    {
+      "command": "gz service -s /world/default/control ... pause:true/false",
+      "exit_codes": [0, 0],
+      "result": "clock stopped and resumed"
+    }
+  ],
+  "limitations": [
+    "Position control uses gz_ros2_control proportional tracking with gain 0.5; it is not a real motor dynamic model.",
+    "Collision boxes are simulation approximations, not physical safety evidence.",
+    "move_group reproducibly terminates with SIGSEGV (-11) during Ctrl-C teardown; Gazebo reports -2 for the received SIGINT.",
+    "No device watchdog uses ROS /clock."
+  ]
+}

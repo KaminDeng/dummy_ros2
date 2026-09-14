@@ -14,6 +14,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_jazzy_simulation_contract test/test_jazzy_simulation_contract.py)
   ament_add_pytest_test(test_model_alignment test/test_model_alignment.py)
   ament_add_pytest_test(test_reference_chain_fk test/test_reference_chain_fk.py)
+  ament_add_pytest_test(test_r02_gazebo_contract test/test_r02_gazebo_contract.py)
 endif()
 
 add_executable(dummy_servo_keyboard_input src/servo_keyboard_input.cpp)

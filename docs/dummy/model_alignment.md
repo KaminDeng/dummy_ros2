@@ -52,7 +52,11 @@ and 128 independently generated legacy-solver samples. Acceptance limits are
 ## Visual And Collision Assets
 
 The existing `dummy-ros2.xacro` retains the seven uploaded STL files and their
-CAD-derived visual/collision origins. Those origins are not used as the FK oracle.
+CAD-derived visual origins. Those origins are not used as the FK oracle. Gazebo
+Harmonic's DART backend rejected the STL collision shapes, so simulation collision
+uses axis-aligned boxes computed from every STL vertex after applying the visual
+origin. These boxes are conservative simulation-only approximations, not measured
+link geometry.
 The reference chain intentionally contains no visual, collision, mass, or inertia
 claims. The CAD xacro continues to provide simulation appearance and provisional
 collision geometry while the reference chain proves mathematical kinematics.

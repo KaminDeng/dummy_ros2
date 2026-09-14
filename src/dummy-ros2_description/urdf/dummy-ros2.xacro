@@ -17,9 +17,9 @@
     <material name="silver"/>
   </visual>
   <collision>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <origin xyz="-0.019225 -0.005523 0.054184" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      <box size="0.1 0.11 0.099"/>
     </geometry>
   </collision>
 </link>
@@ -38,9 +38,9 @@
     <material name="silver"/>
   </visual>
   <collision>
-    <origin xyz="0.019225 0.000523 -0.100684" rpy="0 0 0"/>
+    <origin xyz="0.00095 0.009 0.017749" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link1_1_1.stl" scale="0.001 0.001 0.001"/>
+      <box size="0.0629 0.079 0.048499"/>
     </geometry>
   </collision>
 </link>
@@ -59,9 +59,9 @@
     <material name="silver"/>
   </visual>
   <collision>
-    <origin xyz="0.034725 -0.034477 -0.129184" rpy="0 0 0"/>
+    <origin xyz="0.021575 0.001501 0.073002" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link2_1_1.stl" scale="0.001 0.001 0.001"/>
+      <box size="0.05585 0.050998 0.193995"/>
     </geometry>
   </collision>
 </link>
@@ -80,9 +80,9 @@
     <material name="silver"/>
   </visual>
   <collision>
-    <origin xyz="-0.001925 -0.034477 -0.275184" rpy="0 0 0"/>
+    <origin xyz="-0.011975 -0.014252 0.04735" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link3_1_1.stl" scale="0.001 0.001 0.001"/>
+      <box size="0.05115 0.051495 0.1177"/>
     </geometry>
   </collision>
 </link>
@@ -101,9 +101,9 @@
     <material name="silver"/>
   </visual>
   <collision>
-    <origin xyz="0.016625 -0.024477 -0.327184" rpy="0 0 0"/>
+    <origin xyz="-0.0027 0.0755 0" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link4_1_1.stl" scale="0.001 0.001 0.001"/>
+      <box size="0.039 0.151 0.048"/>
     </geometry>
   </collision>
 </link>
@@ -122,9 +122,9 @@
     <material name="silver"/>
   </visual>
   <collision>
-    <origin xyz="-0.000175 -0.151477 -0.327184" rpy="0 0 0"/>
+    <origin xyz="-0.0148 0.030004 0" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link5_1_1.stl" scale="0.001 0.001 0.001"/>
+      <box size="0.048 0.093992 0.036"/>
     </geometry>
   </collision>
 </link>
@@ -143,9 +143,9 @@
     <material name="silver"/>
   </visual>
   <collision>
-    <origin xyz="0.018331 -0.228477 -0.327078" rpy="0 0 0"/>
+    <origin xyz="-0.000001 0.0015 -0.000002" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link6_1_1.stl" scale="0.001 0.001 0.001"/>
+      <box size="0.022997 0.003 0.022996"/>
     </geometry>
   </collision>
 </link>

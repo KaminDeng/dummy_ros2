@@ -53,13 +53,14 @@ def _launch_gazebo_sim(context):
         Node(
             package="robot_state_publisher",
             executable="robot_state_publisher",
-            parameters=[{"robot_description": robot_urdf}],
+            parameters=[{"robot_description": robot_urdf, "use_sim_time": True}],
             output="screen",
         ),
         Node(
             package="ros_gz_bridge",
             executable="parameter_bridge",
             arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+            parameters=[{"use_sim_time": True}],
             output="screen",
         ),
         Node(
@@ -67,6 +68,7 @@ def _launch_gazebo_sim(context):
             executable="create",
             parameters=[
                 {
+                    "use_sim_time": True,
                     "world": "default",
                     "file": sdf_path,
                     "name": "dummy-ros2",
@@ -81,12 +83,14 @@ def _launch_gazebo_sim(context):
             package="controller_manager",
             executable="spawner",
             arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
+            parameters=[{"use_sim_time": True}],
             output="screen",
         ),
         Node(
             package="controller_manager",
             executable="spawner",
             arguments=["dummy_arm_controller", "--controller-manager", "/controller_manager"],
+            parameters=[{"use_sim_time": True}],
             output="screen",
         ),
     ]
