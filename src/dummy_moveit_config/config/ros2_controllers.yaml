@@ -3,14 +3,14 @@ controller_manager:
   ros__parameters:
     update_rate: 100  # Hz
 
-    dummy_arm_controller:
+    _internal_arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-dummy_arm_controller:
+_internal_arm_controller:
   ros__parameters:
     joints:
       - Joint1
@@ -24,3 +24,12 @@ dummy_arm_controller:
     state_interfaces:
       - position
       - velocity
+    allow_partial_joints_goal: false
+    allow_nonzero_velocity_at_trajectory_end: false
+    constraints:
+      Joint1: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}
+      Joint2: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}
+      Joint3: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}
+      Joint4: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}
+      Joint5: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}
+      Joint6: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}

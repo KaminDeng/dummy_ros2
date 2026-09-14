@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>dummy_motion_client</name>
+  <version>0.1.0</version>
+  <description>Public guarded action entrypoint for Dummy motion.</description>
+  <maintainer email="maintainer@example.invalid">Dummy ROS maintainers</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>control_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

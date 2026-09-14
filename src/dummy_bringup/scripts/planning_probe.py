@@ -7,13 +7,16 @@ import argparse
 import json
 import math
 from pathlib import Path
+import random
 
-from geometry_msgs.msg import Pose
-from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest, RobotState
-from moveit_msgs.srv import GetCartesianPath, GetMotionPlan
+from builtin_interfaces.msg import Duration
+from geometry_msgs.msg import Pose, PoseStamped
+from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest, PositionIKRequest, RobotState
+from moveit_msgs.srv import GetCartesianPath, GetMotionPlan, GetPositionFK, GetPositionIK, GetStateValidity
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Header
 import yaml
 
 
@@ -64,8 +67,7 @@ def joint_sample(node: Node, timeout: float = 8.0) -> float:
         node.destroy_subscription(subscription)
 
 
-def motion_request(joint1: float) -> GetMotionPlan.Request:
-    goal = (joint1,) + START[1:]
+def motion_request(goal: tuple[float, ...]) -> GetMotionPlan.Request:
     if not validate_joint_target(goal):
         raise ValueError("target is outside the C02 joint limits")
     constraints = Constraints(
@@ -95,6 +97,69 @@ def motion_request(joint1: float) -> GetMotionPlan.Request:
     )
 
 
+def find_barrier_collision(node: Node) -> tuple[float, ...] | None:
+    model = yaml.safe_load(MODEL.read_text())["joints"]
+    generator = random.Random(20260914)
+    candidates = [
+        tuple(generator.uniform(*joint["model_limits_rad"]) for joint in model)
+        for _ in range(160)
+    ]
+    for positions in candidates:
+        response = call(
+            node,
+            GetStateValidity,
+            "/check_state_validity",
+            GetStateValidity.Request(
+                robot_state=RobotState(
+                    joint_state=JointState(name=list(JOINT_NAMES), position=list(positions))
+                ),
+                group_name="dummy_arm",
+            ),
+        )
+        if any(
+            contact.contact_body_1 == "planning_barrier" or contact.contact_body_2 == "planning_barrier"
+            for contact in response.contacts
+        ):
+            return positions
+    return None
+
+
+def solve_nearby_pose(node: Node) -> tuple[int, bool]:
+    state = RobotState(joint_state=JointState(name=list(JOINT_NAMES), position=list(START)))
+    fk = call(
+        node,
+        GetPositionFK,
+        "/compute_fk",
+        GetPositionFK.Request(
+            header=Header(frame_id="base_link"),
+            fk_link_names=["link6_1_1"],
+            robot_state=state,
+        ),
+    )
+    if fk.error_code.val != 1 or not fk.pose_stamped:
+        return fk.error_code.val, False
+    target = PoseStamped(header=Header(frame_id="base_link"), pose=fk.pose_stamped[0].pose)
+    target.pose.position.y += 0.005
+    ik = call(
+        node,
+        GetPositionIK,
+        "/compute_ik",
+        GetPositionIK.Request(
+            ik_request=PositionIKRequest(
+                group_name="dummy_arm",
+                robot_state=state,
+                avoid_collisions=True,
+                ik_link_name="link6_1_1",
+                pose_stamped=target,
+                timeout=Duration(sec=2),
+            )
+        ),
+    )
+    by_name = dict(zip(ik.solution.joint_state.name, ik.solution.joint_state.position))
+    solution = tuple(by_name.get(name, math.nan) for name in JOINT_NAMES)
+    return ik.error_code.val, validate_joint_target(solution)
+
+
 def cartesian_request() -> GetCartesianPath.Request:
     far_pose = Pose()
     far_pose.position.x = 5.0
@@ -115,9 +180,16 @@ def cartesian_request() -> GetCartesianPath.Request:
 
 def run(node: Node) -> dict[str, int | float | bool]:
     initial = joint_sample(node)
-    valid = call(node, GetMotionPlan, "/plan_kinematic_path", motion_request(0.15))
+    valid = call(node, GetMotionPlan, "/plan_kinematic_path", motion_request((0.15,) + START[1:]))
     out_of_bounds_rejected = not validate_joint_target((5.0,) + START[1:])
     cartesian = call(node, GetCartesianPath, "/compute_cartesian_path", cartesian_request())
+    collision_state = find_barrier_collision(node)
+    collision_plan = (
+        call(node, GetMotionPlan, "/plan_kinematic_path", motion_request(collision_state))
+        if collision_state is not None
+        else None
+    )
+    pose_ik_error, pose_ik_within_limits = solve_nearby_pose(node)
     final = joint_sample(node)
     return {
         "valid_joint_plan_error_code": valid.motion_plan_response.error_code.val,
@@ -125,6 +197,12 @@ def run(node: Node) -> dict[str, int | float | bool]:
         "out_of_bounds_rejected_by_guard": out_of_bounds_rejected,
         "out_of_bounds_service_sent": not out_of_bounds_rejected,
         "unreachable_cartesian_fraction": cartesian.fraction,
+        "barrier_collision_state_found": collision_state is not None,
+        "barrier_collision_goal_error_code": (
+            collision_plan.motion_plan_response.error_code.val if collision_plan is not None else 0
+        ),
+        "pose_ik_error_code": pose_ik_error,
+        "pose_ik_solution_within_contract_limits": pose_ik_within_limits,
         "initial_joint1_rad": initial,
         "final_joint1_rad": final,
         "trajectory_executed": abs(final - initial) > 0.005,

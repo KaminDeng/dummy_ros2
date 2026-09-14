@@ -6,6 +6,7 @@ find_package(ament_cmake REQUIRED)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(PROGRAMS
+  scripts/action_gate_probe.py
   scripts/planning_probe.py
   scripts/scene_publisher.py
   DESTINATION lib/${PROJECT_NAME})

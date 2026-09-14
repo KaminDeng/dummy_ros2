@@ -1,6 +1,6 @@
 {
   "task": "R05",
-  "status": "IN_PROGRESS",
+  "status": "PASS_WITH_LIMITATION",
   "hardware": "none",
   "contract": {
     "model_release": "dummy-model-v1",
@@ -9,7 +9,7 @@
   "completed_cases": {
     "ROS04_scene_presence": "PASS: Gazebo world is generated from scene.yaml; /get_planning_scene WORLD_OBJECT_GEOMETRY contains planning_barrier",
     "scene_dimensions_m": [0.08, 0.5, 0.5],
-    "scene_pose_xyz_m": [0.35, 0.0, 0.25],
+    "scene_pose_xyz_m": [0.15, 0.0, 0.25],
     "scene_revision": "dummy_scene_v1"
     ,"valid_joint_plan": {
       "error_code": 1,
@@ -21,13 +21,23 @@
       "rejected": true,
       "service_request_sent": false,
       "raw_moveit_observation_before_guard": "non-deterministically returned SUCCESS(1) once and FAILURE(99999) once for Joint1=5 rad"
-    }
+    },
+    "barrier_collision_state_found": true,
+    "barrier_collision_goal_error_code": 99999,
+    "pose_ik_error_code": 1,
+    "pose_ik_solution_within_contract_limits": true,
+    "public_action_gate": {
+      "first_goal_accepted": true,
+      "second_goal_accepted": false,
+      "first_goal_terminal_status": 5,
+      "third_goal_accepted": true,
+      "third_goal_terminal_status": 4,
+      "out_of_bounds_goal_accepted": false
+    },
+    "cancel_deceleration_rad_s2": 0.5
   },
   "not_run": [
-    "ROS04 collision-blocked or detoured planning result",
-    "ROS06 second-goal BUSY, cancel, third-goal execution",
-    "ROS11 locked JTC cancel-deceleration behavior",
-    "pose target through MoveIt with scene revision"
+    "R06 device-backed internal JTC action/topic bypass closure"
   ],
   "commands": [
     {
@@ -47,7 +57,12 @@
     {
       "command": "/usr/bin/python3 src/dummy_bringup/scripts/planning_probe.py --report build_dummy/reports/R05.planning.json",
       "exit_code": 0,
-      "result": "valid joint plan 15 points; Cartesian fraction 0; no feedback motion"
+      "result": "valid joint plan 15 points; barrier collision goal FAILURE; nearby pose IK SUCCESS; Cartesian fraction 0; no feedback motion"
+    },
+    {
+      "command": "/usr/bin/python3 src/dummy_bringup/scripts/action_gate_probe.py --report build_dummy/reports/R05.action-final.json",
+      "exit_code": 0,
+      "result": "BUSY goal rejected; first canceled; third succeeded; Joint1=5 rad rejected"
     }
   ],
   "known_limitations": [
@@ -55,5 +70,5 @@
     "move_group exits -11 on Ctrl-C teardown in this environment; active service calls succeeded.",
     "No hardware IO or DPSDK device process was opened."
   ],
-  "next_action": "Exercise collision-aware MoveIt planning, Cartesian fraction, and native FJT cancel/BUSY/third-goal behavior."
+  "next_action": "Complete R03 async RPC evidence and await C04/C05 before R04/R06 device-backed integration."
 }

@@ -37,5 +37,11 @@ def generate_launch_description():
                 ],
                 output="screen",
             ),
+            Node(
+                package="dummy_motion_client",
+                executable="native_action_gate",
+                parameters=[{"use_sim_time": True}],
+                output="screen",
+            ),
         ]
     )

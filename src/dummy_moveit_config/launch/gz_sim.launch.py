@@ -89,7 +89,7 @@ def _launch_gazebo_sim(context):
         Node(
             package="controller_manager",
             executable="spawner",
-            arguments=["dummy_arm_controller", "--controller-manager", "/controller_manager"],
+            arguments=["_internal_arm_controller", "--controller-manager", "/controller_manager"],
             parameters=[{"use_sim_time": True}],
             output="screen",
         ),
