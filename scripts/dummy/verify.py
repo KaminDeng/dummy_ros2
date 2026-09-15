@@ -48,6 +48,20 @@ SUITES = {
         "modules": ("scripts/dummy/tests/test_r05_acceptance.py",),
         "runtime_action": "/arm_controller/follow_joint_trajectory",
     },
+    "R06": {
+        "fixture": "R06.json",
+        "modules": ("scripts/dummy/tests/test_r06_acceptance.py",),
+        "runtime_action": "/arm_controller/follow_joint_trajectory",
+    },
+    "R07": {
+        "fixture": "R07.json",
+        "modules": ("scripts/dummy/tests/test_r07_acceptance.py",),
+        "timeout": 180,
+    },
+    "R08": {
+        "fixture": "R08.json",
+        "modules": ("scripts/dummy/tests/test_r08_acceptance.py",),
+    },
 }
 
 
@@ -114,7 +128,8 @@ def run_registered_suite(suite: str, hardware: str) -> tuple[dict[str, object], 
 
     command = ["/usr/bin/python3", "-m", "unittest", *modules, "-v"]
     completed = subprocess.run(
-        command, cwd=WORKSPACE_ROOT, capture_output=True, text=True, check=False, timeout=45,
+        command, cwd=WORKSPACE_ROOT, capture_output=True, text=True, check=False,
+        timeout=definition.get("timeout", 45),
     )
     output = completed.stdout + completed.stderr
     match = re.search(r"Ran (\d+) tests?", output)

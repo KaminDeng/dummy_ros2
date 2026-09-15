@@ -1,0 +1,29 @@
+{
+  "task": "R08",
+  "status": "PASS",
+  "hardware": "none",
+  "test_count": 1,
+  "release_artifacts": [
+    "docs/dummy/ros-runbook.md",
+    "docs/dummy/backend-matrix.md",
+    "docs/dummy/versions.lock"
+  ],
+  "software_evidence": {
+    "colcon": "45 tests, 0 errors, 0 failures, 0 skipped",
+    "R05": "PASS (3 runtime tests)",
+    "R06": "PASS (23 cases)",
+    "R07": "PASS (8 cases)",
+    "R08": "PASS (1 case)"
+  },
+  "artifact_sha256": {
+    "json": "a03e50c767a416bbe7975f9673394163717de98c49be0317bdd5121b6edddc90",
+    "junit": "299644cf661a1bbe85186cbdb465f428fd1ce62941fdd4fb9dd48604a795d840",
+    "log": "f9bac4c83e73f9e8275920d5f7006e8f24a92eb9d47c28c8560a00b91abc555d"
+  },
+  "known_limitations": [
+    "MoveIt move_group exits with signal 11 during Ctrl-C teardown after successful runtime tests",
+    "Gazebo server reports signal 2 during requested shutdown",
+    "collision geometry and position servo are simulation approximations"
+  ],
+  "hardware_not_run": ["J-Link", "ttyACM0", "USB", "SocketCAN", "physical J1 motion"]
+}

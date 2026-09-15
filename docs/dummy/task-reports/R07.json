@@ -1,0 +1,26 @@
+{
+  "task": "R07",
+  "status": "PASS",
+  "hardware": "none",
+  "test_count": 8,
+  "upstream": {
+    "D05": "PASS (33 cases)",
+    "D06": "PASS (26 cases)",
+    "D07": "PASS (14 cases)",
+    "dpsdk_commit": "1fbe388416976c7e8c920311f2a9b0f0db9ad856"
+  },
+  "evidence": [
+    "four localhost Zenoh dual-peer scenarios",
+    "D07 RobotCore plus VirtualCAN J1 and six-axis scenarios",
+    "J1 plugin lifecycle with one state and command interface",
+    "separate simulation and steady clock domains",
+    "real_j1 read-only and no automatic authorization"
+  ],
+  "report": "build_dummy/reports/R07.json",
+  "artifact_sha256": {
+    "json": "f2279c6822dbd75d82b5aa32fbd0db78bc611e5abb6f430540e4e0841dce0828",
+    "junit": "aa6b5814aa61ad773fa50a541f8bdd9f39a3f8031c9ff606ce2afcb0ea769bdc",
+    "log": "9995c7bece360b809eecc0fc6dbeb95b8e0433a6cd3a9bfb1e21ad82b4918e30"
+  },
+  "known_not_run": ["J-Link", "ttyACM0", "USB", "SocketCAN", "physical J1 motion"]
+}

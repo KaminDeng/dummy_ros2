@@ -1,6 +1,10 @@
-from setuptools import setup
-import os
+# Copyright 2026 Dummy ROS maintainers
+# Licensed under the Apache License, Version 2.0
+
 from glob import glob
+import os
+
+from setuptools import setup
 
 package_name = 'dummy-ros2_description'
 
@@ -22,7 +26,7 @@ setup(
     maintainer='author',
     maintainer_email='todo@todo.com',
     description='The ' + package_name + ' package',
-    license='TODO: License declaration',
+    license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

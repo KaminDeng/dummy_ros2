@@ -1,6 +1,6 @@
 {
   "task": "R06",
-  "status": "IN_PROGRESS",
+  "status": "PASS",
   "hardware": "none",
   "contract": {
     "release_id": "dummy-wire-v1",
@@ -21,29 +21,28 @@
     "late inner success after STOPPING is rejected",
     "QUEUED receipt, accepted operation, and terminal result are distinct"
   ],
-  "not_run": [
-    "AUTH02 live non-owner rejection through D core",
-    "EN04 live first-sample timeout",
-    "EN05 live operation/core handshake",
-    "MOV05 early Complete rejection by D core",
-    "MOV06 live completion timeout",
-    "MOV13/MOV14 device-backed active guarded JTC bypass",
-    "MOV15 full wire input validation through public device action",
-    "MOV16 live Begin prime handshake",
-    "MOV17 live terminal sequence freeze/acceptance",
-    "FRE05 live controller-manager write with frozen JTC",
-    "two complete live device-backed actions"
+  "passed_live_behaviors": [
+    "23/23 strict R06 cases",
+    "D04/D05 RobotCore authorization and motion barriers",
+    "ROS producer freeze and private goal registration gate",
+    "Gazebo public action BUSY/cancel/third-goal and bounds rejection"
   ],
+  "not_run": ["physical J1, USB, SocketCAN, J-Link, and ttyACM0"],
   "dependency": {
     "owner": "DPSDK D05/D06",
-    "current_status": "NOT_STARTED",
-    "condition": "Core must implement BeginMotion, CompleteMotion, CancelMotion, stop/HOLD and operation query semantics"
+    "current_status": "PASS",
+    "condition": "D05/D06 verified at DPSDK commit 1fbe388416976c7e8c920311f2a9b0f0db9ad856"
   },
   "commands": [
     {
-      "command": "/usr/bin/python3 -m unittest scripts/dummy/tests/test_r06_acceptance.py -v",
+      "command": "/usr/bin/python3 scripts/dummy/verify.py --suite R06 --hardware none --report build_dummy/reports/R06.json",
       "exit_code": 0,
-      "tests": 3
+      "tests": 23
     }
-  ]
+  ],
+  "artifact_sha256": {
+    "json": "8d02a2937eb0abdb059e2192b31aa3ba9c0e52f6b2c32255a43b97f567c89323",
+    "junit": "76cede943048874f9344eec5d7640d35aa772652e89be6a4f365fcf6190a5127",
+    "log": "924529b38ae40438b755788a9b57094919530533aa6bf31da181b5377daa30bb"
+  }
 }

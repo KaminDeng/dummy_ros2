@@ -1,0 +1,21 @@
+schema: dummy.ros.backends.v1
+backends:
+  gazebo_6dof:
+    active_axes: [Joint1, Joint2, Joint3, Joint4, Joint5, Joint6]
+    clock: simulation
+    transport: gazebo
+    read_only: false
+  sil_j1:
+    active_axes: [Joint1]
+    clock: steady
+    transport: virtual_can
+    read_only: false
+  real_j1:
+    active_axes: [Joint1]
+    clock: steady
+    transport: zenoh
+    read_only: true
+security:
+  auto_grant: false
+  auto_capture_reference: false
+  auto_enable: false
