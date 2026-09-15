@@ -4,6 +4,14 @@
   "superseded": true,
   "superseded_reason": "Historical standalone DPSDK and plugin evidence did not execute one ROS device SIL chain. All device backend cases remain NOT_RUN.",
   "current_evidence": "build_dummy/reports/R07.json",
+  "current_recheck": {
+    "report": "build_dummy/reports/R07-repair.json",
+    "status": "NOT_RUN",
+    "j1_peer_commit": "56426ea",
+    "six_axis_peer_commit": "2716594",
+    "six_axis_scope": "state/status transport only; not promoted to ROS motion or missing-axis fault PASS",
+    "blocker": "runtime contract/model/profile and authorization evidence absent from D08 status"
+  },
   "hardware": "none",
   "test_count": 8,
   "upstream": {

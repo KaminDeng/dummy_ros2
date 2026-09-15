@@ -16,6 +16,15 @@
     ]
   },
   "blocker_handoff": "docs/dummy/handoffs/R06-to-DPSDK-operation-enum-blocker.json",
+  "real_peer_bootstrap": {
+    "dpsdk_commits": ["a24c017", "56426ea", "2716594", "a7cfc50"],
+    "sequence_implemented": ["SELECT_CONTROL_MODE", "GRANT_SESSION", "CAPTURE_BENCH_REFERENCE", "SET_BENCH_PERMIT", "ENABLE_HOLD", "FIRST_HOLD_SAMPLE"],
+    "operator_trigger": "/device_action_gate/enable",
+    "status_endpoint": "/device_action_gate/bootstrap_status",
+    "test_result": "NOT_RUN",
+    "reason": "D08 peer status omits contract/model/profile hash evidence and authorization status fields",
+    "log": "build_dummy/reports/R06-bootstrap-final-test.log"
+  },
   "hardware": "none",
   "contract": {
     "release_id": "dummy-wire-v1",

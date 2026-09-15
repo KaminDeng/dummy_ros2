@@ -95,8 +95,7 @@ def _sil_transport_case(case_id: str) -> dict[str, Any]:
     ) else "FAIL"
     return _blocked_case(
         case_id,
-        "BLOCKED: D06 transport evidence and a separate GuardedSystem probe are not a single "
-        "long-lived parameterized ROS device bridge chain",
+        "BLOCKED: the production bridge and D08 long-lived peer exist, but D08 status omits runtime contract/model/profile hashes required for one trusted ROS device chain",
         observations={
             "posix_peer_started": False,
             "ros_device_chain_started": False,
@@ -118,8 +117,7 @@ def _d07_case(case_id: str) -> dict[str, Any]:
     ) else "FAIL"
     return _blocked_case(
         case_id,
-        "BLOCKED: D07 RobotCore + VirtualCAN scenario is real upstream evidence, but no "
-        "long-lived parameterized ROS device bridge consumes it in this workspace",
+        "BLOCKED: DPSDK 2716594 provides J1/six-axis long-lived transport, but its runtime status omits contract/model/profile hashes and the D07 fault scenario is not the same ROS bridge process",
         observations={
             "robot_core": "DPSDK RobotCore",
             "virtual_can": True,
@@ -142,8 +140,7 @@ def _backend_case(case_id: str) -> dict[str, Any]:
     if case_id == "FRE11":
         return _blocked_case(
             case_id,
-            "BLOCKED: committed R06 has no long-lived ROS device bridge exposing a steady-clock "
-            "watchdog and a separately observable /clock input",
+            "BLOCKED: the production bridge exists, but the committed D08 peer omits runtime hash/authorization evidence required before its steady watchdog can be combined with ROS observations",
             {"steady_clock_source": config["backends"]["sil_j1"]["clock"],
              "simulation_clock_isolated": False},
         )
@@ -160,8 +157,7 @@ def _backend_case(case_id: str) -> dict[str, Any]:
         inactive_test, trace = _run_ctest("nonblocking_tests")
         return _blocked_case(
             case_id,
-            "BLOCKED: no committed ROS device management bridge can issue and observe a read-only "
-            "management operation while the hardware is inactive",
+            "BLOCKED: the bridge supports inactive management bootstrap, but the D08 peer is rejected before mutation because required runtime hash evidence is absent",
             {"management_while_inactive": "NOT_RUN", "management_access_unit_probe": inactive_test,
              "guarded_probe_trace_sha256": sha256(trace.encode()).hexdigest()},
         )
@@ -169,8 +165,7 @@ def _backend_case(case_id: str) -> dict[str, Any]:
         plugin_loaded, trace = _run_ctest("guarded_plugin_load_tests")
         return _blocked_case(
             case_id,
-            "BLOCKED: the committed plugin loads, but R06 does not provide a live controller-manager "
-            "instance from which J1 interfaces can be enumerated",
+            "BLOCKED: the embedded controller manager exposes J1 interfaces in component E2E, but the real D08 peer fails strict runtime identity before this can become real-peer evidence",
             {"controller_state_interfaces": [], "controller_command_interfaces": [],
              "guarded_plugin_loaded": plugin_loaded,
              "guarded_probe_trace_sha256": sha256(trace.encode()).hexdigest()},
