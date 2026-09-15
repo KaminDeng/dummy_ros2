@@ -45,6 +45,9 @@ class R03AcceptanceTest(unittest.TestCase):
     def test_gen01_gen03_and_rpc_payloads_use_actual_generated_codecs(self):
         self.compile_and_run(ROOT / "src/dummy_ros_control/test/wire_probe_tests.cpp")
 
+    def test_rpc12_preserves_caller_owner_and_session_snapshot(self):
+        self.compile_and_run(ROOT / "src/dummy_ros_control/test/wire_probe_tests.cpp")
+
     def test_mov14_unregistered_goal_and_wrong_digest_are_rejected(self):
         self.compile_and_run(ROOT / "src/dummy_ros_control/test/goal_gate_tests.cpp")
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dummy_test_support.task_adapters import not_run_case, run_unittest_case
+from dummy_test_support.task_adapters import run_unittest_case
 
 
 TARGETS = {
@@ -14,7 +14,7 @@ TARGETS = {
     "RPC01": "scripts.dummy.tests.test_r03_acceptance.R03AcceptanceTest.test_rpc01_and_rpc08_use_real_dp_comm_transport_and_handles",
     "RPC08": "scripts.dummy.tests.test_r03_acceptance.R03AcceptanceTest.test_rpc01_and_rpc08_use_real_dp_comm_transport_and_handles",
     "MOV14": "scripts.dummy.tests.test_r03_acceptance.R03AcceptanceTest.test_mov14_unregistered_goal_and_wrong_digest_are_rejected",
-    "RPC12": "scripts.dummy.tests.test_r03_acceptance.R03AcceptanceTest.test_guarded_jtc_plugin_closes_base_action_and_topic_inputs",
+    "RPC12": "scripts.dummy.tests.test_r03_acceptance.R03AcceptanceTest.test_rpc12_preserves_caller_owner_and_session_snapshot",
 }
 SOURCES = (
     "scripts/dummy/tests/test_r03_acceptance.py",
@@ -25,12 +25,6 @@ SOURCES = (
 
 
 def run_r03_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
-    if case_id == "RPC12":
-        return not_run_case(
-            case_id, stimulus, SOURCES,
-            "the available codec probe lacks a case-specific caller/owner/session/q snapshot and stale-result probe",
-            sut_kind="codec_generator",
-        )
     try:
         target = TARGETS[case_id]
     except KeyError as error:
