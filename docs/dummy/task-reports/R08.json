@@ -1,6 +1,8 @@
 {
   "task": "R08",
-  "status": "PASS",
+  "status": "BLOCKED",
+  "superseded": true,
+  "superseded_reason": "Full release requires completed R06/R07. Historical version lock and PASS evidence are not a verified device release.",
   "hardware": "none",
   "test_count": 1,
   "release_artifacts": [

@@ -1,6 +1,10 @@
 {
   "task": "R06",
-  "status": "PASS",
+  "status": "BLOCKED",
+  "superseded": true,
+  "superseded_reason": "Historical aggregate PASS withdrawn. Lifecycle components pass, but production device FJT bridge and C05-compliant DPSDK wire semantics are not verified.",
+  "current_evidence": "build_dummy/reports/R06-repair.json",
+  "blocker_handoff": "docs/dummy/handoffs/R06-to-DPSDK-operation-enum-blocker.json",
   "hardware": "none",
   "contract": {
     "release_id": "dummy-wire-v1",

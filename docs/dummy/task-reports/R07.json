@@ -1,6 +1,9 @@
 {
   "task": "R07",
-  "status": "PASS",
+  "status": "BLOCKED",
+  "superseded": true,
+  "superseded_reason": "Historical standalone DPSDK and plugin evidence did not execute one ROS device SIL chain. All device backend cases remain NOT_RUN.",
+  "current_evidence": "build_dummy/reports/R07.json",
   "hardware": "none",
   "test_count": 8,
   "upstream": {
