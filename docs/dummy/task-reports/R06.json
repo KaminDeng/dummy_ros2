@@ -4,6 +4,17 @@
   "superseded": true,
   "superseded_reason": "Historical aggregate PASS withdrawn. Lifecycle components pass, but production device FJT bridge and C05-compliant DPSDK wire semantics are not verified.",
   "current_evidence": "build_dummy/reports/R06-repair.json",
+  "component_checkpoint": {
+    "commit": "402c18f",
+    "control_ctest": "16/16 PASS",
+    "motion_ctest": "30/30 PASS",
+    "synthetic_e2e": "component_only: two successes, cancel, abort, public feedback, terminal freeze and new HOLD",
+    "logs": [
+      "build_dummy/reports/R06-bridge-final-build.log",
+      "build_dummy/reports/R06-bridge-final-control.log",
+      "build_dummy/reports/R06-bridge-final-motion.log"
+    ]
+  },
   "blocker_handoff": "docs/dummy/handoffs/R06-to-DPSDK-operation-enum-blocker.json",
   "hardware": "none",
   "contract": {
