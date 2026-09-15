@@ -44,6 +44,21 @@ class VerifySuitesTest(unittest.TestCase):
         self.assertEqual(3, code)
         self.assertEqual("NOT_RUN", report["status"])
 
+    def test_r05_keeps_model_and_controller_contract_cases_offline(self):
+        from dummy_test_support.adapters import r05
+
+        evidence = {
+            "case_id": "case", "executed": True, "status": "PASS", "reason": "",
+            "sut_source_sha256": "a" * 64, "trace_sha256": "b" * 64,
+            "observations": {},
+        }
+        with mock.patch.object(r05, "run_unittest_case", return_value=evidence) as execute:
+            for case_id in ("MOD06", "ROS11"):
+                r05.run_r05_case(case_id, {
+                    "case_id": case_id, "hardware": "none", "test_only": True,
+                })
+                self.assertIsNone(execute.call_args.kwargs["runtime_action"])
+
     def test_r04_runs_nonblocking_plugin_suite(self):
         code, report = self.run_suite("R04")
         self.assertEqual(0, code)
