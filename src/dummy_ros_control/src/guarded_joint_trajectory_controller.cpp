@@ -2,12 +2,38 @@
 #include "dummy_ros_control/command_channel.hpp"
 
 #include "pluginlib/class_list_macros.hpp"
+#include "rclcpp/serialization.hpp"
+#include <openssl/sha.h>
+#include <cmath>
 
 namespace dummy_ros_control {
+TrajectoryDigest trajectory_digest(const trajectory_msgs::msg::JointTrajectory &trajectory) {
+  rclcpp::Serialization<trajectory_msgs::msg::JointTrajectory> serializer;
+  rclcpp::SerializedMessage serialized;
+  serializer.serialize_message(&trajectory,&serialized);
+  const auto &bytes=serialized.get_rcl_serialized_message();
+  TrajectoryDigest digest{}; SHA256(bytes.buffer,bytes.buffer_length,digest.data()); return digest;
+}
 
 controller_interface::return_type GuardedJointTrajectoryController::update(
     const rclcpp::Time &time, const rclcpp::Duration &period) {
-  const auto result = JointTrajectoryController::update(time, period);
+  const auto prime=*prime_buffer_.readFromRT();
+  auto result=controller_interface::return_type::OK;
+  if(prime) {
+    if(dof_!=1 && dof_!=6) return controller_interface::return_type::ERROR;
+    for(std::size_t index=0;index<dof_;++index) {
+      state_desired_.positions[index]=(*prime)[index];
+      state_current_.positions[index]=joint_state_interface_[0][index].get().get_optional().value_or(NAN);
+      if(!joint_command_interface_[0][index].get().set_value((*prime)[index]))
+        return controller_interface::return_type::ERROR;
+    }
+  } else result = JointTrajectoryController::update(time, period);
+  sample_sequence_.fetch_add(1,std::memory_order_acq_rel);
+  for(std::size_t index=0;index<dof_ && index<6;++index) {
+    sample_actual_[index].store(state_current_.positions[index],std::memory_order_relaxed);
+    sample_desired_[index].store(state_desired_.positions[index],std::memory_order_relaxed);
+  }
+  sample_sequence_.fetch_add(1,std::memory_order_release);
   const auto sink = update_sink_.load(std::memory_order_acquire);
   if (result == controller_interface::return_type::OK && sink != nullptr &&
       state_desired_.positions.size() == dof_) {
@@ -47,13 +73,37 @@ bool GuardedJointTrajectoryController::submit_registered_goal(
     const GoalCredential &credential,
     const std::shared_ptr<trajectory_msgs::msg::JointTrajectory> &trajectory) {
   std::lock_guard<std::mutex> lock(gate_mutex_);
-  if (!gate_.permits(credential) || !trajectory || !validate_trajectory_msg(*trajectory)) return false;
+  if (!gate_.permits(credential) || !trajectory || trajectory_digest(*trajectory)!=credential.digest ||
+      !validate_trajectory_msg(*trajectory)) return false;
   auto ordered = std::make_shared<trajectory_msgs::msg::JointTrajectory>(*trajectory);
   if (ordered->joint_names.size() != command_joint_names_.size()) return false;
   sort_to_local_joint_order(ordered);
   add_new_trajectory_msg(ordered);
+  prime_buffer_.writeFromNonRT(nullptr);
   gate_ = gate_.clear();
   return true;
+}
+
+bool GuardedJointTrajectoryController::prime_position(const std::array<double,6> &position) {
+  if(dof_!=1 && dof_!=6) return false;
+  for(std::size_t i=0;i<dof_;++i) if(!std::isfinite(position[i])) return false;
+  prime_buffer_.writeFromNonRT(std::make_shared<std::array<double,6>>(position));
+  return true;
+}
+void GuardedJointTrajectoryController::cancel_execution() {
+  clear_registration();
+  if(const auto sample=execution_sample()) prime_position(sample->actual);
+}
+std::optional<GuardedExecutionSample> GuardedJointTrajectoryController::execution_sample() const noexcept {
+  const auto sequence=sample_sequence_.load(std::memory_order_acquire);
+  if(sequence==0 || sequence%2) return {};
+  GuardedExecutionSample sample; sample.sequence=sequence;
+  for(std::size_t i=0;i<6;++i) {
+    sample.actual[i]=sample_actual_[i].load(std::memory_order_relaxed);
+    sample.desired[i]=sample_desired_[i].load(std::memory_order_relaxed);
+  }
+  if(sample_sequence_.load(std::memory_order_acquire)!=sequence) return {};
+  return sample;
 }
 
 void GuardedJointTrajectoryController::clear_registration() {

@@ -16,7 +16,8 @@ bool tolerance(const std::vector<double> &values, const std::vector<double> &lim
   return true;
 }
 }
-std::optional<Trajectory> validate_trajectory(const Trajectory &input, const JointProfile &profile) {
+std::optional<Trajectory> validate_trajectory(const Trajectory &input, const JointProfile &profile,
+                                              const Position *measured_start) {
   const auto count=profile.joints.size();
   if (count==0 || count>6 || input.joints.size()!=count || input.points.empty() ||
       profile.lower.size()!=count || profile.upper.size()!=count || profile.velocity.size()!=count ||
@@ -64,6 +65,40 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
     }
   }
   for (double velocity:output.points.back().velocities) if (velocity!=0) return {};
+  const bool position_only=std::all_of(output.points.begin(),output.points.end(),[](const auto &point) {
+    return point.velocities.empty() && point.accelerations.empty();
+  });
+  if (position_only) {
+    std::vector<double> previous_position;
+    double previous_time=0, previous_duration=0;
+    std::vector<double> previous_velocity;
+    if (measured_start) {
+      previous_position.assign(measured_start->begin(),measured_start->begin()+count);
+      for (std::size_t i=0;i<count;++i)
+        if (!std::isfinite(previous_position[i]) || previous_position[i]<profile.lower[i] ||
+            previous_position[i]>profile.upper[i]) return {};
+    }
+    const std::size_t first_segment=measured_start ? 0 : 1;
+    if (!measured_start) {
+      previous_position=output.points.front().positions;
+      previous_time=output.points.front().time;
+    }
+    for (std::size_t point_index=first_segment;point_index<output.points.size();++point_index) {
+      const auto &point=output.points[point_index];
+      const double duration=point.time-previous_time;
+      if (duration<=0) return {};
+      std::vector<double> velocity(count);
+      for (std::size_t i=0;i<count;++i) {
+        velocity[i]=(point.positions[i]-previous_position[i])/duration;
+        if (std::abs(velocity[i])>profile.velocity[i] ||
+            (!previous_velocity.empty() &&
+             std::abs(velocity[i]-previous_velocity[i])/std::min(duration,previous_duration)>profile.acceleration[i]))
+          return {};
+      }
+      previous_position=point.positions; previous_time=point.time;
+      previous_duration=duration; previous_velocity=std::move(velocity);
+    }
+  }
   return output;
 }
 ActionGate::ActionGate(ManagementClient &client, ActionPort &port, JointProfile profile, std::uint64_t timeout)
@@ -78,7 +113,7 @@ bool ActionGate::issue(ManageOperation operation,std::uint64_t now) {
   }
   operation_=operation; deadline_=saturating_deadline(now,timeout_); request_=client_.submit(request,now);
   management_evidence_={}; state_evidence_={};
-  if (!request_) { fail("TRANSPORT_UNAVAILABLE"); return false; }
+  if (!request_) { fail(operation==ManageOperation::kCancel ? "STOP_FAILED" : "TRANSPORT_UNAVAILABLE"); return false; }
   return true;
 }
 bool ActionGate::enable(const Authorization &authorization,std::uint64_t now) {
@@ -92,11 +127,17 @@ bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
   trajectory_=*validated; terminal_=Terminal::kNone; error_.clear(); frozen_=false; frozen_seq_=0;
   return issue(ManageOperation::kBegin,now);
 }
-void ActionGate::prime(const ManageReply &reply,Phase phase) {
+bool ActionGate::prime(const ManageReply &reply,Phase phase,std::uint64_t now) {
   port_.disable(); ++generation_; epoch_=reply.motion_epoch; phase_=phase;
   sampled_=false; last_seq_=0; prime_seq_=0; frozen_=false;
   prime_q_=phase==Phase::kPrimeMotion ? reply.position : reply.hold_position;
+  if (phase==Phase::kPrimeMotion) {
+    const auto validated=validate_trajectory(trajectory_,profile_,&prime_q_);
+    if (!validated) { stop(false,"TRAJECTORY_LIMIT_VIOLATION",now); return false; }
+    trajectory_=*validated;
+  }
   port_.prime(prime_q_,epoch_,generation_);
+  return true;
 }
 bool ActionGate::handshake(const ManageReply &reply) const {
   return reply.snapshot_valid && reply.motion_epoch==epoch_ && sampled_ &&
@@ -134,6 +175,7 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
   }
   state_seq_=state.state_seq();
   authorization_.identity.set_expected_management_epoch(state.management_epoch());
+  authorization_.identity.set_freshness_ticket(state.freshness_ticket());
   if (!request_) return true;
   if (state.core_state()==wire_value(WireCoreState::kFault)) { fail("DEVICE_FAULT"); return true; }
   ManageReply evidence; evidence.request_id=request_; evidence.snapshot_valid=true;
@@ -164,14 +206,15 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
     if (reply.motion_epoch==epoch_ && reply.accepted_seq==frozen_seq_) issue(ManageOperation::kComplete,now);
     return;
   }
-  if (operation_==ManageOperation::kEnable && phase_==Phase::kIdle && reply.motion_epoch>epoch_ && reply.hold_available)
-    prime(reply,Phase::kPrimeHold);
-  else if (operation_==ManageOperation::kBegin && phase_==Phase::kHold && reply.motion_epoch>epoch_)
-    prime(reply,Phase::kPrimeMotion);
-  else if (operation_==ManageOperation::kComplete && phase_==Phase::kCompleting && reply.motion_epoch>epoch_ && reply.hold_available)
-    prime(reply,Phase::kPrimeCompletionHold);
-  else if (operation_==ManageOperation::kCancel && phase_==Phase::kStopping && reply.motion_epoch>epoch_ && reply.hold_available)
-    prime(reply,Phase::kPrimeStopHold);
+  if (operation_==ManageOperation::kEnable && phase_==Phase::kIdle && reply.motion_epoch>epoch_ && reply.hold_available) {
+    if (!prime(reply,Phase::kPrimeHold,now)) return;
+  } else if (operation_==ManageOperation::kBegin && phase_==Phase::kHold && reply.motion_epoch>epoch_) {
+    if (!prime(reply,Phase::kPrimeMotion,now)) return;
+  } else if (operation_==ManageOperation::kComplete && phase_==Phase::kCompleting && reply.motion_epoch>epoch_ && reply.hold_available) {
+    if (!prime(reply,Phase::kPrimeCompletionHold,now)) return;
+  } else if (operation_==ManageOperation::kCancel && phase_==Phase::kStopping && reply.motion_epoch>epoch_ && reply.hold_available) {
+    if (!prime(reply,Phase::kPrimeStopHold,now)) return;
+  }
   if (!handshake(reply)) return;
   if (phase_==Phase::kPrimeMotion) {
     phase_=Phase::kRunning; port_.start(trajectory_,generation_); deadline_=0;
@@ -190,7 +233,13 @@ void ActionGate::tick(std::uint64_t now) {
   }
   if (!request_) return;
   try { if (const auto reply=client_.poll(request_)) observe(*reply,now); }
-  catch (const std::exception &) { fail("RESULT_UNCONFIRMED"); }
+  catch (const std::exception &) {
+    if (phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold) fail("STOP_FAILED");
+    else if (phase_==Phase::kRunning || phase_==Phase::kCompleting || phase_==Phase::kPrimeMotion)
+      stop(false,"RESULT_UNCONFIRMED",now);
+    else if (operation_==ManageOperation::kEnable) fail("ENABLE_FAILED");
+    else fail("RESULT_UNCONFIRMED");
+  }
 }
 bool ActionGate::record_update(std::uint64_t generation,std::uint32_t epoch,std::uint32_t seq,const Position &q) {
   if (generation!=generation_ || epoch!=epoch_ || !seq || seq<=last_seq_ || frozen_ ||
@@ -229,7 +278,7 @@ void ActionGate::invalidate_authorization(std::uint64_t now) {
   fail("SESSION_CHANGED");
 }
 void ActionGate::fail(const std::string &error) {
-  port_.disable(); ++generation_; phase_=Phase::kFault; terminal_=Terminal::kAborted;
+  port_.disable(); port_.cancel(); ++generation_; phase_=Phase::kFault; terminal_=Terminal::kAborted;
   if (error_.empty() || error=="STOP_FAILED") error_=error;
   request_=0; deadline_=0;
 }

@@ -15,7 +15,8 @@ struct JointProfile {
   std::vector<std::string> joints;
   std::vector<double> lower, upper, velocity, acceleration, path_tolerance, goal_tolerance;
 };
-std::optional<Trajectory> validate_trajectory(const Trajectory &, const JointProfile &);
+std::optional<Trajectory> validate_trajectory(const Trajectory &, const JointProfile &,
+                                              const Position *measured_start=nullptr);
 struct Authorization {
   ManageRequest identity{};
   bool session=false, reference=false, permit=false;
@@ -51,7 +52,7 @@ class ActionGate {
   const std::string &error() const { return error_; }
  private:
   bool issue(ManageOperation, std::uint64_t now);
-  void prime(const ManageReply &, Phase);
+  bool prime(const ManageReply &, Phase, std::uint64_t now);
   void stop(bool canceled, const std::string &, std::uint64_t now);
   void fail(const std::string &);
   bool handshake(const ManageReply &) const;

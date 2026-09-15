@@ -6,12 +6,14 @@
 using namespace dummy_motion_client;
 namespace wire=dp::protocol::dummy_robot_v1;
 struct Transport : ManagementTransport {
+  bool timeout_next=false;
   std::vector<ManageRequest> requests;
   std::deque<std::vector<std::uint8_t>> responses;
   struct Handle : RequestHandle {
     explicit Handle(Transport &transport) : transport(transport) {}
     Transport &transport;
     std::optional<std::vector<std::uint8_t>> poll() override {
+      if(transport.timeout_next) { transport.timeout_next=false; throw std::runtime_error("simulated query timeout"); }
       if (transport.responses.empty()) return {};
       auto result=transport.responses.front(); transport.responses.pop_front(); return result;
     }
@@ -65,7 +67,10 @@ bool two_stream_handshake() {
   transport.respond(receipt); gate.tick(103); if (gate.ready()) return false;
   state.set_state_seq(2); state.set_accepted_seq_valid(true); state.set_accepted_producer_seq(1);
   state.set_core_state(4); state.set_hold_ready(true);
-  return observe() && gate.ready() && !observe();
+  state.set_freshness_ticket(55);
+  if(!observe() || !gate.ready() || observe()) return false;
+  const Trajectory motion{{"Joint1"},{{{0.0},{},{},1.0}},{},{},0};
+  return gate.submit(motion,104) && transport.requests.back().freshness_ticket()==55;
 }
 bool wire_boundary_case(const std::string &scenario) {
   Transport transport; WireManagementClient client(transport); ManageRequest request;
@@ -98,6 +103,9 @@ int main(int argc,char **argv) {
   if (!queued || !queued->queued || queued->accepted || queued->result_valid) return 3;
   const auto query=transport.requests.back();
   if (query.operation()!=11 || query.queried_request_id()!=id || query.request_id()==id) return 4;
+  transport.timeout_next=true;
+  if(client.poll(id) || transport.requests.back().request_id()!=query.request_id() ||
+     transport.requests.back().queried_request_id()!=id || client.original_sent_at_us()!=123) return 11;
   response.set_request_id(query.request_id()); response.set_core_request_id(id);
   response.set_accepted(false); response.set_operation_id(9007199254740995ULL);
   response.set_operation_status(1);

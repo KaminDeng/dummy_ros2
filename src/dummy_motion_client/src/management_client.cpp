@@ -7,8 +7,12 @@ bool WireManagementClient::send(const ManageRequest &request) {
   std::vector<std::uint8_t> bytes(wire::DummyManageV1RequestCodec::kEncodedSize);
   if (wire::DummyManageV1RequestCodec::encode(request,bytes.data(),bytes.size()) != wire::CodecResult::kOk)
     return false;
+  // Release an unsent query before a cancellation replaces it in the bounded queue.
+  handle_.reset();
+  current_=request; pending_send_=false; query_retries_=0;
   handle_=transport_.send(bytes); wire_id_=request.request_id();
-  return bool(handle_);
+  pending_send_=!handle_ && request.operation()==wire_value(ManageOperation::kQuery);
+  return bool(handle_) || pending_send_;
 }
 std::uint64_t WireManagementClient::submit(const ManageRequest &request, std::uint64_t sent_at_us) {
   original_=request; original_.set_schema_major(1); original_.set_request_id(next_id_++);
@@ -17,8 +21,22 @@ std::uint64_t WireManagementClient::submit(const ManageRequest &request, std::ui
   return send(original_) ? original_.request_id() : 0;
 }
 std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) {
-  if (!handle_ || request_id != original_.request_id()) return {};
-  const auto bytes=handle_->poll(); if (!bytes) return {};
+  if (request_id != original_.request_id()) return {};
+  const auto retry_query=[this]() {
+    if(current_.operation()!=wire_value(ManageOperation::kQuery) || ++query_retries_>3)
+      throw std::runtime_error("manage_v1 request transport unavailable");
+    handle_.reset();
+    std::vector<std::uint8_t> bytes(wire::DummyManageV1RequestCodec::kEncodedSize);
+    if(wire::DummyManageV1RequestCodec::encode(current_,bytes.data(),bytes.size())!=wire::CodecResult::kOk)
+      throw std::runtime_error("manage_v1 query encoding failed");
+    handle_=transport_.send(bytes); pending_send_=!handle_;
+  };
+  if(pending_send_) { retry_query(); return {}; }
+  if(!handle_) return {};
+  std::optional<std::vector<std::uint8_t>> bytes;
+  try { bytes=handle_->poll(); }
+  catch(const std::runtime_error &) { retry_query(); return {}; }
+  if (!bytes) return {};
   wire::DummyManageV1Response response;
   if (wire::DummyManageV1ResponseCodec::decode(bytes->data(),bytes->size(),&response) != wire::CodecResult::kOk ||
       response.schema_major()!=1 || response.request_id()!=wire_id_ ||

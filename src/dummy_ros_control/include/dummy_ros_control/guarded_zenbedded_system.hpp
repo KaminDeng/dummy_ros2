@@ -50,7 +50,8 @@ class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface 
   std::uint64_t publish_drops() const noexcept;
   bool take_stop_request() noexcept;
   TransportStatistics transport_statistics() const noexcept;
-  void invalidate_transport_state() noexcept;
+  void invalidate_transport_state(const CommandIdentity *retired_authority = nullptr) noexcept;
+  void invalidate_authority_state(const CommandIdentity &retired_authority) noexcept;
   void set_state_deadline(std::uint64_t deadline_us) noexcept;
   bool commands_active() const noexcept { return active_.load(std::memory_order_acquire); }
   static constexpr bool active_joint_count_supported(std::size_t count) noexcept {
@@ -63,6 +64,8 @@ class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface 
   mutable std::mutex state_mutex_;
   JointStateSnapshot state_{};
   std::atomic<bool> state_valid_{false};
+  // Epoch changes suspend command authorization but retain still-fresh measured positions for read().
+  std::atomic<bool> read_state_valid_{false};
   std::atomic<bool> active_{false};
   std::atomic<std::uint64_t> state_deadline_us_{0U};
   std::atomic<bool> stop_requested_{false};

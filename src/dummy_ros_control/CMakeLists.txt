@@ -7,6 +7,7 @@ find_package(joint_trajectory_controller REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake")
@@ -87,7 +88,7 @@ add_library(dummy_guarded_joint_trajectory_controller SHARED
   src/guarded_joint_trajectory_controller.cpp)
 target_compile_features(dummy_guarded_joint_trajectory_controller PRIVATE cxx_std_17)
 target_link_libraries(dummy_guarded_joint_trajectory_controller
-  dummy_goal_registration_gate dummy_command_channel)
+  dummy_goal_registration_gate dummy_command_channel OpenSSL::Crypto)
 ament_target_dependencies(dummy_guarded_joint_trajectory_controller
   controller_interface joint_trajectory_controller pluginlib trajectory_msgs)
 pluginlib_export_plugin_description_file(controller_interface dummy_ros_control_plugins.xml)
@@ -102,6 +103,9 @@ ament_target_dependencies(dummy_guarded_zenbedded_system hardware_interface plug
 pluginlib_export_plugin_description_file(hardware_interface dummy_ros_control_plugins.xml)
 
 if(BUILD_TESTING)
+  add_executable(state_contention_tests test/state_contention_tests.cpp)
+  target_link_libraries(state_contention_tests dummy_guarded_zenbedded_system)
+  add_test(NAME state_contention_tests COMMAND state_contention_tests)
   add_executable(transport_component_tests test/transport_component_tests.cpp)
   target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
@@ -198,5 +202,6 @@ install(TARGETS
   dummy_guarded_zenbedded_system
   EXPORT export_dummy_goal_registration_gate
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
-ament_export_targets(export_dummy_goal_registration_gate)
+ament_export_targets(export_dummy_goal_registration_gate HAS_LIBRARY_TARGET)
+ament_export_dependencies(OpenSSL)
 ament_package()

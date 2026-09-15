@@ -81,8 +81,11 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_error(
 hardware_interface::return_type GuardedZenbeddedSystem::read(
     const rclcpp::Time &, const rclcpp::Duration &) {
   std::unique_lock<std::mutex> lock(state_mutex_, std::try_to_lock);
-  if (!lock.owns_lock() || !state_valid_ ||
+  if (!read_state_valid_ ||
       (state_deadline_us_ != 0U && transport_steady_now_us() > state_deadline_us_)) return hardware_interface::return_type::ERROR;
+  // A receive in progress is not stale state. Keep the last exported handles;
+  // neither the payload timestamp nor its deadline is advanced by this path.
+  if(!lock.owns_lock()) return hardware_interface::return_type::OK;
   for (std::size_t index = 0; index < active_joint_count_; ++index) {
     if (!set_state<double>(position_handles_[index], state_.position[index], false) ||
         !set_state<double>(velocity_handles_[index], state_.velocity[index], false))
@@ -101,8 +104,9 @@ hardware_interface::return_type GuardedZenbeddedSystem::write(
 bool GuardedZenbeddedSystem::transfer_control_update() noexcept {
   const auto record = consume_control_update(consumed_generation_);
   if (!record.has_value()) return false;
+  if (!publish_queue_.try_push(record.value())) return false;
   consumed_generation_ = record->generation;
-  return publish_queue_.try_push(record.value());
+  return true;
 }
 
 bool GuardedZenbeddedSystem::ingest_state(
@@ -118,6 +122,7 @@ bool GuardedZenbeddedSystem::ingest_state(
   if (!lock.owns_lock()) return false;
   state_ = snapshot;
   state_valid_ = true;
+  read_state_valid_ = true;
   return true;
 }
 
@@ -177,10 +182,19 @@ TransportStatistics GuardedZenbeddedSystem::transport_statistics() const noexcep
   return transport_ ? transport_->statistics() : TransportStatistics{};
 }
 
-void GuardedZenbeddedSystem::invalidate_transport_state() noexcept {
+void GuardedZenbeddedSystem::invalidate_transport_state(
+    const CommandIdentity *retired_authority) noexcept {
   state_valid_.store(false, std::memory_order_release);
+  read_state_valid_.store(false, std::memory_order_release);
   active_.store(false, std::memory_order_release);
-  clear_command_identity();
+  if (retired_authority != nullptr) clear_command_identity_if(*retired_authority);
+  else clear_command_identity();
+}
+
+void GuardedZenbeddedSystem::invalidate_authority_state(
+    const CommandIdentity &retired_authority) noexcept {
+  state_valid_.store(false, std::memory_order_release);
+  clear_command_identity_if(retired_authority);
 }
 
 void GuardedZenbeddedSystem::set_state_deadline(std::uint64_t deadline_us) noexcept {

@@ -8,6 +8,7 @@
 
 namespace dummy_ros_control {
 class GuardedZenbeddedSystem;
+struct DeviceManagementChannel;
 
 struct TransportParameters {
   std::string endpoint;
@@ -45,6 +46,7 @@ class DeviceTransport final {
   bool start();
   void stop();
   TransportStatistics statistics() const noexcept;
+  static std::shared_ptr<DeviceManagementChannel> management_channel(const TransportParameters &) noexcept;
 
  private:
   struct Impl;

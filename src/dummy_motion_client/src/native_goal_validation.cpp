@@ -19,12 +19,7 @@ bool tolerances_valid(const std::vector<control_msgs::msg::JointTolerance> &valu
   return true;
 }
 }
-std::optional<Trajectory> validated_native_trajectory(const NativeGoal &goal) {
-  const JointProfile profile{
-    {"Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"},
-    {-2.9670597283903604,-1.2740903539558606,0.6108652381980153,-3.141592653589793,-2.0943951023931953,-12.566370614359172},
-    {2.9670597283903604,1.5707963267948966,3.141592653589793,3.141592653589793,2.0943951023931953,12.566370614359172},
-    {2,2,2,2,2,2},{4,4,4,4,4,4},{0.15,0.15,0.15,0.15,0.15,0.15},{0.1,0.1,0.1,0.1,0.1,0.1}};
+std::optional<Trajectory> convert_goal(const NativeGoal &goal,const JointProfile &profile) {
   if (!duration_valid(goal.goal_time_tolerance) || !goal.multi_dof_trajectory.points.empty() ||
       !goal.component_path_tolerance.empty() || !goal.component_goal_tolerance.empty() ||
       !tolerances_valid(goal.path_tolerance,profile.joints,0.15) ||
@@ -46,6 +41,20 @@ std::optional<Trajectory> validated_native_trajectory(const NativeGoal &goal) {
         static_cast<double>(point.time_from_start.sec)+point.time_from_start.nanosec*1e-9});
   }
   return validate_trajectory(trajectory,profile);
+}
+std::optional<Trajectory> validated_device_trajectory(const NativeGoal &goal,const JointProfile &profile) {
+  if(goal.trajectory.header.stamp.sec!=0 || goal.trajectory.header.stamp.nanosec!=0) return {};
+  for(const auto &value:goal.path_tolerance) if(value.velocity!=0 || value.acceleration!=0) return {};
+  for(const auto &value:goal.goal_tolerance) if(value.velocity!=0 || value.acceleration!=0) return {};
+  return convert_goal(goal,profile);
+}
+std::optional<Trajectory> validated_native_trajectory(const NativeGoal &goal) {
+  const JointProfile profile{
+    {"Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"},
+    {-2.9670597283903604,-1.2740903539558606,0.6108652381980153,-3.141592653589793,-2.0943951023931953,-12.566370614359172},
+    {2.9670597283903604,1.5707963267948966,3.141592653589793,3.141592653589793,2.0943951023931953,12.566370614359172},
+    {2,2,2,2,2,2},{4,4,4,4,4,4},{0.15,0.15,0.15,0.15,0.15,0.15},{0.1,0.1,0.1,0.1,0.1,0.1}};
+  return convert_goal(goal,profile);
 }
 bool valid_native_goal(const NativeGoal &goal) { return validated_native_trajectory(goal).has_value(); }
 }  // namespace dummy_motion_client

@@ -53,6 +53,9 @@ class WireManagementClient final : public ManagementClient {
   ManagementTransport &transport_;
   std::unique_ptr<ManagementTransport::RequestHandle> handle_;
   ManageRequest original_{};
+  ManageRequest current_{};
+  bool pending_send_=false;
+  unsigned query_retries_=0;
   std::uint64_t next_id_=1, wire_id_=0, operation_id_=0, sent_at_us_=0;
   std::uint32_t next_seq_=1;
   bool accepted_=false;

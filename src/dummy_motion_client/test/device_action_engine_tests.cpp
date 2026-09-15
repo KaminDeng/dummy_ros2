@@ -6,13 +6,17 @@
 using namespace dummy_motion_client;
 void check(bool value) { if (!value) throw std::runtime_error("lifecycle assertion failed"); }
 struct Client : ManagementClient {
+  bool reject_cancel=false;
+  bool throw_on_poll=false;
   std::vector<ManageRequest> requests;
   std::deque<ManageReply> replies;
   std::uint64_t submit(const ManageRequest &request, std::uint64_t) override {
+    if(reject_cancel && request.operation()==wire_value(ManageOperation::kCancel)) return 0;
     auto copy = request; copy.set_request_id(requests.size()+1); requests.push_back(copy);
     return copy.request_id();
   }
   std::optional<ManageReply> poll(std::uint64_t) override {
+    if (throw_on_poll) throw std::runtime_error("management poll failed");
     if (replies.empty()) return {}; auto next = replies.front(); replies.pop_front(); return next;
   }
 };
@@ -93,6 +97,60 @@ int main() {
   check(gate.submit(trajectory(),25)); gate.cancel(26); gate.tick(2000000);
   const bool stop_timeout_aborted=gate.terminal()==Terminal::kAborted && gate.error()=="STOP_FAILED";
   check(stop_timeout_aborted);
+  Client unavailable; unavailable.reject_cancel=true; Port failed_port;
+  ActionGate failed_gate(unavailable,failed_port,profile());
+  check(failed_gate.enable(authorization,1)); failed_gate.abort("PATH_TOLERANCE",2);
+  check(failed_gate.terminal()==Terminal::kAborted && failed_gate.error()=="STOP_FAILED" && !failed_gate.ready());
+  Client polling; Port polling_port; ActionGate polling_gate(polling,polling_port,profile());
+  check(polling_gate.enable(authorization,1)); polling.replies.push_back(reply(1,1)); polling_gate.tick(2);
+  check(polling_gate.record_update(polling_gate.generation(),1,1,Position{}));
+  polling.replies.push_back(reply(1,1,true)); polling_gate.tick(3); check(polling_gate.ready());
+  check(polling_gate.submit(trajectory(),4)); polling.replies.push_back(reply(2,2)); polling_gate.tick(5);
+  check(polling_gate.record_update(polling_gate.generation(),2,1,Position{}));
+  polling.replies.push_back(reply(2,2,true)); polling_gate.tick(6); check(polling_port.starts==1);
+  polling.throw_on_poll=true; polling_gate.tick(7);
+  const bool running_poll_cancel_barrier=polling_port.cancels==1 && polling_gate.terminal()==Terminal::kNone &&
+      polling.requests.back().operation()==wire_value(ManageOperation::kCancel) && !polling_gate.submit(trajectory(),7);
+  check(running_poll_cancel_barrier);
+  polling.throw_on_poll=false; polling.replies.push_back(reply(3,3)); polling_gate.tick(8);
+  check(polling_gate.record_update(polling_gate.generation(),3,1,Position{}));
+  polling.replies.push_back(reply(3,3,true)); polling_gate.tick(9);
+  check(polling_gate.terminal()==Terminal::kAborted && polling_gate.error()=="RESULT_UNCONFIRMED");
+  check(polling_gate.submit(trajectory(),10)); polling.replies.push_back(reply(4,4)); polling_gate.tick(11);
+  check(polling_gate.record_update(polling_gate.generation(),4,1,Position{}));
+  polling.replies.push_back(reply(4,4,true)); polling_gate.tick(12);
+  Position completed{}; completed[0]=0.2;
+  check(polling_gate.record_update(polling_gate.generation(),4,2,completed));
+  polling_gate.inner_result(polling_gate.generation(),Terminal::kSucceeded,"",13);
+  polling.throw_on_poll=true; polling_gate.tick(14);
+  const bool completing_poll_cancel_barrier=polling_port.cancels==2 && polling_gate.terminal()==Terminal::kNone &&
+      polling.requests.back().operation()==wire_value(ManageOperation::kCancel);
+  check(completing_poll_cancel_barrier);
+  Client enable_poll; Port enable_port; ActionGate enable_gate(enable_poll,enable_port,profile());
+  check(enable_gate.enable(authorization,1)); enable_poll.throw_on_poll=true; enable_gate.tick(2);
+  const bool enable_poll_fault=enable_gate.terminal()==Terminal::kAborted &&
+      enable_gate.error()=="ENABLE_FAILED" && enable_port.cancels==1;
+  check(enable_poll_fault);
+  Client stopping; Port stopping_port; ActionGate stopping_gate(stopping,stopping_port,profile());
+  check(stopping_gate.enable(authorization,1)); stopping_gate.abort("PATH_TOLERANCE",2);
+  stopping.throw_on_poll=true; stopping_gate.tick(3);
+  const bool stopping_poll_fault=stopping_gate.terminal()==Terminal::kAborted &&
+      stopping_gate.error()=="STOP_FAILED" && stopping_port.cancels>=2 && !stopping_gate.ready();
+  check(stopping_poll_fault);
+  Trajectory fast_segment{{"Joint1"},{{{0.2},{},{},1.0},{{0.5},{},{},1.1}},{},{},0.0};
+  check(!validate_trajectory(fast_segment,profile()));
+  JointProfile acceleration_profile=profile(); acceleration_profile.velocity={3}; acceleration_profile.acceleration={1};
+  Trajectory acceleration_jump{{"Joint1"},{{{0.0},{},{},1.0},{{0.2},{},{},1.5},{{1.2},{},{},2.0}},{},{},0.0};
+  check(!validate_trajectory(acceleration_jump,acceleration_profile));
+  Client deferred; Port deferred_port; ActionGate deferred_gate(deferred,deferred_port,profile());
+  check(deferred_gate.enable(authorization,1)); deferred.replies.push_back(reply(1,1)); deferred_gate.tick(2);
+  check(deferred_gate.record_update(deferred_gate.generation(),1,1,Position{}));
+  deferred.replies.push_back(reply(1,1,true)); deferred_gate.tick(3); check(deferred_gate.ready());
+  auto fast_first=trajectory(); fast_first.points.front().velocities.clear(); fast_first.points.front().time=0.1;
+  check(deferred_gate.submit(fast_first,4)); deferred.replies.push_back(reply(2,2)); deferred_gate.tick(5);
+  const bool deferred_start_rejected=deferred_port.starts==0 && deferred_port.cancels==1 &&
+      deferred_gate.terminal()==Terminal::kNone && deferred.requests.back().operation()==wire_value(ManageOperation::kCancel);
+  check(deferred_start_rejected);
   auto invalid=trajectory(); invalid.path_tolerance={-1}; check(!validate_trajectory(invalid,profile()));
   invalid=trajectory(); invalid.points[0].time=std::numeric_limits<double>::quiet_NaN();
   check(!validate_trajectory(invalid,profile()));
@@ -105,5 +163,10 @@ int main() {
     << ",\"complete_seq\":" << complete_seq
     << ",\"cancel_barrier\":" << cancel_barrier
     << ",\"stop_timeout_aborted\":" << stop_timeout_aborted
+    << ",\"running_poll_cancel_barrier\":" << running_poll_cancel_barrier
+    << ",\"completing_poll_cancel_barrier\":" << completing_poll_cancel_barrier
+    << ",\"enable_poll_fault\":" << enable_poll_fault
+    << ",\"stopping_poll_fault\":" << stopping_poll_fault
+    << ",\"deferred_start_rejected\":" << deferred_start_rejected
     << ",\"late_generation_accepted\":" << late_generation_accepted << "}\n";
 }

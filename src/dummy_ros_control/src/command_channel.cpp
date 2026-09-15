@@ -33,9 +33,24 @@ void set_command_identity(const CommandIdentity &identity) noexcept {
 }
 
 void clear_command_identity() noexcept {
+  std::lock_guard<std::mutex> writer(identity_writer_mutex);
   authority_epoch.fetch_add(1U, std::memory_order_acq_rel);
   const auto record = producer.consume_after(0U);
   if (record) invalidated_generation.store(record->generation, std::memory_order_release);
+}
+
+bool clear_command_identity_if(const CommandIdentity &expected) noexcept {
+  std::lock_guard<std::mutex> writer(identity_writer_mutex);
+  if (boot.load(std::memory_order_relaxed) != expected.boot ||
+      session.load(std::memory_order_relaxed) != expected.session ||
+      reference_epoch.load(std::memory_order_relaxed) != expected.reference_epoch ||
+      motion_epoch.load(std::memory_order_relaxed) != expected.motion_epoch) {
+    return false;
+  }
+  authority_epoch.fetch_add(1U, std::memory_order_acq_rel);
+  const auto record = producer.consume_after(0U);
+  if (record) invalidated_generation.store(record->generation, std::memory_order_release);
+  return true;
 }
 
 std::uint64_t publish_control_update(const double *positions, std::size_t count,

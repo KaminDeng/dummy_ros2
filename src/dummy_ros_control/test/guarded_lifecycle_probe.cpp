@@ -1,4 +1,5 @@
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
+#include "dummy_ros_control/command_channel.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_loader.hpp"
 #include <atomic>
@@ -76,5 +77,10 @@ int main() {
   }
   count_allocations = false;
   if (allocations != 0U) return 13;
+  const dummy_ros_control::CommandIdentity retired{1U, 2U, 3U, 1U, 5U};
+  const dummy_ros_control::CommandIdentity replacement{1U, 2U, 3U, 2U, 5U};
+  dummy_ros_control::set_command_identity(replacement);
+  system->invalidate_authority_state(retired);
+  if (!system->commands_active()) return 14;
   return 0;
 }

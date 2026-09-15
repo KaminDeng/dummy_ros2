@@ -24,5 +24,15 @@ int main() {
   dummy_ros_control::set_command_identity(identity);
   if (dummy_ros_control::consume_control_update(0U).has_value()) return 10;
   if (dummy_ros_control::command_record_current(*single)) return 11;
+  const dummy_ros_control::CommandIdentity old_identity{1U, 2U, 3U, 1U, 5U};
+  const dummy_ros_control::CommandIdentity new_identity{1U, 2U, 3U, 2U, 5U};
+  dummy_ros_control::set_command_identity(old_identity);
+  const auto old_record_generation =
+      dummy_ros_control::publish_control_update(hold.data(), hold.size(), 5, nullptr);
+  dummy_ros_control::set_command_identity(new_identity);
+  if (dummy_ros_control::clear_command_identity_if(old_identity)) return 12;
+  if (dummy_ros_control::publish_control_update(hold.data(), hold.size(), 6, nullptr) == 0U) return 13;
+  const auto old_record = dummy_ros_control::consume_control_update(old_record_generation - 1U);
+  if (old_record && old_record->identity.motion_epoch == old_identity.motion_epoch) return 14;
   return 0;
 }

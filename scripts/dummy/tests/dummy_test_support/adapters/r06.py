@@ -36,6 +36,7 @@ ENGINE_FIELDS = {
     "STOP09": ("engine_late_generation_accepted", "late_generation_accepted"),
 }
 _ACTION_OBSERVATIONS: dict[str, Any] | None = None
+_DEVICE_E2E_OBSERVATIONS: dict[str, Any] | None = None
 
 
 def _load_upstream_adapter(name: str):
@@ -199,17 +200,52 @@ finally:
 
 
 def _device_not_run(case_id: str, component: dict[str, Any]) -> dict[str, Any]:
+    e2e = _device_e2e_component()
     values = component["observations"]
     return {
         "case_id": case_id, "executed": False, "status": "NOT_RUN", "sut_kind": "ros_action",
-        "reason": "Production device transport and ActionPort/JTC bridge are not connected; component evidence only",
+        "reason": "Production bridge passes a C05 synthetic peer only; committed DPSDK operation enums drift from wire-v1 and no committed authorized positive peer exists",
         "sut_source_sha256": component["sut_source_sha256"],
         "trace_sha256": component["trace_sha256"],
         "component_evidence": component,
         "component_observations": values,
+        "synthetic_e2e_observations": e2e,
         "observations": {"case_id": case_id, "requirement_observed": False,
                          "evidence_scope": values["evidence_scope"]},
     }
+
+
+def _device_e2e_component() -> dict[str, Any]:
+    global _DEVICE_E2E_OBSERVATIONS
+    if _DEVICE_E2E_OBSERVATIONS is not None:
+        return _DEVICE_E2E_OBSERVATIONS
+    script = ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"
+    gate = ROOT / "build_dummy/dummy_motion_client/device_action_gate"
+    peer = ROOT / "build_dummy/dummy_motion_client/c05_action_peer"
+    bundle = ROOT / "contracts/dummy_robot_v1"
+    completed = subprocess.run(
+        ["/usr/bin/python3", str(script), str(gate), str(peer), str(bundle)],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,
+    )
+    if completed.returncode != 0:
+        _DEVICE_E2E_OBSERVATIONS = {
+            "evidence_scope": "component_only", "executed": False,
+            "reason": (completed.stdout + completed.stderr)[-2000:],
+        }
+        return _DEVICE_E2E_OBSERVATIONS
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            observed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(observed, dict) and observed.get("evidence_scope") == "component_only":
+            _DEVICE_E2E_OBSERVATIONS = {**observed, "executed": True}
+            return _DEVICE_E2E_OBSERVATIONS
+    _DEVICE_E2E_OBSERVATIONS = {
+        "evidence_scope": "component_only", "executed": False,
+        "reason": "synthetic E2E emitted no machine observation",
+    }
+    return _DEVICE_E2E_OBSERVATIONS
 
 
 def run_r06_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:

@@ -30,5 +30,9 @@ int main() {
     system.transfer_control_update();
   }
   if (system.publish_drops() != 996U) return 11;
+  while (system.take_publish_record(&output)) {}
+  if (!system.transfer_control_update()) return 12;
+  if (!system.take_publish_record(&output) || output.position != hold) return 13;
+  if (system.transfer_control_update()) return 14;
   return 0;
 }
