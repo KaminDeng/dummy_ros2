@@ -34,7 +34,7 @@ class BootstrapCoordinator {
   void tick(std::uint64_t now_us);
   BootstrapPhase phase() const noexcept { return phase_; }
   bool ready() const noexcept { return phase_ == BootstrapPhase::kReady; }
-  const char *error() const noexcept { return error_; }
+  const char *error() const noexcept { return error_.c_str(); }
   std::optional<Authorization> authorization() const;
 
  private:
@@ -49,6 +49,6 @@ class BootstrapCoordinator {
   BootstrapPhase phase_ = BootstrapPhase::kIdle;
   std::uint64_t request_id_ = 0;
   std::uint32_t issued_management_epoch_ = 0;
-  const char *error_ = "";
+  std::string error_;
 };
 }  // namespace dummy_motion_client

@@ -24,6 +24,8 @@ int main() {
   std::array<std::uint8_t, 32> permit{}; permit[0]=1U;
   BootstrapCoordinator bootstrap(client, identity, permit, 1000000U);
   BootstrapSnapshot state{7U,0U,0U,0U,0U,9U,2U,1U,true,true};
+  bootstrap.observe(state);
+  assert(bootstrap.phase()==BootstrapPhase::kIdle);
   assert(bootstrap.start(state, 1U));
   const std::uint16_t operations[]{2U,3U,4U,14U};
   for (unsigned index=0; index<4; ++index) {

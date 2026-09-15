@@ -115,7 +115,11 @@ class DeviceActionGate final : public rclcpp::Node {
     enable_service_=create_service<std_srvs::srv::Trigger>("~/enable",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         response->success=enable_available_.load() && !enable_requested_.exchange(true);
-        response->message=response->success ? "Enable queued; wait for confirmed HOLD before submitting motion" : "Device authorization or active guarded controller unavailable";
+        response->message=response->success ? "Enable queued; wait for confirmed HOLD before submitting motion" :
+          "Enable unavailable phase="+std::to_string(static_cast<unsigned>(bootstrap_->phase()))+
+          " transport="+(transport_->ready()?"ready":"not_ready")+
+          " boot="+std::to_string(latest_bootstrap_.boot_epoch)+
+          " raw="+(latest_bootstrap_.raw_ready?"ready":"not_ready");
       });
     bootstrap_status_service_=create_service<std_srvs::srv::Trigger>("~/bootstrap_status",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -169,11 +173,17 @@ class DeviceActionGate final : public rclcpp::Node {
  private:
   bool read_observation(std::uint64_t now) {
     const auto observed=transport_->observe();
-    if(!observed || observed->state.empty() || observed->status.empty()) return false;
-    if(!observation_is_fresh(*observed,now)) return false;
+    if(!observed || observed->state.empty() || observed->status.empty()) {
+      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_EMPTY"); return false;
+    }
+    if(!observation_is_fresh(*observed,now)) {
+      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_STALE"); return false;
+    }
     wire::DummyDeviceStatusV1 status; wire::DummyJointStateV1 state;
     if(wire::DummyDeviceStatusV1Codec::decode(observed->status.data(),observed->status.size(),&status)!=wire::CodecResult::kOk ||
-       wire::DummyJointStateV1Codec::decode(observed->state.data(),observed->state.size(),&state)!=wire::CodecResult::kOk) return false;
+       wire::DummyJointStateV1Codec::decode(observed->state.data(),observed->state.size(),&state)!=wire::CodecResult::kOk) {
+      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_CODEC"); return false;
+    }
     const auto reject=[this](const char *reason) {
       RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_%s",reason);
       return false;

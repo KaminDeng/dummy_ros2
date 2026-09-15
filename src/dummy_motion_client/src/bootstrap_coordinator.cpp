@@ -53,6 +53,10 @@ bool BootstrapCoordinator::start(const BootstrapSnapshot &snapshot, std::uint64_
 }
 
 void BootstrapCoordinator::observe(const BootstrapSnapshot &snapshot) noexcept {
+  if (phase_ == BootstrapPhase::kIdle) {
+    snapshot_ = snapshot;
+    return;
+  }
   if (snapshot.boot_epoch != snapshot_.boot_epoch) {
     phase_ = BootstrapPhase::kFault;
     error_ = "BOOT_CHANGED";
@@ -111,9 +115,11 @@ void BootstrapCoordinator::tick(std::uint64_t now_us) {
       request_id_ = 0U;
       advance(now_us);
     }
-  } catch (...) {
+  } catch (const std::exception &error) {
+    const auto failed_phase=phase_;
     phase_ = BootstrapPhase::kFault;
-    error_ = "BOOTSTRAP_UNCONFIRMED";
+    error_ = std::string("BOOTSTRAP_UNCONFIRMED phase=")+
+      std::to_string(static_cast<unsigned>(failed_phase))+" error="+error.what();
     request_id_ = 0U;
   }
 }

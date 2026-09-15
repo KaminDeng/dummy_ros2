@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "handoff": "R06-to-DPSDK-operation-enum-blocker",
-  "status": "PARTIALLY_RESOLVED",
+  "status": "BLOCKED_MANAGE_RESPONSE",
   "hardware": "none",
   "wire_authority": {
     "release": "dummy-wire-v1",
@@ -24,7 +24,7 @@
     }
   },
   "observed_dpsdk": {
-    "commit": "56426ea",
+    "commit": "648582f",
     "enum_alignment_commit": "a24c017",
     "source": "applications/dummy_ref_control/include/dummy_ref/core_types.hpp",
     "operations": {
@@ -39,14 +39,16 @@
   },
   "impact": [
     "The operation/receipt/result/core-state enum drift is resolved by DPSDK commit a24c017.",
-    "The committed D08 peer publishes zero contract/model/profile hashes and omits control_mode/reference_kind/real_motion_permitted/permit_remaining_us in status.",
-    "The production ROS gate therefore rejects the real peer with DEVICE_BOOTSTRAP_INPUT_REJECTED_HASH before issuing any mutation."
+    "Runtime status identity is resolved by DPSDK commit 648582f.",
+    "DummyNode manage_v1 responses do not set device_id, profile_id, or operation_status; the production client rejects SELECT_CONTROL_MODE receipt identity before continuing bootstrap."
   ],
   "ros_behavior": "ROS uses the published C05 values, accepts no legacy aliases, and retains strict runtime contract/profile/permit validation.",
   "resolution_required": [
     "Resolved: DPSDK maps published wire operation values and D06 passes 26/26.",
-    "The committed long-lived J1 peer must publish C05 contract/model/profile hashes and accurate control/reference/permit status fields.",
-    "The peer must retain DISARMED raw-state visibility so explicit SELECT/GRANT/CAPTURE/PERMIT/ENABLE bootstrap can run.",
+    "Resolved: D08 publishes runtime hashes and authorization status, with DISARMED raw-state visibility.",
+    "Every manage_v1 receipt/query response must populate device_id and profile_id from the addressed device/request.",
+    "GET_OPERATION terminal responses must populate the C05 operation_status value in addition to result_code.",
+    "D06/D08 acceptance must assert these decoded response fields for SELECT, GRANT, CAPTURE, PERMIT and ENABLE.",
     "ROS reruns R06 and R07 cross-process cases against that committed artifact."
   ]
 }

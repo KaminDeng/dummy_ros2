@@ -117,7 +117,7 @@ def main():
                 node.destroy_node()
                 rclpy.shutdown()
                 return
-            assert enable_response.success, "explicit enable unavailable"
+            assert enable_response.success, f"explicit enable unavailable: {enable_response.message}"
             while time.monotonic() < deadline:
                 bootstrap = call(node, Trigger, "/device_action_gate/bootstrap_status", Trigger.Request())
                 if bootstrap.success:
