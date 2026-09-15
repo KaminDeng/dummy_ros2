@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import struct
 import unittest
 import xml.etree.ElementTree as element_tree
 
@@ -38,6 +39,43 @@ class ModelAlignmentTest(unittest.TestCase):
             self.assertAlmostEqual(upper, float(limit.attrib["upper"]), places=12, msg=name)
         self.assertAlmostEqual(-4.0 * math.pi, float(urdf_joints["Joint6"].find("limit").attrib["lower"]), places=12)
         self.assertAlmostEqual(4.0 * math.pi, float(urdf_joints["Joint6"].find("limit").attrib["upper"]), places=12)
+
+    def test_joint6_preserves_three_pi_and_rejects_five_pi_without_wrapping(self):
+        lower, upper = self.joints["Joint6"]["model_limits_rad"]
+        self.assertLessEqual(lower, 3.0 * math.pi)
+        self.assertGreaterEqual(upper, 3.0 * math.pi)
+        self.assertGreater(5.0 * math.pi, upper)
+        self.assertNotEqual(3.0 * math.pi, math.remainder(3.0 * math.pi, 2.0 * math.pi))
+
+    def test_mesh_bounds_match_transformed_collision_boxes(self):
+        def vertices(path: Path):
+            data = path.read_bytes()
+            triangle_count = struct.unpack_from("<I", data, 80)[0]
+            self.assertEqual(84 + triangle_count * 50, len(data), path.name)
+            for triangle in range(triangle_count):
+                offset = 84 + triangle * 50 + 12
+                for vertex in range(3):
+                    yield struct.unpack_from("<fff", data, offset + vertex * 12)
+
+        links = [link for link in self.urdf.findall("link") if link.find("visual/geometry/mesh") is not None]
+        self.assertEqual(7, len(links))
+        for link in links:
+            visual = link.find("visual")
+            collision = link.find("collision")
+            mesh_name = Path(visual.find("geometry/mesh").attrib["filename"]).name
+            points = list(vertices(DESCRIPTION / "meshes" / mesh_name))
+            raw_size = [(max(point[axis] for point in points) - min(point[axis] for point in points)) * 0.001
+                        for axis in range(3)]
+            collision_size = [float(value) for value in collision.find("geometry/box").attrib["size"].split()]
+            self.assertEqual(3, len(collision_size))
+            self.assertTrue(all(value > 0.0 for value in collision_size))
+            self.assertAlmostEqual(sorted(raw_size)[0], sorted(collision_size)[0], places=5, msg=link.attrib["name"])
+            self.assertAlmostEqual(sorted(raw_size)[1], sorted(collision_size)[1], places=5, msg=link.attrib["name"])
+            self.assertAlmostEqual(sorted(raw_size)[2], sorted(collision_size)[2], places=5, msg=link.attrib["name"])
+            self.assertIsNotNone(visual.find("origin"), link.attrib["name"])
+            self.assertIsNotNone(collision.find("origin"), link.attrib["name"])
+        report = " ".join((WORKSPACE_ROOT / "docs/dummy/model_alignment.md").read_text().split())
+        self.assertIn("does not establish real collision clearance", report)
 
     def test_r01_tests_are_registered_with_ament(self):
         cmake = (MOVEIT / "CMakeLists.txt").read_text()
