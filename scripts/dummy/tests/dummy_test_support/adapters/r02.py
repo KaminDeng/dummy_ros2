@@ -4,16 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from dummy_test_support.task_adapters import run_action_probe_case, run_unittest_case
+from dummy_test_support.task_adapters import not_run_case, run_unittest_case
 
 
 TARGETS = {
     "MOD05": "src.dummy_moveit_config.test.test_model_alignment.ModelAlignmentTest.test_all_zero_pose_is_rejected_by_joint3_contract_range",
-    "FRE11": "src.dummy_moveit_config.test.test_r02_gazebo_contract.R02GazeboContractTest.test_gazebo_nodes_use_sim_time_and_do_not_start_device_transport",
-    "ROS03": "src.dummy_moveit_config.test.test_r02_gazebo_contract.R02GazeboContractTest.test_collision_geometry_uses_gazebo_supported_positive_boxes",
-    "ROS11": "src.dummy_moveit_config.test.test_r02_gazebo_contract.R02GazeboContractTest.test_bringup_installs_canonical_gazebo_entrypoint",
-    "ROS01": "src/dummy_bringup/scripts/action_gate_probe.py",
-    "ROS02": "src/dummy_bringup/scripts/action_gate_probe.py",
 }
 SOURCES = (
     "src/dummy_bringup/launch/gazebo_6dof.launch.py",
@@ -24,8 +19,15 @@ SOURCES = (
 
 
 def run_r02_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
-    if case_id in {"ROS01", "ROS02"}:
-        return run_action_probe_case(case_id, stimulus, TARGETS[case_id], SOURCES)
+    unavailable = {
+        "FRE11": "no pause/resume Gazebo clock probe also observes independent device watchdog behavior",
+        "ROS01": "no case-specific headless Gazebo probe observes spawn, controller count, and device isolation",
+        "ROS02": "no case-specific Gazebo trajectory probe observes time-varying joint feedback and tracking error",
+        "ROS03": "no case-specific no-command Gazebo probe observes fixed-base gravity stability",
+        "ROS11": "no case-specific controller load probe validates this installed JTC configuration",
+    }
+    if case_id in unavailable:
+        return not_run_case(case_id, stimulus, SOURCES, unavailable[case_id], sut_kind="gazebo_runtime")
     try:
         target = TARGETS[case_id]
     except KeyError as error:

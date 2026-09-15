@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dummy_test_support.task_adapters import run_unittest_case
+from dummy_test_support.task_adapters import run_cpp_probe_case, run_unittest_case
 
 
 TARGETS = {
@@ -28,6 +28,17 @@ SOURCES = (
 
 
 def run_r04_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
+    if case_id == "FRE01":
+        return run_cpp_probe_case(
+            case_id, stimulus, "src/dummy_ros_control/test/stale_state_tests.cpp", SOURCES,
+            "ticket_half_open_window_verified",
+        )
+    if case_id == "ROS08":
+        return run_unittest_case(
+            case_id, stimulus,
+            "scripts.dummy.tests.test_r04_acceptance.R04AcceptanceTest.test_ros09_bounded_publisher_backpressure",
+            SOURCES, sut_kind="core_binary",
+        )
     try:
         target = TARGETS[case_id]
     except KeyError as error:

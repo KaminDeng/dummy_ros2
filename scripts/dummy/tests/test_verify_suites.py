@@ -17,47 +17,94 @@ import verify  # noqa: E402
 
 
 class VerifySuitesTest(unittest.TestCase):
-    def run_suite(self, suite: str) -> tuple[int, dict]:
+    def run_suite(
+        self, suite: str, *, case: str | None = None, hardware: str = "none",
+    ) -> tuple[int, dict]:
         with tempfile.TemporaryDirectory(prefix="verify_suite_") as temporary:
             report = Path(temporary) / "report.json"
             completed = subprocess.run(
-                ["/usr/bin/python3", str(VERIFY), "--suite", suite, "--hardware", "none", "--report", str(report)],
+                [
+                    "/usr/bin/python3", str(VERIFY), "--suite", suite,
+                    "--hardware", hardware, "--report", str(report),
+                    *( ("--case", case) if case is not None else () ),
+                ],
                 cwd=ROOT, capture_output=True, text=True, check=False, timeout=45,
             )
             self.assertTrue(report.is_file(), completed.stdout + completed.stderr)
             return completed.returncode, json.loads(report.read_text())
 
+    def test_every_registered_suite_supports_a_registered_single_case(self):
+        for suite, definition in verify.SUITES.items():
+            fixture = json.loads((verify.TEST_ROOT / "fixtures" / definition["fixture"]).read_text())
+            case_id = fixture["cases"][0]
+            code, report = self.run_suite(suite, case=case_id)
+            self.assertNotEqual(2, code, suite)
+            self.assertEqual([case_id], [result["case_id"] for result in report["cases"]])
+
+    def test_plan_only_and_manual_do_not_dispatch_a_case_probe(self):
+        with mock.patch.object(verify, "run_case") as dispatch:
+            for hardware in ("plan-only", "manual"):
+                report, code = verify.run_registered_suite("R01", hardware, "GEN07")
+                self.assertEqual(4, code)
+                self.assertEqual("NOT_RUN", report["status"])
+                self.assertFalse(report["cases"][0]["executed"])
+        dispatch.assert_not_called()
+
+    def test_runner_materializes_required_case_evidence_and_real_unique_traces(self):
+        with tempfile.TemporaryDirectory(prefix="verify_trace_") as temporary:
+            evidence_dir = Path(temporary) / "traces"
+            with mock.patch.dict("os.environ", {"DUMMY_EVIDENCE_DIR": str(evidence_dir)}):
+                first, _ = verify.run_registered_suite("R00", "none", "AUD01")
+                second, _ = verify.run_registered_suite("R00", "none", "AUD01")
+            for result in (first["cases"][0], second["cases"][0]):
+                self.assertEqual(1, result["schema"])
+                self.assertEqual("document_utility", result["sut_kind"])
+                self.assertEqual(64, len(result["input_digest"]))
+                trace = Path(result["trace_path"])
+                self.assertTrue(trace.is_file())
+                self.assertEqual(result["trace_sha256"], __import__("hashlib").sha256(trace.read_bytes()).hexdigest())
+            self.assertNotEqual(first["cases"][0]["trace_path"], second["cases"][0]["trace_path"])
+
+    def test_action_probe_requires_its_case_validator(self):
+        from dummy_test_support.task_adapters import run_action_probe_case
+
+        result = run_action_probe_case(
+            "LIVE",
+            {"case_id": "LIVE", "hardware": "none", "test_only": True},
+            "scripts/dummy/tests/fixtures/success_probe.py",
+            ("scripts/dummy/tests/fixtures/success_probe.py",),
+            validator=lambda observed: observed.get("required") is True,
+        )
+
+        self.assertEqual("FAIL", result["status"])
+        self.assertIn("validator", result["reason"])
+
     def test_r01_runs_registered_model_suite(self):
         code, report = self.run_suite("R01")
-        self.assertEqual(0, code)
-        self.assertEqual("PASS", report["status"])
-        self.assertEqual(7, report["executed_test_count"])
+        self.assertEqual(4, code)
+        self.assertEqual("NOT_RUN", report["status"])
+        self.assertEqual(5, report["executed_test_count"])
 
     def test_r03_runs_registered_wire_rpc_suite(self):
         code, report = self.run_suite("R03")
-        self.assertEqual(0, code)
-        self.assertEqual("PASS", report["status"])
-        self.assertEqual(7, report["executed_test_count"])
+        self.assertEqual(4, code)
+        self.assertEqual("NOT_RUN", report["status"])
+        self.assertEqual(6, report["executed_test_count"])
 
     def test_r05_without_runtime_is_not_run(self):
         code, report = self.run_suite("R05")
-        self.assertEqual(3, code)
+        self.assertEqual(4, code)
         self.assertEqual("NOT_RUN", report["status"])
 
     def test_r05_keeps_model_and_controller_contract_cases_offline(self):
         from dummy_test_support.adapters import r05
 
-        evidence = {
-            "case_id": "case", "executed": True, "status": "PASS", "reason": "",
-            "sut_source_sha256": "a" * 64, "trace_sha256": "b" * 64,
-            "observations": {},
-        }
-        with mock.patch.object(r05, "run_unittest_case", return_value=evidence) as execute:
-            for case_id in ("MOD06", "ROS11"):
-                r05.run_r05_case(case_id, {
-                    "case_id": case_id, "hardware": "none", "test_only": True,
-                })
-                self.assertIsNone(execute.call_args.kwargs["runtime_action"])
+        for case_id in ("MOD06", "ROS11"):
+            evidence = r05.run_r05_case(case_id, {
+                "case_id": case_id, "hardware": "none", "test_only": True,
+            })
+            self.assertEqual("NOT_RUN", evidence["status"])
+            self.assertFalse(evidence["executed"])
 
     def test_r04_runs_nonblocking_plugin_suite(self):
         code, report = self.run_suite("R04")
@@ -66,18 +113,22 @@ class VerifySuitesTest(unittest.TestCase):
         self.assertEqual(10, report["executed_test_count"])
 
     def test_registered_runner_preserves_each_case_adapter_evidence(self):
-        first = {
-            "case_id": "FIRST", "executed": True, "status": "PASS", "reason": "",
-            "sut_source_sha256": "a" * 64, "trace_sha256": "b" * 64,
-            "observations": {"probe": "first"},
-        }
-        second = {
-            "case_id": "SECOND", "executed": True, "status": "PASS", "reason": "",
-            "sut_source_sha256": "c" * 64, "trace_sha256": "d" * 64,
-            "observations": {"probe": "second"},
-        }
         with tempfile.TemporaryDirectory(prefix="verify_cases_") as temporary:
             fixture_root = Path(temporary)
+            def evidence(case_id: str, source_digest: str, input_digest: str, observation: str) -> dict:
+                trace_path = fixture_root / f"{case_id}.trace"
+                trace_path.write_text(observation + "\n")
+                return {
+                    "schema": 1, "case_id": case_id, "sut_kind": "document_utility",
+                    "executed": True, "status": "PASS", "reason": "",
+                    "sut_source_sha256": source_digest, "input_digest": input_digest,
+                    "trace_path": str(trace_path.resolve()),
+                    "trace_sha256": __import__("hashlib").sha256(trace_path.read_bytes()).hexdigest(),
+                    "observations": {"probe": observation},
+                }
+
+            first = evidence("FIRST", "a" * 64, "b" * 64, "first")
+            second = evidence("SECOND", "c" * 64, "d" * 64, "second")
             (fixture_root / "fixtures").mkdir()
             (fixture_root / "fixtures" / "RX.json").write_text(
                 json.dumps({"suite": "RX", "cases": ["FIRST", "SECOND"]})
@@ -104,14 +155,19 @@ class VerifySuitesTest(unittest.TestCase):
         self.assertIn("R02", verify.SUITES)
         self.assertEqual("R02.json", verify.SUITES["R02"]["fixture"])
 
-    def test_runtime_not_run_case_returns_exit_three(self):
-        result = {
-            "case_id": "ROS01", "executed": False, "status": "NOT_RUN",
-            "reason": "required live runtime unavailable", "sut_source_sha256": "a" * 64,
-            "trace_sha256": "b" * 64, "observations": {"runtime_available": False},
-        }
+    def test_runtime_not_run_case_returns_exit_four(self):
         with tempfile.TemporaryDirectory(prefix="verify_not_run_") as temporary:
             fixture_root = Path(temporary)
+            trace_path = fixture_root / "ros01.trace"
+            trace_path.write_text("required live runtime unavailable\n")
+            result = {
+                "schema": 1, "case_id": "ROS01", "sut_kind": "ros_launch",
+                "executed": False, "status": "NOT_RUN", "reason": "required live runtime unavailable",
+                "sut_source_sha256": "a" * 64, "input_digest": "b" * 64,
+                "trace_path": str(trace_path.resolve()),
+                "trace_sha256": __import__("hashlib").sha256(trace_path.read_bytes()).hexdigest(),
+                "observations": {"runtime_available": False},
+            }
             (fixture_root / "fixtures").mkdir()
             (fixture_root / "fixtures" / "RX.json").write_text(
                 json.dumps({"suite": "RX", "cases": ["ROS01"]})
@@ -127,7 +183,7 @@ class VerifySuitesTest(unittest.TestCase):
             ):
                 report, code = verify.run_registered_suite("RX", "none")
 
-        self.assertEqual(3, code)
+        self.assertEqual(4, code)
         self.assertEqual("NOT_RUN", report["status"])
         self.assertEqual([result], report["cases"])
 
@@ -149,16 +205,21 @@ class VerifySuitesTest(unittest.TestCase):
                 report, code = verify.run_registered_suite("EMPTY", "none")
 
         self.assertEqual(4, code)
-        self.assertEqual("UNEXECUTED", report["status"])
+        self.assertEqual("NOT_RUN", report["status"])
 
     def test_all_skipped_cases_do_not_pass(self):
-        skipped = {
-            "case_id": "SKIPPED", "executed": False, "status": "SKIP",
-            "reason": "probe intentionally skipped", "sut_source_sha256": "a" * 64,
-            "trace_sha256": "b" * 64, "observations": {"probe_started": False},
-        }
         with tempfile.TemporaryDirectory(prefix="verify_skipped_") as temporary:
             fixture_root = Path(temporary)
+            trace_path = fixture_root / "skipped.trace"
+            trace_path.write_text("probe intentionally skipped\n")
+            skipped = {
+                "schema": 1, "case_id": "SKIPPED", "sut_kind": "document_utility",
+                "executed": False, "status": "SKIP", "reason": "probe intentionally skipped",
+                "sut_source_sha256": "a" * 64, "input_digest": "b" * 64,
+                "trace_path": str(trace_path.resolve()),
+                "trace_sha256": __import__("hashlib").sha256(trace_path.read_bytes()).hexdigest(),
+                "observations": {"probe_started": False},
+            }
             (fixture_root / "fixtures").mkdir()
             (fixture_root / "fixtures" / "RX.json").write_text(
                 json.dumps({"suite": "RX", "cases": ["SKIPPED"]})
@@ -175,7 +236,7 @@ class VerifySuitesTest(unittest.TestCase):
                 report, code = verify.run_registered_suite("RX", "none")
 
         self.assertEqual(4, code)
-        self.assertEqual("UNEXECUTED", report["status"])
+        self.assertEqual("NOT_RUN", report["status"])
 
     def test_junit_distinguishes_failure_from_runtime_skip(self):
         report = {
@@ -197,6 +258,36 @@ class VerifySuitesTest(unittest.TestCase):
         self.assertIsNotNone(cases["OFFLINE"].find("skipped"))
         self.assertIsNotNone(cases["SKIPPED"].find("skipped"))
 
+    def test_junit_serializes_blocked_as_skipped(self):
+        report = {
+            "suite": "RX",
+            "cases": [
+                {"case_id": "BLOCKED", "status": "BLOCKED", "reason": "missing dependency"},
+            ],
+        }
+        with tempfile.TemporaryDirectory(prefix="verify_blocked_junit_") as temporary:
+            path = Path(temporary) / "report.junit.xml"
+            verify.write_junit(report, path)
+            root = element_tree.parse(path).getroot()
+        self.assertEqual("1", root.attrib["skipped"])
+        self.assertIsNotNone(root.find(".//skipped"))
+
+    def test_task_adapter_dispatches_r08_and_rejects_unknown_suite(self):
+        from dummy_test_support import task_adapters
+
+        evidence = {
+            "case_id": "REL01", "executed": True, "status": "PASS", "reason": "",
+            "sut_source_sha256": "a" * 64, "observations": {},
+        }
+        stimulus = {"case_id": "REL01", "hardware": "none", "test_only": True}
+        with mock.patch.object(task_adapters, "run_r08_case", return_value=evidence):
+            result = task_adapters.run_case("R08", "REL01", stimulus)
+        self.assertEqual("REL01", result["case_id"])
+        with self.assertRaises(ValueError):
+            task_adapters.run_case("UNKNOWN", "X", {
+                "case_id": "X", "hardware": "none", "test_only": True,
+            })
+
     def test_r00_uses_the_common_report_status_and_count_schema(self):
         with tempfile.TemporaryDirectory(prefix="verify_r00_") as temporary:
             report_path = Path(temporary) / "report.json"
@@ -210,7 +301,7 @@ class VerifySuitesTest(unittest.TestCase):
             self.assertTrue(report_path.is_file(), completed.stdout + completed.stderr)
             report = json.loads(report_path.read_text())
 
-        self.assertEqual(3, completed.returncode)
+        self.assertEqual(4, completed.returncode)
         self.assertEqual("NOT_RUN", report["status"])
         self.assertEqual(3, report["executed_test_count"])
         self.assertEqual(4, len(report["cases"]))
@@ -226,7 +317,7 @@ class VerifySuitesTest(unittest.TestCase):
             r02.run_r02_case("MOD05", {"case_id": "MOD05", "hardware": "none", "test_only": True})
 
         self.assertNotIn("runtime_action", run_unittest.call_args.kwargs)
-        self.assertNotIn(".launch.", r02.TARGETS["ROS01"])
+        self.assertNotIn("ROS01", r02.TARGETS)
 
     def test_missing_adapter_source_returns_failed_evidence(self):
         from dummy_test_support.task_adapters import run_unittest_case
@@ -262,6 +353,7 @@ class VerifySuitesTest(unittest.TestCase):
             {"case_id": "LIVE", "hardware": "none", "test_only": True},
             "scripts/dummy/tests/fixtures/success_probe.py",
             ("scripts/dummy/tests/fixtures/success_probe.py",),
+            validator=lambda observed: observed.get("observed") is True,
         )
 
         self.assertEqual("PASS", result["status"])

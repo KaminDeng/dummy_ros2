@@ -1,6 +1,5 @@
-"""R01 case-specific model acceptance."""
+"""R01 adapter evidence is tied to the real model and FK probes."""
 
-import json
 from pathlib import Path
 import sys
 import unittest
@@ -10,30 +9,32 @@ sys.path.insert(0, str(TEST_ROOT))
 from dummy_test_support.task_adapters import run_case
 
 
-CASES = json.loads((TEST_ROOT / "fixtures/R01.json").read_text())["cases"]
-
-
 class R01Acceptance(unittest.TestCase):
-    pass
-
-
-def _make_case(case_id: str):
-    def test(self):
-        result = run_case("R01", case_id, {
+    def evidence(self, case_id: str) -> dict:
+        return run_case("R01", case_id, {
             "case_id": case_id, "hardware": "none", "test_only": True,
         })
-        self.assertEqual(case_id, result["case_id"])
-        self.assertTrue(result["executed"])
+
+    def test_mod01_uses_the_joint1_anchor_round_trip_probe(self):
+        result = self.evidence("MOD01")
         self.assertEqual("PASS", result["status"], result["reason"])
-        self.assertTrue(result["sut_source_sha256"])
-        self.assertTrue(result["trace_sha256"])
-        self.assertEqual(case_id, result["observations"]["case_id"])
+        self.assertIn("joint1_bench_mapping", result["observations"]["case_target"])
 
-    return test
+    def test_mod02_uses_reference_chain_fk_samples(self):
+        result = self.evidence("MOD02")
+        self.assertEqual("PASS", result["status"], result["reason"])
+        self.assertIn("fixed_and_random_evidence_match_kdl", result["observations"]["case_target"])
 
+    def test_mod03_uses_the_actual_legacy_chain_divergence_probe(self):
+        result = self.evidence("MOD03")
+        self.assertEqual("PASS", result["status"], result["reason"])
+        self.assertIn("literal_legacy_axis3_row_diverges", result["observations"]["case_target"])
 
-for _case_id in CASES:
-    setattr(R01Acceptance, f"test_{_case_id.lower()}", _make_case(_case_id))
+    def test_mod04_and_mod06_are_not_claimed_without_their_specific_probe(self):
+        for case_id in ("MOD04", "MOD06"):
+            result = self.evidence(case_id)
+            self.assertEqual("NOT_RUN", result["status"])
+            self.assertFalse(result["executed"])
 
 
 if __name__ == "__main__":

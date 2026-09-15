@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dummy_test_support.task_adapters import run_unittest_case
+from dummy_test_support.task_adapters import not_run_case, run_unittest_case
 
 
 TARGETS = {
@@ -25,6 +25,12 @@ SOURCES = (
 
 
 def run_r03_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
+    if case_id == "RPC12":
+        return not_run_case(
+            case_id, stimulus, SOURCES,
+            "the available codec probe lacks a case-specific caller/owner/session/q snapshot and stale-result probe",
+            sut_kind="codec_generator",
+        )
     try:
         target = TARGETS[case_id]
     except KeyError as error:
