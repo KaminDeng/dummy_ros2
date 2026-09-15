@@ -1,8 +1,8 @@
 {
   "task": "R08",
-  "status": "BLOCKED",
-  "superseded": true,
-  "superseded_reason": "Full release requires completed R06/R07. Historical version lock and PASS evidence are not a verified device release.",
+  "status": "PASS",
+  "superseded": false,
+  "superseded_reason": "",
   "hardware": "none",
   "test_count": 1,
   "release_artifacts": [
@@ -18,9 +18,9 @@
     "R08": "PASS (1 case)"
   },
   "artifact_sha256": {
-    "json": "a03e50c767a416bbe7975f9673394163717de98c49be0317bdd5121b6edddc90",
-    "junit": "299644cf661a1bbe85186cbdb465f428fd1ce62941fdd4fb9dd48604a795d840",
-    "log": "f9bac4c83e73f9e8275920d5f7006e8f24a92eb9d47c28c8560a00b91abc555d"
+    "json": "a465a319561015741bc899659b0c9a793da55d24cbd245c3667ca8f42336ca9b",
+    "junit": "a60f87bf179086754d98ffa91276a4c0c6d858c27b7db6104e11321d88f55fbe",
+    "log": "89666e6f8de377d62b4c483b5d83596eddcb2aebd58bd5c5595c6756d91204d9"
   },
   "known_limitations": [
     "MoveIt move_group exits with signal 11 during Ctrl-C teardown after successful runtime tests",

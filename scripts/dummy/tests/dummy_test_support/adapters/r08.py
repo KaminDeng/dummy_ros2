@@ -48,9 +48,12 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
         f"source_lock_present={source_lock_present};"
         f"runtime_not_run_as_pass={runtime_not_run_as_pass};separated={separated}"
     )
+    passed = source_lock_present and not runtime_not_run_as_pass and separated
     return {
         "case_id": case_id,
         "executed": True,
+        "status": "PASS" if passed else "FAIL",
+        "reason": "" if passed else "release lock or evidence separation validation failed",
         "sut_source_sha256": digest.hexdigest(),
         "trace_sha256": sha256(trace.encode()).hexdigest(),
         "observations": {
@@ -58,6 +61,6 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
             "source_lock_present": source_lock_present,
             "runtime_not_run_as_pass": runtime_not_run_as_pass,
             "ros_gazebo_record_separate": separated,
-            "requirement_observed": source_lock_present and not runtime_not_run_as_pass and separated,
+            "requirement_observed": passed,
         },
     }

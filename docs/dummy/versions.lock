@@ -1,7 +1,7 @@
 schema=dummy.ros.release.v1
 ros_distro=jazzy
-ros_workspace_base_commit=7ba3c690129ad512520bdaa2cd5961524799a9d0
-dpsdk_commit=1fbe388416976c7e8c920311f2a9b0f0db9ad856
+ros_workspace_base_commit=7038e7478f1ef9d85f3bd1b59b18dfed99e34daf
+dpsdk_commit=c19221509f1f83caffda374c43ae1be90f9fb44f
 wire_release=dummy-wire-v1
 wire_payload_sorted_sha256=d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a
 gazebo_sim=8.15.0

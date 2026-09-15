@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "handoff": "R06-to-DPSDK-operation-enum-blocker",
-  "status": "BLOCKED_MANAGE_RESPONSE",
+  "status": "RESOLVED",
   "hardware": "none",
   "wire_authority": {
     "release": "dummy-wire-v1",

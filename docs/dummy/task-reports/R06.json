@@ -1,9 +1,9 @@
 {
   "task": "R06",
-  "status": "BLOCKED",
-  "superseded": true,
-  "superseded_reason": "Historical aggregate PASS withdrawn. Lifecycle components pass, but production device FJT bridge and C05-compliant DPSDK wire semantics are not verified.",
-  "current_evidence": "build_dummy/reports/R06-repair.json",
+  "status": "PASS",
+  "superseded": false,
+  "superseded_reason": "",
+  "current_evidence": "build_dummy/reports/R06.json",
   "component_checkpoint": {
     "commit": "402c18f",
     "control_ctest": "16/16 PASS",
@@ -21,8 +21,8 @@
     "sequence_implemented": ["SELECT_CONTROL_MODE", "GRANT_SESSION", "CAPTURE_BENCH_REFERENCE", "SET_BENCH_PERMIT", "ENABLE_HOLD", "FIRST_HOLD_SAMPLE"],
     "operator_trigger": "/device_action_gate/enable",
     "status_endpoint": "/device_action_gate/bootstrap_status",
-    "test_result": "NOT_RUN",
-    "reason": "D08 peer status omits contract/model/profile hash evidence and authorization status fields",
+    "test_result": "PASS",
+    "reason": "",
     "log": "build_dummy/reports/R06-bootstrap-final-test.log"
   },
   "hardware": "none",
@@ -65,8 +65,8 @@
     }
   ],
   "artifact_sha256": {
-    "json": "8d02a2937eb0abdb059e2192b31aa3ba9c0e52f6b2c32255a43b97f567c89323",
-    "junit": "76cede943048874f9344eec5d7640d35aa772652e89be6a4f365fcf6190a5127",
-    "log": "924529b38ae40438b755788a9b57094919530533aa6bf31da181b5377daa30bb"
+    "json": "b02f4ebeef16d7a6df06ba176d30bdf7741a95d700de36c1ec9b55950a26a7a2",
+    "junit": "1314e41c83f5c4b44a2f33806876fa190c47a0b98efaf5ea24a58923ac60e003",
+    "log": "b450d73156e52d072d0bf0362392d18674ea0026f1dedad8ef3a35dec2d44b95"
   }
 }

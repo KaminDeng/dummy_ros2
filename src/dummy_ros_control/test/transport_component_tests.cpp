@@ -214,6 +214,8 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   const auto before_reordered = transport.statistics().invalidations;
   if (!wait_for([&] { send(reordered); return system.copy_state(&snapshot); }) ||
       transport.statistics().invalidations != before_reordered) return 52;
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  (void)system.copy_state(&snapshot);
   auto rebooted = valid;
   rebooted.status.set_boot_epoch(11U);
   rebooted.state.set_boot_epoch(11U);

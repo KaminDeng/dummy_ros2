@@ -1,16 +1,16 @@
 {
   "task": "R07",
-  "status": "BLOCKED",
-  "superseded": true,
-  "superseded_reason": "Historical standalone DPSDK and plugin evidence did not execute one ROS device SIL chain. All device backend cases remain NOT_RUN.",
+  "status": "PASS",
+  "superseded": false,
+  "superseded_reason": "",
   "current_evidence": "build_dummy/reports/R07.json",
   "current_recheck": {
     "report": "build_dummy/reports/R07-repair.json",
-    "status": "NOT_RUN",
+    "status": "PASS",
     "j1_peer_commit": "56426ea",
     "six_axis_peer_commit": "2716594",
-    "six_axis_scope": "state/status transport only; not promoted to ROS motion or missing-axis fault PASS",
-    "blocker": "runtime contract/model/profile and authorization evidence absent from D08 status"
+    "six_axis_scope": "independent profile_id=1 configured_mask=63 peer plus SEN06 fault evidence",
+    "blocker": ""
   },
   "hardware": "none",
   "test_count": 8,
@@ -29,9 +29,9 @@
   ],
   "report": "build_dummy/reports/R07.json",
   "artifact_sha256": {
-    "json": "f2279c6822dbd75d82b5aa32fbd0db78bc611e5abb6f430540e4e0841dce0828",
-    "junit": "aa6b5814aa61ad773fa50a541f8bdd9f39a3f8031c9ff606ce2afcb0ea769bdc",
-    "log": "9995c7bece360b809eecc0fc6dbeb95b8e0433a6cd3a9bfb1e21ad82b4918e30"
+    "json": "a2c2c20b7e3d1c68b4a205986d747b4d0a5d76dda4a2054ad1b39ea4212e5ce0",
+    "junit": "36814b5d67407bac7590f2fc4aaa0d139f9137646c80279a877cc94b54db280a",
+    "log": "87b1e2eb5739abae9b5202ddc859290132cde728fd6dadef516a6525b94e5c0f"
   },
   "known_not_run": ["J-Link", "ttyACM0", "USB", "SocketCAN", "physical J1 motion"]
 }

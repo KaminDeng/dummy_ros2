@@ -8,9 +8,9 @@
 | R03 | PASS | Case-specific codec/RPC/caller-owner snapshot probes pass (7/7); C04/C05 consumed the ROS-owned local extension, with no upstream source patch claimed. | Device-mode cross-process bypass closure remains R06. |
 | R04 | PASS | Case suite 10/10 and production transport CTest 15/15 pass; real D06 negative path, synthetic component positive paths, identity invalidation, source locks and zero-allocation read/write are separated. | A committed authorized positive device peer is required by R06/R07, not claimed here. |
 | R05 | PASS_WITH_LIMITATION | Actual native trajectory feedback, scene equality, collision rejection, Cartesian failure and cancellation probes pass (7/7). | Physical collision safety and MoveIt teardown remain unverified. |
-| R06 | BLOCKED | Explicit bootstrap, inactive HOLD prime, and runtime status identity now reach the real D08 peer. | D08 manage_v1 responses omit device_id, profile_id and operation_status, so SELECT receipt fails C05 identity validation; see `handoffs/R06-to-DPSDK-operation-enum-blocker.json`. |
-| R07 | BLOCKED | Fail-closed backend launches and upstream component evidence exist; no case is promoted to cross-process PASS. | Requires completed R06 and a committed long-lived shared-core SIL peer for six-axis and J1. |
-| R08 | BLOCKED | Previous release claim was withdrawn. | Requires truthful R00-R07 reports and a regenerated source/model/profile/version lock. |
+| R06 | PASS | 23/23; real D08 peer verifies explicit bootstrap, two successes, cancel, abort, operation IDs, epochs, tickets and HOLD barriers. | Evidence: `build_dummy/reports/R06.json`. |
+| R07 | PASS | 8/8; independent J1 and six-axis D08 processes plus guarded lifecycle/stale probes pass. | Evidence: `build_dummy/reports/R07.json`; six-axis is not inferred from J1. |
+| R08 | PASS | REL01 release lock and evidence separation pass. | Evidence: `build_dummy/reports/R08.json`. |
 | Hardware/J1 | NOT_RUN | `--hardware none` enforced; no probe, upload, reset, or motion performed. | Requires separate human-gated procedure. |
 
 The detailed R00 report is `docs/dummy/task-reports/R00.json`; build evidence is
