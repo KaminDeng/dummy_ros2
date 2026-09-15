@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import random
 
+from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest, PositionIKRequest, RobotState
@@ -22,7 +23,12 @@ import yaml
 
 JOINT_NAMES = tuple(f"Joint{index}" for index in range(1, 7))
 START = (0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0)
-MODEL = Path(__file__).resolve().parents[3] / "contracts/dummy_robot_v1/model/model.yaml"
+SOURCE_MODEL = Path(__file__).resolve().parents[3] / "contracts/dummy_robot_v1/model/model.yaml"
+INSTALLED_MODEL = (
+    Path(get_package_share_directory("dummy_bringup"))
+    / "contracts/dummy_robot_v1/model/model.yaml"
+)
+MODEL = SOURCE_MODEL if SOURCE_MODEL.is_file() else INSTALLED_MODEL
 
 
 def validate_joint_target(positions: tuple[float, ...]) -> bool:
