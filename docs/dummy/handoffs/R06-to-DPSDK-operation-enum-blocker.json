@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "handoff": "R06-to-DPSDK-operation-enum-blocker",
+  "status": "BLOCKED",
+  "hardware": "none",
+  "wire_authority": {
+    "release": "dummy-wire-v1",
+    "payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
+    "operations": {
+      "ENABLE_HOLD": 5,
+      "BEGIN_MOTION": 6,
+      "CANCEL_MOTION": 7,
+      "STOP_AND_DISARM": 8,
+      "GET_OPERATION": 11,
+      "COMPLETE_MOTION": 13
+    },
+    "receipt_queued": 1,
+    "result_pending": 23,
+    "core_states": {
+      "ENABLING_HOLD": 3,
+      "ENABLED_HOLD": 4,
+      "RUNNING": 5,
+      "FAULT_LATCHED": 9
+    }
+  },
+  "observed_dpsdk": {
+    "commit": "5f8510b",
+    "source": "applications/dummy_ref_control/include/dummy_ref/core_types.hpp",
+    "operations": {
+      "ENABLE_HOLD": 7,
+      "BEGIN_MOTION": 8,
+      "COMPLETE_MOTION": 9,
+      "CANCEL_MOTION": 10,
+      "STOP": 11,
+      "QUERY_RESULT": 13
+    },
+    "wire_dispatch": "comm/dummy_node.cpp copies request.operation directly into ManagementRequest"
+  },
+  "impact": [
+    "A wire-v1 EnableHold request is interpreted as CancelMotion by the committed DPSDK core.",
+    "BeginMotion is interpreted as Stop and GetOperation is interpreted as Stop.",
+    "ROS cannot execute the R06 device action lifecycle or R07 device SIL without violating C05."
+  ],
+  "ros_behavior": "ROS uses the published C05 values and does not add compatibility aliases for the stale DPSDK values.",
+  "resolution_required": [
+    "DPSDK maps published wire operation values to internal operations or adopts the published enum values.",
+    "D06 service and D05 lifecycle acceptance are rerun with C05 vectors.",
+    "A committed long-lived VirtualCAN SIL peer exposes state/status/command/manage endpoints for J1 and six-axis profiles.",
+    "ROS reruns R06 and R07 cross-process cases against that committed artifact."
+  ]
+}
