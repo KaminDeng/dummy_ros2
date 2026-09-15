@@ -48,6 +48,7 @@ struct ActionCoordinator {
     auto next = *this;
     next.phase = Phase::kPrimeMotion;
     next.terminal = Terminal::kNone;
+    next.terminal_producer_seq = 0;
     next.goal = goal_id;
     next.motion_epoch = epoch;
     next.producer_enabled = true;

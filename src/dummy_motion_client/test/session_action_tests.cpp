@@ -24,5 +24,6 @@ int main() {
   if (!succeeded || succeeded->phase != Phase::kHold || succeeded->terminal != Terminal::kSucceeded)
     return 10;
   auto second = succeeded->begin_accepted(11U, 4U);
+  if (second && second->terminal_producer_seq != 0U) return 12;
   return second && second->terminal == Terminal::kNone && second->goal == 11U ? 0 : 11;
 }

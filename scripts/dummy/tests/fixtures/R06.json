@@ -1,5 +1,30 @@
 {
   "suite": "R06",
   "hardware": "none",
-  "cases": ["AUTH02", "FRE05", "EN01", "EN02", "EN03", "EN04", "EN05", "MOV01", "MOV02", "MOV03", "MOV04", "MOV05", "MOV06", "MOV07", "MOV13", "MOV14", "MOV15", "MOV16", "MOV17", "STOP01", "STOP02", "STOP09", "ROS06"]
+  "cases": ["AUTH02", "FRE05", "EN01", "EN02", "EN03", "EN04", "EN05", "MOV01", "MOV02", "MOV03", "MOV04", "MOV05", "MOV06", "MOV07", "MOV13", "MOV14", "MOV15", "MOV16", "MOV17", "STOP01", "STOP02", "STOP09", "ROS06"],
+  "expected_observations": {
+    "AUTH02": {"other_rejected": 1, "accepted_seq_unchanged": 1},
+    "FRE05": {"fresh_generations": 1, "duplicate_generations": 0},
+    "EN01": {"core_lifecycle": 2, "fake_can_tx_count": 0, "scenario_variant": 2},
+    "EN02": {"core_lifecycle": 2, "core_motion_epoch": 1, "scenario_variant": 3},
+    "EN03": {"core_lifecycle": 3, "fake_can_tx_count": 1, "scenario_variant": 4},
+    "EN04": {"core_lifecycle": 5, "core_motion_epoch": 2, "scenario_variant": 5},
+    "EN05": {"core_lifecycle": 3, "scenario_variant": 30, "wire_handshake_executed": true},
+    "MOV01": {"core_lifecycle": 3, "scenario_variant": 6},
+    "MOV02": {"core_lifecycle": 4, "scenario_variant": 7},
+    "MOV03": {"core_lifecycle": 4, "scenario_variant": 8, "engine_busy_rejected": true},
+    "MOV04": {"core_lifecycle": 4, "scenario_variant": 9, "engine_completion_barrier": true, "component_successful_goals": 2, "component_completion_barrier_count": 2, "component_old_generation_accepted": false},
+    "MOV05": {"core_lifecycle": 4, "scenario_variant": 10},
+    "MOV06": {"core_lifecycle": 5, "scenario_variant": 11},
+    "MOV07": {"core_lifecycle": 6, "scenario_variant": 12},
+    "MOV13": {"topic_subscriber_present": false, "empty_trajectory_rejected": true},
+    "MOV14": {"unregistered_goal_rejected": true, "internal_action_present": false},
+    "MOV15": {"minus_one_tolerance_rejected": 1, "nan_time_rejected": 1, "partial_joints_rejected": 1},
+    "MOV16": {"core_lifecycle": 4, "scenario_variant": 31, "engine_prime_before_result": true},
+    "MOV17": {"core_lifecycle": 6, "scenario_variant": 32, "engine_frozen_seq": 17},
+    "STOP01": {"core_lifecycle": 6, "scenario_variant": 15, "engine_cancel_barrier": true},
+    "STOP02": {"core_lifecycle": 5, "scenario_variant": 16, "engine_stop_timeout_aborted": true},
+    "STOP09": {"core_lifecycle": 6, "scenario_variant": 23, "engine_late_generation_accepted": false, "engine_abort_error_preserved": true},
+    "ROS06": {"first_goal_accepted": true, "second_goal_accepted": false, "third_goal_accepted": true, "first_goal_terminal_status": 5, "third_goal_terminal_status": 4}
+  }
 }

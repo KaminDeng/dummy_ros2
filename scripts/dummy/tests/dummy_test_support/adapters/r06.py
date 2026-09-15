@@ -13,23 +13,35 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[5]
-DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", "../dpsdk"))
+DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT") or ROOT.parent / "dpsdk").resolve()
 CORE_CASES = {
     "EN01", "EN02", "EN03", "EN04", "EN05", "MOV01", "MOV02", "MOV03",
     "MOV04", "MOV05", "MOV06", "MOV07", "MOV16", "MOV17", "STOP01",
     "STOP02", "STOP09",
 }
 LOCAL_CASES = {
-    "FRE05": "command_channel_tests",
-    "MOV13": "goal_gate_tests",
-    "MOV14": "goal_gate_tests",
+    "FRE05": "update_generation_tests",
+    "MOV13": "guarded_entry_tests",
+    "MOV14": "guarded_entry_tests",
+    "MOV15": "native_action_gate_tests",
 }
-ACTION_CASES = {"MOV15", "ROS06"}
+ACTION_CASES = {"ROS06"}
+ENGINE_FIELDS = {
+    "MOV03": ("engine_busy_rejected", "busy_rejected"),
+    "MOV04": ("engine_completion_barrier", "completion_barrier"),
+    "MOV16": ("engine_prime_before_result", "prime_before_result"),
+    "MOV17": ("engine_frozen_seq", "complete_seq"),
+    "STOP01": ("engine_cancel_barrier", "cancel_barrier"),
+    "STOP02": ("engine_stop_timeout_aborted", "stop_timeout_aborted"),
+    "STOP09": ("engine_late_generation_accepted", "late_generation_accepted"),
+}
 _ACTION_OBSERVATIONS: dict[str, Any] | None = None
 
 
 def _load_upstream_adapter(name: str):
     path = DPSDK_ROOT / "tools/dummy/tests/dummy_test_support/adapters" / f"{name}.py"
+    if not path.is_file():
+        raise RuntimeError(f"DPSDK_ROOT must contain the published {name} adapter: {path}")
     spec = importlib.util.spec_from_file_location(f"dpsdk_{name}_adapter", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load upstream adapter: {path}")
@@ -47,21 +59,47 @@ def _core_case(case_id: str) -> dict[str, Any]:
     passed = bool(values.pop("case_passed", True))
     values["case_id"] = case_id
     values["requirement_observed"] = passed and bool(values.get("requirement_observed", True))
+    values["evidence_scope"] = "RobotCore component; no cross-process device action"
+    if case_id in ENGINE_FIELDS or case_id == "EN05":
+        binary = "wire_management_tests" if case_id == "EN05" else "device_action_engine_tests"
+        extra = _component(binary, [])
+        if case_id == "EN05":
+            values["wire_handshake_executed"] = extra["observations"]["two_stream_handshake"]
+        else:
+            destination, source = ENGINE_FIELDS[case_id]
+            values[destination] = extra["observations"][source]
+        if case_id == "STOP09":
+            values["engine_abort_error_preserved"] = extra["observations"]["abort_error_preserved"]
+        upstream = {**upstream,
+                    "sut_source_sha256": sha256((upstream["sut_source_sha256"] + extra["sut_source_sha256"]).encode()).hexdigest(),
+                    "trace_sha256": sha256((upstream["trace_sha256"] + extra["trace_sha256"]).encode()).hexdigest()}
+    if case_id == "MOV04":
+        completion = _component("complete_motion_tests", [])
+        values.update(completion["observations"])
+        upstream = {**upstream,
+                    "sut_source_sha256": sha256((upstream["sut_source_sha256"] + completion["sut_source_sha256"]).encode()).hexdigest(),
+                    "trace_sha256": sha256((upstream["trace_sha256"] + completion["trace_sha256"]).encode()).hexdigest()}
     return {**upstream, "observations": values}
 
 
-def _local_case(case_id: str) -> dict[str, Any]:
-    binary = ROOT / "build_dummy/dummy_ros_control" / LOCAL_CASES[case_id]
+def _component(name: str, arguments: list[str]) -> dict[str, Any]:
+    codec = DPSDK_ROOT / "contracts/dummy_robot_v1/codec/dp_dummy_robot_v1.hpp"
+    if not codec.is_file():
+        raise RuntimeError(f"DPSDK_ROOT must contain the published manage_v1 codec: {codec}")
+    binary = ROOT / "build_dummy/dummy_motion_client" / name
     if not binary.is_file():
         raise RuntimeError(f"R06 ROS SUT binary is missing: {binary}")
-    run = subprocess.run([str(binary)], cwd=ROOT, capture_output=True, text=True, check=False)
+    run = subprocess.run(
+        ["bash", "-c", 'source /opt/ros/jazzy/setup.bash && source "$1/install_dummy/setup.bash" && shift && exec "$@"',
+         "r06-component", str(ROOT), str(binary), *arguments],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=20)
     if run.returncode:
         raise RuntimeError(f"{binary.name} failed ({run.returncode}):\n{run.stdout}{run.stderr}")
-    sources = [
-        ROOT / "src/dummy_ros_control/test" / f"{LOCAL_CASES[case_id].removesuffix('_tests')}.cpp",
-        ROOT / "src/dummy_ros_control/include/dummy_ros_control/goal_registration_gate.hpp",
-        ROOT / "src/dummy_ros_control/src/command_channel.cpp",
-    ]
+    sources = [*sorted((ROOT / "src/dummy_motion_client").rglob("*.cpp")),
+               *sorted((ROOT / "src/dummy_motion_client").rglob("*.hpp")),
+               ROOT / "src/dummy_ros_control/src/guarded_joint_trajectory_controller.cpp",
+               ROOT / "src/dummy_ros_control/src/command_channel.cpp",
+               codec]
     digest = sha256()
     for source in sources:
         if source.is_file():
@@ -71,19 +109,56 @@ def _local_case(case_id: str) -> dict[str, Any]:
         "executed": True,
         "sut_source_sha256": digest.hexdigest(),
         "trace_sha256": sha256(trace.encode()).hexdigest(),
-        "observations": {
-            "case_id": case_id,
-            "component": binary.name,
-            "return_code": run.returncode,
-            "requirement_observed": True,
-        },
+        "observations": json.loads(next(line for line in reversed(run.stdout.splitlines()) if line.startswith("{"))),
     }
+
+
+def _local_case(case_id: str) -> dict[str, Any]:
+    result = _component(LOCAL_CASES[case_id], [case_id] if case_id in {"MOV13", "MOV14"} else [])
+    return {**result, "observations": {**result["observations"], "case_id": case_id,
+            "component": LOCAL_CASES[case_id], "requirement_observed": True,
+            "evidence_scope": "ROS component; no cross-process device action"}}
 
 
 def _action_case(case_id: str) -> dict[str, Any]:
     global _ACTION_OBSERVATIONS
     probe = ROOT / "src/dummy_bringup/scripts/action_gate_probe.py"
     if _ACTION_OBSERVATIONS is None:
+        # The shared probe's final target is -0.1 rad. Establish a different
+        # starting pose through the same public action so repeat runs still
+        # measure real motion; never write simulator joint state directly.
+        prepare = subprocess.run(
+            ["/usr/bin/python3", "-c", """
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('r06_native_probe', sys.argv[1])
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+probe.rclpy.init()
+node = probe.Node('r06_native_precondition')
+client = probe.ActionClient(node, probe.FollowJointTrajectory, '/arm_controller/follow_joint_trajectory')
+try:
+    if not client.wait_for_server(timeout_sec=10):
+        raise RuntimeError('public action server unavailable')
+    handle = probe.wait(node, client.send_goal_async(probe.goal(0.1, 2)))
+    if not handle.accepted or probe.wait(node, handle.get_result_async()).status != 4:
+        raise RuntimeError('native precondition action failed')
+finally:
+    client.destroy()
+    node.destroy_node()
+    probe.rclpy.shutdown()
+""", str(probe)], cwd=ROOT, capture_output=True, text=True, check=False, timeout=30)
+        if prepare.returncode:
+            if "public action server unavailable" in prepare.stderr:
+                trace = prepare.stdout + prepare.stderr
+                return {
+                    "case_id": case_id, "executed": False, "status": "NOT_RUN",
+                    "sut_kind": "ros_action", "reason": "Live native public action server unavailable",
+                    "sut_source_sha256": sha256(probe.read_bytes()).hexdigest(),
+                    "trace_sha256": sha256(trace.encode()).hexdigest(), "_trace_text": trace,
+                    "observations": {"case_id": case_id, "requirement_observed": False,
+                                     "evidence_scope": "native ROS action runtime unavailable"},
+                }
+            raise RuntimeError(f"native action precondition failed:\n{prepare.stdout}{prepare.stderr}")
         with tempfile.TemporaryDirectory(prefix="r06_action_") as temporary:
             report = Path(temporary) / "observations.json"
             run = subprocess.run(
@@ -102,14 +177,38 @@ def _action_case(case_id: str) -> dict[str, Any]:
     )
     trace = json.dumps(values, sort_keys=True)
     return {
+        "case_id": case_id,
         "executed": True,
-        "sut_source_sha256": sha256((probe.read_bytes() + trace.encode())).hexdigest(),
+        "status": "PASS" if observed else "FAIL", "sut_kind": "ros_action",
+        "reason": "" if observed else "Native action lifecycle observation failed",
+        "sut_source_sha256": sha256(probe.read_bytes() +
+            (ROOT / "src/dummy_motion_client/src/native_action_gate.cpp").read_bytes() +
+            (ROOT / "src/dummy_motion_client/src/native_goal_validation.cpp").read_bytes()).hexdigest(),
         "trace_sha256": sha256(trace.encode()).hexdigest(),
         "observations": {
+            **values,
             "case_id": case_id,
             "requirement_observed": bool(observed),
             "action_trace": values,
+            "first_goal_accepted": values["first_goal_accepted"],
+            "second_goal_accepted": values["second_goal_accepted"],
+            "third_goal_accepted": values["third_goal_accepted"],
+            "evidence_scope": "live native ROS action; no DPSDK device session",
         },
+    }
+
+
+def _device_not_run(case_id: str, component: dict[str, Any]) -> dict[str, Any]:
+    values = component["observations"]
+    return {
+        "case_id": case_id, "executed": False, "status": "NOT_RUN", "sut_kind": "ros_action",
+        "reason": "Production device transport and ActionPort/JTC bridge are not connected; component evidence only",
+        "sut_source_sha256": component["sut_source_sha256"],
+        "trace_sha256": component["trace_sha256"],
+        "component_evidence": component,
+        "component_observations": values,
+        "observations": {"case_id": case_id, "requirement_observed": False,
+                         "evidence_scope": values["evidence_scope"]},
     }
 
 
@@ -118,9 +217,9 @@ def run_r06_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     if stimulus != expected:
         raise ValueError("R06 stimulus is invalid")
     if case_id == "AUTH02" or case_id in CORE_CASES:
-        return _core_case(case_id)
+        return _device_not_run(case_id, _core_case(case_id))
     if case_id in LOCAL_CASES:
-        return _local_case(case_id)
+        return _device_not_run(case_id, _local_case(case_id))
     if case_id in ACTION_CASES:
         return _action_case(case_id)
     raise ValueError(f"unsupported R06 case: {case_id}")
