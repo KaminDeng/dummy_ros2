@@ -1,6 +1,7 @@
 """Launch-test MoveIt planning and synchronized scene behavior."""
 
 from pathlib import Path
+import json
 import subprocess
 import tempfile
 import unittest
@@ -31,3 +32,10 @@ class PlanExecuteRuntime(unittest.TestCase):
             )
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertTrue(report.is_file())
+            observations = json.loads(report.read_text())
+            self.assertEqual(1, observations["valid_joint_plan_error_code"])
+            self.assertGreater(observations["valid_joint_trajectory_points"], 1)
+            self.assertLess(observations["unreachable_cartesian_fraction"], 1.0)
+            self.assertTrue(observations["barrier_collision_state_found"])
+            self.assertNotEqual(1, observations["barrier_collision_goal_error_code"])
+            self.assertFalse(observations["trajectory_executed"])
