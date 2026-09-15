@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ import unittest
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 VERIFY = WORKSPACE_ROOT / "scripts" / "dummy" / "verify.py"
 BUILD = WORKSPACE_ROOT / "scripts" / "dummy" / "build.sh"
+ENVIRONMENT_REPORT = WORKSPACE_ROOT / "scripts" / "dummy" / "environment_report.py"
 BRINGUP_PACKAGE = WORKSPACE_ROOT / "src" / "dummy_bringup" / "package.xml"
 
 
@@ -25,6 +27,34 @@ class R00AcceptanceTest(unittest.TestCase):
             build_source,
         )
         self.assertIn("-DPython3_EXECUTABLE=/usr/bin/python3", build_source)
+
+    def test_build_script_preserves_explicit_dpsdk_root(self):
+        build_source = BUILD.read_text()
+        self.assertNotIn("../dpsdk", build_source)
+        self.assertIn('DPSDK_ROOT="${DPSDK_ROOT:-', build_source)
+        self.assertIn("export DPSDK_ROOT", build_source)
+
+    def test_environment_report_uses_explicit_source_roots(self):
+        with tempfile.TemporaryDirectory(prefix="r00_roots_") as temporary:
+            root = Path(temporary)
+            dpsdk = root / "dpsdk"
+            dummy = root / "dummy"
+            (dpsdk / "tools/ros2").mkdir(parents=True)
+            (dpsdk / "tools/ros2/zenbedded.repos").write_text("repositories: {}\n")
+            (dummy / "Robot/instances").mkdir(parents=True)
+            (dummy / "Robot/instances/dummy_robot.cpp").write_text("// sentinel\n")
+            output = root / "environment.json"
+            environment = dict(os.environ, DPSDK_ROOT=str(dpsdk), DUMMY_ROOT=str(dummy))
+            completed = subprocess.run(
+                ["/usr/bin/python3", str(ENVIRONMENT_REPORT), "--output", str(output)],
+                cwd=WORKSPACE_ROOT, env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            report = json.loads(output.read_text())
+            self.assertEqual(str(dpsdk), report["dpsdk_root"])
+            self.assertEqual(str(dummy), report["dummy_root"])
+            self.assertTrue(report["roots"]["dpsdk_sentinel"])
+            self.assertTrue(report["roots"]["dummy_sentinel"])
 
     def test_bringup_package_declares_ament_cmake_build_type(self):
         package_xml = BRINGUP_PACKAGE.read_text()

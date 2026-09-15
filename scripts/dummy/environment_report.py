@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import platform
 import shutil
@@ -14,8 +15,10 @@ from typing import Any
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DPSDK_ROOT = Path("../dpsdk")
-DEFAULT_DUMMY_ROOT = Path("<dummy-code-root>/firmware/dummy-ref-core-fw")
+DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", WORKSPACE_ROOT.parent / "dpsdk"))
+DUMMY_ROOT = Path(os.environ.get(
+    "DUMMY_ROOT", WORKSPACE_ROOT.parent / "dummy_code/firmware/dummy-ref-core-fw"
+))
 
 
 def command_output(command: list[str]) -> dict[str, Any]:
@@ -50,8 +53,8 @@ def main() -> int:
     arguments = parser.parse_args()
     report = {
         "workspace_root": str(WORKSPACE_ROOT),
-        "dpsdk_root": str(DEFAULT_DPSDK_ROOT),
-        "dummy_root": str(DEFAULT_DUMMY_ROOT),
+        "dpsdk_root": str(DPSDK_ROOT),
+        "dummy_root": str(DUMMY_ROOT),
         "platform": platform.platform(),
         "python": platform.python_version(),
         "source_hashes": source_hashes(),
@@ -62,8 +65,8 @@ def main() -> int:
         },
         "roots": {
             "workspace_exists": WORKSPACE_ROOT.is_dir(),
-            "dpsdk_sentinel": (DEFAULT_DPSDK_ROOT / "tools/ros2/zenbedded.repos").is_file(),
-            "dummy_sentinel": (DEFAULT_DUMMY_ROOT / "Robot/instances/dummy_robot.cpp").is_file(),
+            "dpsdk_sentinel": (DPSDK_ROOT / "tools/ros2/zenbedded.repos").is_file(),
+            "dummy_sentinel": (DUMMY_ROOT / "Robot/instances/dummy_robot.cpp").is_file(),
         },
     }
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
