@@ -5,15 +5,32 @@ backends:
     clock: simulation
     transport: gazebo
     read_only: false
+  sil_6dof:
+    active_axes: [Joint1, Joint2, Joint3, Joint4, Joint5, Joint6]
+    clock: steady
+    transport: virtual_can
+    device_id: sil-6dof-000000000000000000000001
+    serial: virtual-can-sil-6dof
+    profile: sil_6dof
+    endpoint: tcp/127.0.0.1:17446
+    read_only: false
   sil_j1:
     active_axes: [Joint1]
     clock: steady
     transport: virtual_can
+    device_id: sil-j1-00000000000000000000000001
+    serial: virtual-can-sil-j1
+    profile: sil_j1
+    endpoint: tcp/127.0.0.1:17447
     read_only: false
   real_j1:
     active_axes: [Joint1]
     clock: steady
     transport: zenoh
+    device_id: required-at-launch
+    serial: required-at-launch
+    profile: real_j1
+    endpoint: required-at-launch
     read_only: true
 security:
   auto_grant: false

@@ -7,6 +7,7 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   add_launch_test(test/test_gazebo_runtime.launch.py TIMEOUT 120)
   add_launch_test(test/test_plan_execute.launch.py TIMEOUT 150)
+  add_launch_test(test/test_backend_contract.launch.py TIMEOUT 45)
 endif()
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
