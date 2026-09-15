@@ -1,6 +1,8 @@
 {
   "task": "R00",
-  "status": "IN_PROGRESS",
+  "status": "PASS",
+  "current_evidence": "build_dummy/reports/R00-repair.json",
+  "current_case_count": 4,
   "hardware": "none",
   "source": {
     "ros_workspace_commit": "0dc69ac6948dfc8ddbd6ee584431770f01c73a9a",
@@ -50,9 +52,6 @@
     "build_dummy/reports/R00.junit.xml",
     "build_dummy/reports/R00.log"
   ],
-  "blocking_conditions": [
-    "C02 model-v1 manifest/hash is not available to begin R01.",
-    "ROS01 Gazebo runtime remains a required R02 execution result."
-  ],
-  "next_independent_task": "Consume C02 model-v1 and execute R01 mathematical-model alignment."
+  "blocking_conditions": [],
+  "next_independent_task": "R01 mathematical-model alignment."
 }

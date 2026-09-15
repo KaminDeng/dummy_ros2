@@ -13,7 +13,7 @@
   "component_tests": {"R06": 21},
   "completion_boundaries": [
     "R03 historical upstream patch handoff needs reconciliation.",
-    "R04 production transport is still under review.",
+    "R04 production transport passed independent review and 15/15 CTest; real positive authorized peer evidence remains R06/R07 scope.",
     "R06 production management transport and guarded JTC bridge are not complete.",
     "DPSDK wire operation/receipt/result/core-state values drift from published C05.",
     "R07 full device SIL chain and R08 release remain blocked."

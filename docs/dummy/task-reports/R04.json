@@ -1,6 +1,10 @@
 {
   "task": "R04",
   "status": "PASS",
+  "current_evidence": "build_dummy/reports/R04-repair.json",
+  "current_case_count": 10,
+  "production_transport_ctest": "15/15 PASS",
+  "production_transport_scope": "D06 real negative path plus synthetic component positive paths; no authorized real positive peer claimed",
   "hardware": "none",
   "contract": {
     "release_id": "dummy-wire-v1",

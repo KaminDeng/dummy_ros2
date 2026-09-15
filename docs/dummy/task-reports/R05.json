@@ -1,6 +1,8 @@
 {
   "task": "R05",
   "status": "PASS_WITH_LIMITATION",
+  "current_evidence": "build_dummy/reports/R05-repair.json",
+  "current_case_count": 7,
   "hardware": "none",
   "contract": {
     "model_release": "dummy-model-v1",
@@ -66,9 +68,9 @@
     }
   ],
   "known_limitations": [
-    "Gazebo world is generated from the checked-in YAML during build; planning collision response is not yet exercised.",
+    "Gazebo world and runtime PlanningScene match the canonical YAML; collision response is exercised in the runtime probe.",
     "move_group exits -11 on Ctrl-C teardown in this environment; active service calls succeeded.",
     "No hardware IO or DPSDK device process was opened."
   ],
-  "next_action": "Complete R03 async RPC evidence and await C04/C05 before R04/R06 device-backed integration."
+  "next_action": "R06 device-backed integration remains blocked by DPSDK wire enum drift and the missing committed positive SIL peer."
 }

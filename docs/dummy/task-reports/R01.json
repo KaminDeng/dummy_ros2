@@ -1,6 +1,8 @@
 {
   "task": "R01",
   "status": "PASS",
+  "current_evidence": "build_dummy/reports/R01-repair.json",
+  "current_case_count": 7,
   "hardware": "none",
   "contract": {
     "release_id": "dummy-model-v1",
