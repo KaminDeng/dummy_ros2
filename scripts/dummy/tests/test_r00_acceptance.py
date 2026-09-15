@@ -55,6 +55,9 @@ class R00AcceptanceTest(unittest.TestCase):
             self.assertEqual(str(dummy), report["dummy_root"])
             self.assertTrue(report["roots"]["dpsdk_sentinel"])
             self.assertTrue(report["roots"]["dummy_sentinel"])
+            for name in ("ros_distro", "moveit", "joint_trajectory_controller", "rmw", "gazebo"):
+                self.assertIn(name, report["versions"])
+                self.assertTrue(report["versions"][name])
 
     def test_bringup_package_declares_ament_cmake_build_type(self):
         package_xml = BRINGUP_PACKAGE.read_text()
@@ -132,7 +135,8 @@ class R00AcceptanceTest(unittest.TestCase):
         self.assertEqual(return_code, 3)
         result = next(case for case in report["cases"] if case["case_id"] == "ROS01")
         self.assertEqual(result["status"], "NOT_RUN")
-        self.assertTrue(result["observations"]["r02_runtime_required"])
+        self.assertFalse(result["executed"])
+        self.assertTrue(result["reason"])
 
 
 if __name__ == "__main__":

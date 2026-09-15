@@ -142,20 +142,9 @@ def run_r00_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     elif case_id == "AUD03":
         observations = _hardware_denial(stimulus)
     elif case_id == "ROS01":
-        required_packages = ("gz_ros2_control", "controller_manager", "moveit_ros_move_group")
-        package_checks = {
-            package: _test_exit(["ros2", "pkg", "prefix", package]) == 0
-            for package in required_packages
-        }
-        observations = {
-            "hardware_mode": stimulus.get("hardware"),
-            "dpsdk_process_started": False,
-            "serial_open_count": 0,
-            "required_packages": package_checks,
-            "r02_runtime_required": True,
-        }
-        status = "NOT_RUN"
-        reason = "R00 does not reuse archived build/install output; Gazebo runtime starts after a new build."
+        from dummy_test_support.adapters.r02 import run_r02_case
+
+        return run_r02_case(case_id, stimulus)
     else:
         raise ValueError(f"unknown R00 case: {case_id}")
 

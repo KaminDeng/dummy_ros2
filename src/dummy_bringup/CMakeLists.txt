@@ -16,6 +16,7 @@ install(FILES ../../contracts/dummy_robot_v1/model/model.yaml
   DESTINATION share/${PROJECT_NAME}/contracts/dummy_robot_v1/model)
 install(PROGRAMS
   scripts/action_gate_probe.py
+  scripts/gazebo_runtime_probe.py
   scripts/planning_probe.py
   scripts/scene_publisher.py
   DESTINATION lib/${PROJECT_NAME})

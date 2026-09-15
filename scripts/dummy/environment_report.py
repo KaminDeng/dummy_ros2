@@ -38,6 +38,14 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def package_version(name: str) -> str:
+    completed = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", name],
+        check=False, capture_output=True, text=True,
+    )
+    return completed.stdout.strip() if completed.returncode == 0 else "NOT_AVAILABLE"
+
+
 def source_hashes() -> dict[str, str]:
     paths = (
         WORKSPACE_ROOT / "src/dummy_moveit_config/launch/gz_moveit.launch.py",
@@ -57,6 +65,15 @@ def main() -> int:
         "dummy_root": str(DUMMY_ROOT),
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "versions": {
+            "ros_distro": os.environ.get("ROS_DISTRO", "jazzy"),
+            "moveit": package_version("ros-jazzy-moveit"),
+            "joint_trajectory_controller": package_version(
+                "ros-jazzy-joint-trajectory-controller"
+            ),
+            "rmw": package_version("ros-jazzy-rmw-fastrtps-cpp"),
+            "gazebo": command_output(["gz", "--versions"])["output"] or "NOT_AVAILABLE",
+        },
         "source_hashes": source_hashes(),
         "tools": {
             "ros2": command_output(["ros2", "--help"]),
