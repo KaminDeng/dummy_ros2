@@ -8,6 +8,12 @@
 
 namespace dummy_ros_control {
 
+// Wire serial arithmetic is modulo 2^32. Zero is reserved by the device CAN
+// scheduler; the worker drops that one generation at wrap and resumes at one.
+inline std::uint32_t wire_producer_sequence(std::uint64_t generation) noexcept {
+  return static_cast<std::uint32_t>(generation);
+}
+
 struct CommandIdentity {
   std::uint64_t boot = 0;
   std::uint64_t session = 0;
@@ -20,12 +26,14 @@ struct CommandGenerationRecord {
   std::uint64_t generation = 0;
   CommandIdentity identity{};
   std::array<double, 6> position{};
+  std::uint64_t authority_generation = 0U;
 };
 
 class CommandProducer {
  public:
   std::uint64_t record_update(const CommandIdentity &identity,
-                              const std::array<double, 6> &position) noexcept {
+                              const std::array<double, 6> &position,
+                              std::uint64_t authority_generation = 0U) noexcept {
     const auto generation = next_generation_.fetch_add(1, std::memory_order_relaxed) + 1;
     auto &slot = slots_[generation % slots_.size()];
     slot.ready.store(0, std::memory_order_relaxed);
@@ -34,6 +42,7 @@ class CommandProducer {
     slot.reference_epoch.store(identity.reference_epoch, std::memory_order_relaxed);
     slot.motion_epoch.store(identity.motion_epoch, std::memory_order_relaxed);
     slot.ticket.store(identity.ticket, std::memory_order_relaxed);
+    slot.authority_generation.store(authority_generation, std::memory_order_relaxed);
     for (std::size_t index = 0; index < position.size(); ++index) {
       slot.position_bits[index].store(to_bits(position[index]), std::memory_order_relaxed);
     }
@@ -55,6 +64,7 @@ class CommandProducer {
       record.identity.reference_epoch = slot.reference_epoch.load(std::memory_order_relaxed);
       record.identity.motion_epoch = slot.motion_epoch.load(std::memory_order_relaxed);
       record.identity.ticket = slot.ticket.load(std::memory_order_relaxed);
+      record.authority_generation = slot.authority_generation.load(std::memory_order_relaxed);
       for (std::size_t index = 0; index < record.position.size(); ++index) {
         record.position[index] = from_bits(slot.position_bits[index].load(std::memory_order_relaxed));
       }
@@ -81,6 +91,7 @@ class CommandProducer {
     std::atomic<std::uint32_t> reference_epoch{0};
     std::atomic<std::uint32_t> motion_epoch{0};
     std::atomic<std::uint64_t> ticket{0};
+    std::atomic<std::uint64_t> authority_generation{0};
     std::array<std::atomic<std::uint64_t>, 6> position_bits{};
   };
   std::array<Slot, 2> slots_{};

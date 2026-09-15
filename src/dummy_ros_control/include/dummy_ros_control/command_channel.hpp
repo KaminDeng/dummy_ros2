@@ -9,6 +9,7 @@
 namespace dummy_ros_control {
 void set_command_identity(const CommandIdentity &identity) noexcept;
 void clear_command_identity() noexcept;
+bool command_record_current(const CommandGenerationRecord &record) noexcept;
 std::uint64_t publish_control_update(const double *positions, std::size_t count,
                                      std::int64_t update_time_ns, void *context) noexcept;
 void controller_update_sink(const double *positions, std::size_t count,

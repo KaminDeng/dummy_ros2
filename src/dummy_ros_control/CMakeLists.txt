@@ -9,8 +9,64 @@ find_package(pluginlib REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 
 set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake")
 get_filename_component(ROS_WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v1/codec")
+set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v1/codec")
+if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v1_dp_comm.hpp")
+  message(FATAL_ERROR "Production device transport requires the published DPSDK wire-v1 codec")
+endif()
+add_library(dummy_dp_comm INTERFACE)
+set(DUMMY_DP_COMM_SDK_SOURCES
+  "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like.cpp"
+  "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like_transport.cpp"
+  "${DPSDK_ROOT}/platform/posix_native/dp_comm_zenohc_port/dp_comm_port.cpp")
+set(DUMMY_DP_COMM_SDK_HASHES
+  5e9ac76a760546738173b7f227f0adfa6dbe5c543dcb58d0b036823d0e48d65c
+  0719ece00499f43d8d8df58df22cc317808a14c97970f720b25df86d38034f43
+  05a927e73df40d57ae8ed3fb889cc714f081b8907fd8f5fc23ebf1b9ad01037e)
+set(source_index 0)
+foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
+  if(NOT EXISTS "${source}")
+    message(FATAL_ERROR "Missing required read-only DPSDK source: ${source}")
+  endif()
+  file(SHA256 "${source}" source_sha256)
+  list(GET DUMMY_DP_COMM_SDK_HASHES ${source_index} expected_source_sha256)
+  if(NOT source_sha256 STREQUAL expected_source_sha256)
+    message(FATAL_ERROR "DPSDK PIC source changed; revalidate the transport adapter before updating its source lock: ${source}")
+  endif()
+  math(EXPR source_index "${source_index}+1")
+  message(STATUS "DPSDK PIC input ${source}: ${source_sha256}")
+endforeach()
+# The prebuilt runtime uses a local-exec TLS relocation and cannot be loaded by
+# pluginlib. Compile only the unchanged transport sources as PIC in this build.
+add_library(dummy_dp_comm_pic STATIC ${DUMMY_DP_COMM_SDK_SOURCES})
+set_target_properties(dummy_dp_comm_pic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(dummy_dp_comm_pic PUBLIC cxx_std_17)
+target_compile_definitions(dummy_dp_comm_pic PUBLIC
+  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
+target_compile_definitions(dummy_dp_comm_pic PRIVATE
+  DP_COMM_ZENOHC_TRUSTED_TRANSPORT=1 DP_COMM_DEFAULT_LOCAL_ONLY=1)
+target_include_directories(dummy_dp_comm_pic PRIVATE
+  "${DPSDK_ROOT}/libraries/dp_comm/include"
+  "${DPSDK_ROOT}/libraries/dp_comm/src"
+  "${DPSDK_ROOT}/platform/posix_native/dp_comm_zenohc_port"
+  "${DPSDK_ROOT}/platform/posix_native/kernel_port"
+  "${DPSDK_ROOT}/platform/common/console_device"
+  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src"
+  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/interface"
+  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/debug"
+  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/impl/posix/include"
+  "${DPSDK_ROOT}/build/posix-zenohc/thirdparty/zenoh-c/debug/include")
+target_include_directories(dummy_dp_comm INTERFACE
+  "${DUMMY_WIRE_INCLUDE}" "${DPSDK_ROOT}/libraries/dp_comm/include")
+target_compile_definitions(dummy_dp_comm INTERFACE
+  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
+target_link_libraries(dummy_dp_comm INTERFACE
+  dummy_dp_comm_pic
+  "${DPSDK_ROOT}/build/posix-zenohc/core/dp_sdk_core/dp_osal/libdp_osal.a"
+  "${DPSDK_ROOT}/build/posix-zenohc/thirdparty/zenoh-c/debug/target/debug/libzenohc.a"
+  rt pthread m dl)
 if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v1.hpp")
   message(FATAL_ERROR "ROS C03 prototype mirror does not contain the Dummy generated codec")
 endif()
@@ -37,15 +93,36 @@ ament_target_dependencies(dummy_guarded_joint_trajectory_controller
 pluginlib_export_plugin_description_file(controller_interface dummy_ros_control_plugins.xml)
 
 add_library(dummy_guarded_zenbedded_system SHARED
-  src/guarded_zenbedded_system.cpp)
+  src/guarded_zenbedded_system.cpp src/device_transport.cpp)
 target_compile_features(dummy_guarded_zenbedded_system PRIVATE cxx_std_17)
-target_include_directories(dummy_guarded_zenbedded_system PRIVATE "${C03_PROTOTYPE_INCLUDE}")
+target_include_directories(dummy_guarded_zenbedded_system PRIVATE "${DUMMY_WIRE_INCLUDE}")
 target_link_libraries(dummy_guarded_zenbedded_system
-  dummy_goal_registration_gate dummy_command_channel)
+  dummy_goal_registration_gate dummy_command_channel dummy_dp_comm)
 ament_target_dependencies(dummy_guarded_zenbedded_system hardware_interface pluginlib)
 pluginlib_export_plugin_description_file(hardware_interface dummy_ros_control_plugins.xml)
 
 if(BUILD_TESTING)
+  add_executable(transport_component_tests test/transport_component_tests.cpp)
+  target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system)
+  add_test(NAME transport_component_tests COMMAND transport_component_tests)
+  add_test(NAME transport_six_axis_component_tests COMMAND transport_component_tests six_axis)
+  set_tests_properties(transport_component_tests PROPERTIES TIMEOUT 30)
+  set_tests_properties(transport_six_axis_component_tests PROPERTIES TIMEOUT 30)
+  set_tests_properties(transport_component_tests transport_six_axis_component_tests
+    PROPERTIES LABELS "component_only;synthetic_peer")
+  add_executable(production_transport_tests test/production_transport_tests.cpp)
+  target_link_libraries(production_transport_tests dummy_guarded_zenbedded_system)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME sdk_input_lock_tests COMMAND "${CMAKE_COMMAND}"
+    "-DDPSDK_ROOT=${DPSDK_ROOT}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/sdk-lock-test"
+    "-DLOCK_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/test/sdk_input_lock_tests.cmake")
+  add_test(NAME production_transport_tests COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/run_transport_peer_test.py"
+    "${DPSDK_ROOT}/build/posix-zenohc/applications/dummy_ref_control/dummy_ref_posix_node"
+    "$<TARGET_FILE:production_transport_tests>")
+  set_tests_properties(production_transport_tests PROPERTIES TIMEOUT 40)
+  set_tests_properties(production_transport_tests PROPERTIES LABELS "d06_real_peer;negative_path")
   foreach(r04_test IN ITEMS producer_tests stale_state_tests nonblocking_tests)
     add_executable(${r04_test} test/${r04_test}.cpp)
     target_link_libraries(${r04_test} dummy_goal_registration_gate)
@@ -114,10 +191,12 @@ endif()
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS
   dummy_goal_registration_gate
+  dummy_dp_comm
+  dummy_dp_comm_pic
   dummy_command_channel
   dummy_guarded_joint_trajectory_controller
   dummy_guarded_zenbedded_system
   EXPORT export_dummy_goal_registration_gate
-  LIBRARY DESTINATION lib)
+  LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_goal_registration_gate)
 ament_package()

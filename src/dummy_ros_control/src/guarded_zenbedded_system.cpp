@@ -7,10 +7,13 @@
 
 #include "dp_dummy_robot_v1.hpp"
 #include "dummy_ros_control/command_channel.hpp"
+#include "dummy_ros_control/device_transport.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
 namespace dummy_ros_control {
+GuardedZenbeddedSystem::GuardedZenbeddedSystem() = default;
+GuardedZenbeddedSystem::~GuardedZenbeddedSystem() = default;
 
 hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_init(
     const hardware_interface::HardwareComponentInterfaceParams &params) {
@@ -24,15 +27,37 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_init(
       return CallbackReturn::ERROR;
     }
   }
+  TransportParameters transport_parameters{};
+  if (!parse_transport_parameters(params.hardware_info.hardware_parameters,
+                                  active_joint_count_, &transport_parameters)) return CallbackReturn::ERROR;
+  transport_ = std::make_unique<DeviceTransport>(*this, transport_parameters);
+  return CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_configure(
+    const rclcpp_lifecycle::State &) {
+  for (std::size_t index = 0; index < active_joint_count_; ++index) {
+    position_handles_[index] = get_state_interface_handle(std::string(kJointNames[index]) + "/position");
+    velocity_handles_[index] = get_state_interface_handle(std::string(kJointNames[index]) + "/velocity");
+    command_handles_[index] = get_command_interface_handle(std::string(kJointNames[index]) + "/position");
+  }
+  return transport_ && transport_->start() ? CallbackReturn::SUCCESS : CallbackReturn::ERROR;
+}
+
+hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_cleanup(
+    const rclcpp_lifecycle::State &) {
+  if (transport_) transport_->stop();
+  invalidate_transport_state();
   return CallbackReturn::SUCCESS;
 }
 
 hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_activate(
     const rclcpp_lifecycle::State &) {
   std::unique_lock<std::mutex> lock(state_mutex_, std::try_to_lock);
-  if (!lock.owns_lock() || !state_valid_) return CallbackReturn::FAILURE;
+  if (!lock.owns_lock() || !state_valid_ ||
+      (state_deadline_us_ != 0U && transport_steady_now_us() > state_deadline_us_)) return CallbackReturn::FAILURE;
   for (std::size_t index = 0; index < active_joint_count_; ++index) {
-    set_command<double>(std::string(kJointNames[index]) + "/position", state_.position[index]);
+    if (!set_command<double>(command_handles_[index], state_.position[index], false)) return CallbackReturn::FAILURE;
   }
   active_ = true;
   return CallbackReturn::SUCCESS;
@@ -41,6 +66,7 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_activate(
 hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_deactivate(
     const rclcpp_lifecycle::State &) {
   active_ = false;
+  clear_command_identity();
   return CallbackReturn::SUCCESS;
 }
 
@@ -55,10 +81,12 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_error(
 hardware_interface::return_type GuardedZenbeddedSystem::read(
     const rclcpp::Time &, const rclcpp::Duration &) {
   std::unique_lock<std::mutex> lock(state_mutex_, std::try_to_lock);
-  if (!lock.owns_lock() || !state_valid_) return hardware_interface::return_type::ERROR;
+  if (!lock.owns_lock() || !state_valid_ ||
+      (state_deadline_us_ != 0U && transport_steady_now_us() > state_deadline_us_)) return hardware_interface::return_type::ERROR;
   for (std::size_t index = 0; index < active_joint_count_; ++index) {
-    set_state<double>(std::string(kJointNames[index]) + "/position", state_.position[index]);
-    set_state<double>(std::string(kJointNames[index]) + "/velocity", state_.velocity[index]);
+    if (!set_state<double>(position_handles_[index], state_.position[index], false) ||
+        !set_state<double>(velocity_handles_[index], state_.velocity[index], false))
+      return hardware_interface::return_type::ERROR;
   }
   return hardware_interface::return_type::OK;
 }
@@ -79,10 +107,10 @@ bool GuardedZenbeddedSystem::transfer_control_update() noexcept {
 
 bool GuardedZenbeddedSystem::ingest_state(
     const JointStateSnapshot &snapshot, const StateExpectation &expectation) noexcept {
-  if (validate_state(snapshot.envelope, expectation) != StateValidity::kValid ||
-      !std::all_of(snapshot.position.begin(), snapshot.position.end(), [](double value) { return std::isfinite(value); }))
-    return false;
+  if (validate_state(snapshot.envelope, expectation) != StateValidity::kValid) return false;
   for (std::size_t index = 0; index < snapshot.velocity.size(); ++index) {
+    if ((snapshot.envelope.configured_mask & (1U << index)) != 0U &&
+        !std::isfinite(snapshot.position[index])) return false;
     if ((snapshot.envelope.velocity_valid_mask & (1U << index)) != 0U &&
         !std::isfinite(snapshot.velocity[index])) return false;
   }
@@ -121,7 +149,8 @@ bool GuardedZenbeddedSystem::ingest_wire_state(
 bool GuardedZenbeddedSystem::copy_state(JointStateSnapshot *snapshot) const noexcept {
   if (!snapshot) return false;
   std::unique_lock<std::mutex> lock(state_mutex_, std::try_to_lock);
-  if (!lock.owns_lock() || !state_valid_) return false;
+  if (!lock.owns_lock() || !state_valid_ ||
+      (state_deadline_us_ != 0U && transport_steady_now_us() > state_deadline_us_)) return false;
   *snapshot = state_;
   return true;
 }
@@ -142,6 +171,20 @@ std::uint64_t GuardedZenbeddedSystem::publish_drops() const noexcept {
 
 bool GuardedZenbeddedSystem::take_stop_request() noexcept {
   return stop_requested_.exchange(false, std::memory_order_acq_rel);
+}
+
+TransportStatistics GuardedZenbeddedSystem::transport_statistics() const noexcept {
+  return transport_ ? transport_->statistics() : TransportStatistics{};
+}
+
+void GuardedZenbeddedSystem::invalidate_transport_state() noexcept {
+  state_valid_.store(false, std::memory_order_release);
+  active_.store(false, std::memory_order_release);
+  clear_command_identity();
+}
+
+void GuardedZenbeddedSystem::set_state_deadline(std::uint64_t deadline_us) noexcept {
+  state_deadline_us_.store(deadline_us, std::memory_order_release);
 }
 
 }  // namespace dummy_ros_control

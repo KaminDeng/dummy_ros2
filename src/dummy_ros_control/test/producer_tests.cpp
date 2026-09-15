@@ -1,5 +1,6 @@
 #include <array>
 #include "dummy_ros_control/command_producer.hpp"
+#include "dummy_ros_control/state_validator.hpp"
 
 int main() {
   dummy_ros_control::CommandProducer producer;
@@ -17,5 +18,10 @@ int main() {
   if (!second || second->generation != second_generation || second_generation != first_generation + 1U)
     return 4;
   if (second->identity.ticket != hold.ticket || second->position != position) return 5;
+  if (dummy_ros_control::wire_producer_sequence(0xFFFFFFFFULL) != 0xFFFFFFFFU ||
+      dummy_ros_control::wire_producer_sequence(0x100000000ULL) != 0U ||
+      dummy_ros_control::wire_producer_sequence(0x100000001ULL) != 1U) return 6;
+  if (!dummy_ros_control::sequence_newer(1U, 0xFFFFFFFFU) ||
+      dummy_ros_control::sequence_newer(0xFFFFFFFFU, 1U)) return 7;
   return 0;
 }

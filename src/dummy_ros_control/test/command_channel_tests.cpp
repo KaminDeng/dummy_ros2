@@ -13,7 +13,16 @@ int main() {
   const auto latest = dummy_ros_control::consume_control_update(first);
   if (!latest || latest->generation != second || latest->identity.ticket != 5U) return 3;
   if (dummy_ros_control::consume_control_update(second).has_value()) return 4;
+  const auto joint1 = dummy_ros_control::publish_control_update(hold.data(), 1U, 4, nullptr);
+  if (joint1 == 0U) return 6;
+  const auto single = dummy_ros_control::consume_control_update(second);
+  if (!single || single->position[0] != hold[0]) return 7;
+  if (dummy_ros_control::publish_control_update(hold.data(), 2U, 4, nullptr) != 0U) return 8;
   dummy_ros_control::clear_command_identity();
   if (dummy_ros_control::publish_control_update(hold.data(), hold.size(), 4, nullptr) != 0U) return 5;
+  if (dummy_ros_control::consume_control_update(0U).has_value()) return 9;
+  dummy_ros_control::set_command_identity(identity);
+  if (dummy_ros_control::consume_control_update(0U).has_value()) return 10;
+  if (dummy_ros_control::command_record_current(*single)) return 11;
   return 0;
 }

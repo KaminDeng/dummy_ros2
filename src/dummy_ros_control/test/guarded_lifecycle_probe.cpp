@@ -1,6 +1,21 @@
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_loader.hpp"
+#include <atomic>
+#include <cstdlib>
+#include <new>
+
+namespace {
+std::atomic<bool> count_allocations{false};
+std::atomic<unsigned> allocations{0};
+}
+void *operator new(std::size_t size) {
+  if (count_allocations.load(std::memory_order_relaxed)) ++allocations;
+  if (void *pointer = std::malloc(size)) return pointer;
+  throw std::bad_alloc();
+}
+void operator delete(void *pointer) noexcept { std::free(pointer); }
+void operator delete(void *pointer, std::size_t) noexcept { std::free(pointer); }
 
 int main() {
   pluginlib::ClassLoader<hardware_interface::SystemInterface> loader(
@@ -11,6 +26,11 @@ int main() {
   hardware_interface::HardwareComponentParams params{};
   params.hardware_info.name = "dummy";
   params.hardware_info.type = "system";
+  params.hardware_info.hardware_parameters = {
+      {"endpoint", "tcp/127.0.0.1:17449"},
+      {"device_id", "01000000000000000000000000000000"},
+      {"client_instance_id", "02000000000000000000000000000000"},
+      {"profile_id", "1"}, {"configured_mask", "1"}};
   hardware_interface::ComponentInfo joint{};
   joint.name = "Joint1";
   joint.type = "joint";
@@ -28,9 +48,11 @@ int main() {
   params.clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
   params.logger = rclcpp::get_logger("guarded_lifecycle_probe");
   if (system->init(params) != hardware_interface::CallbackReturn::SUCCESS) return 1;
-  if (system->on_configure(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 8;
   const auto state_interfaces = system->on_export_state_interfaces();
   const auto command_interfaces = system->on_export_command_interfaces();
+  if (system->on_configure(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 8;
+  if (system->on_activate(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::FAILURE) return 10;
+  if (system->on_cleanup(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 11;
   if (state_interfaces.size() != 2U || command_interfaces.size() != 1U) return 6;
   dummy_ros_control::JointStateSnapshot snapshot{};
   snapshot.envelope = {7U, 1U, 1U, 100U, 1U, 1U, 1U};
@@ -45,5 +67,14 @@ int main() {
       hardware_interface::return_type::OK) return 4;
   dummy_ros_control::CommandGenerationRecord record{};
   if (system->take_publish_record(&record) || system->take_stop_request()) return 5;
+  count_allocations = true;
+  for (unsigned iteration = 0U; iteration < 1000U; ++iteration) {
+    if (system->read(rclcpp::Time(), rclcpp::Duration::from_nanoseconds(1000000)) !=
+            hardware_interface::return_type::OK ||
+        system->write(rclcpp::Time(), rclcpp::Duration::from_nanoseconds(1000000)) !=
+            hardware_interface::return_type::OK) return 12;
+  }
+  count_allocations = false;
+  if (allocations != 0U) return 13;
   return 0;
 }
