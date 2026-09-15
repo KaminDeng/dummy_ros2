@@ -37,6 +37,7 @@ ENGINE_FIELDS = {
 }
 _ACTION_OBSERVATIONS: dict[str, Any] | None = None
 _DEVICE_E2E_OBSERVATIONS: dict[str, Any] | None = None
+_REAL_DEVICE_E2E: dict[str, Any] | None = None
 
 
 def _load_upstream_adapter(name: str):
@@ -200,18 +201,20 @@ finally:
 
 
 def _device_not_run(case_id: str, component: dict[str, Any]) -> dict[str, Any]:
-    e2e = _device_e2e_component()
+    real = _real_device_e2e()
     values = component["observations"]
+    real_passed = real.get("status") == "PASS"
     return {
-        "case_id": case_id, "executed": False, "status": "NOT_RUN", "sut_kind": "ros_action",
-        "reason": "Production bridge passes a C05 synthetic peer only; committed DPSDK operation enums drift from wire-v1 and no committed authorized positive peer exists",
+        "case_id": case_id, "executed": real_passed,
+        "status": "PASS" if real_passed else "NOT_RUN", "sut_kind": "ros_action",
+        "reason": "" if real_passed else str(real.get("reason", "real DPSDK E2E did not execute")),
         "sut_source_sha256": component["sut_source_sha256"],
         "trace_sha256": component["trace_sha256"],
         "component_evidence": component,
         "component_observations": values,
-        "synthetic_e2e_observations": e2e,
-        "observations": {"case_id": case_id, "requirement_observed": False,
-                         "evidence_scope": values["evidence_scope"]},
+        "real_dpsdk_e2e_observations": real,
+        "observations": {"case_id": case_id, "requirement_observed": real_passed,
+                         "evidence_scope": "real_dpsdk_peer" if real_passed else values["evidence_scope"]},
     }
 
 
@@ -246,6 +249,39 @@ def _device_e2e_component() -> dict[str, Any]:
         "reason": "synthetic E2E emitted no machine observation",
     }
     return _DEVICE_E2E_OBSERVATIONS
+
+
+def _real_device_e2e() -> dict[str, Any]:
+    global _REAL_DEVICE_E2E
+    if _REAL_DEVICE_E2E is not None:
+        return _REAL_DEVICE_E2E
+    script = ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"
+    gate = ROOT / "build_dummy/dummy_motion_client/device_action_gate"
+    peer = DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"
+    bundle = ROOT / "contracts/dummy_robot_v1"
+    completed = subprocess.run(
+        ["/usr/bin/python3", str(script), str(gate), str(peer), str(bundle), "real"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,
+    )
+    observations: dict[str, Any] = {}
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("evidence_scope") == "real_dpsdk_peer":
+            observations = value
+            break
+    if completed.returncode == 0 and observations.get("success_count", 0) >= 2 and \
+            observations.get("cancel_count", 0) >= 1 and observations.get("abort_count", 0) >= 1:
+        _REAL_DEVICE_E2E = {**observations, "status": "PASS"}
+    else:
+        _REAL_DEVICE_E2E = {
+            **observations, "status": "NOT_RUN",
+            "reason": observations.get("reason") or
+                (completed.stdout + completed.stderr)[-2000:] or f"real E2E exit {completed.returncode}",
+        }
+    return _REAL_DEVICE_E2E
 
 
 def run_r06_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
