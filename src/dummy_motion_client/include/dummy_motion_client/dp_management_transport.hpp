@@ -13,12 +13,13 @@ struct DeviceObservation {
   std::vector<std::uint8_t> state, status;
   std::uint64_t state_received_us=0, status_received_us=0;
 };
-inline bool observation_is_fresh(const DeviceObservation &observation,std::uint64_t now) noexcept {
+inline bool observation_is_fresh(const DeviceObservation &observation,std::uint64_t now,
+                                 std::uint64_t state_max_age_us=250000U) noexcept {
   if(!observation.state_received_us || !observation.status_received_us) return false;
   // Receipt stamps are local. A receive after the caller sampled `now` has zero age.
   const auto state_age=now>observation.state_received_us ? now-observation.state_received_us : 0;
   const auto status_age=now>observation.status_received_us ? now-observation.status_received_us : 0;
-  return state_age<=250000 && status_age<=1000000;
+  return state_age<=state_max_age_us && status_age<=1000000U;
 }
 class DpManagementTransport final : public ManagementTransport {
  public:

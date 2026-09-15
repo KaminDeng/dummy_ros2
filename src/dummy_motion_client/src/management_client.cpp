@@ -9,7 +9,7 @@ bool WireManagementClient::send(const ManageRequest &request) {
     return false;
   // Release an unsent query before a cancellation replaces it in the bounded queue.
   handle_.reset();
-  current_=request; pending_send_=false; query_retries_=0;
+  current_=request; pending_send_=false; query_retries_=0; query_delay_polls_=0;
   handle_=transport_.send(bytes); wire_id_=request.request_id();
   pending_send_=!handle_ && request.operation()==wire_value(ManageOperation::kQuery);
   return bool(handle_) || pending_send_;
@@ -31,7 +31,10 @@ std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) 
       throw std::runtime_error("manage_v1 query encoding failed");
     handle_=transport_.send(bytes); pending_send_=!handle_;
   };
-  if(pending_send_) { retry_query(); return {}; }
+  if(pending_send_) {
+    if(query_delay_polls_!=0U) { --query_delay_polls_; return {}; }
+    retry_query(); return {};
+  }
   if(!handle_) return {};
   std::optional<std::vector<std::uint8_t>> bytes;
   try { bytes=handle_->poll(); }
@@ -85,13 +88,23 @@ std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) 
   result.accepted_seq=response.accepted_seq_valid() ? response.accepted_producer_seq() : 0;
   std::copy(std::begin(response.position_rad()),std::end(response.position_rad()),result.position.begin());
   std::copy(std::begin(response.hold_position_rad()),std::end(response.hold_position_rad()),result.hold_position.begin());
+  if (result.result_valid) {
+    handle_.reset();
+    pending_send_=false;
+    return result;
+  }
   // Poll with a fresh query ID, retaining the original mutation ID and causal t0.
   // A lost transport reply retains this same handle; it never resubmits Enable/Begin.
   auto query=original_; query.set_operation(static_cast<std::uint16_t>(ManageOperation::kQuery));
   query.set_request_id(next_id_++); query.set_queried_request_id(request_id);
   query.set_request_seq(next_seq_++);
   query.set_queried_operation_id(operation_id_);
-  if (!send(query)) throw std::runtime_error("manage_v1 query transport unavailable");
+  if(original_response) {
+    if (!send(query)) throw std::runtime_error("manage_v1 query transport unavailable");
+  } else {
+    handle_.reset(); current_=query; wire_id_=query.request_id(); pending_send_=true;
+    query_retries_=0U; query_delay_polls_=9U;
+  }
   return result;
 }
 }  // namespace dummy_motion_client

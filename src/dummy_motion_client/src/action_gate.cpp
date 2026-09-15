@@ -108,7 +108,8 @@ bool ActionGate::issue(ManageOperation operation,std::uint64_t now) {
   request.set_operation(static_cast<std::uint16_t>(operation));
   if (operation==ManageOperation::kComplete) {
     request.set_terminal_producer_seq(frozen_seq_);
-    double positions[6]; std::copy(frozen_q_.begin(),frozen_q_.end(),positions);
+    double positions[6]{};
+    std::copy_n(frozen_q_.begin(),profile_.joints.size(),positions);
     request.set_terminal_position_rad(positions);
   }
   operation_=operation; deadline_=saturating_deadline(now,timeout_); request_=client_.submit(request,now);
@@ -180,9 +181,10 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
   if (state.core_state()==wire_value(WireCoreState::kFault)) { fail("DEVICE_FAULT"); return true; }
   ManageReply evidence; evidence.request_id=request_; evidence.snapshot_valid=true;
   evidence.motion_epoch=state.motion_epoch(); evidence.accepted_seq=state.accepted_seq_valid()?state.accepted_producer_seq():0;
+  const bool enabling_hold=state.core_state()==wire_value(WireCoreState::kEnablingHold);
   evidence.hold_ready=state.hold_ready() && hold_valid;
-  evidence.hold_available=hold_valid && (state.core_state()==wire_value(WireCoreState::kEnablingHold) ||
-      state.core_state()==wire_value(WireCoreState::kHold));
+  evidence.hold_available=enabling_hold ||
+      (hold_valid && state.core_state()==wire_value(WireCoreState::kHold));
   // A fresh, identity-checked state transition is core acceptance evidence; QUEUED alone is not.
   evidence.accepted=(evidence.motion_epoch>epoch_ &&
       ((operation_==ManageOperation::kBegin && state.core_state()==wire_value(WireCoreState::kRunning)) ||
@@ -190,6 +192,7 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
       (evidence.motion_epoch==epoch_ && phase_!=Phase::kIdle && phase_!=Phase::kHold);
   std::copy(std::begin(state.position_rad()),std::end(state.position_rad()),evidence.position.begin());
   std::copy(std::begin(state.hold_position_rad()),std::end(state.hold_position_rad()),evidence.hold_position.begin());
+  if(enabling_hold) evidence.hold_position=evidence.position;
   evidence.result_valid=management_evidence_.result_valid; evidence.succeeded=management_evidence_.succeeded;
   state_evidence_=evidence; advance(evidence,now); return true;
 }

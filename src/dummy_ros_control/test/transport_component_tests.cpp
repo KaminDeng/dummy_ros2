@@ -137,12 +137,15 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   if (!generation || !system.transfer_control_update()) return 15;
   if (::poll(&response, 1, 3000) != 1) return 16;
   Command command;
-  if (::read(input, &command, sizeof(command)) != sizeof(command) || command.device_id()[0] != 1U ||
-      command.client_instance_id()[0] != 2U || command.boot_epoch() != 7U || command.session_id() != 8U ||
+  if (::read(input, &command, sizeof(command)) != sizeof(command)) return 17;
+  if (command.device_id()[0] != 1U || command.client_instance_id()[0] != 2U ||
+      command.boot_epoch() != 7U || command.session_id() != 8U ||
       command.reference_epoch() != 9U || command.motion_epoch() != 10U || command.configured_mask() != parameters.configured_mask ||
       command.profile_id() != 1U || command.producer_seq() != generation ||
       command.freshness_ticket() != 9007199254740997ULL || command.position_rad()[0] != 0.25 ||
-      (six_axis ? command.position_rad()[1] != 0.2 : !std::isnan(command.position_rad()[1]))) return 17;
+      (six_axis ? command.position_rad()[1] != 0.2 : command.position_rad()[1] != 0.0) ||
+      !std::all_of(std::begin(command.position_rad()), std::end(command.position_rad()),
+                   [](double value) { return std::isfinite(value); })) return 17;
   // Replayed sequence, wrong device/profile and missing position evidence cannot replace feedback.
   auto invalid = valid;
   const double wrong_position[6]{0.75, NAN, NAN, NAN, NAN, NAN};
@@ -198,6 +201,19 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
     valid.state.set_state_seq(1U);
     if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 44 + changed_field;
   }
+  valid.status.set_management_epoch(10U);
+  valid.state.set_management_epoch(10U);
+  valid.state.set_state_seq(2U);
+  if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 51;
+  auto reordered = valid;
+  reordered.status.set_management_epoch(9U);
+  reordered.status.set_session_id(0U);
+  std::uint8_t no_client[16]{};
+  reordered.status.set_client_instance_id(no_client);
+  reordered.state.set_state_seq(3U);
+  const auto before_reordered = transport.statistics().invalidations;
+  if (!wait_for([&] { send(reordered); return system.copy_state(&snapshot); }) ||
+      transport.statistics().invalidations != before_reordered) return 52;
   auto rebooted = valid;
   rebooted.status.set_boot_epoch(11U);
   rebooted.state.set_boot_epoch(11U);

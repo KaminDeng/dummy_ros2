@@ -23,7 +23,7 @@ def _make_case(case_id: str):
         observed = run_case("R07", case_id, {
             "case_id": case_id, "hardware": "none", "test_only": True,
         })
-        self.assertIn(observed["status"], {"PASS", "NOT_RUN"})
+        self.assertEqual("PASS", observed["status"])
         self.assertIsInstance(observed["reason"], str)
         self.assertTrue(observed["sut_source_sha256"])
         self.assertTrue(observed["trace_sha256"])
@@ -51,7 +51,6 @@ def _make_case(case_id: str):
         for field in required:
             self.assertIn(field, values)
         if case_id in {"B02", "AUTH04", "SEN05", "SEN06"}:
-            self.assertEqual("NOT_RUN", observed["status"])
             self.assertIn(values["upstream_subtest_status"], {"PASS", "FAIL"})
             self.assertTrue(values["upstream_trace_sha256"])
         if case_id == "AUTH04":
@@ -60,7 +59,8 @@ def _make_case(case_id: str):
             self.assertEqual("steady", values["steady_clock_source"])
             self.assertIs(values["simulation_clock_isolated"], True)
         if case_id == "ROS07" and observed["status"] == "PASS":
-            self.assertEqual("ERROR", values["stale_read_result"])
+            self.assertEqual("ERROR_WHEN_ACTIVE", values["stale_read_result"])
+            self.assertEqual("OK", values["inactive_poll_result"])
         if case_id == "ROS10" and observed["status"] == "PASS":
             self.assertEqual(["Joint1/position", "Joint1/velocity"], values["controller_state_interfaces"])
             self.assertEqual(["Joint1/position"], values["controller_command_interfaces"])

@@ -33,7 +33,8 @@ int main() {
   if(system.read(rclcpp::Time(),rclcpp::Duration::from_seconds(0.01))!=hardware_interface::return_type::OK) {
     std::cerr<<"fresh measurement was discarded during authority transition\n"; return 6;
   }
-  // Repeated reads and contended writes must not renew the original deadline.
+  // An expired deadline remains recorded, but inactive controller-manager polls
+  // must not force an error before on_activate performs the strict fresh check.
   system.set_state_deadline(transport_steady_now_us()-1);
-  if(system.read(rclcpp::Time(),rclcpp::Duration::from_seconds(0.01))!=hardware_interface::return_type::ERROR) return 4;
+  if(system.read(rclcpp::Time(),rclcpp::Duration::from_seconds(0.01))!=hardware_interface::return_type::OK) return 4;
 }

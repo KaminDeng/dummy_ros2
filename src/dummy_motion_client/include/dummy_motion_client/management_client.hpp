@@ -60,6 +60,7 @@ class WireManagementClient final : public ManagementClient {
   ManageRequest original_{};
   ManageRequest current_{};
   bool pending_send_=false;
+  unsigned query_delay_polls_=0;
   unsigned query_retries_=0;
   std::uint64_t next_id_=1, wire_id_=0, operation_id_=0, sent_at_us_=0;
   std::uint32_t next_seq_=1;

@@ -12,7 +12,9 @@ int main() {
       dummy_motion_client::DpManagementTransport::Connection::kDeviceWorker);
   if(!facade.start() || !facade.ready() || !facade.observe()) return 2;
   if(!dummy_motion_client::observation_is_fresh(*facade.observe(),99) ||
-     dummy_motion_client::observation_is_fresh(*facade.observe(),1000001)) return 7;
+     dummy_motion_client::observation_is_fresh(*facade.observe(),300100) ||
+     !dummy_motion_client::observation_is_fresh(*facade.observe(),300100,1000000U) ||
+     dummy_motion_client::observation_is_fresh(*facade.observe(),1000101,1000000U)) return 7;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
     const auto cached=facade.observe();

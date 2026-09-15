@@ -109,16 +109,21 @@ int main(int argc,char **argv) {
   response.set_request_id(query.request_id()); response.set_core_request_id(id);
   response.set_accepted(false); response.set_operation_id(9007199254740995ULL);
   response.set_operation_status(1);
+  const auto accepted_query_count=transport.requests.size();
   transport.respond(response); const auto accepted=client.poll(id);
   if (!accepted || !accepted->accepted || accepted->queued || accepted->result_valid) return 5;
+  if(transport.requests.size()!=accepted_query_count) return 12;
+  for(unsigned wait=0;wait<10;++wait) if(client.poll(id)) return 13;
+  if(transport.requests.size()!=accepted_query_count+1) return 14;
+  const auto terminal_query_count=transport.requests.size();
   response.set_request_id(transport.requests.back().request_id()); response.set_operation_result_valid(true);
   response.set_result_code(6); response.set_operation_result_code(6);
   response.set_operation_status(4);
   transport.respond(response); const auto failed=client.poll(id);
-  if (!failed || !failed->result_valid || failed->succeeded || client.original_sent_at_us()!=123) return 6;
+  if (!failed || !failed->result_valid || failed->succeeded || client.original_sent_at_us()!=123 ||
+      transport.requests.size()!=terminal_query_count) return 6;
   response.set_request_id(999); transport.respond(response);
-  bool rejected=false; try { client.poll(id); } catch(const std::runtime_error &) { rejected=true; }
-  if (!rejected) return 7;
+  if (client.poll(id)) return 7;
   const bool handshake=two_stream_handshake(); if (!handshake) return 8;
   const bool round_trip=transport.requests[0].expected_session_id()==request.expected_session_id();
   const bool request_preserved=query.queried_request_id()==id;

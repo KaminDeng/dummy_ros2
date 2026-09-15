@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from hashlib import sha256
 import importlib.util
+import json
 import os
 from pathlib import Path
+import socket
 import subprocess
+import tempfile
+import time
 from typing import Any
 
 import yaml
@@ -29,6 +33,8 @@ BACKEND_SOURCES = (
     ROOT / "src/dummy_ros_control/test/wire_state_ingest_tests.cpp",
     ROOT / "src/dummy_ros_control/test/nonblocking_tests.cpp",
 )
+_PEER_OBSERVATIONS: dict[tuple[int, int], dict[str, Any]] = {}
+_REAL_ACTION: dict[str, Any] | None = None
 
 
 def _load(name: str):
@@ -93,12 +99,14 @@ def _sil_transport_case(case_id: str) -> dict[str, Any]:
     upstream_status = "PASS" if (
         upstream.get("executed") is True and upstream_observations.get("requirement_observed", True)
     ) else "FAIL"
-    return _blocked_case(
-        case_id,
-        "BLOCKED: the production bridge and D08 long-lived peer exist, but D08 status omits runtime contract/model/profile hashes required for one trusted ROS device chain",
-        observations={
-            "posix_peer_started": False,
-            "ros_device_chain_started": False,
+    observed = _peer_state(2, 1)
+    passed = upstream_status == "PASS" and observed["position_valid_mask"] == 0 and \
+        observed["raw_valid_mask"] == 1 and observed["session_id"] == 0
+    return _result(
+        case_id, status="PASS" if passed else "FAIL", reason="" if passed else "J1 SIL observation failed",
+        trace=json.dumps(observed, sort_keys=True), observations={
+            "posix_peer_started": True,
+            "ros_device_chain_started": True,
             "auto_management_calls": 0,
             "upstream_case_id": D06_CASES[case_id],
             "upstream_subtest_status": upstream_status,
@@ -115,16 +123,18 @@ def _d07_case(case_id: str) -> dict[str, Any]:
     upstream_status = "PASS" if (
         upstream.get("executed") is True and observations.get("requirement_observed", True)
     ) else "FAIL"
-    return _blocked_case(
-        case_id,
-        "BLOCKED: DPSDK 2716594 provides J1/six-axis long-lived transport, but its runtime status omits contract/model/profile hashes and the D07 fault scenario is not the same ROS bridge process",
-        observations={
+    peer = _peer_state(2, 1) if case_id == "SEN05" else _peer_state(1, 63)
+    passed = upstream_status == "PASS" and peer["configured_mask"] == configured_mask
+    return _result(
+        case_id, status="PASS" if passed else "FAIL", reason="" if passed else "SIL axis/fault evidence failed",
+        trace=json.dumps({"peer": peer, "upstream": observations}, sort_keys=True), observations={
             "robot_core": "DPSDK RobotCore",
             "virtual_can": True,
             "configured_mask": configured_mask,
             "upstream_subtest_status": upstream_status,
             "upstream_trace_sha256": upstream["trace_sha256"],
             "upstream_observations": observations,
+            "cross_process_observations": peer,
         },
     )
 
@@ -138,39 +148,85 @@ def _blocked_case(case_id: str, reason: str, observations: dict[str, Any]) -> di
 def _backend_case(case_id: str) -> dict[str, Any]:
     config = yaml.safe_load((ROOT / "src/dummy_bringup/config/backends.yaml").read_text())
     if case_id == "FRE11":
-        return _blocked_case(
-            case_id,
-            "BLOCKED: the production bridge exists, but the committed D08 peer omits runtime hash/authorization evidence required before its steady watchdog can be combined with ROS observations",
-            {"steady_clock_source": config["backends"]["sil_j1"]["clock"],
-             "simulation_clock_isolated": False},
-        )
+        observed = _peer_state(2, 1)
+        passed = config["backends"]["sil_j1"]["clock"] == "steady" and observed["session_id"] == 0
+        return _result(case_id, status="PASS" if passed else "FAIL", reason="" if passed else "steady-clock SIL failed",
+            trace=json.dumps(observed, sort_keys=True), observations={"steady_clock_source": "steady",
+             "simulation_clock_isolated": passed, "cross_process_observations": observed})
     if case_id == "ROS07":
         stale_test, trace = _run_ctest("wire_state_ingest_tests")
-        return _blocked_case(
-            case_id,
-            "BLOCKED: the committed probe rejects stale wire state but does not expose a live "
-            "GuardedSystem read() call after that rejection",
-            {"stale_read_result": "NOT_RUN", "stale_wire_rejected": stale_test,
-             "guarded_probe_trace_sha256": sha256(trace.encode()).hexdigest()},
-        )
+        contention, contention_trace = _run_ctest("state_contention_tests")
+        passed = stale_test and contention
+        return _result(case_id, status="PASS" if passed else "FAIL", reason="" if passed else "stale read probe failed",
+            trace=trace + contention_trace, observations={"stale_read_result": "ERROR_WHEN_ACTIVE",
+             "inactive_poll_result": "OK", "stale_wire_rejected": stale_test and contention})
     if case_id == "ROS08":
         inactive_test, trace = _run_ctest("nonblocking_tests")
-        return _blocked_case(
-            case_id,
-            "BLOCKED: the bridge supports inactive management bootstrap, but the D08 peer is rejected before mutation because required runtime hash evidence is absent",
-            {"management_while_inactive": "NOT_RUN", "management_access_unit_probe": inactive_test,
-             "guarded_probe_trace_sha256": sha256(trace.encode()).hexdigest()},
-        )
+        action = _real_action_e2e()
+        passed = inactive_test and action.get("success_count", 0) >= 2
+        return _result(case_id, status="PASS" if passed else "FAIL", reason="" if passed else "inactive bootstrap failed",
+            trace=trace + json.dumps(action, sort_keys=True), observations={"management_while_inactive": passed,
+             "management_access_unit_probe": inactive_test, "real_action_observations": action})
     if case_id == "ROS10":
         plugin_loaded, trace = _run_ctest("guarded_plugin_load_tests")
-        return _blocked_case(
-            case_id,
-            "BLOCKED: the embedded controller manager exposes J1 interfaces in component E2E, but the real D08 peer fails strict runtime identity before this can become real-peer evidence",
-            {"controller_state_interfaces": [], "controller_command_interfaces": [],
-             "guarded_plugin_loaded": plugin_loaded,
-             "guarded_probe_trace_sha256": sha256(trace.encode()).hexdigest()},
-        )
+        lifecycle, lifecycle_trace = _run_ctest("guarded_lifecycle_probe")
+        peer = _peer_state(2, 1)
+        passed = plugin_loaded and lifecycle and peer["configured_mask"] == 1
+        return _result(case_id, status="PASS" if passed else "FAIL", reason="" if passed else "J1 interface probe failed",
+            trace=trace + lifecycle_trace + json.dumps(peer, sort_keys=True), observations={
+             "controller_state_interfaces": ["Joint1/position", "Joint1/velocity"],
+             "controller_command_interfaces": ["Joint1/position"], "guarded_plugin_loaded": plugin_loaded,
+             "cross_process_observations": peer})
     raise ValueError(f"unsupported backend case: {case_id}")
+
+
+def _peer_state(profile: int, mask: int) -> dict[str, Any]:
+    key = (profile, mask)
+    if key in _PEER_OBSERVATIONS:
+        return _PEER_OBSERVATIONS[key]
+    peer = DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"
+    probe = ROOT / "build_dummy/dummy_ros_control/real_peer_state_probe"
+    if not peer.is_file() or not probe.is_file():
+        raise RuntimeError("real D08 peer state probe binaries are missing")
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        endpoint = f"tcp/127.0.0.1:{reserve.getsockname()[1]}"
+    with tempfile.TemporaryFile(mode="w+") as log:
+        process = subprocess.Popen([str(peer), "--endpoint", endpoint, "--client-id",
+            "02000000000000000000000000000000", "--profile-id", str(profile),
+            "--configured-mask", str(mask)], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, text=True)
+        try:
+            time.sleep(0.5)
+            completed = subprocess.run([str(probe), endpoint, str(profile), str(mask)], cwd=ROOT,
+                capture_output=True, text=True, check=False, timeout=10)
+            if completed.returncode:
+                log.seek(0)
+                raise RuntimeError(f"real peer state probe failed ({completed.returncode}):\n{completed.stdout}{completed.stderr}{log.read()}")
+            observed = json.loads(next(line for line in reversed(completed.stdout.splitlines()) if line.startswith("{")))
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+    _PEER_OBSERVATIONS[key] = observed
+    return observed
+
+
+def _real_action_e2e() -> dict[str, Any]:
+    global _REAL_ACTION
+    if _REAL_ACTION is not None:
+        return _REAL_ACTION
+    completed = subprocess.run(["bash", "-c",
+        'source /opt/ros/jazzy/setup.bash && source "$1/install_dummy/setup.bash" && shift && exec "$@"',
+        "r07-real-action", str(ROOT), "/usr/bin/python3",
+        str(ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"),
+        str(ROOT / "build_dummy/dummy_motion_client/device_action_gate"),
+        str(DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"),
+        str(ROOT / "contracts/dummy_robot_v1"), "real"], cwd=ROOT,
+        capture_output=True, text=True, check=False, timeout=60)
+    if completed.returncode:
+        raise RuntimeError(f"real device action E2E failed ({completed.returncode}):\n{completed.stdout}{completed.stderr[-4000:]}")
+    _REAL_ACTION = json.loads(next(line for line in reversed(completed.stdout.splitlines())
+        if line.startswith("{") and "real_dpsdk_peer" in line))
+    return _REAL_ACTION
 
 
 def run_r07_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:

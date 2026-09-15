@@ -8,10 +8,15 @@ int main() {
   const dummy_ros_control::CommandIdentity identity{1U, 2U, 3U, 4U, 5U};
   dummy_ros_control::set_command_identity(identity);
   const auto first = dummy_ros_control::publish_control_update(hold.data(), hold.size(), 2, nullptr);
+  const dummy_ros_control::CommandIdentity refreshed{1U, 2U, 3U, 4U, 6U};
+  dummy_ros_control::set_command_identity(refreshed);
+  auto first_record = dummy_ros_control::consume_control_update(first - 1U);
+  if (!first_record || !dummy_ros_control::command_record_current(*first_record) ||
+      first_record->identity.ticket != 5U) return 15;
   const auto second = dummy_ros_control::publish_control_update(hold.data(), hold.size(), 3, nullptr);
   if (first == 0U || second != first + 1U) return 2;
   const auto latest = dummy_ros_control::consume_control_update(first);
-  if (!latest || latest->generation != second || latest->identity.ticket != 5U) return 3;
+  if (!latest || latest->generation != second || latest->identity.ticket != 6U) return 3;
   if (dummy_ros_control::consume_control_update(second).has_value()) return 4;
   const auto joint1 = dummy_ros_control::publish_control_update(hold.data(), 1U, 4, nullptr);
   if (joint1 == 0U) return 6;

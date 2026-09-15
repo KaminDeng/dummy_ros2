@@ -59,7 +59,7 @@ int main() {
   Position premature_motion{}; premature_motion[0]=0.1;
   check(!gate.record_update(generation,2,2,premature_motion));
   client.replies.push_back(reply(2,2,true)); gate.tick(7); check(port.starts==1);
-  Position terminal{}; terminal[0]=0.2;
+  Position terminal{}; terminal.fill(std::numeric_limits<double>::quiet_NaN()); terminal[0]=0.2;
   check(gate.record_update(generation,2,17,terminal));
   gate.inner_result(generation,Terminal::kSucceeded,"",8);
   check(gate.terminal()==Terminal::kNone && client.requests.size()==2);
@@ -67,6 +67,8 @@ int main() {
   auto accepted=reply(2,2,true); accepted.accepted_seq=17;
   gate.observe(accepted,9);
   const auto complete_seq=client.requests.back().terminal_producer_seq(); check(complete_seq==17);
+  check(client.requests.back().terminal_position_rad()[0]==0.2);
+  for(std::size_t axis=1;axis<6;++axis) check(client.requests.back().terminal_position_rad()[axis]==0.0);
   client.replies.push_back(reply(3,3)); gate.tick(10); check(gate.terminal()==Terminal::kNone);
   check(gate.record_update(gate.generation(),3,1,Position{}));
   client.replies.push_back(reply(3,3,true)); gate.tick(11);

@@ -40,18 +40,25 @@ class GuardedPort final : public ActionPort {
   dummy_ros_control::GoalUuid uuid{};
   std::uint64_t motion_generation=0, started_us=0;
   bool executing=false, failed=false, publishing=false;
+  bool direct_hold=false, direct_hold_started=false;
   std::size_t active_count=0;
   Trajectory trajectory;
+  Position hold_position{};
   void prime(const Position &position,std::uint32_t epoch,std::uint64_t generation) override {
-    executing=false; identity.motion_epoch=epoch; motion_generation=generation;
+    executing=false; identity.motion_epoch=epoch; motion_generation=generation; hold_position=position;
     dummy_ros_control::set_command_identity(identity);
     if(controller) {
+      direct_hold=false;
       if(!controller->prime_position(position)) { failed=true; return; }
       controller->set_update_sink(dummy_ros_control::controller_update_sink,nullptr);
     } else if(dummy_ros_control::publish_control_update(position.data(),active_count,0,nullptr)==0U) {
       failed=true; return;
-    }
+    } else { direct_hold=true; direct_hold_started=true; }
     publishing=true;
+  }
+  void refresh_direct_hold() {
+    if(direct_hold && publishing)
+      (void)dummy_ros_control::publish_control_update(hold_position.data(),active_count,0,nullptr);
   }
   void start(const Trajectory &value,std::uint64_t generation) override {
     auto message=std::make_shared<trajectory_msgs::msg::JointTrajectory>();
@@ -72,6 +79,7 @@ class GuardedPort final : public ActionPort {
     // Called on the same control loop after update/write, so no new sample can race this freeze.
     if(controller) controller->set_update_sink(nullptr,nullptr);
     publishing=false; executing=false;
+    direct_hold=false;
   }
   void cancel() override {
     dummy_ros_control::clear_command_identity();
@@ -90,8 +98,11 @@ class DeviceActionGate final : public rclcpp::Node {
     const auto session=declare_parameter<std::int64_t>("session_id",0);
     const auto permit_text=declare_parameter<std::string>("permit_sha256","");
     const auto permit_us=declare_parameter<std::int64_t>("permit_remaining_us",10000000);
-    if(profile<=0 || profile>UINT32_MAX || (mask!=1 && mask!=63) || session<=0 || permit_us<=0 || permit_us>60000000)
+    const auto state_max_age=declare_parameter<std::int64_t>("state_max_age_us",250000);
+    if(profile<=0 || profile>UINT32_MAX || (mask!=1 && mask!=63) || session<=0 || permit_us<=0 || permit_us>60000000 ||
+       state_max_age<=0 || state_max_age>1000000)
       throw std::invalid_argument("profile/mask/session/permit duration required");
+    state_max_age_us_=static_cast<std::uint64_t>(state_max_age);
     parameters_.profile=profile; parameters_.mask=mask;
     controller_name_=declare_parameter<std::string>("guarded_controller","arm_controller");
     const auto bundle=declare_parameter<std::string>("contract_bundle","");
@@ -176,8 +187,12 @@ class DeviceActionGate final : public rclcpp::Node {
     if(!observed || observed->state.empty() || observed->status.empty()) {
       RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_EMPTY"); return false;
     }
-    if(!observation_is_fresh(*observed,now)) {
-      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_STALE"); return false;
+    if(!observation_is_fresh(*observed,now,state_max_age_us_)) {
+      const auto state_age=now>observed->state_received_us ? now-observed->state_received_us : 0U;
+      const auto status_age=now>observed->status_received_us ? now-observed->status_received_us : 0U;
+      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,
+        "DEVICE_BOOTSTRAP_INPUT_REJECTED_STALE state_age_us=%llu status_age_us=%llu",
+        static_cast<unsigned long long>(state_age),static_cast<unsigned long long>(status_age)); return false;
     }
     wire::DummyDeviceStatusV1 status; wire::DummyJointStateV1 state;
     if(wire::DummyDeviceStatusV1Codec::decode(observed->status.data(),observed->status.size(),&status)!=wire::CodecResult::kOk ||
@@ -201,7 +216,9 @@ class DeviceActionGate final : public rclcpp::Node {
     if(status.boot_epoch()==0 || !status.motion_supported() ||
        status.core_state()==wire_value(WireCoreState::kFault)) return reject("MOTION");
     if(state.boot_epoch()!=status.boot_epoch() || state.session_id()!=status.session_id() ||
-       state.reference_epoch()!=status.reference_epoch() || state.freshness_ticket()==0) return reject("STATE");
+       state.reference_epoch()!=status.reference_epoch() || state.freshness_ticket()==0) {
+      return reject("STATE");
+    }
     if((state.raw_position_valid_mask() & parameters_.mask)!=parameters_.mask) return reject("RAW");
     latest_bootstrap_={status.boot_epoch(),status.session_id(),status.reference_epoch(),status.motion_epoch(),
       status.management_epoch(),state.freshness_ticket(),parameters_.profile,parameters_.mask,true,status.motion_supported()};
@@ -229,7 +246,8 @@ class DeviceActionGate final : public rclcpp::Node {
       }
       enabled_=true;
     }
-    if(enabled_ && gate_->ready()) transport_->allow_inactive_prime(false);
+    if(enabled_ && port_.direct_hold_started && !port_.direct_hold)
+      transport_->allow_inactive_prime(false);
   }
   void check_execution(std::uint64_t now) {
     if(!port_.executing || !port_.controller) return;
@@ -267,9 +285,11 @@ class DeviceActionGate final : public rclcpp::Node {
     if(const auto update=dummy_ros_control::consume_control_update(last_update_)) {
       last_update_=update->generation;
       if(!gate_->record_update(port_.motion_generation,update->identity.motion_epoch,
-          dummy_ros_control::wire_producer_sequence(update->generation),update->position))
+          dummy_ros_control::wire_producer_sequence(update->generation),update->position)) {
         gate_->abort("CONTROL_UPDATE_REJECTED",now);
+      }
     }
+    port_.refresh_direct_hold();
     { std::unique_lock<std::mutex> lock(goal_mutex_,std::try_to_lock);
       if(lock && pending_) {
         active_=std::move(pending_); port_.uuid=active_->get_goal_id();
@@ -307,6 +327,7 @@ class DeviceActionGate final : public rclcpp::Node {
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bootstrap_status_service_;
   std::atomic<bool> ready_{false}, busy_{false}, cancel_requested_{false};
   std::atomic<bool> enable_requested_{false}, enable_available_{false};
+  std::uint64_t state_max_age_us_=250000U;
   std::mutex goal_mutex_;
   std::shared_ptr<GoalHandle> pending_, active_;
   std::uint64_t last_update_=0;

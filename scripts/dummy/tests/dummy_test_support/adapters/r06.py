@@ -129,8 +129,7 @@ def _action_case(case_id: str) -> dict[str, Any]:
         # The shared probe's final target is -0.1 rad. Establish a different
         # starting pose through the same public action so repeat runs still
         # measure real motion; never write simulator joint state directly.
-        prepare = subprocess.run(
-            ["/usr/bin/python3", "-c", """
+        prepare_command = ["/usr/bin/python3", "-c", """
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location('r06_native_probe', sys.argv[1])
 probe = importlib.util.module_from_spec(spec)
@@ -148,18 +147,34 @@ finally:
     client.destroy()
     node.destroy_node()
     probe.rclpy.shutdown()
-""", str(probe)], cwd=ROOT, capture_output=True, text=True, check=False, timeout=30)
+""", str(probe)]
+        prepare = subprocess.run(prepare_command, cwd=ROOT, capture_output=True, text=True,
+                                 check=False, timeout=30)
+        launched = None
+        launch_log = None
+        if prepare.returncode and "public action server unavailable" in prepare.stderr:
+            launch_log = tempfile.TemporaryFile(mode="w+")
+            launched = subprocess.Popen(
+                ["ros2", "launch", "dummy_bringup", "gazebo_6dof.launch.py",
+                 "gui:=false", "rviz:=false"], cwd=ROOT, stdout=launch_log,
+                stderr=subprocess.STDOUT, text=True)
+            deadline = __import__("time").monotonic() + 30
+            while __import__("time").monotonic() < deadline:
+                prepare = subprocess.run(prepare_command, cwd=ROOT, capture_output=True,
+                                         text=True, check=False, timeout=30)
+                if prepare.returncode == 0:
+                    break
+                __import__("time").sleep(1)
         if prepare.returncode:
-            if "public action server unavailable" in prepare.stderr:
-                trace = prepare.stdout + prepare.stderr
-                return {
-                    "case_id": case_id, "executed": False, "status": "NOT_RUN",
-                    "sut_kind": "ros_action", "reason": "Live native public action server unavailable",
-                    "sut_source_sha256": sha256(probe.read_bytes()).hexdigest(),
-                    "trace_sha256": sha256(trace.encode()).hexdigest(), "_trace_text": trace,
-                    "observations": {"case_id": case_id, "requirement_observed": False,
-                                     "evidence_scope": "native ROS action runtime unavailable"},
-                }
+            if launched:
+                launched.terminate()
+                launched.wait(timeout=10)
+            if launch_log:
+                launch_log.seek(0)
+                launch_output = launch_log.read()
+                launch_log.close()
+            else:
+                launch_output = ""
             raise RuntimeError(f"native action precondition failed:\n{prepare.stdout}{prepare.stderr}")
         with tempfile.TemporaryDirectory(prefix="r06_action_") as temporary:
             report = Path(temporary) / "observations.json"
@@ -170,6 +185,15 @@ finally:
             if run.returncode or not report.is_file():
                 raise RuntimeError(f"live action probe failed ({run.returncode}):\n{run.stdout}{run.stderr}")
             _ACTION_OBSERVATIONS = json.loads(report.read_text())
+        if launched:
+            launched.terminate()
+            try:
+                launched.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                launched.kill()
+                launched.wait()
+        if launch_log:
+            launch_log.close()
     values = _ACTION_OBSERVATIONS
     observed = (
         values["out_of_bounds_goal_accepted"] is False

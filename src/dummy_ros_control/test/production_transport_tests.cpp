@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
   JointStateSnapshot snapshot{};
   if (system.copy_state(&snapshot)) return 8;
   if (system.read(rclcpp::Time(), rclcpp::Duration::from_nanoseconds(1000000)) !=
-      hardware_interface::return_type::ERROR) return 16;
+      hardware_interface::return_type::OK) return 16;
   system.submit_control_update({1U, 2U, 3U, 4U, 5U}, {0.25, NAN, NAN, NAN, NAN, NAN});
   const bool transferred = system.transfer_control_update();
   const auto command_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);

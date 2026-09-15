@@ -20,6 +20,7 @@ using State = wire::DummyJointStateV1;
 using Status = wire::DummyDeviceStatusV1;
 using Command = wire::DummyJointCommandV1;
 using Management = dp::protocol::services::DummyManageV1RawFixed;
+constexpr std::uint16_t kWireEnablingHold = 3U;
 std::mutex channel_registry_mutex;
 std::weak_ptr<DeviceManagementChannel> channel_registry;
 
@@ -40,6 +41,9 @@ bool parse_id(const std::string &text, std::array<std::uint8_t, 16> *id) {
 bool parse_number(const std::string &text, std::uint32_t *value) {
   const auto parsed = std::from_chars(text.data(), text.data() + text.size(), *value);
   return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && *value != 0U;
+}
+bool sequence_at_or_after(std::uint32_t value, std::uint32_t reference) {
+  return static_cast<std::uint32_t>(value - reference) < 0x80000000U;
 }
 }  // namespace
 
@@ -154,6 +158,11 @@ struct DeviceTransport::Impl {
     }
     if (std::find(self.retired_boots.begin(), self.retired_boots.end(), value.boot_epoch()) !=
         self.retired_boots.end()) return;
+    if (self.boot == value.boot_epoch() && self.status.boot_epoch() == value.boot_epoch()) {
+      if (!sequence_at_or_after(value.management_epoch(), self.status.management_epoch())) return;
+      if (value.management_epoch() == self.status.management_epoch() &&
+          !self.matches_authority(value)) return;
+    }
     if (self.boot != 0U && self.boot != value.boot_epoch()) {
       if (self.retired_count >= self.retired_boots.size()) {
         self.invalidate();
@@ -229,8 +238,10 @@ struct DeviceTransport::Impl {
     }
     const auto &record=*pending_command;
     JointStateSnapshot snapshot{};
+    const bool inactive_prime = management->inactive_prime_allowed.load(std::memory_order_acquire) ||
+        status.core_state() == kWireEnablingHold;
     if (wire_producer_sequence(record.generation) == 0U || !command_record_current(record) ||
-        (!system.commands_active() && !management->inactive_prime_allowed.load(std::memory_order_acquire)) || boot == 0U ||
+        (!system.commands_active() && !inactive_prime) || boot == 0U ||
         record.identity.boot != boot || record.identity.session != status.session_id() ||
         record.identity.reference_epoch != status.reference_epoch() ||
         record.identity.motion_epoch != status.motion_epoch() || record.identity.ticket == 0U ||
@@ -260,7 +271,10 @@ struct DeviceTransport::Impl {
     message.set_freshness_ticket(record.identity.ticket);
     message.set_configured_mask(parameters.configured_mask);
     double position[6]{};
-    std::copy(record.position.begin(), record.position.end(), position);
+    for (std::size_t axis = 0U; axis < record.position.size(); ++axis)
+      position[axis] = (parameters.configured_mask & (1U << axis)) != 0U
+                           ? record.position[axis]
+                           : 0.0;
     message.set_position_rad(position);
     const auto published=publisher.publish(message);
     if(published==dp::comm::Result::kBusy || published==dp::comm::Result::kQueueFull) return;
@@ -336,7 +350,8 @@ struct DeviceTransport::Impl {
       }
       if (last_received_us != 0U && transport_steady_now_us() - last_received_us > parameters.max_state_age_us)
         invalidate();
-      if (management->inactive_prime_allowed.load(std::memory_order_acquire))
+      if (management->inactive_prime_allowed.load(std::memory_order_acquire) ||
+          status.core_state() == kWireEnablingHold)
         system.transfer_control_update();
       publish_pending(command_publisher);
     }

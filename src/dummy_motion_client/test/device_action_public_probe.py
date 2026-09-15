@@ -26,6 +26,7 @@ def main():
         "-p", 'device_id:="01000000000000000000000000000000"',
         "-p", 'client_instance_id:="02000000000000000000000000000000"',
         "-p", "profile_id:=2", "-p", "configured_mask:=1",
+        "-p", "session_id:=11", "-p", 'permit_sha256:="01' + "00" * 31 + '"',
     ]
     missing = subprocess.run(options, env=env, capture_output=True, text=True, timeout=3)
     assert missing.returncode != 0 and "bundle" in missing.stderr, "missing profile bundle must fail startup"

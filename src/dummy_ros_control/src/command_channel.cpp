@@ -22,6 +22,17 @@ std::atomic<std::uint64_t> invalidated_generation{0};
 
 void set_command_identity(const CommandIdentity &identity) noexcept {
   std::lock_guard<std::mutex> writer(identity_writer_mutex);
+  const bool same_authority =
+      boot.load(std::memory_order_relaxed) == identity.boot &&
+      session.load(std::memory_order_relaxed) == identity.session &&
+      reference_epoch.load(std::memory_order_relaxed) == identity.reference_epoch &&
+      motion_epoch.load(std::memory_order_relaxed) == identity.motion_epoch &&
+      published_authority_epoch.load(std::memory_order_acquire) ==
+          authority_epoch.load(std::memory_order_acquire);
+  if (same_authority && identity.boot != 0U && identity.session != 0U && identity.ticket != 0U) {
+    ticket.store(identity.ticket, std::memory_order_release);
+    return;
+  }
   const auto epoch = authority_epoch.fetch_add(1U, std::memory_order_acq_rel) + 1U;
   boot.store(identity.boot, std::memory_order_relaxed);
   session.store(identity.session, std::memory_order_relaxed);

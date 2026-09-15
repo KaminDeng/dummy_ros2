@@ -9,7 +9,8 @@ bool state_case(bool partial_hold_mask) {
   require(harness.gate.enable(auth,1));
   wire::DummyJointStateV1 state; state.set_schema_major(1); state.set_state_seq(1);
   state.set_session_id(1); state.set_configured_mask(1); state.set_position_valid_mask(1);
-  state.set_hold_valid_mask(partial_hold_mask?0:1); state.set_motion_epoch(1); state.set_core_state(3);
+  state.set_hold_valid_mask(partial_hold_mask?0:1); state.set_motion_epoch(1);
+  state.set_core_state(partial_hold_mask?4:3);
   double positions[6]{};
   if (!partial_hold_mask) positions[5]=std::numeric_limits<double>::quiet_NaN();
   state.set_position_rad(positions); state.set_hold_position_rad(positions);

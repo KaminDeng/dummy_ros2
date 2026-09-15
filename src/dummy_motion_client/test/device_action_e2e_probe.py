@@ -58,7 +58,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="device-action-e2e-") as temporary:
         directory = pathlib.Path(temporary)
         params = {
-            "controller_manager": {"ros__parameters": {"update_rate": 100,
+            "controller_manager": {"ros__parameters": {"update_rate": 20,
                 "hardware_components_initial_state": {"inactive": ["dummy"]},
                 "arm_controller": {"type": "dummy_ros_control/GuardedJointTrajectoryController"}}},
             "arm_controller": {"ros__parameters": {"joints": ["Joint1"],
@@ -67,7 +67,8 @@ def main():
             "device_action_gate": {"ros__parameters": {"endpoint": endpoint,
                 "device_id": "01000000000000000000000000000000", "client_instance_id": "02000000000000000000000000000000",
                 "profile_id": 2, "configured_mask": 1, "session_id": 11,
-                "permit_sha256": "01" + "00" * 31, "permit_remaining_us": 10000000,
+                "state_max_age_us": 1000000,
+                "permit_sha256": "01" + "00" * 31, "permit_remaining_us": 60000000,
                 "contract_bundle": str(bundle), "profile_name": "sil_j1"}},
             "robot_state_publisher": {"ros__parameters": {"robot_description": urdf(endpoint)}},
         }
@@ -85,6 +86,9 @@ def main():
         try:
             peer_command = [str(peer), "--endpoint", endpoint, "--client-id",
                             "02000000000000000000000000000000", "--profile-id", "2", "--configured-mask", "1"]
+            evidence_file = directory / "peer-command-evidence.jsonl"
+            if real_peer:
+                peer_command += ["--evidence-file", str(evidence_file)]
             if not real_peer:
                 peer_command += ["--device-id", "01000000000000000000000000000000",
                                  "--contract-bundle", str(bundle), "--profile-name", "sil_j1",
@@ -140,6 +144,7 @@ def main():
             point = JointTrajectoryPoint(positions=[0.05])
             point.time_from_start.sec = 1
             goal.trajectory.points = [point]
+            goal.goal_time_tolerance.sec = 1
             feedback = []
             handle = wait_future(node, action.send_goal_async(goal, feedback_callback=lambda value: feedback.append(value.feedback)))
             assert handle.accepted, "public goal rejected after Enable"
@@ -158,6 +163,7 @@ def main():
                 sample = JointTrajectoryPoint(positions=[target])
                 sample.time_from_start.sec = duration
                 motion.trajectory.points = [sample]
+                motion.goal_time_tolerance.sec = 1
                 if tolerance is not None:
                     motion.path_tolerance = [JointTolerance(name="Joint1", position=tolerance)]
                 stream = []
@@ -184,10 +190,19 @@ def main():
             assert aborted.accepted, "cancel barrier did not reopen admission"
             aborted_result = wait_future(node, aborted.get_result_async(), 10)
             assert aborted_result.status == 6 and "PATH_TOLERANCE" in aborted_result.result.error_string, f"abort path not confirmed: {aborted_result}"
+            if real_peer:
+                processes[0].terminate()
+                processes[0].wait(timeout=5)
             logs["peer"].seek(0)
             events = [json.loads(line) for line in logs["peer"].read().splitlines() if line.startswith('{"event"')]
+            if real_peer:
+                events += [json.loads(line) for line in evidence_file.read_text().splitlines()]
             operations = [event["operation"] for event in events if event["event"] == "manage"]
-            assert operations == [5, 6, 13, 6, 13, 6, 7, 6, 7], operations
+            expected_operations = ([2, 3, 4, 14] if real_peer else []) + [5, 6, 13, 6, 13, 6, 7, 6, 7]
+            assert [value for value in operations if value != 11] == expected_operations, operations
+            if real_peer:
+                operation_results = [event for event in events if event["event"] == "operation_result"]
+                assert operation_results and all(event["operation_id"] > 0 for event in operation_results), operation_results
             commands = [event for event in events if event["event"] == "command"]
             sequences = [event["producer_seq"] for event in commands]
             assert sequences == sorted(set(sequences)), "producer generations repeated or regressed"
@@ -197,13 +212,19 @@ def main():
             for index, event in enumerate(events):
                 if event["event"] != "manage" or event["operation"] != 13:
                     continue
-                prior = [value for value in events[:index] if value["event"] == "command" and value["motion_epoch"] == event["motion_epoch"]][-1]
-                later = [value for value in events[index + 1:] if value["event"] == "command"]
-                assert not any(value["motion_epoch"] == event["motion_epoch"] for value in later), "command emitted after terminal freeze"
-                assert later and abs(later[0]["position"][0] - prior["position"][0]) < 1e-9, "completion hold jumped"
+                if real_peer:
+                    old_epoch = event["motion_epoch"] - 1
+                    prior = [value for value in commands if value["motion_epoch"] == old_epoch][-1]
+                    later = [value for value in commands if value["motion_epoch"] == event["motion_epoch"]]
+                else:
+                    prior = [value for value in events[:index] if value["event"] == "command" and value["motion_epoch"] == event["motion_epoch"]][-1]
+                    later = [value for value in events[index + 1:] if value["event"] == "command"]
+                    assert not any(value["motion_epoch"] == event["motion_epoch"] for value in later), "command emitted after terminal freeze"
+                hold_tolerance = 0.001 if real_peer else 1e-9
+                assert later and abs(later[0]["position"][0] - prior["position"][0]) <= hold_tolerance, "completion hold jumped"
                 frozen.append({"motion_epoch": prior["motion_epoch"], "producer_seq": prior["producer_seq"], "position": prior["position"][0]})
             results = [result, second_result, canceled_result, aborted_result]
-            print(json.dumps({"evidence_scope": "component_only", "public_fjt_succeeded": result.status == 4,
+            print(json.dumps({"evidence_scope": "real_dpsdk_peer" if real_peer else "component_only", "public_fjt_succeeded": result.status == 4,
                               "success_count": sum(item.status == 4 for item in results),
                               "cancel_count": sum(item.status == 5 for item in results),
                               "abort_count": sum(item.status == 6 for item in results),

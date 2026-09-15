@@ -49,6 +49,7 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
         f"runtime_not_run_as_pass={runtime_not_run_as_pass};separated={separated}"
     )
     return {
+        "case_id": case_id,
         "executed": True,
         "sut_source_sha256": digest.hexdigest(),
         "trace_sha256": sha256(trace.encode()).hexdigest(),
