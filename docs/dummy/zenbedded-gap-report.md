@@ -5,9 +5,10 @@
 The upstream repository is locked by DPSDK `tools/ros2/zenbedded.repos` to
 `ros-controls/zephyr-zenoh-integration` commit
 `96a7a912a250780bc15c086deb65210296d6fb11`. That upstream source checkout is not
-present locally, so R03 does not publish or claim an upstream patch. Any future
-patch must record this exact parent and a patch SHA-256 under
-`patches/zenbedded_dummy_v1/`.
+present locally, so R03 does not publish or claim an upstream source patch. The
+selected integration is the ROS-owned `dummy_ros_control` plugin extension; C04
+consumed its handoff and C05 published the resulting wire contract. A future
+upstream patch, if introduced, must record this exact parent and its SHA-256.
 
 DPSDK C03 commit `6ce5a55` provides the generated raw-fixed implementation used
 by the ROS-owned probe. The probe includes `dp_dummy_robot_v1_dp_comm.hpp`
@@ -41,8 +42,9 @@ than copying its algorithm. After base configure it destroys the inherited actio
 server and trajectory subscriber. A same-process owner must register a UUID and
 trajectory digest before submitting a trajectory through the inherited validation,
 ordering, and realtime-buffer methods. The plugin compiles and exports through
-pluginlib; controller-manager runtime loading and endpoint-negative evidence remain
-required before MOV14 is PASS.
+pluginlib. Controller-manager runtime loading and endpoint-negative evidence are
+covered by registered plugin/lifecycle probes. Device-mode cross-process bypass
+closure remains R06 and is not claimed by this R03 component evidence.
 
 ROS CDR is a separate representation. DPSDK C03 owns and has passed its ROSIDL
 semantic probe; this R03 probe compares and validates raw-fixed device encoding

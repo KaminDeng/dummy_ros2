@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "status": "IN_PROGRESS",
+  "hardware": "none",
+  "verified_suites": {
+    "R00": {"report": "build_dummy/reports/R00-repair.json", "cases_passed": 4},
+    "R01": {"report": "build_dummy/reports/R01-repair.json", "cases_passed": 7},
+    "R02": {"report": "build_dummy/reports/R02-repair.json", "cases_passed": 6},
+    "R03": {"report": "build_dummy/reports/R03-repair.json", "cases_passed": 7},
+    "R04": {"report": "build_dummy/reports/R04-repair.json", "cases_passed": 10},
+    "R05": {"report": "build_dummy/reports/R05-repair.json", "cases_passed": 7}
+  },
+  "component_tests": {"R06": 21},
+  "completion_boundaries": [
+    "R03 historical upstream patch handoff needs reconciliation.",
+    "R04 production transport is still under review.",
+    "R06 production management transport and guarded JTC bridge are not complete.",
+    "DPSDK wire operation/receipt/result/core-state values drift from published C05.",
+    "R07 full device SIL chain and R08 release remain blocked."
+  ],
+  "hardware_not_run": ["USB", "ttyACM0", "SocketCAN", "J-Link", "physical motor motion"],
+  "known_runtime_limitation": "Successful native Gazebo tests precede MoveIt -11 during Ctrl-C teardown."
+}

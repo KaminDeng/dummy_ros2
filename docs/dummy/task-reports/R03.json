@@ -7,7 +7,12 @@
     "upstream_repository": "https://github.com/ros-controls/zephyr-zenoh-integration.git",
     "upstream_commit": "96a7a912a250780bc15c086deb65210296d6fb11",
     "upstream_checkout_present": false,
-    "upstream_patch_published": false,
+    "integration_strategy": "ROS-owned local extension; no upstream source patch required or claimed",
+    "local_extension_sha256": {
+      "header": "b60741e0b36870b7b6eb38b0e57485a79b65ea68ae9b09ebde2fc94e8efe6a20",
+      "implementation": "3eddb41b8c91cee158ca6eed6eea4cac8cf977c1d33b6ad657a638f9afe34878",
+      "plugin_manifest": "5aabe65b63ffcfb2aaf612688ad287be284f609a9b45fed46f2b6037095847ec"
+    },
     "wire_release": "dummy-wire-v1",
     "wire_payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
     "c04_commit": "803eff5",
@@ -60,5 +65,7 @@
     "owner": "DPSDK C04/C05",
     "required_resolution": "Resolved; C04 must still rerun its own full compatibility gate before wire-v1 publication"
   },
-  "next_action": "C04 consumes this R03 handoff; R04 waits for C04 and C05 wire-v1."
+  "handoff_result": "C04 commit 803eff5 consumed R03 commit 2f9ebf1 and C05 commit 2c9392a published dummy-wire-v1.",
+  "current_case_evidence": "build_dummy/reports/R03-repair.json",
+  "next_action": "R04 consumes the published wire-v1 bundle and the ROS-owned plugin extension."
 }
