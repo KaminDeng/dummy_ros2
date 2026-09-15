@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dummy_test_support.task_adapters import not_run_case, run_action_probe_case
+from dummy_test_support.task_adapters import not_run_case, run_action_probe_case, run_unittest_case
 
 
 PROBES = {
@@ -19,14 +19,16 @@ SOURCES = (
     "src/dummy_bringup/scripts/action_gate_probe.py",
     "src/dummy_bringup/scripts/planning_probe.py",
     "src/dummy_moveit_config/test/test_r05_action_gate_contract.py",
+    "src/dummy_moveit_config/test/test_model_alignment.py",
 )
 
 
 def run_r05_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     if case_id == "MOD06":
-        return not_run_case(
-            case_id, stimulus, SOURCES,
-            "no case-specific mesh/axis/tool transform evidence probe is available",
+        return run_unittest_case(
+            case_id, stimulus,
+            "src.dummy_moveit_config.test.test_model_alignment.ModelAlignmentTest.test_mesh_bounds_match_transformed_collision_boxes",
+            SOURCES, sut_kind="core_binary",
         )
     if case_id == "ROS11":
         return not_run_case(
