@@ -30,6 +30,7 @@ class DpManagementTransport final : public ManagementTransport {
   bool ready() const noexcept;
   std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &) override;
   std::optional<DeviceObservation> observe();
+  bool allow_inactive_prime(bool allowed) noexcept;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

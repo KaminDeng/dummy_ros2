@@ -9,6 +9,7 @@
 #include "controller_manager/controller_manager.hpp"
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dummy_motion_client/device_profile.hpp"
+#include "dummy_motion_client/bootstrap_coordinator.hpp"
 #include "dummy_motion_client/native_goal_validation.hpp"
 #include "dummy_ros_control/guarded_joint_trajectory_controller.hpp"
 #include "dummy_ros_control/command_channel.hpp"
@@ -39,12 +40,17 @@ class GuardedPort final : public ActionPort {
   dummy_ros_control::GoalUuid uuid{};
   std::uint64_t motion_generation=0, started_us=0;
   bool executing=false, failed=false, publishing=false;
+  std::size_t active_count=0;
   Trajectory trajectory;
   void prime(const Position &position,std::uint32_t epoch,std::uint64_t generation) override {
     executing=false; identity.motion_epoch=epoch; motion_generation=generation;
-    if(!controller || !controller->prime_position(position)) { failed=true; return; }
     dummy_ros_control::set_command_identity(identity);
-    controller->set_update_sink(dummy_ros_control::controller_update_sink,nullptr);
+    if(controller) {
+      if(!controller->prime_position(position)) { failed=true; return; }
+      controller->set_update_sink(dummy_ros_control::controller_update_sink,nullptr);
+    } else if(dummy_ros_control::publish_control_update(position.data(),active_count,0,nullptr)==0U) {
+      failed=true; return;
+    }
     publishing=true;
   }
   void start(const Trajectory &value,std::uint64_t generation) override {
@@ -81,7 +87,11 @@ class DeviceActionGate final : public rclcpp::Node {
     parameters_.client=hex_id<16>(declare_parameter<std::string>("client_instance_id",""));
     const auto profile=declare_parameter<std::int64_t>("profile_id",0);
     const auto mask=declare_parameter<std::int64_t>("configured_mask",0);
-    if(profile<=0 || profile>UINT32_MAX || (mask!=1 && mask!=63)) throw std::invalid_argument("profile_id/configured_mask required");
+    const auto session=declare_parameter<std::int64_t>("session_id",0);
+    const auto permit_text=declare_parameter<std::string>("permit_sha256","");
+    const auto permit_us=declare_parameter<std::int64_t>("permit_remaining_us",10000000);
+    if(profile<=0 || profile>UINT32_MAX || (mask!=1 && mask!=63) || session<=0 || permit_us<=0 || permit_us>60000000)
+      throw std::invalid_argument("profile/mask/session/permit duration required");
     parameters_.profile=profile; parameters_.mask=mask;
     controller_name_=declare_parameter<std::string>("guarded_controller","arm_controller");
     const auto bundle=declare_parameter<std::string>("contract_bundle","");
@@ -89,14 +99,29 @@ class DeviceActionGate final : public rclcpp::Node {
     if(bundle.empty() || profile_name.empty()) throw std::invalid_argument("contract bundle and profile_name are required");
     device_profile_=load_device_profile(bundle,profile_name,parameters_.profile,parameters_.mask);
     profile_=device_profile_.joints;
+    port_.active_count=profile_.joints.size();
     transport_=std::make_unique<DpManagementTransport>(parameters_,DpManagementTransport::Connection::kDeviceWorker);
     if(!transport_->start()) throw std::invalid_argument("invalid device transport parameters");
     client_=std::make_unique<WireManagementClient>(*transport_);
+    ManageRequest bootstrap_identity{};
+    std::uint8_t device[16]{}, client_id[16]{};
+    std::copy(parameters_.device.begin(),parameters_.device.end(),device);
+    std::copy(parameters_.client.begin(),parameters_.client.end(),client_id);
+    bootstrap_identity.set_device_id(device); bootstrap_identity.set_client_instance_id(client_id);
+    bootstrap_identity.set_expected_session_id(static_cast<std::uint64_t>(session));
+    const auto permit=hex_id<32>(permit_text);
+    bootstrap_=std::make_unique<BootstrapCoordinator>(*client_,bootstrap_identity,permit,permit_us);
     gate_=std::make_unique<ActionGate>(*client_,port_,profile_,2000000);
     enable_service_=create_service<std_srvs::srv::Trigger>("~/enable",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         response->success=enable_available_.load() && !enable_requested_.exchange(true);
         response->message=response->success ? "Enable queued; wait for confirmed HOLD before submitting motion" : "Device authorization or active guarded controller unavailable";
+      });
+    bootstrap_status_service_=create_service<std_srvs::srv::Trigger>("~/bootstrap_status",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        response->success=enabled_ && gate_->ready();
+        response->message=response->success ? "ENABLED_HOLD" :
+          (bootstrap_ && bootstrap_->phase()==BootstrapPhase::kFault ? bootstrap_->error() : "BOOTSTRAP_PENDING");
       });
     server_=rclcpp_action::create_server<Follow>(this,"/arm_controller/follow_joint_trajectory",
       [this](const rclcpp_action::GoalUUID &,std::shared_ptr<const Follow::Goal> goal) {
@@ -135,6 +160,7 @@ class DeviceActionGate final : public rclcpp::Node {
         if(enabled_) { gate_->invalidate_authorization(now); port_.cancel(); }
       }
       gate_->tick(now);
+      bootstrap_tick(now);
     } catch(const std::exception &error) {
       RCLCPP_ERROR(get_logger(),"DEVICE_GATE_OBSERVATION: %s",error.what());
       gate_->abort("INTERNAL_BRIDGE_FAILURE",management_now_us()); ready_=false;
@@ -148,16 +174,28 @@ class DeviceActionGate final : public rclcpp::Node {
     wire::DummyDeviceStatusV1 status; wire::DummyJointStateV1 state;
     if(wire::DummyDeviceStatusV1Codec::decode(observed->status.data(),observed->status.size(),&status)!=wire::CodecResult::kOk ||
        wire::DummyJointStateV1Codec::decode(observed->state.data(),observed->state.size(),&state)!=wire::CodecResult::kOk) return false;
+    const auto reject=[this](const char *reason) {
+      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_%s",reason);
+      return false;
+    };
     if(!std::equal(device_profile_.contract_hash.begin(),device_profile_.contract_hash.end(),status.contract_sha256()) ||
        !std::equal(device_profile_.model_hash.begin(),device_profile_.model_hash.end(),status.model_sha256()) ||
-       !std::equal(device_profile_.profile_hash.begin(),device_profile_.profile_hash.end(),status.profile_sha256()) ||
-       !std::equal(parameters_.client.begin(),parameters_.client.end(),status.client_instance_id()) ||
-       !std::equal(parameters_.client.begin(),parameters_.client.end(),state.client_instance_id()) ||
-       status.boot_epoch()==0 || status.session_id()==0 || status.reference_epoch()==0 ||
-       status.control_mode()!=1 || status.reference_kind()==0 || !status.real_motion_permitted() || !status.motion_supported() ||
-       status.permit_remaining_us()==0 || status.core_state()==wire_value(WireCoreState::kFault) ||
-       state.boot_epoch()!=status.boot_epoch() || state.session_id()!=status.session_id() ||
-       state.reference_epoch()!=status.reference_epoch() || state.freshness_ticket()==0) return false;
+       !std::equal(device_profile_.profile_hash.begin(),device_profile_.profile_hash.end(),status.profile_sha256())) return reject("HASH");
+    const bool configured_client =
+      std::equal(parameters_.client.begin(),parameters_.client.end(),status.client_instance_id()) &&
+      std::equal(parameters_.client.begin(),parameters_.client.end(),state.client_instance_id());
+    const bool unowned_bootstrap = status.session_id()==0U && state.session_id()==0U &&
+      std::all_of(std::begin(status.client_instance_id()),std::end(status.client_instance_id()),[](auto value){return value==0U;}) &&
+      std::all_of(std::begin(state.client_instance_id()),std::end(state.client_instance_id()),[](auto value){return value==0U;});
+    if(!configured_client && !unowned_bootstrap) return reject("CLIENT");
+    if(status.boot_epoch()==0 || !status.motion_supported() ||
+       status.core_state()==wire_value(WireCoreState::kFault)) return reject("MOTION");
+    if(state.boot_epoch()!=status.boot_epoch() || state.session_id()!=status.session_id() ||
+       state.reference_epoch()!=status.reference_epoch() || state.freshness_ticket()==0) return reject("STATE");
+    if((state.raw_position_valid_mask() & parameters_.mask)!=parameters_.mask) return reject("RAW");
+    latest_bootstrap_={status.boot_epoch(),status.session_id(),status.reference_epoch(),status.motion_epoch(),
+      status.management_epoch(),state.freshness_ticket(),parameters_.profile,parameters_.mask,true,status.motion_supported()};
+    if(bootstrap_) bootstrap_->observe(latest_bootstrap_);
     if(enabled_ && (status.boot_epoch()!=port_.identity.boot || status.session_id()!=port_.identity.session ||
        status.reference_epoch()!=port_.identity.reference_epoch)) return false;
     port_.identity.boot=status.boot_epoch(); port_.identity.session=status.session_id();
@@ -166,18 +204,22 @@ class DeviceActionGate final : public rclcpp::Node {
       port_.identity.ticket=state.freshness_ticket();
       if(port_.publishing) dummy_ros_control::set_command_identity(port_.identity);
     }
-    enable_available_=!enabled_ && port_.controller && transport_->ready();
-    if(enable_available_ && enable_requested_.exchange(false)) {
-      Authorization auth; auth.session=auth.reference=auth.permit=true;
-      auth.identity.set_device_id(status.device_id()); auth.identity.set_client_instance_id(status.client_instance_id());
-      auth.identity.set_expected_boot_epoch(status.boot_epoch()); auth.identity.set_expected_session_id(status.session_id());
-      auth.identity.set_expected_reference_epoch(status.reference_epoch()); auth.identity.set_expected_management_epoch(status.management_epoch());
-      auth.identity.set_expected_profile_id(parameters_.profile); auth.identity.set_configured_mask(parameters_.mask);
-      auth.identity.set_freshness_ticket(state.freshness_ticket());
-      enabled_=gate_->enable(auth,now);
-    }
-    gate_->observe_state(observed->state.data(),observed->state.size(),now);
+    enable_available_=!enabled_ && bootstrap_ && bootstrap_->phase()==BootstrapPhase::kIdle && transport_->ready();
+    if(enable_available_ && enable_requested_.exchange(false)) bootstrap_->start(latest_bootstrap_,now);
+    if(enabled_) gate_->observe_state(observed->state.data(),observed->state.size(),now);
     return true;
+  }
+  void bootstrap_tick(std::uint64_t now) {
+    if(!bootstrap_ || bootstrap_->phase()==BootstrapPhase::kIdle || bootstrap_->phase()==BootstrapPhase::kFault) return;
+    bootstrap_->tick(now);
+    if(!enabled_ && bootstrap_->ready()) {
+      const auto authorization=bootstrap_->authorization();
+      if(!authorization || !transport_->allow_inactive_prime(true) || !gate_->enable(*authorization,now)) {
+        transport_->allow_inactive_prime(false); ready_=false; return;
+      }
+      enabled_=true;
+    }
+    if(enabled_ && gate_->ready()) transport_->allow_inactive_prime(false);
   }
   void check_execution(std::uint64_t now) {
     if(!port_.executing || !port_.controller) return;
@@ -248,15 +290,18 @@ class DeviceActionGate final : public rclcpp::Node {
   std::shared_ptr<Controller> discovered_controller_;
   std::unique_ptr<DpManagementTransport> transport_;
   std::unique_ptr<WireManagementClient> client_;
+  std::unique_ptr<BootstrapCoordinator> bootstrap_;
   std::unique_ptr<ActionGate> gate_;
   rclcpp_action::Server<Follow>::SharedPtr server_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr enable_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bootstrap_status_service_;
   std::atomic<bool> ready_{false}, busy_{false}, cancel_requested_{false};
   std::atomic<bool> enable_requested_{false}, enable_available_{false};
   std::mutex goal_mutex_;
   std::shared_ptr<GoalHandle> pending_, active_;
   std::uint64_t last_update_=0;
   bool enabled_=false;
+  BootstrapSnapshot latest_bootstrap_{};
 };
 }  // namespace dummy_motion_client
 

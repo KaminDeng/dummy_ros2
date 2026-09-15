@@ -22,7 +22,8 @@ set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v1/codec")
 if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v1.hpp")
   message(FATAL_ERROR "The published DPSDK manage_v1 wire codec is required")
 endif()
-add_library(dummy_device_action STATIC src/action_gate.cpp src/management_client.cpp)
+add_library(dummy_device_action STATIC
+  src/action_gate.cpp src/bootstrap_coordinator.cpp src/management_client.cpp)
 target_compile_features(dummy_device_action PUBLIC cxx_std_17)
 target_include_directories(dummy_device_action PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -59,11 +60,14 @@ if(BUILD_TESTING)
   set_tests_properties(device_action_public_probe PROPERTIES TIMEOUT 30 LABELS "component_only;ros_action")
   add_test(NAME device_action_e2e_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v1)
+    ${DPSDK_ROOT}/build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v1 real)
   add_test(NAME device_motion_unsupported_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
     $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v1 unsupported)
-  set_tests_properties(device_action_e2e_probe device_motion_unsupported_probe PROPERTIES
+  set_tests_properties(device_action_e2e_probe PROPERTIES
+    TIMEOUT 60 SKIP_RETURN_CODE 77 LABELS "real_dpsdk_peer;ros_action")
+  set_tests_properties(device_motion_unsupported_probe PROPERTIES
     TIMEOUT 45 LABELS "component_only;synthetic_peer;ros_action")
   add_executable(device_goal_validation_tests test/device_goal_validation_tests.cpp)
   target_link_libraries(device_goal_validation_tests dummy_native_goal_validation)
@@ -86,7 +90,7 @@ if(BUILD_TESTING)
   find_package(trajectory_msgs REQUIRED)
   foreach(test_name IN ITEMS session_action_tests cancel_barrier_tests management_client_tests
       complete_motion_tests first_sample_handshake_tests device_action_engine_tests wire_management_tests
-      native_action_gate_tests)
+      native_action_gate_tests bootstrap_coordinator_tests)
     add_executable(${test_name} test/${test_name}.cpp)
     target_include_directories(${test_name} PRIVATE include)
     target_link_libraries(${test_name} dummy_device_action)

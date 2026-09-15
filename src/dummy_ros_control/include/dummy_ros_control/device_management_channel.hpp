@@ -22,6 +22,7 @@ struct DeviceManagementChannel {
   const TransportParameters parameters;
   std::mutex mutex;
   std::atomic<bool> ready{false};
+  std::atomic<bool> inactive_prime_allowed{false};
   std::shared_ptr<DeviceManagementRequest> queued;
   DeviceManagementObservation observation;
 };

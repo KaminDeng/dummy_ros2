@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "handoff": "R06-to-DPSDK-operation-enum-blocker",
-  "status": "BLOCKED",
+  "status": "PARTIALLY_RESOLVED",
   "hardware": "none",
   "wire_authority": {
     "release": "dummy-wire-v1",
@@ -24,7 +24,8 @@
     }
   },
   "observed_dpsdk": {
-    "commit": "5f8510b",
+    "commit": "56426ea",
+    "enum_alignment_commit": "a24c017",
     "source": "applications/dummy_ref_control/include/dummy_ref/core_types.hpp",
     "operations": {
       "ENABLE_HOLD": 7,
@@ -37,15 +38,15 @@
     "wire_dispatch": "comm/dummy_node.cpp copies request.operation directly into ManagementRequest"
   },
   "impact": [
-    "A wire-v1 EnableHold request is interpreted as CancelMotion by the committed DPSDK core.",
-    "BeginMotion is interpreted as Stop and GetOperation is interpreted as Stop.",
-    "ROS cannot execute the R06 device action lifecycle or R07 device SIL without violating C05."
+    "The operation/receipt/result/core-state enum drift is resolved by DPSDK commit a24c017.",
+    "The committed D08 peer publishes zero contract/model/profile hashes and omits control_mode/reference_kind/real_motion_permitted/permit_remaining_us in status.",
+    "The production ROS gate therefore rejects the real peer with DEVICE_BOOTSTRAP_INPUT_REJECTED_HASH before issuing any mutation."
   ],
-  "ros_behavior": "ROS uses the published C05 values and does not add compatibility aliases for the stale DPSDK values.",
+  "ros_behavior": "ROS uses the published C05 values, accepts no legacy aliases, and retains strict runtime contract/profile/permit validation.",
   "resolution_required": [
-    "DPSDK maps published wire operation values to internal operations or adopts the published enum values.",
-    "D06 service and D05 lifecycle acceptance are rerun with C05 vectors.",
-    "A committed long-lived VirtualCAN SIL peer exposes state/status/command/manage endpoints for J1 and six-axis profiles.",
+    "Resolved: DPSDK maps published wire operation values and D06 passes 26/26.",
+    "The committed long-lived J1 peer must publish C05 contract/model/profile hashes and accurate control/reference/permit status fields.",
+    "The peer must retain DISARMED raw-state visibility so explicit SELECT/GRANT/CAPTURE/PERMIT/ENABLE bootstrap can run.",
     "ROS reruns R06 and R07 cross-process cases against that committed artifact."
   ]
 }

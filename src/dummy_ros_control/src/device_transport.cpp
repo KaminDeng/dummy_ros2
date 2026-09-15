@@ -142,8 +142,13 @@ struct DeviceTransport::Impl {
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) return;
     ++self.statuses;
     if (!self.matches(value)) return;
-    if (!std::equal(self.parameters.client_instance_id.begin(), self.parameters.client_instance_id.end(),
-                    std::begin(value.client_instance_id()))) {
+    const bool configured_client = std::equal(
+        self.parameters.client_instance_id.begin(), self.parameters.client_instance_id.end(),
+        std::begin(value.client_instance_id()));
+    const bool unowned_bootstrap = value.session_id() == 0U && std::all_of(
+        std::begin(value.client_instance_id()), std::end(value.client_instance_id()),
+        [](std::uint8_t byte) { return byte == 0U; });
+    if (!configured_client && !unowned_bootstrap) {
       self.invalidate();
       return;
     }
@@ -185,8 +190,16 @@ struct DeviceTransport::Impl {
         self.has_sequence, self.parameters.configured_mask, self.anchor_us, now,
         self.parameters.max_state_age_us};
     std::uint8_t bytes[wire::DummyJointStateV1Codec::kEncodedSize]{};
-    if (wire::DummyJointStateV1Codec::encode(value, bytes, sizeof(bytes)) != wire::CodecResult::kOk ||
-        !self.system.ingest_wire_state(bytes, sizeof(bytes), expected)) {
+    if (wire::DummyJointStateV1Codec::encode(value, bytes, sizeof(bytes)) != wire::CodecResult::kOk) {
+      ++self.rejected_states;
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(self.management->mutex);
+      std::copy(std::begin(bytes),std::end(bytes),self.management->observation.state.begin());
+      self.management->observation.state_received_us=now;
+    }
+    if (!self.system.ingest_wire_state(bytes, sizeof(bytes), expected)) {
       ++self.rejected_states;
       if ((value.position_valid_mask() & self.parameters.configured_mask) != self.parameters.configured_mask)
         self.system.invalidate_transport_state();
@@ -196,11 +209,6 @@ struct DeviceTransport::Impl {
     self.last_sequence = value.state_seq();
     self.has_sequence = true;
     self.last_received_us = now;
-    {
-      std::lock_guard<std::mutex> lock(self.management->mutex);
-      std::copy(std::begin(bytes),std::end(bytes),self.management->observation.state.begin());
-      self.management->observation.state_received_us=now;
-    }
   }
 
   static void management_reply(dp::comm::Result result,const Management::Response *response,
@@ -222,7 +230,7 @@ struct DeviceTransport::Impl {
     const auto &record=*pending_command;
     JointStateSnapshot snapshot{};
     if (wire_producer_sequence(record.generation) == 0U || !command_record_current(record) ||
-        !system.commands_active() || boot == 0U ||
+        (!system.commands_active() && !management->inactive_prime_allowed.load(std::memory_order_acquire)) || boot == 0U ||
         record.identity.boot != boot || record.identity.session != status.session_id() ||
         record.identity.reference_epoch != status.reference_epoch() ||
         record.identity.motion_epoch != status.motion_epoch() || record.identity.ticket == 0U ||
@@ -328,6 +336,8 @@ struct DeviceTransport::Impl {
       }
       if (last_received_us != 0U && transport_steady_now_us() - last_received_us > parameters.max_state_age_us)
         invalidate();
+      if (management->inactive_prime_allowed.load(std::memory_order_acquire))
+        system.transfer_control_update();
       publish_pending(command_publisher);
     }
     if(active_management && !active_management->complete) active_management->failed=true;
@@ -340,6 +350,7 @@ struct DeviceTransport::Impl {
       catch (...) { failed = true; }
       ready = false;
       management->ready=false;
+      management->inactive_prime_allowed=false;
       {
         std::lock_guard<std::mutex> lock(management->mutex);
         if(management->queued) management->queued->failed=true;

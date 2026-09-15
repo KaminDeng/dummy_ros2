@@ -48,6 +48,7 @@ def urdf(endpoint):
 def main():
     gate, peer, bundle = (pathlib.Path(value).resolve() for value in sys.argv[1:4])
     unsupported = len(sys.argv) > 4 and sys.argv[4] == "unsupported"
+    real_peer = len(sys.argv) > 4 and sys.argv[4] == "real"
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         endpoint = f"tcp/127.0.0.1:{reserve.getsockname()[1]}"
@@ -65,7 +66,9 @@ def main():
                 "allow_partial_joints_goal": False, "allow_nonzero_velocity_at_trajectory_end": False}},
             "device_action_gate": {"ros__parameters": {"endpoint": endpoint,
                 "device_id": "01000000000000000000000000000000", "client_instance_id": "02000000000000000000000000000000",
-                "profile_id": 2, "configured_mask": 1, "contract_bundle": str(bundle), "profile_name": "sil_j1"}},
+                "profile_id": 2, "configured_mask": 1, "session_id": 11,
+                "permit_sha256": "01" + "00" * 31, "permit_remaining_us": 10000000,
+                "contract_bundle": str(bundle), "profile_name": "sil_j1"}},
             "robot_state_publisher": {"ros__parameters": {"robot_description": urdf(endpoint)}},
         }
         configuration = directory / "params.yaml"
@@ -80,10 +83,13 @@ def main():
             return process
 
         try:
-            launch("peer", [str(peer), "--endpoint", endpoint, "--device-id", "01000000000000000000000000000000",
-                            "--client-id", "02000000000000000000000000000000", "--profile-id", "2", "--configured-mask", "1",
-                            "--contract-bundle", str(bundle), "--profile-name", "sil_j1",
-                            "--motion-supported", "false" if unsupported else "true"])
+            peer_command = [str(peer), "--endpoint", endpoint, "--client-id",
+                            "02000000000000000000000000000000", "--profile-id", "2", "--configured-mask", "1"]
+            if not real_peer:
+                peer_command += ["--device-id", "01000000000000000000000000000000",
+                                 "--contract-bundle", str(bundle), "--profile-name", "sil_j1",
+                                 "--motion-supported", "false" if unsupported else "true"]
+            launch("peer", peer_command)
             time.sleep(0.4)
             launch("gate", [str(gate), "--ros-args", "--params-file", str(configuration)])
             launch("description", ["/opt/ros/jazzy/lib/robot_state_publisher/robot_state_publisher", "--ros-args", "--params-file", str(configuration)])
@@ -93,6 +99,31 @@ def main():
             client = node.create_client(SetHardwareComponentState, service)
             assert client.wait_for_service(timeout_sec=10), "manager did not start"
             time.sleep(1)
+            logs["peer"].seek(0)
+            assert '"event":"manage"' not in logs["peer"].read(), "startup implicitly issued Enable"
+            enable_response = None
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                enable_response = call(node, Trigger, "/device_action_gate/enable", Trigger.Request())
+                if enable_response.success:
+                    break
+                time.sleep(0.1)
+            assert enable_response is not None
+            if unsupported:
+                assert not enable_response.success, "motion-unsupported device accepted Enable"
+                logs["peer"].seek(0)
+                assert '"event":"manage"' not in logs["peer"].read(), "mutation sent to unsupported peer"
+                print(json.dumps({"evidence_scope": "component_only", "motion_unsupported_rejected": True, "mutation_count": 0}))
+                node.destroy_node()
+                rclpy.shutdown()
+                return
+            assert enable_response.success, "explicit enable unavailable"
+            while time.monotonic() < deadline:
+                bootstrap = call(node, Trigger, "/device_action_gate/bootstrap_status", Trigger.Request())
+                if bootstrap.success:
+                    break
+                time.sleep(0.05)
+            assert bootstrap.success, f"bootstrap did not reach HOLD: {bootstrap.message}"
             request = SetHardwareComponentState.Request(name="dummy")
             request.target_state.id = 3
             assert wait_future(node, client.call_async(request)).ok, "hardware activation failed"
@@ -104,19 +135,6 @@ def main():
             action = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
             assert action.wait_for_server(timeout_sec=5)
             time.sleep(0.3)
-            logs["peer"].seek(0)
-            assert '"event":"manage"' not in logs["peer"].read(), "startup implicitly issued Enable"
-            enable_response = call(node, Trigger, "/device_action_gate/enable", Trigger.Request())
-            if unsupported:
-                assert not enable_response.success, "motion-unsupported device accepted Enable"
-                logs["peer"].seek(0)
-                assert '"event":"manage"' not in logs["peer"].read(), "mutation sent to unsupported peer"
-                print(json.dumps({"evidence_scope": "component_only", "motion_unsupported_rejected": True, "mutation_count": 0}))
-                node.destroy_node()
-                rclpy.shutdown()
-                return
-            assert enable_response.success, "explicit enable unavailable"
-            time.sleep(0.5)
             goal = FollowJointTrajectory.Goal()
             goal.trajectory.joint_names = ["Joint1"]
             point = JointTrajectoryPoint(positions=[0.05])
@@ -195,10 +213,23 @@ def main():
                               "real_hardware_plugin": True, "real_guarded_jtc": True}))
             node.destroy_node()
             rclpy.shutdown()
-        except BaseException:
+        except BaseException as error:
+            gate_output = ""
             for name, log in logs.items():
                 log.seek(0)
-                print(f"{name}:\n{log.read()[-18000:]}", file=sys.stderr)
+                output = log.read()[-18000:]
+                if name == "gate":
+                    gate_output = output
+                print(f"{name}:\n{output}", file=sys.stderr)
+            if real_peer and isinstance(error, AssertionError) and \
+                    "explicit enable unavailable" in str(error) and \
+                    "DEVICE_BOOTSTRAP_INPUT_REJECTED_HASH" in gate_output:
+                print(json.dumps({
+                    "evidence_scope": "real_dpsdk_peer",
+                    "status": "NOT_RUN",
+                    "reason": "D08 peer omitted required contract/model/profile hash evidence",
+                }))
+                raise SystemExit(77)
             raise
         finally:
             for process in reversed(processes):

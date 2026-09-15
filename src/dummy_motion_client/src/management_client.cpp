@@ -38,10 +38,15 @@ std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) 
   catch(const std::runtime_error &) { retry_query(); return {}; }
   if (!bytes) return {};
   wire::DummyManageV1Response response;
-  if (wire::DummyManageV1ResponseCodec::decode(bytes->data(),bytes->size(),&response) != wire::CodecResult::kOk ||
+  if (wire::DummyManageV1ResponseCodec::decode(bytes->data(),bytes->size(),&response) != wire::CodecResult::kOk)
+    throw std::runtime_error("invalid manage_v1 response codec");
+  const bool original_receipt = wire_id_ == original_.request_id();
+  const bool session_matches = response.session_id()==original_.expected_session_id() ||
+      (original_receipt && !response.operation_result_valid() && response.session_id()==0U);
+  if (
       response.schema_major()!=1 || response.request_id()!=wire_id_ ||
       response.boot_epoch()!=original_.expected_boot_epoch() ||
-      response.session_id()!=original_.expected_session_id() ||
+      !session_matches ||
       response.profile_id()!=original_.expected_profile_id() ||
       response.configured_mask()!=original_.configured_mask() ||
       !std::equal(std::begin(response.device_id()),std::end(response.device_id()),std::begin(original_.device_id())) ||
@@ -72,6 +77,8 @@ std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) 
   result.rejected=correlated && !result.queued && !accepted_ && !response.accepted();
   result.snapshot_valid=correlated && response.snapshot_valid();
   result.motion_epoch=response.motion_epoch();
+  result.session_id=response.session_id(); result.reference_epoch=response.reference_epoch();
+  result.management_epoch=response.management_epoch();
   result.hold_available=response.configured_mask()!=0 &&
       (response.hold_valid_mask() & response.configured_mask())==response.configured_mask();
   result.hold_ready=response.hold_ready() && result.hold_available;

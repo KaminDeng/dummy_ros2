@@ -11,7 +11,10 @@ namespace dummy_motion_client {
 using ManageRequest = dp::protocol::dummy_robot_v1::DummyManageV1Request;
 using Position = std::array<double, 6>;
 // C05 contracts/dummy_robot_v1/enums/dummy_enum_values_v1.json wire values.
-enum class ManageOperation : std::uint16_t { kEnable=5, kBegin=6, kCancel=7, kStop=8, kQuery=11, kComplete=13 };
+enum class ManageOperation : std::uint16_t {
+  kSelectMode=2, kGrantSession=3, kCaptureReference=4, kEnable=5,
+  kBegin=6, kCancel=7, kStop=8, kQuery=11, kComplete=13, kSetPermit=14
+};
 enum class WireCoreState : std::uint16_t { kEnablingHold=3, kHold=4, kRunning=5, kFault=9 };
 enum class WireReceipt : std::uint8_t { kQueued=1, kReplayed=2, kBusy=4 };
 enum class WireResult : std::uint16_t { kOk=0, kPending=23 };
@@ -22,6 +25,8 @@ struct ManageReply {
   bool queued=false, accepted=false, rejected=false, result_valid=false, succeeded=false;
   bool snapshot_valid=false, hold_available=false, hold_ready=false;
   std::uint32_t motion_epoch=0, accepted_seq=0;
+  std::uint64_t session_id=0;
+  std::uint32_t reference_epoch=0, management_epoch=0;
   Position position{}, hold_position{};
 };
 class ManagementClient {

@@ -149,6 +149,13 @@ bool DpManagementTransport::start() {
   catch(...) { impl_->running=false; return false; }
   return true;
 }
+bool DpManagementTransport::allow_inactive_prime(bool allowed) noexcept {
+  if (impl_->connection != Connection::kDeviceWorker) return false;
+  const auto channel = impl_->shared_channel();
+  if (!channel) return false;
+  channel->inactive_prime_allowed.store(allowed, std::memory_order_release);
+  return true;
+}
 void DpManagementTransport::stop() { impl_->running=false; if(impl_->worker.joinable()) impl_->worker.join(); }
 bool DpManagementTransport::ready() const noexcept {
   if(impl_->connection==Connection::kDeviceWorker) {
