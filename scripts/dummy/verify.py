@@ -7,10 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
-import subprocess
 import sys
-import unittest
 import xml.etree.ElementTree as element_tree
 
 
@@ -25,33 +22,28 @@ EXIT_PASS = 0
 EXIT_UNKNOWN_SUITE = 2
 EXIT_NOT_RUN = 3
 EXIT_UNEXECUTED = 4
-R00_CASES = ("AUD01", "AUD02", "AUD03", "ROS01")
 SUITES = {
+    "R00": {
+        "fixture": "R00.json",
+    },
     "R01": {
         "fixture": "R01.json",
-        "modules": (
-            "scripts/dummy/tests/test_r01_contract.py",
-            "src/dummy_moveit_config/test/test_model_alignment.py",
-            "src/dummy_moveit_config/test/test_reference_chain_fk.py",
-        ),
+    },
+    "R02": {
+        "fixture": "R02.json",
     },
     "R03": {
         "fixture": "R03.json",
-        "modules": ("scripts/dummy/tests/test_r03_acceptance.py",),
     },
     "R04": {
         "fixture": "R04.json",
-        "modules": ("scripts/dummy/tests/test_r04_acceptance.py",),
     },
     "R05": {
         "fixture": "R05.json",
-        "modules": ("scripts/dummy/tests/test_r05_acceptance.py",),
-        "runtime_action": "/arm_controller/follow_joint_trajectory",
     },
     "R06": {
         "fixture": "R06.json",
         "modules": ("scripts/dummy/tests/test_r06_acceptance.py",),
-        "runtime_action": "/arm_controller/follow_joint_trajectory",
     },
     "R07": {
         "fixture": "R07.json",
@@ -70,7 +62,9 @@ def write_junit(report: dict[str, object], path: Path) -> None:
     suite = element_tree.Element("testsuite", name=str(report["suite"]), tests=str(len(cases)))
     for result in cases:
         case = element_tree.SubElement(suite, "testcase", name=result["case_id"])
-        if result["status"] != "PASS":
+        if result["status"] == "FAIL":
+            element_tree.SubElement(case, "failure", message=result["reason"] or result["status"])
+        elif result["status"] in {"NOT_RUN", "SKIP"}:
             element_tree.SubElement(case, "skipped", message=result["reason"] or result["status"])
     path.write_text(element_tree.tostring(suite, encoding="unicode") + "\n")
 
@@ -86,73 +80,92 @@ def write_log(report: dict[str, object], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def source_digest(paths: tuple[str, ...]) -> str:
-    digest = hashlib.sha256()
-    for relative in paths:
-        path = WORKSPACE_ROOT / relative
-        digest.update(relative.encode())
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
+def _invalid_result(case_id: str, reason: str) -> dict[str, object]:
+    trace = hashlib.sha256(reason.encode()).hexdigest()
+    return {
+        "case_id": case_id,
+        "executed": True,
+        "status": "FAIL",
+        "reason": reason,
+        "sut_source_sha256": hashlib.sha256(case_id.encode()).hexdigest(),
+        "trace_sha256": trace,
+        "observations": {"runner_validation_error": reason},
+    }
 
 
-def runtime_action_available(name: str) -> bool:
-    completed = subprocess.run(
-        ["ros2", "action", "info", name, "-t"],
-        cwd=WORKSPACE_ROOT, capture_output=True, text=True, check=False, timeout=10,
-    )
-    return completed.returncode == 0 and "Action servers: 1" in completed.stdout
+def _validate_case_result(case_id: str, result: object) -> dict[str, object]:
+    if not isinstance(result, dict):
+        return _invalid_result(case_id, "adapter did not return an evidence object")
+    required = {
+        "case_id", "executed", "status", "reason", "sut_source_sha256",
+        "trace_sha256", "observations",
+    }
+    missing = sorted(required.difference(result))
+    if missing:
+        return _invalid_result(case_id, f"adapter evidence missing fields: {', '.join(missing)}")
+    if result["case_id"] != case_id:
+        return _invalid_result(case_id, "adapter evidence case_id does not match requested fixture case")
+    if not isinstance(result["executed"], bool):
+        return _invalid_result(case_id, "adapter evidence executed must be boolean")
+    if result["status"] not in {"PASS", "FAIL", "NOT_RUN", "SKIP"}:
+        return _invalid_result(case_id, f"adapter evidence status is invalid: {result['status']!r}")
+    if not isinstance(result["reason"], str) or not isinstance(result["observations"], dict):
+        return _invalid_result(case_id, "adapter evidence reason/observations has invalid type")
+    for field in ("sut_source_sha256", "trace_sha256"):
+        value = result[field]
+        if not isinstance(value, str) or len(value) != 64:
+            return _invalid_result(case_id, f"adapter evidence {field} is not a SHA-256 digest")
+    return result
 
 
-def run_registered_suite(suite: str, hardware: str) -> tuple[dict[str, object], int]:
+def _suite_status(results: list[dict[str, object]]) -> tuple[str, int]:
+    if not results:
+        return "UNEXECUTED", EXIT_UNEXECUTED
+    if any(result["status"] == "FAIL" for result in results):
+        return "FAIL", 1
+    if any(result["status"] == "NOT_RUN" for result in results):
+        return "NOT_RUN", EXIT_NOT_RUN
+    if any(not result["executed"] or result["status"] == "SKIP" for result in results):
+        return "UNEXECUTED", EXIT_UNEXECUTED
+    if all(result["status"] == "PASS" and result["executed"] for result in results):
+        return "PASS", EXIT_PASS
+    return "UNEXECUTED", EXIT_UNEXECUTED
+
+
+def run_registered_suite(
+    suite: str, hardware: str, selected_case: str | None = None,
+) -> tuple[dict[str, object], int]:
     definition = SUITES[suite]
     fixture = json.loads((TEST_ROOT / "fixtures" / definition["fixture"]).read_text())
-    modules = definition["modules"]
-    if "runtime_action" in definition and not runtime_action_available(definition["runtime_action"]):
-        reason = f"required live action server unavailable: {definition['runtime_action']}"
-        results = [
-            {
-                "case_id": case_id,
-                "executed": False,
-                "status": "NOT_RUN",
-                "reason": reason,
-                "sut_source_sha256": source_digest(modules),
-                "trace_sha256": hashlib.sha256(reason.encode()).hexdigest(),
-                "observations": {},
-            }
-            for case_id in fixture["cases"]
-        ]
-        return {
-            "suite": suite, "hardware": hardware, "status": "NOT_RUN",
-            "executed_test_count": 0, "cases": results,
-        }, EXIT_NOT_RUN
-
-    command = ["/usr/bin/python3", "-m", "unittest", *modules, "-v"]
-    completed = subprocess.run(
-        command, cwd=WORKSPACE_ROOT, capture_output=True, text=True, check=False,
-        timeout=definition.get("timeout", 45),
-    )
-    output = completed.stdout + completed.stderr
-    match = re.search(r"Ran (\d+) tests?", output)
-    count = int(match.group(1)) if match else 0
-    passed = completed.returncode == 0 and count > 0 and "FAILED" not in output
-    status = "PASS" if passed else "FAIL"
-    trace = hashlib.sha256(output.encode()).hexdigest()
-    results = [
-        {
-            "case_id": case_id,
-            "executed": count > 0,
-            "status": status,
-            "reason": "" if passed else output[-4000:],
-            "sut_source_sha256": source_digest(modules),
-            "trace_sha256": trace,
-            "observations": {"aggregate_test_count": count},
-        }
-        for case_id in fixture["cases"]
-    ]
+    cases = fixture.get("cases")
+    if not isinstance(cases, list):
+        results = [_invalid_result("<fixture>", "fixture cases must be a list")]
+    else:
+        if selected_case is not None:
+            if selected_case not in cases:
+                return {
+                    "suite": suite, "hardware": hardware, "status": "UNKNOWN_CASE",
+                    "executed_test_count": 0, "cases": [],
+                }, EXIT_UNKNOWN_SUITE
+            cases = [selected_case]
+        results = []
+        for case_id in cases:
+            if not isinstance(case_id, str):
+                results.append(_invalid_result("<fixture>", "fixture case identifiers must be strings"))
+                continue
+            try:
+                result = run_case(suite, case_id, {
+                    "case_id": case_id, "hardware": hardware, "test_only": True,
+                })
+            except Exception as error:  # Keep a report even when an adapter fails unexpectedly.
+                result = _invalid_result(case_id, f"adapter raised {type(error).__name__}: {error}")
+            results.append(_validate_case_result(case_id, result))
+    status, exit_code = _suite_status(results)
     return {
         "suite": suite, "hardware": hardware, "status": status,
-        "executed_test_count": count, "command": command, "cases": results,
-    }, EXIT_PASS if passed else 1
+        "executed_test_count": sum(bool(result["executed"]) for result in results),
+        "cases": results,
+    }, exit_code
 
 
 def main() -> int:
@@ -162,24 +175,13 @@ def main() -> int:
     parser.add_argument("--hardware", default="none", choices=("none",))
     parser.add_argument("--report", type=Path, required=True)
     arguments = parser.parse_args()
-    if arguments.suite != "R00" and arguments.suite not in SUITES:
+    if arguments.suite not in SUITES:
         return EXIT_UNKNOWN_SUITE
-
-    if arguments.suite == "R00":
-        if arguments.case is not None and arguments.case not in R00_CASES:
-            return EXIT_UNKNOWN_SUITE
-        selected_cases = (arguments.case,) if arguments.case else R00_CASES
-        results = [run_case("R00", case_id, {"hardware": arguments.hardware}) for case_id in selected_cases]
-        report = {"suite": "R00", "hardware": arguments.hardware, "cases": results}
-        exit_code = 1 if any(result["status"] == "FAIL" for result in results) else (
-            EXIT_NOT_RUN if any(result["status"] == "NOT_RUN" for result in results) else (
-                EXIT_UNEXECUTED if not results else EXIT_PASS
-            )
-        )
-    else:
-        if arguments.case is not None:
-            return EXIT_UNKNOWN_SUITE
-        report, exit_code = run_registered_suite(arguments.suite, arguments.hardware)
+    if arguments.suite != "R00" and arguments.case is not None:
+        return EXIT_UNKNOWN_SUITE
+    report, exit_code = run_registered_suite(
+        arguments.suite, arguments.hardware, arguments.case,
+    )
     arguments.report.parent.mkdir(parents=True, exist_ok=True)
     arguments.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     write_junit(report, arguments.report.with_suffix(".junit.xml"))

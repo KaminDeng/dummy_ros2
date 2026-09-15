@@ -124,7 +124,7 @@ def run_r00_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     trace = hashlib.sha256(repr((case_id, observations, status, reason)).encode("utf-8")).hexdigest()
     return {
         "case_id": case_id,
-        "executed": True,
+        "executed": status != "NOT_RUN",
         "status": status,
         "reason": reason,
         "sut_source_sha256": source_hash_before,
