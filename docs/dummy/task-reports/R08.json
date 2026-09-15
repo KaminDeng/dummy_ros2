@@ -18,9 +18,9 @@
     "R08": "PASS (1 case)"
   },
   "artifact_sha256": {
-    "json": "a465a319561015741bc899659b0c9a793da55d24cbd245c3667ca8f42336ca9b",
+    "json": "ec41ccfe38f1be8891e10a7ef7f4c0d1ed0063afdee0743b4709dbfcd561ae48",
     "junit": "a60f87bf179086754d98ffa91276a4c0c6d858c27b7db6104e11321d88f55fbe",
-    "log": "89666e6f8de377d62b4c483b5d83596eddcb2aebd58bd5c5595c6756d91204d9"
+    "log": "120ca68aae8a837950434245c9fd0ad3fecb4a8615385e48d2f73073fadd109d"
   },
   "known_limitations": [
     "MoveIt move_group exits with signal 11 during Ctrl-C teardown after successful runtime tests",
