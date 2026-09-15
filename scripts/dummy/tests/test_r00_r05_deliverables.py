@@ -8,6 +8,11 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class R00R05Deliverables(unittest.TestCase):
+    def test_r01_and_r02_acceptance_entrypoints_are_delivered(self):
+        for name in ("test_r01_acceptance.py", "test_r02_acceptance.py"):
+            path = ROOT / "scripts/dummy/tests" / name
+            self.assertTrue(path.is_file(), str(path))
+
     def test_reference_chain_xacro_is_delivered(self):
         path = ROOT / "src/dummy-ros2_description/urdf/dummy_reference_chain.xacro"
         self.assertTrue(path.is_file(), str(path))
