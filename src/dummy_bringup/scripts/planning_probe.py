@@ -8,12 +8,19 @@ import json
 import math
 from pathlib import Path
 import random
+import xml.etree.ElementTree as element_tree
 
 from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Pose, PoseStamped
-from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest, PositionIKRequest, RobotState
-from moveit_msgs.srv import GetCartesianPath, GetMotionPlan, GetPositionFK, GetPositionIK, GetStateValidity
+from moveit_msgs.msg import (
+    Constraints, JointConstraint, MotionPlanRequest, PlanningSceneComponents,
+    PositionIKRequest, RobotState,
+)
+from moveit_msgs.srv import (
+    GetCartesianPath, GetMotionPlan, GetPlanningScene, GetPositionFK, GetPositionIK,
+    GetStateValidity,
+)
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -30,6 +37,14 @@ if not MODEL.is_file():
         Path(get_package_share_directory("dummy_bringup"))
         / "contracts/dummy_robot_v1/model/model.yaml"
     )
+SOURCE_SCENE = Path(__file__).resolve().parents[1] / "config/scene.yaml"
+SOURCE_WORLD = Path(__file__).resolve().parents[2] / "dummy_moveit_config/worlds/empty.sdf"
+SCENE = SOURCE_SCENE
+WORLD = SOURCE_WORLD
+if not SCENE.is_file():
+    share = Path(get_package_share_directory("dummy_bringup"))
+    SCENE = share / "config/scene.yaml"
+    WORLD = Path(get_package_share_directory("dummy_moveit_config")) / "worlds/empty.sdf"
 
 
 def validate_joint_target(positions: tuple[float, ...]) -> bool:
@@ -131,6 +146,46 @@ def find_barrier_collision(node: Node) -> tuple[float, ...] | None:
     return None
 
 
+def scene_matches_canonical(node: Node) -> tuple[bool, bool]:
+    canonical = yaml.safe_load(SCENE.read_text())
+    expected = canonical["objects"][0]
+    response = call(
+        node,
+        GetPlanningScene,
+        "/get_planning_scene",
+        GetPlanningScene.Request(
+            components=PlanningSceneComponents(
+                components=PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+            )
+        ),
+    )
+    objects = {item.id: item for item in response.scene.world.collision_objects}
+    actual = objects.get(expected["id"])
+    planning_matches = False
+    if actual is not None and actual.header.frame_id in {canonical["frame_id"], "base_link"}:
+        primitive = actual.primitives[0] if actual.primitives else None
+        if primitive is not None:
+            pose = actual.pose
+            expected_pose = expected["pose_xyz_rpy"]
+            planning_matches = (
+                all(abs(value - target) < 1e-9 for value, target in zip(
+                    primitive.dimensions, expected["size"]
+                ))
+                and all(abs(value - target) < 1e-9 for value, target in zip(
+                    (pose.position.x, pose.position.y, pose.position.z), expected_pose[:3]
+                ))
+            )
+    world = element_tree.parse(WORLD).getroot().find(
+        f"./world/model[@name='{expected['id']}']"
+    )
+    world_matches = False
+    if world is not None:
+        pose = [float(value) for value in world.findtext("pose", "").split()]
+        size = [float(value) for value in world.findtext("./link/collision/geometry/box/size", "").split()]
+        world_matches = pose == expected["pose_xyz_rpy"] and size == expected["size"]
+    return planning_matches, bool(canonical.get("scene_revision")) and planning_matches and world_matches
+
+
 def solve_nearby_pose(node: Node) -> tuple[int, bool]:
     state = RobotState(joint_state=JointState(name=list(JOINT_NAMES), position=list(START)))
     fk = call(
@@ -191,6 +246,7 @@ def run(node: Node) -> dict[str, int | float | bool]:
     out_of_bounds_rejected = not validate_joint_target((5.0,) + START[1:])
     cartesian = call(node, GetCartesianPath, "/compute_cartesian_path", cartesian_request())
     collision_state = find_barrier_collision(node)
+    planning_scene_matches, world_scene_revision_matches = scene_matches_canonical(node)
     collision_plan = (
         call(node, GetMotionPlan, "/plan_kinematic_path", motion_request(collision_state))
         if collision_state is not None
@@ -205,6 +261,8 @@ def run(node: Node) -> dict[str, int | float | bool]:
         "out_of_bounds_service_sent": not out_of_bounds_rejected,
         "unreachable_cartesian_fraction": cartesian.fraction,
         "barrier_collision_state_found": collision_state is not None,
+        "planning_scene_matches_canonical": planning_scene_matches,
+        "world_scene_revision_matches": world_scene_revision_matches,
         "barrier_collision_goal_error_code": (
             collision_plan.motion_plan_response.error_code.val if collision_plan is not None else 0
         ),

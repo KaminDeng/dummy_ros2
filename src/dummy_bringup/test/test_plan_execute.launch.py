@@ -38,4 +38,6 @@ class PlanExecuteRuntime(unittest.TestCase):
             self.assertLess(observations["unreachable_cartesian_fraction"], 1.0)
             self.assertTrue(observations["barrier_collision_state_found"])
             self.assertNotEqual(1, observations["barrier_collision_goal_error_code"])
+            self.assertTrue(observations["planning_scene_matches_canonical"])
+            self.assertTrue(observations["world_scene_revision_matches"])
             self.assertFalse(observations["trajectory_executed"])
