@@ -1,0 +1,10 @@
+sensor_consumer:
+  ros__parameters:
+    enabled: false
+    namespace: /sensors/dabai
+    require_pair: true
+    require_aligned: false
+    require_robot_extrinsic: false
+    status_ttl_ms: 2500
+    pair_ttl_ms: 300
+    read_only: true

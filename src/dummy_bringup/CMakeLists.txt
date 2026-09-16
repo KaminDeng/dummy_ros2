@@ -5,6 +5,8 @@ find_package(ament_cmake REQUIRED)
 
 if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(sensor_optional test/test_sensor_optional.py)
   add_launch_test(test/test_gazebo_runtime.launch.py TIMEOUT 120)
   add_launch_test(test/test_plan_execute.launch.py TIMEOUT 150)
   add_launch_test(test/test_backend_contract.launch.py TIMEOUT 45)
