@@ -1,37 +1,41 @@
 {
   "task": "R07",
   "status": "PASS",
-  "superseded": false,
-  "superseded_reason": "",
-  "current_evidence": "build_dummy/reports/R07.json",
-  "current_recheck": {
-    "report": "build_dummy/reports/R07-repair.json",
-    "status": "PASS",
-    "j1_peer_commit": "56426ea",
-    "six_axis_peer_commit": "2716594",
-    "six_axis_scope": "independent profile_id=1 configured_mask=63 peer plus SEN06 fault evidence",
-    "blocker": ""
-  },
   "hardware": "none",
   "test_count": 8,
-  "upstream": {
-    "D05": "PASS (33 cases)",
-    "D06": "PASS (26 cases)",
-    "D07": "PASS (14 cases)",
-    "dpsdk_commit": "1fbe388416976c7e8c920311f2a9b0f0db9ad856"
+  "current_evidence": "build_dummy/reports/R07.json",
+  "ros_commit": "93c30d0b9d1fdea90baf122a5ba46d996e3e838c",
+  "dpsdk_commit": "eb9a63f4f974864325880f1fbfca9e6be4fc8c3b",
+  "launches": {
+    "sil_j1": "D08 peer profile_id=2 configured_mask=1 + production device_action_gate",
+    "sil_6dof": "D08 peer profile_id=1 configured_mask=63 + production device_action_gate",
+    "startup_management_mutations": 0
   },
-  "evidence": [
-    "four localhost Zenoh dual-peer scenarios",
-    "D07 RobotCore plus VirtualCAN J1 and six-axis scenarios",
-    "J1 plugin lifecycle with one state and command interface",
-    "separate simulation and steady clock domains",
-    "real_j1 read-only and no automatic authorization"
-  ],
-  "report": "build_dummy/reports/R07.json",
-  "artifact_sha256": {
-    "json": "a2c2c20b7e3d1c68b4a205986d747b4d0a5d76dda4a2054ad1b39ea4212e5ce0",
-    "junit": "36814b5d67407bac7590f2fc4aaa0d139f9137646c80279a877cc94b54db280a",
-    "log": "87b1e2eb5739abae9b5202ddc859290132cde728fd6dadef516a6525b94e5c0f"
+  "sen06": {
+    "scope": "同一 six-axis D08 peer、RobotCore、Zenoh 与 ROS DeviceTransport 进程链",
+    "injected_fault": "停止 J3 feedback 并推进 feedback timeout",
+    "configured_mask": 63,
+    "raw_valid_mask": 59,
+    "core_state": "FAULT_LATCHED",
+    "auto_degraded": false
   },
-  "known_not_run": ["J-Link", "ttyACM0", "USB", "SocketCAN", "physical J1 motion"]
+  "management": {
+    "independent_services": [
+      "select_control_mode",
+      "grant_session",
+      "capture_bench_reference",
+      "set_bench_permit",
+      "enable_hold"
+    ],
+    "composite_operator_service": "enable",
+    "queued_is_not_terminal_success": true
+  },
+  "not_run": [
+    "实体 J1",
+    "J-Link",
+    "ttyACM0",
+    "USB",
+    "SocketCAN",
+    "实体运动"
+  ]
 }

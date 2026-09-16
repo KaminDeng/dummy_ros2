@@ -1,31 +1,23 @@
 {
   "task": "R08",
   "status": "PASS",
-  "superseded": false,
-  "superseded_reason": "",
   "hardware": "none",
   "test_count": 1,
+  "current_evidence": "build_dummy/reports/R08.json",
   "release_artifacts": [
     "docs/dummy/ros-runbook.md",
     "docs/dummy/backend-matrix.md",
-    "docs/dummy/versions.lock"
+    "docs/dummy/versions.lock",
+    "patches/zenbedded_dummy_v1/README.md"
   ],
   "software_evidence": {
-    "colcon": "45 tests, 0 errors, 0 failures, 0 skipped",
-    "R05": "PASS (3 runtime tests)",
-    "R06": "PASS (23 cases)",
-    "R07": "PASS (8 cases)",
-    "R08": "PASS (1 case)"
-  },
-  "artifact_sha256": {
-    "json": "ec41ccfe38f1be8891e10a7ef7f4c0d1ed0063afdee0743b4709dbfcd561ae48",
-    "junit": "a60f87bf179086754d98ffa91276a4c0c6d858c27b7db6104e11321d88f55fbe",
-    "log": "120ca68aae8a837950434245c9fd0ad3fecb4a8615385e48d2f73073fadd109d"
+    "R06": "PASS（23 个用例）",
+    "R07": "PASS（8 个用例）",
+    "R08": "PASS（1 个用例）"
   },
   "known_limitations": [
-    "MoveIt move_group exits with signal 11 during Ctrl-C teardown after successful runtime tests",
-    "Gazebo server reports signal 2 during requested shutdown",
-    "collision geometry and position servo are simulation approximations"
-  ],
-  "hardware_not_run": ["J-Link", "ttyACM0", "USB", "SocketCAN", "physical J1 motion"]
+    "实体 J1 与所有带电运动均未运行",
+    "碰撞几何与位置伺服属于仿真假设",
+    "MoveIt 在成功完成无头断言后的 Ctrl-C 清理阶段仍可出现信号 11"
+  ]
 }

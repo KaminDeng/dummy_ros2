@@ -34,12 +34,14 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
         )
     )
     runtime_not_run_as_pass = (
-        "| Hardware/J1 | PASS" in status or "| `real_j1`" not in matrix
+        "| Hardware/J1 | PASS" in status or "| 实体硬件/J1 | PASS" in status
+        or "| `real_j1`" not in matrix
         or "| NOT_RUN |" not in matrix
     )
-    separated = all(
-        marker in runbook for marker in ("simulation evidence only", "SIL uses", "`NOT_RUN`")
-    ) and '"status": "PASS"' in r06 and '"status": "PASS"' in r07
+    simulation_boundary = "simulation evidence only" in runbook or "只产生仿真证据" in runbook
+    sil_boundary = "SIL uses" in runbook or "两个 SIL 入口仅使用" in runbook
+    separated = simulation_boundary and sil_boundary and "`NOT_RUN`" in runbook \
+        and '"status": "PASS"' in r06 and '"status": "PASS"' in r07
     digest = sha256()
     for path in FILES:
         digest.update(path.relative_to(ROOT).as_posix().encode())
