@@ -52,6 +52,8 @@ int main() {
   const auto state_interfaces = system->on_export_state_interfaces();
   const auto command_interfaces = system->on_export_command_interfaces();
   if (system->on_configure(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 8;
+  if (system->read(rclcpp::Time(), rclcpp::Duration::from_nanoseconds(1000000)) !=
+      hardware_interface::return_type::OK) return 15;
   if (system->on_activate(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::FAILURE) return 10;
   if (system->on_cleanup(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 11;
   if (state_interfaces.size() != 2U || command_interfaces.size() != 1U) return 6;

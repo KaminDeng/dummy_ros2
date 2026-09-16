@@ -80,6 +80,9 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_error(
 
 hardware_interface::return_type GuardedZenbeddedSystem::read(
     const rclcpp::Time &, const rclcpp::Duration &) {
+  // controller_manager polls inactive hardware before activation. Fresh state
+  // remains mandatory in on_activate(); an inactive poll must not force ERROR.
+  if (!active_) return hardware_interface::return_type::OK;
   std::unique_lock<std::mutex> lock(state_mutex_, std::try_to_lock);
   if (!read_state_valid_ ||
       (state_deadline_us_ != 0U && transport_steady_now_us() > state_deadline_us_)) return hardware_interface::return_type::ERROR;
