@@ -5,7 +5,7 @@
   "test_count": 23,
   "current_evidence": "build_dummy/reports/R06.json",
   "ros_commit": "93c30d0b9d1fdea90baf122a5ba46d996e3e838c",
-  "dpsdk_commit": "34fcf112b2059a36dc342a4fd2bf148839a85114",
+  "dpsdk_commit": "34fcf117c7200e4c1a4cc0db8993222b4ef0678c",
   "dpsdk_fault_injection_commit": "eb9a63f4f974864325880f1fbfca9e6be4fc8c3b",
   "real_peer_bootstrap": {
     "sequence": [
