@@ -40,7 +40,7 @@ bool BootstrapCoordinator::issue(ManageOperation operation, std::uint64_t now_us
 }
 
 bool BootstrapCoordinator::start(const BootstrapSnapshot &snapshot, std::uint64_t now_us) {
-  if (phase_ != BootstrapPhase::kIdle || snapshot.boot_epoch == 0U ||
+  if ((phase_ != BootstrapPhase::kIdle && phase_ != BootstrapPhase::kOperationComplete) || snapshot.boot_epoch == 0U ||
       snapshot.profile_id == 0U || snapshot.configured_mask == 0U ||
       snapshot.freshness_ticket == 0U || !snapshot.raw_ready ||
       !snapshot.motion_supported || identity_.expected_session_id() == 0U ||
@@ -48,8 +48,30 @@ bool BootstrapCoordinator::start(const BootstrapSnapshot &snapshot, std::uint64_
       std::all_of(permit_digest_.begin(), permit_digest_.end(), [](auto value) { return value == 0U; }))
     return false;
   snapshot_ = snapshot;
+  automatic_ = true;
+  error_.clear();
   phase_ = BootstrapPhase::kSelectMode;
   return issue(ManageOperation::kSelectMode, now_us);
+}
+
+bool BootstrapCoordinator::start_operation(
+    const BootstrapSnapshot &snapshot, ManageOperation operation, std::uint64_t now_us) {
+  if ((phase_ != BootstrapPhase::kIdle && phase_ != BootstrapPhase::kOperationComplete) ||
+      snapshot.boot_epoch == 0U || snapshot.profile_id == 0U ||
+      snapshot.configured_mask == 0U || snapshot.freshness_ticket == 0U ||
+      !snapshot.raw_ready || !snapshot.motion_supported) return false;
+  switch (operation) {
+    case ManageOperation::kSelectMode: phase_ = BootstrapPhase::kSelectMode; break;
+    case ManageOperation::kGrantSession: phase_ = BootstrapPhase::kGrantSession; break;
+    case ManageOperation::kCaptureReference: phase_ = BootstrapPhase::kCaptureReference; break;
+    case ManageOperation::kSetPermit: phase_ = BootstrapPhase::kSetPermit; break;
+    default: return false;
+  }
+  snapshot_ = snapshot;
+  automatic_ = false;
+  last_operation_ = operation;
+  error_.clear();
+  return issue(operation, now_us);
 }
 
 void BootstrapCoordinator::observe(const BootstrapSnapshot &snapshot) noexcept {
@@ -113,6 +135,10 @@ void BootstrapCoordinator::tick(std::uint64_t now_us) {
     }
     if (reply->result_valid && reply->succeeded) {
       request_id_ = 0U;
+      if (!automatic_) {
+        phase_ = BootstrapPhase::kOperationComplete;
+        return;
+      }
       advance(now_us);
     }
   } catch (const std::exception &error) {
@@ -125,7 +151,7 @@ void BootstrapCoordinator::tick(std::uint64_t now_us) {
 }
 
 std::optional<Authorization> BootstrapCoordinator::authorization() const {
-  if (!ready()) return {};
+  if (!ready() && !(operation_complete() && last_operation_ == ManageOperation::kSetPermit)) return {};
   auto request = identity_;
   request.set_expected_boot_epoch(snapshot_.boot_epoch);
   request.set_expected_reference_epoch(snapshot_.reference_epoch);

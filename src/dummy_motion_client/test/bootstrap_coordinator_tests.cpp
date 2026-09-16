@@ -41,5 +41,22 @@ int main() {
   const auto authorization=bootstrap.authorization();
   assert(authorization && authorization->identity.expected_session_id()==42U &&
          authorization->identity.expected_reference_epoch()==1U);
+  Client explicit_client;
+  BootstrapCoordinator explicit_bootstrap(explicit_client, identity, permit, 1000000U);
+  BootstrapSnapshot explicit_state{8U,0U,0U,0U,0U,10U,2U,1U,true,true};
+  const ManageOperation explicit_operations[]{ManageOperation::kSelectMode,ManageOperation::kGrantSession,
+      ManageOperation::kCaptureReference,ManageOperation::kSetPermit};
+  for (const auto operation : explicit_operations) {
+    assert(explicit_bootstrap.start_operation(explicit_state,operation,20U));
+    assert(explicit_client.requests.back().operation()==wire_value(operation));
+    explicit_bootstrap.tick(21U);
+    assert(explicit_bootstrap.operation_complete());
+    ++explicit_state.management_epoch;
+    if(operation==ManageOperation::kGrantSession) explicit_state.session_id=42U;
+    if(operation==ManageOperation::kCaptureReference) explicit_state.reference_epoch=1U;
+    explicit_bootstrap.observe(explicit_state);
+  }
+  assert(explicit_bootstrap.last_operation()==ManageOperation::kSetPermit);
+  assert(explicit_bootstrap.authorization().has_value());
   return 0;
 }

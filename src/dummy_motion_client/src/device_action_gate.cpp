@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 #include "controller_manager/controller_manager.hpp"
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dummy_motion_client/device_profile.hpp"
@@ -134,10 +135,34 @@ class DeviceActionGate final : public rclcpp::Node {
       });
     bootstrap_status_service_=create_service<std_srvs::srv::Trigger>("~/bootstrap_status",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-        response->success=enabled_ && gate_->ready();
-        response->message=response->success ? "ENABLED_HOLD" :
-          (bootstrap_ && bootstrap_->phase()==BootstrapPhase::kFault ? bootstrap_->error() : "BOOTSTRAP_PENDING");
+        const bool operation_complete=management_request_.load()==0 && bootstrap_ && bootstrap_->operation_complete();
+        response->success=(enabled_ && gate_->ready()) || operation_complete;
+        response->message=enabled_ && gate_->ready() ? "ENABLED_HOLD" :
+          (operation_complete ? "OPERATION_COMPLETE" :
+          (bootstrap_ && bootstrap_->phase()==BootstrapPhase::kFault ? bootstrap_->error() : "BOOTSTRAP_PENDING"));
       });
+    const auto add_operation_service=[this](const char *name,ManageOperation operation) {
+      management_services_.push_back(create_service<std_srvs::srv::Trigger>(name,
+        [this,operation](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+          int expected=0;
+          response->success=explicit_operation_available_.load() &&
+            management_request_.compare_exchange_strong(expected,static_cast<int>(wire_value(operation)));
+          response->message=response->success ? "Operation queued; poll bootstrap_status for final result" :
+            "Operation unavailable or another management request is pending";
+        }));
+    };
+    add_operation_service("~/select_control_mode",ManageOperation::kSelectMode);
+    add_operation_service("~/grant_session",ManageOperation::kGrantSession);
+    add_operation_service("~/capture_bench_reference",ManageOperation::kCaptureReference);
+    add_operation_service("~/set_bench_permit",ManageOperation::kSetPermit);
+    management_services_.push_back(create_service<std_srvs::srv::Trigger>("~/enable_hold",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+             std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        response->success=single_enable_available_.load() && !single_enable_requested_.exchange(true);
+        response->message=response->success ? "EnableHold queued; poll bootstrap_status for confirmed HOLD" :
+          "EnableHold requires a successfully completed SetBenchPermit";
+      }));
     server_=rclcpp_action::create_server<Follow>(this,"/arm_controller/follow_joint_trajectory",
       [this](const rclcpp_action::GoalUUID &,std::shared_ptr<const Follow::Goal> goal) {
         if(!validated_device_trajectory(*goal,profile_)) {
@@ -223,6 +248,13 @@ class DeviceActionGate final : public rclcpp::Node {
     latest_bootstrap_={status.boot_epoch(),status.session_id(),status.reference_epoch(),status.motion_epoch(),
       status.management_epoch(),state.freshness_ticket(),parameters_.profile,parameters_.mask,true,status.motion_supported()};
     if(bootstrap_) bootstrap_->observe(latest_bootstrap_);
+    const int requested=management_request_.exchange(0);
+    if(requested!=0) {
+      explicit_operation_available_=false;
+      const auto operation=static_cast<ManageOperation>(requested);
+      if(!bootstrap_->start_operation(latest_bootstrap_,operation,now))
+        RCLCPP_WARN(get_logger(),"EXPLICIT_MANAGEMENT_OPERATION_REJECTED operation=%d",requested);
+    }
     if(enabled_ && (status.boot_epoch()!=port_.identity.boot || status.session_id()!=port_.identity.session ||
        status.reference_epoch()!=port_.identity.reference_epoch)) return false;
     port_.identity.boot=status.boot_epoch(); port_.identity.session=status.session_id();
@@ -232,6 +264,10 @@ class DeviceActionGate final : public rclcpp::Node {
       if(port_.publishing) dummy_ros_control::set_command_identity(port_.identity);
     }
     enable_available_=!enabled_ && bootstrap_ && bootstrap_->phase()==BootstrapPhase::kIdle && transport_->ready();
+    explicit_operation_available_=!enabled_ && bootstrap_ &&
+      (bootstrap_->phase()==BootstrapPhase::kIdle || bootstrap_->operation_complete()) && transport_->ready();
+    single_enable_available_=!enabled_ && bootstrap_ && bootstrap_->operation_complete() &&
+      bootstrap_->last_operation()==ManageOperation::kSetPermit && transport_->ready();
     if(enable_available_ && enable_requested_.exchange(false)) bootstrap_->start(latest_bootstrap_,now);
     if(enabled_) gate_->observe_state(observed->state.data(),observed->state.size(),now);
     return true;
@@ -239,6 +275,13 @@ class DeviceActionGate final : public rclcpp::Node {
   void bootstrap_tick(std::uint64_t now) {
     if(!bootstrap_ || bootstrap_->phase()==BootstrapPhase::kIdle || bootstrap_->phase()==BootstrapPhase::kFault) return;
     bootstrap_->tick(now);
+    if(!enabled_ && single_enable_requested_.exchange(false)) {
+      const auto authorization=bootstrap_->authorization();
+      if(!authorization || !transport_->allow_inactive_prime(true) || !gate_->enable(*authorization,now)) {
+        transport_->allow_inactive_prime(false); ready_=false; return;
+      }
+      enabled_=true;
+    }
     if(!enabled_ && bootstrap_->ready()) {
       const auto authorization=bootstrap_->authorization();
       if(!authorization || !transport_->allow_inactive_prime(true) || !gate_->enable(*authorization,now)) {
@@ -325,8 +368,12 @@ class DeviceActionGate final : public rclcpp::Node {
   rclcpp_action::Server<Follow>::SharedPtr server_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr enable_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bootstrap_status_service_;
+  std::vector<rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr> management_services_;
   std::atomic<bool> ready_{false}, busy_{false}, cancel_requested_{false};
   std::atomic<bool> enable_requested_{false}, enable_available_{false};
+  std::atomic<bool> single_enable_requested_{false}, single_enable_available_{false};
+  std::atomic<bool> explicit_operation_available_{false};
+  std::atomic<int> management_request_{0};
   std::uint64_t state_max_age_us_=250000U;
   std::mutex goal_mutex_;
   std::shared_ptr<GoalHandle> pending_, active_;

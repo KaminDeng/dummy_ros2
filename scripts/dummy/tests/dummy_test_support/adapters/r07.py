@@ -33,7 +33,7 @@ BACKEND_SOURCES = (
     ROOT / "src/dummy_ros_control/test/wire_state_ingest_tests.cpp",
     ROOT / "src/dummy_ros_control/test/nonblocking_tests.cpp",
 )
-_PEER_OBSERVATIONS: dict[tuple[int, int], dict[str, Any]] = {}
+_PEER_OBSERVATIONS: dict[tuple[int, int, int], dict[str, Any]] = {}
 _REAL_ACTION: dict[str, Any] | None = None
 
 
@@ -123,8 +123,11 @@ def _d07_case(case_id: str) -> dict[str, Any]:
     upstream_status = "PASS" if (
         upstream.get("executed") is True and observations.get("requirement_observed", True)
     ) else "FAIL"
-    peer = _peer_state(2, 1) if case_id == "SEN05" else _peer_state(1, 63)
+    peer = _peer_state(2, 1) if case_id == "SEN05" else _peer_state(1, 63, 3)
     passed = upstream_status == "PASS" and peer["configured_mask"] == configured_mask
+    if case_id == "SEN06":
+        passed = passed and peer["missing_axis"] == 3 and peer["core_state"] == 9 \
+            and not peer["auto_degraded"] and not (peer["raw_valid_mask"] & (1 << 2))
     return _result(
         case_id, status="PASS" if passed else "FAIL", reason="" if passed else "SIL axis/fault evidence failed",
         trace=json.dumps({"peer": peer, "upstream": observations}, sort_keys=True), observations={
@@ -180,8 +183,8 @@ def _backend_case(case_id: str) -> dict[str, Any]:
     raise ValueError(f"unsupported backend case: {case_id}")
 
 
-def _peer_state(profile: int, mask: int) -> dict[str, Any]:
-    key = (profile, mask)
+def _peer_state(profile: int, mask: int, missing_axis: int = 0) -> dict[str, Any]:
+    key = (profile, mask, missing_axis)
     if key in _PEER_OBSERVATIONS:
         return _PEER_OBSERVATIONS[key]
     peer = DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"
@@ -192,12 +195,18 @@ def _peer_state(profile: int, mask: int) -> dict[str, Any]:
         reserve.bind(("127.0.0.1", 0))
         endpoint = f"tcp/127.0.0.1:{reserve.getsockname()[1]}"
     with tempfile.TemporaryFile(mode="w+") as log:
-        process = subprocess.Popen([str(peer), "--endpoint", endpoint, "--client-id",
+        peer_command = [str(peer), "--endpoint", endpoint, "--client-id",
             "02000000000000000000000000000000", "--profile-id", str(profile),
-            "--configured-mask", str(mask)], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, text=True)
+            "--configured-mask", str(mask)]
+        if missing_axis:
+            peer_command += ["--drop-feedback-axis", str(missing_axis)]
+        process = subprocess.Popen(peer_command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, text=True)
         try:
             time.sleep(0.5)
-            completed = subprocess.run([str(probe), endpoint, str(profile), str(mask)], cwd=ROOT,
+            probe_command = [str(probe), endpoint, str(profile), str(mask)]
+            if missing_axis:
+                probe_command.append(str(missing_axis))
+            completed = subprocess.run(probe_command, cwd=ROOT,
                 capture_output=True, text=True, check=False, timeout=10)
             if completed.returncode:
                 log.seek(0)

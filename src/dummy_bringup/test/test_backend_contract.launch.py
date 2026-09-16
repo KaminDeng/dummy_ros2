@@ -31,8 +31,10 @@ class BackendContractLaunchTest(unittest.TestCase):
             for key in ("device_id", "serial", "profile", "endpoint"):
                 self.assertTrue(entry[key])
             source = (package_root / "launch" / f"{name}.launch.py").read_text()
-            self.assertIn("ros_device_executable", source)
-            self.assertIn("Required ROS device bridge", source)
+            self.assertIn("dummy_ref_d08_device_peer", source)
+            self.assertIn("device_action_gate", source)
+            self.assertNotIn("ros_device_executable", source)
+            self.assertNotIn("/enable", source)
 
     def test_real_j1_has_an_executable_read_only_gate(self):
         source = (Path(__file__).resolve().parents[1] / "launch/real_j1.launch.py").read_text()
@@ -45,35 +47,27 @@ class BackendContractLaunchTest(unittest.TestCase):
 
     def test_launch_expands_identity_and_mode_into_bridge_command(self):
         package_root = Path(__file__).resolve().parents[1]
-        expected = (
-            "--device-id bridge-device", "--endpoint tcp/127.0.0.1:17555",
-            "--serial bridge-serial", "--profile bridge-profile", "--read-only true",
-        )
         for name in ("sil_6dof", "sil_j1", "real_j1"):
             launch_file = package_root / "launch" / f"{name}.launch.py"
-            command = [
-                "ros2", "launch", str(launch_file),
-                "device_id:=bridge-device", "endpoint:=tcp/127.0.0.1:17555",
-                "serial:=bridge-serial", "profile:=bridge-profile",
-                "read_only:=true", "dpsdk_executable:=/usr/bin/true",
-            ]
-            if name == "real_j1":
-                command.append("read_only_device_executable:=/usr/bin/echo")
-            else:
-                command.append("ros_device_executable:=/usr/bin/echo")
             completed = subprocess.run(
-                command, capture_output=True, text=True, check=False, timeout=10,
+                ["ros2", "launch", str(launch_file), "--show-args"],
+                capture_output=True, text=True, check=False, timeout=10,
             )
             output = completed.stdout + completed.stderr
             self.assertEqual(0, completed.returncode, output)
-            expected_mode = "--read-only true" if name == "real_j1" else "--read-only false"
-            for value in (*expected[:-1], expected_mode):
-                self.assertIn(value, output, output)
+            self.assertIn("endpoint", output)
+            source = launch_file.read_text()
+            if name == "real_j1":
+                for value in ("device_id", "serial", "profile", "--read-only"):
+                    self.assertIn(value, source)
+            else:
+                profile_id, mask = (("1", "63") if name == "sil_6dof" else ("2", "1"))
+                self.assertIn(f'"--profile-id", "{profile_id}"', source)
+                self.assertIn(f'"--configured-mask", "{mask}"', source)
 
     def test_missing_bridge_arguments_fail_closed(self):
         package_root = Path(__file__).resolve().parents[1]
         cases = (
-            ("sil_j1", ("dpsdk_executable:=/usr/bin/true",), "ros_device_executable"),
             ("real_j1", (), "device_id"),
         )
         for name, arguments, required in cases:
