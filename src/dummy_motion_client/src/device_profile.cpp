@@ -114,7 +114,7 @@ DeviceProfile load_device_profile(const std::string &bundle_root, const std::str
     if (!fs::is_directory(root)) invalid("bundle root unavailable");
     const fs::path manifest_path = root / "manifest.json";
     const YAML::Node manifest = YAML::LoadFile(manifest_path.string());
-    if (require(manifest, "format").as<std::string>() != "dummy_wire_release_v1" ||
+    if (require(manifest, "format").as<std::string>() != "dummy_wire_release_v2" ||
         require(manifest, "release_id").as<std::string>() != "dummy-wire-v2") invalid("unsupported bundle release");
     const YAML::Node payloads = require(manifest, "payloads");
     if (!payloads.IsSequence() || payloads.size() == 0U) invalid("invalid bundle payload list");
@@ -131,7 +131,7 @@ DeviceProfile load_device_profile(const std::string &bundle_root, const std::str
       listing += relative + ":" + expected;
       previous = relative;
     }
-    static constexpr std::string_view kC05Contract = "39c460051675e0defe3529cb6c6e5ec518327576a3c8ed1607522a612daebaf1";
+    static constexpr std::string_view kC05Contract = "914074d31391b455d90d8edc833bfebbe082d1ef1f411df21e5e9fe23f9b28f8";
     const std::string aggregate = require(manifest, "payload_sorted_sha256").as<std::string>();
     if (aggregate != sha256_text(listing) || aggregate != kC05Contract) invalid("bundle aggregate hash mismatch");
     const std::string model_key = "model/model.yaml";

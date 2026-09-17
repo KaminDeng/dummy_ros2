@@ -85,9 +85,9 @@ def _core_case(case_id: str) -> dict[str, Any]:
 
 
 def _component(name: str, arguments: list[str]) -> dict[str, Any]:
-    codec = DPSDK_ROOT / "contracts/dummy_robot_v1/codec/dp_dummy_robot_v1.hpp"
+    codec = DPSDK_ROOT / "contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp"
     if not codec.is_file():
-        raise RuntimeError(f"DPSDK_ROOT must contain the published manage_v1 codec: {codec}")
+        raise RuntimeError(f"DPSDK_ROOT must contain the published manage_v2 codec: {codec}")
     binary = ROOT / "build_dummy/dummy_motion_client" / name
     if not binary.is_file():
         raise RuntimeError(f"R06 ROS SUT binary is missing: {binary}")
@@ -155,8 +155,9 @@ finally:
         if prepare.returncode and "public action server unavailable" in prepare.stderr:
             launch_log = tempfile.TemporaryFile(mode="w+")
             launched = subprocess.Popen(
-                ["ros2", "launch", "dummy_bringup", "gazebo_6dof.launch.py",
-                 "gui:=false", "rviz:=false"], cwd=ROOT, stdout=launch_log,
+                ["bash", "-lc", f"source '{ROOT}/install_dummy/setup.bash' && "
+                 "exec ros2 launch dummy_bringup gazebo_6dof.launch.py gui:=false rviz:=false"],
+                cwd=ROOT, stdout=launch_log,
                 stderr=subprocess.STDOUT, text=True)
             deadline = __import__("time").monotonic() + 30
             while __import__("time").monotonic() < deadline:
@@ -249,7 +250,7 @@ def _device_e2e_component() -> dict[str, Any]:
     script = ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"
     gate = ROOT / "build_dummy/dummy_motion_client/device_action_gate"
     peer = ROOT / "build_dummy/dummy_motion_client/c05_action_peer"
-    bundle = ROOT / "contracts/dummy_robot_v1"
+    bundle = ROOT / "contracts/dummy_robot_v2"
     completed = subprocess.run(
         ["/usr/bin/python3", str(script), str(gate), str(peer), str(bundle)],
         cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,
@@ -282,7 +283,7 @@ def _real_device_e2e() -> dict[str, Any]:
     script = ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"
     gate = ROOT / "build_dummy/dummy_motion_client/device_action_gate"
     peer = DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"
-    bundle = ROOT / "contracts/dummy_robot_v1"
+    bundle = ROOT / "contracts/dummy_robot_v2"
     completed = subprocess.run(
         ["/usr/bin/python3", str(script), str(gate), str(peer), str(bundle), "real"],
         cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,

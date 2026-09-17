@@ -1,0 +1,43 @@
+{
+  "format": "dummy_enum_values_v2",
+  "schema_major": 2,
+  "schema_minor": 0,
+  "transaction_phase": {
+    "IDLE": 0,
+    "RECEIVED": 1,
+    "PREPARED": 2,
+    "COMMITTED": 3,
+    "FAILED": 4
+  },
+  "management_operation": {
+    "GET_STATUS": 0,
+    "SELECT_CONTROL_MODE": 1,
+    "GRANT_SESSION": 2,
+    "CAPTURE_REFERENCE": 3,
+    "CLEAR_REFERENCE": 4,
+    "INSTALL_PERMIT": 5,
+    "PREPARE_HOLD": 6,
+    "START_MOTION": 7,
+    "COMPLETE_MOTION": 8,
+    "CANCEL_MOTION": 9,
+    "DISABLE_AND_RELEASE": 10,
+    "CLEAR_FAULT": 11,
+    "GET_OPERATION": 12
+  },
+  "failure_reason": {
+    "NONE": 0,
+    "VERSION_MISMATCH": 1,
+    "IDENTITY_MISMATCH": 2,
+    "STALE_EPOCH": 3,
+    "PERMIT_INVALID": 4,
+    "BACKPRESSURE": 5,
+    "FIRST_SAMPLE_TIMEOUT": 6,
+    "COMMAND_TIMEOUT": 7,
+    "TERMINAL_MISMATCH": 8,
+    "CAN_SUBMIT_FAILED": 9,
+    "CAN_SENT_TIMEOUT": 10,
+    "TRACKING_ERROR": 11,
+    "FEEDBACK_TIMEOUT": 12,
+    "DISABLE_UNCONFIRMED": 13
+  }
+}

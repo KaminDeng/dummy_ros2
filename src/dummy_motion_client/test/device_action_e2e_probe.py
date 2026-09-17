@@ -221,8 +221,8 @@ def main():
             if real_peer:
                 events += [json.loads(line) for line in evidence_file.read_text().splitlines()]
             operations = [event["operation"] for event in events if event["event"] == "manage"]
-            expected_operations = ([2, 4, 3, 14] if real_peer else []) + [5, 6, 13, 14, 6, 13, 14, 6, 7, 14, 6, 7]
-            assert [value for value in operations if value != 11] == expected_operations, operations
+            expected_operations = ([1, 3, 2, 5] if real_peer else []) + [6, 7, 8, 5, 7, 8, 5, 7, 9, 5, 7, 9]
+            assert operations == expected_operations, operations
             if real_peer:
                 operation_results = [event for event in events if event["event"] == "operation_result"]
                 assert all(event["operation_id"] > 0 for event in operation_results), operation_results

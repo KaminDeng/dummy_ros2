@@ -4,8 +4,8 @@ endif()
 # Symlink unchanged inputs so the 864 MB archive need not be copied. Replace
 # exactly one input with altered bytes, then execute the configure-time checker.
 set(paths
-  contracts/dummy_robot_v1/codec/dp_dummy_robot_v1.hpp
-  contracts/dummy_robot_v1/codec/dp_dummy_robot_v1_dp_comm.hpp
+  contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp
+  contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp
   build/posix-zenohc/core/dp_sdk_core/dp_osal/libdp_osal.a
   build/posix-zenohc/thirdparty/zenoh-c/debug/target/debug/libzenohc.a)
 file(MAKE_DIRECTORY "${TEST_ROOT}")

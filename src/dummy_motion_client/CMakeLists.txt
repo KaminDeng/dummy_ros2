@@ -18,9 +18,9 @@ set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root with published w
 if(NOT DPSDK_ROOT)
   get_filename_component(DPSDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../dpsdk" ABSOLUTE)
 endif()
-set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v1/codec")
-if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v1.hpp")
-  message(FATAL_ERROR "The published DPSDK manage_v1 wire codec is required")
+set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v2/codec")
+if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp")
+  message(FATAL_ERROR "The published DPSDK manage_v2 wire codec is required")
 endif()
 add_library(dummy_device_action STATIC
   src/action_gate.cpp src/bootstrap_coordinator.cpp src/management_client.cpp)
@@ -53,7 +53,7 @@ if(BUILD_TESTING)
   target_link_libraries(c05_action_peer dummy_dp_management dummy_device_profile)
   add_executable(device_profile_tests test/device_profile_tests.cpp)
   target_link_libraries(device_profile_tests dummy_device_profile)
-  add_test(NAME device_profile_tests COMMAND device_profile_tests "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v1")
+  add_test(NAME device_profile_tests COMMAND device_profile_tests "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2")
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME device_action_public_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_public_probe.py $<TARGET_FILE:device_action_gate>)
@@ -61,10 +61,10 @@ if(BUILD_TESTING)
   add_test(NAME device_action_e2e_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
     ${DPSDK_ROOT}/build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v1 real)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real)
   add_test(NAME device_motion_unsupported_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v1 unsupported)
+    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 unsupported)
   set_tests_properties(device_action_e2e_probe PROPERTIES
     TIMEOUT 60 SKIP_RETURN_CODE 77 LABELS "real_dpsdk_peer;ros_action")
   set_tests_properties(device_motion_unsupported_probe PROPERTIES
@@ -126,8 +126,8 @@ if(BUILD_TESTING)
   endforeach()
 endif()
 install(DIRECTORY include/ DESTINATION include)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v1" DESTINATION share/${PROJECT_NAME}/contracts)
-install(FILES "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v1.hpp" DESTINATION include)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2" DESTINATION share/${PROJECT_NAME}/contracts)
+install(FILES "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp" DESTINATION include)
 install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_management dummy_device_profile EXPORT export_dummy_device_action ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_device_action)
 ament_export_dependencies(dummy_ros_control control_msgs yaml-cpp OpenSSL)

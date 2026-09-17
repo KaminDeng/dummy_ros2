@@ -10,8 +10,8 @@ import unittest
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
-BUNDLE = WORKSPACE_ROOT / "contracts" / "dummy_robot_v1"
-DPSDK_BUNDLE = WORKSPACE_ROOT.parent / "dpsdk" / "contracts" / "dummy_robot_v1"
+BUNDLE = WORKSPACE_ROOT / "contracts" / "dummy_robot_v2"
+DPSDK_BUNDLE = WORKSPACE_ROOT.parent / "dpsdk" / "contracts" / "dummy_robot_v2"
 
 
 class R01ContractTest(unittest.TestCase):

@@ -28,10 +28,10 @@ int main() {
   bootstrap.observe(state);
   assert(bootstrap.phase()==BootstrapPhase::kIdle);
   assert(bootstrap.start(state, 1U));
-  const std::uint16_t operations[]{2U,4U,3U,14U};
+  const std::uint16_t operations[]{1U,3U,2U,5U};
   for (unsigned index=0; index<4; ++index) {
     assert(client.requests.back().operation()==operations[index]);
-    if (operations[index]==14U) assert(client.requests.back().compiled_policy_sha256()[0]==2U);
+    if (operations[index]==5U) assert(client.requests.back().compiled_policy_sha256()[0]==2U);
     if (index <= 1U) assert(client.requests.back().expected_session_id()==0U);
     else assert(client.requests.back().expected_session_id()==42U);
     bootstrap.tick(2U+index);

@@ -11,16 +11,16 @@
 #include <thread>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v1_dp_comm.hpp"
+#include "dp_dummy_robot_v2_dp_comm.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 namespace {
-namespace wire = dp::protocol::dummy_robot_v1;
-using State = wire::DummyJointStateV1;
-using Status = wire::DummyDeviceStatusV1;
-using Command = wire::DummyJointCommandV1;
+namespace wire = dp::protocol::dummy_robot_v2;
+using State = wire::DummyJointStateV2;
+using Status = wire::DummyDeviceStatusV2;
+using Command = wire::DummyJointCommandV2;
 using namespace dummy_ros_control;
 struct Stimulus { Status status{}; State state{}; bool done = false; bool send_status = true; };
 struct Peer { int commands_fd; };
@@ -43,10 +43,10 @@ int run_peer(const std::string &endpoint, int input, int output) {
   auto created = context.create_node(options);
   if (!created.has_value()) return 2;
   auto node = std::move(created).take_value();
-  auto states = node.create_publisher<State>("state_v1", {});
-  auto statuses = node.create_publisher<Status>("status_v1", {});
+  auto states = node.create_publisher<State>("state_v2", {});
+  auto statuses = node.create_publisher<Status>("status_v2", {});
   Peer peer{output};
-  auto subscribed = node.create_subscription<Command>("command_v1", {}, receive_command, &peer);
+  auto subscribed = node.create_subscription<Command>("command_v2", {}, receive_command, &peer);
   if (!states.has_value() || !statuses.has_value() || !subscribed.has_value()) return 3;
   auto state_publisher = std::move(states).take_value();
   auto status_publisher = std::move(statuses).take_value();
@@ -88,13 +88,11 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   DeviceTransport transport(system, parameters);
   if (!transport.start() || !wait_for([&] { return transport.statistics().ready; })) return 11;
   Stimulus valid{};
-  valid.status.set_schema_major(1U);
-  valid.state.set_schema_major(1U);
-  std::uint8_t device[16]{1U}, client[16]{2U};
+  valid.status.set_schema_major(2U);
+  valid.state.set_schema_major(2U);
+  std::uint8_t device[16]{1U};
   valid.status.set_device_id(device);
   valid.state.set_device_id(device);
-  valid.status.set_client_instance_id(client);
-  valid.state.set_client_instance_id(client);
   valid.status.set_boot_epoch(7U);
   valid.state.set_boot_epoch(7U);
   valid.status.set_session_id(8U);
@@ -121,13 +119,6 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   unbound.send_status = false;
   if (!wait_for([&] { send(unbound); return transport.statistics().rejected_states != 0U; }) ||
       system.copy_state(&snapshot)) return 48;
-  auto foreign_owner = valid;
-  std::uint8_t foreign_client[16]{3U};
-  foreign_owner.status.set_client_instance_id(foreign_client);
-  foreign_owner.state.set_client_instance_id(foreign_client);
-  const auto foreign_before = transport.statistics().state_messages;
-  if (!wait_for([&] { send(foreign_owner); return transport.statistics().state_messages > foreign_before; }) ||
-      system.copy_state(&snapshot)) return 49;
   if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 12;
   if (snapshot.position[0] != 0.25 ||
       (six_axis ? snapshot.position[1] != 0.2 : !std::isnan(snapshot.position[1]))) return 13;
@@ -164,7 +155,7 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
     if (fault == 3U) wrong.state.set_produced_at_us(transport_steady_now_us() + 2000000U);
     if (fault == 4U) wrong.state.set_produced_at_us(transport_steady_now_us() - 2000000U);
     if (fault == 5U) wrong.state.set_session_id(99U);
-    if (fault == 6U) { std::uint8_t other[16]{3U}; wrong.state.set_client_instance_id(other); }
+    if (fault == 6U) wrong.state.set_boot_epoch(99U);
     if (fault == 7U) wrong.state.set_reference_epoch(99U);
     if (fault == 8U) wrong.state.set_motion_epoch(99U);
     const auto before = transport.statistics().rejected_states;
@@ -174,28 +165,18 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   }
   // A status authority transition must immediately invalidate old state and commands.
   // State carrying the previous authority cannot repopulate the snapshot.
-  for (unsigned changed_field = 0U; changed_field < 4U; ++changed_field) {
+  for (unsigned changed_field = 0U; changed_field < 3U; ++changed_field) {
     auto transition = valid;
     if (changed_field == 0U) transition.status.set_session_id(18U);
-    if (changed_field == 1U) { std::uint8_t other[16]{3U}; transition.status.set_client_instance_id(other); }
-    if (changed_field == 2U) transition.status.set_reference_epoch(19U);
-    if (changed_field == 3U) transition.status.set_motion_epoch(20U);
+    if (changed_field == 1U) transition.status.set_reference_epoch(19U);
+    if (changed_field == 2U) transition.status.set_motion_epoch(20U);
     transition.state.set_state_seq(2U);
     const auto before = transport.statistics().invalidations;
     if (!send(transition) || !wait_for([&] { return transport.statistics().invalidations > before; }) ||
         system.copy_state(&snapshot) || publish_control_update(positions, six_axis ? 6U : 1U, 0, nullptr) != 0U)
       return 40 + changed_field;
-    if (changed_field == 1U) {
-      // Even a matching state from the foreign owner must not establish authority.
-      transition.state.set_client_instance_id(transition.status.client_instance_id());
-      const auto foreign_messages = transport.statistics().state_messages;
-      if (!wait_for([&] { send(transition); return transport.statistics().state_messages > foreign_messages; }) ||
-          system.copy_state(&snapshot)) return 50;
-    } else {
-      valid.status = transition.status;
-    }
+    valid.status = transition.status;
     valid.state.set_session_id(valid.status.session_id());
-    valid.state.set_client_instance_id(valid.status.client_instance_id());
     valid.state.set_reference_epoch(valid.status.reference_epoch());
     valid.state.set_motion_epoch(valid.status.motion_epoch());
     valid.state.set_state_seq(1U);
@@ -218,8 +199,6 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   auto reordered = valid;
   reordered.status.set_management_epoch(9U);
   reordered.status.set_session_id(0U);
-  std::uint8_t no_client[16]{};
-  reordered.status.set_client_instance_id(no_client);
   reordered.state.set_state_seq(4U);
   const auto before_reordered = transport.statistics().invalidations;
   if (!wait_for([&] { send(reordered); return system.copy_state(&snapshot); }) ||

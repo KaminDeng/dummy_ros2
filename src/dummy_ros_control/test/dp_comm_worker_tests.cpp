@@ -1,11 +1,11 @@
 #include <cstdint>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v1_dp_comm.hpp"
+#include "dp_dummy_robot_v2_dp_comm.hpp"
 #include "dummy_ros_control/dp_comm_worker.hpp"
 
 namespace {
-using Message = dp::protocol::dummy_robot_v1::DummyJointCommandV1;
+using Message = dp::protocol::dummy_robot_v2::DummyJointCommandV2;
 struct Received { unsigned count = 0; Message message{}; };
 void receive(dp::comm::BorrowedMessage<Message> borrowed, void *context) {
   auto *received = static_cast<Received *>(context);
@@ -26,19 +26,19 @@ int main() {
   auto node_result = context.create_node(options);
   if (!node_result.has_value()) return 2;
   auto node = std::move(node_result).take_value();
-  auto publisher_result = node.create_publisher<Message>("command_v1", {});
+  auto publisher_result = node.create_publisher<Message>("command_v2", {});
   Received received{};
-  auto subscription_result = node.create_subscription<Message>("command_v1", {}, receive, &received);
+  auto subscription_result = node.create_subscription<Message>("command_v2", {}, receive, &received);
   if (!publisher_result.has_value() || !subscription_result.has_value()) return 3;
   auto publisher = std::move(publisher_result).take_value();
   auto subscription = std::move(subscription_result).take_value();
   dummy_ros_control::GuardedZenbeddedSystem system;
-  using State = dp::protocol::dummy_robot_v1::DummyJointStateV1;
+  using State = dp::protocol::dummy_robot_v2::DummyJointStateV2;
   const dummy_ros_control::StateExpectation expectation{9U, 7U, 100U, true, 0x3FU, 1000U, 1100U, 150U};
   dummy_ros_control::DpCommStateReceiver state_receiver(&system, expectation);
-  auto state_publisher_result = node.create_publisher<State>("state_v1", {});
+  auto state_publisher_result = node.create_publisher<State>("state_v2", {});
   auto state_subscription_result = node.create_subscription<State>(
-      "state_v1", {}, dummy_ros_control::DpCommStateReceiver::receive, &state_receiver);
+      "state_v2", {}, dummy_ros_control::DpCommStateReceiver::receive, &state_receiver);
   if (!state_publisher_result.has_value() || !state_subscription_result.has_value()) return 9;
   auto state_publisher = std::move(state_publisher_result).take_value();
   auto state_subscription = std::move(state_subscription_result).take_value();
@@ -52,7 +52,7 @@ int main() {
   if (worker.publish_one() != dp::comm::Result::kOk ||
       worker.publish_one() != dp::comm::Result::kNotReady) return 6;
   State feedback;
-  feedback.set_schema_major(1U);
+  feedback.set_schema_major(2U);
   feedback.set_schema_minor(0U);
   feedback.set_boot_epoch(9U);
   feedback.set_profile_id(7U);

@@ -8,13 +8,13 @@
 namespace dummy_ros_control {
 // One pending request and one latest observation: capacity is independent of traffic rate.
 struct DeviceManagementRequest {
-  std::array<std::uint8_t,233> request{};
-  std::array<std::uint8_t,618> response{};
+  std::array<std::uint8_t,225> request{};
+  std::array<std::uint8_t,105> response{};
   std::atomic<bool> canceled{false}, failed{false}, complete{false};
 };
 struct DeviceManagementObservation {
-  std::array<std::uint8_t,356> state{};
-  std::array<std::uint8_t,297> status{};
+  std::array<std::uint8_t,301> state{};
+  std::array<std::uint8_t,257> status{};
   std::uint64_t state_received_us=0, status_received_us=0;
 };
 struct DeviceManagementChannel {

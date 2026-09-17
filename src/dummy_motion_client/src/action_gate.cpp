@@ -171,24 +171,24 @@ void ActionGate::observe(const ManageReply &reply,std::uint64_t now) {
   } else advance(reply,now);
 }
 bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::uint64_t now) {
-  namespace wire=dp::protocol::dummy_robot_v1;
-  wire::DummyJointStateV1 state;
-  if (wire::DummyJointStateV1Codec::decode(bytes,size,&state)!=wire::CodecResult::kOk ||
-      state.schema_major()!=1 || state.state_seq()<=state_seq_ ||
+  namespace wire=dp::protocol::dummy_robot_v2;
+  wire::DummyJointStateV2 state;
+  if (wire::DummyJointStateV2Codec::decode(bytes,size,&state)!=wire::CodecResult::kOk ||
+      state.schema_major()!=2 || state.state_seq()<=state_seq_ ||
       state.boot_epoch()!=authorization_.identity.expected_boot_epoch() ||
       state.session_id()!=authorization_.identity.expected_session_id() ||
       state.reference_epoch()!=authorization_.identity.expected_reference_epoch() ||
       state.profile_id()!=authorization_.identity.expected_profile_id() ||
       state.configured_mask()!=authorization_.identity.configured_mask() ||
       (state.position_valid_mask() & state.configured_mask())!=state.configured_mask() ||
-      !std::equal(std::begin(state.device_id()),std::end(state.device_id()),std::begin(authorization_.identity.device_id())))
+      !std::equal(std::begin(state.device_id()),std::end(state.device_id()),std::begin(authorization_.identity.device_id()))) {
     return false;
-  const bool hold_valid=state.configured_mask()!=0 &&
-      (state.hold_valid_mask() & state.configured_mask())==state.configured_mask();
+  }
+  const bool hold_valid=state.hold_ready() && state.configured_mask()!=0 &&
+      (state.position_valid_mask() & state.configured_mask())==state.configured_mask();
   for (std::size_t axis=0;axis<6;++axis) {
     if (!(state.configured_mask() & (1U<<axis))) continue;
-    if (!std::isfinite(state.position_rad()[axis]) ||
-        (hold_valid && !std::isfinite(state.hold_position_rad()[axis]))) return false;
+    if (!std::isfinite(state.position_rad()[axis])) return false;
   }
   state_seq_=state.state_seq();
   authorization_.identity.set_expected_management_epoch(state.management_epoch());
@@ -196,7 +196,7 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
   if (!request_) return true;
   if (state.core_state()==wire_value(WireCoreState::kFault)) { fail("DEVICE_FAULT"); return true; }
   ManageReply evidence; evidence.request_id=request_; evidence.snapshot_valid=true;
-  evidence.motion_epoch=state.motion_epoch(); evidence.accepted_seq=state.accepted_seq_valid()?state.accepted_producer_seq():0;
+  evidence.motion_epoch=state.motion_epoch(); evidence.accepted_seq=state.committed_producer_seq();
   const bool enabling_hold=state.core_state()==wire_value(WireCoreState::kEnablingHold);
   evidence.hold_ready=state.hold_ready() && hold_valid;
   evidence.hold_available=enabling_hold ||
@@ -207,8 +207,7 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
        (operation_!=ManageOperation::kBegin && evidence.hold_available))) ||
       (evidence.motion_epoch==epoch_ && phase_!=Phase::kIdle && phase_!=Phase::kHold);
   std::copy(std::begin(state.position_rad()),std::end(state.position_rad()),evidence.position.begin());
-  std::copy(std::begin(state.hold_position_rad()),std::end(state.hold_position_rad()),evidence.hold_position.begin());
-  if(enabling_hold) evidence.hold_position=evidence.position;
+  evidence.hold_position=evidence.position;
   evidence.result_valid=management_evidence_.result_valid; evidence.succeeded=management_evidence_.succeeded;
   state_evidence_=evidence; advance(evidence,now); return true;
 }

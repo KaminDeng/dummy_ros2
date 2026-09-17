@@ -3,14 +3,14 @@
 #include <cstdint>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v1_dp_comm.hpp"
+#include "dp_dummy_robot_v2_dp_comm.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 namespace dummy_ros_control {
 
 class DpCommCommandWorker {
  public:
-  using WireCommand = dp::protocol::dummy_robot_v1::DummyJointCommandV1;
+  using WireCommand = dp::protocol::dummy_robot_v2::DummyJointCommandV2;
   using Publisher = dp::comm::Publisher<WireCommand>;
 
   DpCommCommandWorker(GuardedZenbeddedSystem *system, Publisher *publisher,
@@ -22,7 +22,7 @@ class DpCommCommandWorker {
     CommandGenerationRecord record{};
     if (!system_->take_publish_record(&record)) return dp::comm::Result::kNotReady;
     WireCommand message;
-    message.set_schema_major(1U);
+    message.set_schema_major(2U);
     message.set_schema_minor(0U);
     message.set_boot_epoch(record.identity.boot);
     message.set_session_id(record.identity.session);
@@ -47,7 +47,7 @@ class DpCommCommandWorker {
 
 class DpCommStateReceiver {
  public:
-  using WireState = dp::protocol::dummy_robot_v1::DummyJointStateV1;
+  using WireState = dp::protocol::dummy_robot_v2::DummyJointStateV2;
   DpCommStateReceiver(GuardedZenbeddedSystem *system, StateExpectation expectation)
       : system_(system), expectation_(expectation) {}
   static void receive(dp::comm::BorrowedMessage<WireState> borrowed, void *context) noexcept {
@@ -55,9 +55,9 @@ class DpCommStateReceiver {
     if (!self || !self->system_) return;
     WireState state;
     if (borrowed.copy_to(&state) != dp::comm::Result::kOk) return;
-    std::uint8_t bytes[dp::protocol::dummy_robot_v1::DummyJointStateV1Codec::kEncodedSize]{};
-    if (dp::protocol::dummy_robot_v1::DummyJointStateV1Codec::encode(
-            state, bytes, sizeof(bytes)) != dp::protocol::dummy_robot_v1::CodecResult::kOk) return;
+    std::uint8_t bytes[dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize]{};
+    if (dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::encode(
+            state, bytes, sizeof(bytes)) != dp::protocol::dummy_robot_v2::CodecResult::kOk) return;
     self->accepted_ = self->system_->ingest_wire_state(bytes, sizeof(bytes), self->expectation_);
   }
   bool accepted() const noexcept { return accepted_; }

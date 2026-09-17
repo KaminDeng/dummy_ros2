@@ -18,7 +18,7 @@
 #include "std_srvs/srv/trigger.hpp"
 
 namespace dummy_motion_client {
-namespace wire=dp::protocol::dummy_robot_v1;
+namespace wire=dp::protocol::dummy_robot_v2;
 using Follow=control_msgs::action::FollowJointTrajectory;
 using GoalHandle=rclcpp_action::ServerGoalHandle<Follow>;
 using Controller=dummy_ros_control::GuardedJointTrajectoryController;
@@ -52,9 +52,11 @@ class GuardedPort final : public ActionPort {
       direct_hold=false;
       if(!controller->prime_position(position)) { failed=true; return; }
       controller->set_update_sink(dummy_ros_control::controller_update_sink,nullptr);
-    } else if(dummy_ros_control::publish_control_update(position.data(),active_count,0,nullptr)==0U) {
-      failed=true; return;
-    } else { direct_hold=true; direct_hold_started=true; }
+    } else {
+      const auto published = dummy_ros_control::publish_control_update(position.data(),active_count,0,nullptr);
+      if(published==0U) { failed=true; return; }
+      direct_hold=true; direct_hold_started=true;
+    }
     publishing=true;
   }
   void refresh_direct_hold() {
@@ -222,9 +224,9 @@ class DeviceActionGate final : public rclcpp::Node {
         "DEVICE_BOOTSTRAP_INPUT_REJECTED_STALE state_age_us=%llu status_age_us=%llu",
         static_cast<unsigned long long>(state_age),static_cast<unsigned long long>(status_age)); return false;
     }
-    wire::DummyDeviceStatusV1 status; wire::DummyJointStateV1 state;
-    if(wire::DummyDeviceStatusV1Codec::decode(observed->status.data(),observed->status.size(),&status)!=wire::CodecResult::kOk ||
-       wire::DummyJointStateV1Codec::decode(observed->state.data(),observed->state.size(),&state)!=wire::CodecResult::kOk) {
+    wire::DummyDeviceStatusV2 status; wire::DummyJointStateV2 state;
+    if(wire::DummyDeviceStatusV2Codec::decode(observed->status.data(),observed->status.size(),&status)!=wire::CodecResult::kOk ||
+       wire::DummyJointStateV2Codec::decode(observed->state.data(),observed->state.size(),&state)!=wire::CodecResult::kOk) {
       RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_CODEC"); return false;
     }
     const auto reject=[this](const char *reason) {
@@ -234,16 +236,10 @@ class DeviceActionGate final : public rclcpp::Node {
     if(!std::equal(device_profile_.contract_hash.begin(),device_profile_.contract_hash.end(),status.contract_sha256()) ||
        !std::equal(device_profile_.model_hash.begin(),device_profile_.model_hash.end(),status.model_sha256()) ||
        !std::equal(device_profile_.profile_hash.begin(),device_profile_.profile_hash.end(),status.profile_sha256())) return reject("HASH");
-    const bool configured_client =
-      std::equal(parameters_.client.begin(),parameters_.client.end(),status.client_instance_id()) &&
-      std::equal(parameters_.client.begin(),parameters_.client.end(),state.client_instance_id());
-    const bool unowned_bootstrap = status.session_id()==0U && state.session_id()==0U &&
-      std::all_of(std::begin(status.client_instance_id()),std::end(status.client_instance_id()),[](auto value){return value==0U;}) &&
-      std::all_of(std::begin(state.client_instance_id()),std::end(state.client_instance_id()),[](auto value){return value==0U;});
-    if(!configured_client && !unowned_bootstrap) return reject("CLIENT");
     if(status.boot_epoch()==0 || !status.motion_supported() ||
        status.core_state()==wire_value(WireCoreState::kFault)) return reject("MOTION");
     if(state.boot_epoch()!=status.boot_epoch() || state.session_id()!=status.session_id() ||
+       state.profile_id()!=status.profile_id() || state.configured_mask()!=status.configured_mask() ||
        state.reference_epoch()!=status.reference_epoch() || state.freshness_ticket()==0) {
       return reject("STATE");
     }

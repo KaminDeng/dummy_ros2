@@ -20,7 +20,7 @@ SOURCES = (
     "scripts/dummy/tests/test_r01_contract.py",
     "src/dummy_moveit_config/test/test_model_alignment.py",
     "src/dummy_moveit_config/test/test_reference_chain_fk.py",
-    "contracts/dummy_robot_v1/model/model.yaml",
+    "contracts/dummy_robot_v2/model/model.yaml",
 )
 
 

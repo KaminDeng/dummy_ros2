@@ -5,20 +5,21 @@
 #include <optional>
 #include <type_traits>
 #include <vector>
-#include "dp_dummy_robot_v1.hpp"
+#include "dp_dummy_robot_v2.hpp"
 
 namespace dummy_motion_client {
-using ManageRequest = dp::protocol::dummy_robot_v1::DummyManageV1Request;
+using ManageRequest = dp::protocol::dummy_robot_v2::DummyManageV2Request;
 using Position = std::array<double, 6>;
-// C05 contracts/dummy_robot_v1/enums/dummy_enum_values_v1.json wire values.
+// Dummy wire-major-v2 stable values.
 enum class ManageOperation : std::uint16_t {
-  kSelectMode=2, kGrantSession=3, kCaptureReference=4, kEnable=5,
-  kBegin=6, kCancel=7, kStop=8, kQuery=11, kComplete=13, kSetPermit=14
+  kGetStatus=0, kSelectMode=1, kGrantSession=2, kCaptureReference=3,
+  kClearReference=4, kSetPermit=5, kEnable=6, kBegin=7, kComplete=8,
+  kCancel=9, kDisableAndRelease=10, kClearFault=11, kQuery=12
 };
 enum class WireCoreState : std::uint16_t { kEnablingHold=3, kHold=4, kRunning=5, kFault=9 };
 enum class WireReceipt : std::uint8_t { kQueued=1, kReplayed=2, kBusy=4 };
-enum class WireResult : std::uint16_t { kOk=0, kPending=23 };
-enum class WireOperationStatus : std::uint16_t { kAccepted=1, kRunning=2, kSucceeded=3, kFailed=4, kRejected=5, kExpired=6 };
+enum class WireResult : std::uint16_t { kOk=0, kPending=8 };
+enum class WireTransactionPhase : std::uint8_t { kIdle=0, kReceived=1, kPrepared=2, kCommitted=3, kFailed=4 };
 template <typename Enum> constexpr auto wire_value(Enum value) { return static_cast<std::underlying_type_t<Enum>>(value); }
 struct ManageReply {
   std::uint64_t request_id=0, operation_id=0;
@@ -35,7 +36,7 @@ class ManagementClient {
   virtual std::uint64_t submit(const ManageRequest &, std::uint64_t sent_at_us)=0;
   virtual std::optional<ManageReply> poll(std::uint64_t request_id)=0;
 };
-// Bind this port to the selected device's manage_v1 endpoint. A handle owns the
+// Bind this port to the selected device's manage_v2 endpoint. A handle owns the
 // native request until its reply or explicit destruction. Poll never blocks.
 class ManagementTransport {
  public:

@@ -8,9 +8,9 @@
 | R03 | PASS | wire-v2 codec/RPC/调用方所有权快照探针通过，共 7/7。 | 证据：`build_dummy/reports/R03.json`。 |
 | R04 | PASS | 用例 10/10；生命周期错误通过 worker 实际发送有界 STOP，不再以 blocked 计数替代。 | 证据：`build_dummy/reports/R04.json`；授权正路径由 R06/R07 记录。 |
 | R05 | PASS_WITH_LIMITATION | 原生轨迹反馈、场景一致性、碰撞拒绝、笛卡尔失败与取消探针通过，共 7/7。 | 证据：`build_dummy/reports/R05.json`；实体碰撞安全仍未验证。 |
-| R06 | PASS | 23/23；wire-v2 bootstrap、compiled-policy permit、单次 permit 续权、两次成功、取消与异常终止均通过真实 D08 peer。 | 证据：`build_dummy/reports/R06.json`。 |
-| R07 | PASS | 8/8；J1/六轴生产 launch 使用 D08 peer 与 guarded bridge，SEN06 缺轴故障不自动降级。 | 证据：`build_dummy/reports/R07.json`。 |
-| R08 | PASS | REL01 校验 DPSDK commit、wire-v2/hash、peer 构建时效与本轮 R06/R07 证据，1/1 通过。 | 证据：`build_dummy/reports/R08.json`。 |
+| R06 | PASS | 23/23；wire-major-v2 bootstrap、PREPARED/COMMITTED、compiled-policy permit、两次成功、取消与异常终止均通过真实 D08 peer。 | contract=`914074d3...b28f8`；证据：`build_dummy/reports/R06.json`。 |
+| R07 | PASS | 8/8；J1/六轴生产 launch 使用 v2 D08 peer 与 guarded bridge，SEN06 缺轴故障不自动降级。 | 证据：`build_dummy/reports/R07.json`。 |
+| R08 | BLOCKED_DPSDK_COMMIT | wire/hash、peer时效与本轮R06/R07均已通过；DPSDK主仓改动仍在暂存区且合同非clean。 | DPSDK通过pre-commit并生成真实commit后更新`versions.lock`，再重跑REL01。 |
 | 实体硬件/J1 | NOT_RUN | 全程使用 `--hardware none`；未探测、下载、复位或执行实体运动。 | 需要另行执行人工门禁流程。 |
 
 R00 详细报告位于 `docs/dummy/task-reports/R00.json`。构建证据位于

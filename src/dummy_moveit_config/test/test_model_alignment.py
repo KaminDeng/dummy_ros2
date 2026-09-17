@@ -13,7 +13,7 @@ import yaml
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
-CONTRACT = WORKSPACE_ROOT / "contracts/dummy_robot_v1"
+CONTRACT = WORKSPACE_ROOT / "contracts/dummy_robot_v2"
 DESCRIPTION = WORKSPACE_ROOT / "src/dummy-ros2_description"
 MOVEIT = WORKSPACE_ROOT / "src/dummy_moveit_config"
 

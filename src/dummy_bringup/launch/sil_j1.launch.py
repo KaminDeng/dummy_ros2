@@ -47,7 +47,7 @@ def generate_launch_description():
             EnvironmentVariable("DPSDK_ROOT"), "build", "posix-zenohc", "applications",
             "dummy_ref_control", "dummy_ref_d08_device_peer"])),
         DeclareLaunchArgument("contract_bundle", default_value=PathJoinSubstitution([
-            EnvironmentVariable("DPSDK_ROOT"), "contracts", "dummy_robot_v1"])),
+            EnvironmentVariable("DPSDK_ROOT"), "contracts", "dummy_robot_v2"])),
         ExecuteProcess(cmd=[executable, "--endpoint", endpoint, "--client-id",
                             "02000000000000000000000000000000", "--profile-id", "2",
                             "--configured-mask", "1"], output="screen"),

@@ -2,13 +2,13 @@
 #include <cmath>
 #include <cstdint>
 
-#include "dp_dummy_robot_v1.hpp"
+#include "dp_dummy_robot_v2.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 int main() {
-  namespace wire = dp::protocol::dummy_robot_v1;
-  wire::DummyJointStateV1 state;
-  state.set_schema_major(1U);
+  namespace wire = dp::protocol::dummy_robot_v2;
+  wire::DummyJointStateV2 state;
+  state.set_schema_major(2U);
   state.set_schema_minor(0U);
   state.set_boot_epoch(9U);
   state.set_profile_id(7U);
@@ -21,8 +21,8 @@ int main() {
   const double velocity[6]{0.01, 0.0, 0.0, 0.0, 0.0, 0.0};
   state.set_position_rad(position);
   state.set_estimated_velocity_rad_s(velocity);
-  std::array<std::uint8_t, wire::DummyJointStateV1Codec::kEncodedSize> bytes{};
-  if (wire::DummyJointStateV1Codec::encode(state, bytes.data(), bytes.size()) != wire::CodecResult::kOk)
+  std::array<std::uint8_t, wire::DummyJointStateV2Codec::kEncodedSize> bytes{};
+  if (wire::DummyJointStateV2Codec::encode(state, bytes.data(), bytes.size()) != wire::CodecResult::kOk)
     return 1;
   dummy_ros_control::GuardedZenbeddedSystem system;
   const dummy_ros_control::StateExpectation expected{9U, 7U, 100U, true, 0x3FU, 1000U, 1100U, 150U};
@@ -43,7 +43,7 @@ int main() {
   if (system.ingest_wire_state(bytes.data(), bytes.size(), stale)) return 7;
   const double invalid_velocity[6]{NAN, 0.0, 0.0, 0.0, 0.0, 0.0};
   state.set_estimated_velocity_rad_s(invalid_velocity);
-  if (wire::DummyJointStateV1Codec::encode(state, bytes.data(), bytes.size()) != wire::CodecResult::kOk)
+  if (wire::DummyJointStateV2Codec::encode(state, bytes.data(), bytes.size()) != wire::CodecResult::kOk)
     return 8;
   if (system.ingest_wire_state(bytes.data(), bytes.size(), expected)) return 9;
   if (!dummy_ros_control::GuardedZenbeddedSystem::active_joint_count_supported(1U) ||

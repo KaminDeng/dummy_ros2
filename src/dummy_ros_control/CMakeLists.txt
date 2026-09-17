@@ -12,9 +12,9 @@ find_package(OpenSSL REQUIRED)
 set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake")
 get_filename_component(ROS_WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v1/codec")
-set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v1/codec")
-if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v1_dp_comm.hpp")
+set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v2/codec")
+set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v2/codec")
+if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2_dp_comm.hpp")
   message(FATAL_ERROR "Production device transport requires the published DPSDK wire-v1 codec")
 endif()
 add_library(dummy_dp_comm INTERFACE)
@@ -68,7 +68,7 @@ target_link_libraries(dummy_dp_comm INTERFACE
   "${DPSDK_ROOT}/build/posix-zenohc/core/dp_sdk_core/dp_osal/libdp_osal.a"
   "${DPSDK_ROOT}/build/posix-zenohc/thirdparty/zenoh-c/debug/target/debug/libzenohc.a"
   rt pthread m dl)
-if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v1.hpp")
+if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v2.hpp")
   message(FATAL_ERROR "ROS C03 prototype mirror does not contain the Dummy generated codec")
 endif()
 

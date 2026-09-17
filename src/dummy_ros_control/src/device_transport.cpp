@@ -8,20 +8,20 @@
 #include <thread>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v1_dp_comm.hpp"
+#include "dp_dummy_robot_v2_dp_comm.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 
 namespace dummy_ros_control {
 namespace {
-namespace wire = dp::protocol::dummy_robot_v1;
-using State = wire::DummyJointStateV1;
-using Status = wire::DummyDeviceStatusV1;
-using Command = wire::DummyJointCommandV1;
-using Management = dp::protocol::services::DummyManageV1RawFixed;
+namespace wire = dp::protocol::dummy_robot_v2;
+using State = wire::DummyJointStateV2;
+using Status = wire::DummyDeviceStatusV2;
+using Command = wire::DummyJointCommandV2;
+using Management = dp::protocol::services::DummyManageV2RawFixed;
 constexpr std::uint16_t kWireEnablingHold = 3U;
-constexpr std::uint16_t kWireStopAndDisarm = 8U;
+constexpr std::uint16_t kWireDisableAndRelease = 10U;
 std::mutex channel_registry_mutex;
 std::weak_ptr<DeviceManagementChannel> channel_registry;
 
@@ -130,7 +130,7 @@ struct DeviceTransport::Impl {
 
   template <typename Message>
   bool matches(const Message &message) const noexcept {
-    return message.schema_major() == 1U && message.schema_minor() == 0U &&
+    return message.schema_major() == 2U && message.schema_minor() == 0U &&
            std::equal(parameters.device_id.begin(), parameters.device_id.end(), message.device_id()) &&
            message.profile_id() == parameters.profile_id &&
            message.configured_mask() == parameters.configured_mask && message.boot_epoch() != 0U;
@@ -139,8 +139,6 @@ struct DeviceTransport::Impl {
   template <typename Message>
   bool matches_authority(const Message &message) const noexcept {
     return message.session_id() == status.session_id() &&
-           std::equal(std::begin(message.client_instance_id()), std::end(message.client_instance_id()),
-                      std::begin(status.client_instance_id())) &&
            message.reference_epoch() == status.reference_epoch() &&
            message.motion_epoch() == status.motion_epoch();
   }
@@ -151,25 +149,13 @@ struct DeviceTransport::Impl {
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) return;
     ++self.statuses;
     if (!self.matches(value)) return;
-    const bool configured_client = std::equal(
-        self.parameters.client_instance_id.begin(), self.parameters.client_instance_id.end(),
-        std::begin(value.client_instance_id()));
-    const bool unowned_bootstrap = value.session_id() == 0U && std::all_of(
-        std::begin(value.client_instance_id()), std::end(value.client_instance_id()),
-        [](std::uint8_t byte) { return byte == 0U; });
-    if (!configured_client && !unowned_bootstrap) {
-      self.invalidate();
-      return;
-    }
     if (std::find(self.retired_boots.begin(), self.retired_boots.end(), value.boot_epoch()) !=
         self.retired_boots.end()) return;
     if (self.boot == value.boot_epoch() && self.status.boot_epoch() == value.boot_epoch()) {
       if (!sequence_at_or_after(value.management_epoch(), self.status.management_epoch())) return;
       if (value.management_epoch() == self.status.management_epoch()) {
         const bool same_owner_reference = value.session_id() == self.status.session_id() &&
-            value.reference_epoch() == self.status.reference_epoch() &&
-            std::equal(std::begin(value.client_instance_id()), std::end(value.client_instance_id()),
-                       std::begin(self.status.client_instance_id()));
+            value.reference_epoch() == self.status.reference_epoch();
         if (!same_owner_reference ||
             !sequence_at_or_after(value.motion_epoch(), self.status.motion_epoch())) return;
       }
@@ -190,7 +176,7 @@ struct DeviceTransport::Impl {
     {
       std::lock_guard<std::mutex> lock(self.management->mutex);
       auto &observation=self.management->observation;
-      if(wire::DummyDeviceStatusV1Codec::encode(value,observation.status.data(),observation.status.size())==wire::CodecResult::kOk)
+      if(wire::DummyDeviceStatusV2Codec::encode(value,observation.status.data(),observation.status.size())==wire::CodecResult::kOk)
         observation.status_received_us=transport_steady_now_us();
     }
   }
@@ -210,8 +196,8 @@ struct DeviceTransport::Impl {
     const StateExpectation expected{self.boot, self.parameters.profile_id, self.last_sequence,
         self.has_sequence, self.parameters.configured_mask, self.anchor_us, now,
         self.parameters.max_state_age_us};
-    std::uint8_t bytes[wire::DummyJointStateV1Codec::kEncodedSize]{};
-    if (wire::DummyJointStateV1Codec::encode(value, bytes, sizeof(bytes)) != wire::CodecResult::kOk) {
+    std::uint8_t bytes[wire::DummyJointStateV2Codec::kEncodedSize]{};
+    if (wire::DummyJointStateV2Codec::encode(value, bytes, sizeof(bytes)) != wire::CodecResult::kOk) {
       ++self.rejected_states;
       return;
     }
@@ -236,7 +222,7 @@ struct DeviceTransport::Impl {
       const dp::comm::ResponseInfo &,void *context) {
     auto &request=*static_cast<DeviceManagementRequest *>(context);
     if(result!=dp::comm::Result::kOk || !response ||
-       wire::DummyManageV1ResponseCodec::encode(*response,request.response.data(),request.response.size())!=wire::CodecResult::kOk) {
+       wire::DummyManageV2ResponseCodec::encode(*response,request.response.data(),request.response.size())!=wire::CodecResult::kOk) {
       request.failed=true; return;
     }
     request.complete.store(true,std::memory_order_release);
@@ -245,7 +231,7 @@ struct DeviceTransport::Impl {
   std::shared_ptr<DeviceManagementRequest> make_stop_request() noexcept {
     if (status.boot_epoch() == 0U || status.profile_id() != parameters.profile_id) return {};
     Management::Request request;
-    request.set_schema_major(1U);
+    request.set_schema_major(2U);
     request.set_schema_minor(0U);
     std::uint8_t device[16]{}, client[16]{};
     std::copy(parameters.device_id.begin(), parameters.device_id.end(), device);
@@ -254,7 +240,7 @@ struct DeviceTransport::Impl {
     request.set_client_instance_id(client);
     request.set_request_id(next_stop_request_id++);
     request.set_request_seq(next_stop_request_seq++);
-    request.set_operation(kWireStopAndDisarm);
+    request.set_operation(kWireDisableAndRelease);
     request.set_expected_boot_epoch(status.boot_epoch());
     request.set_expected_session_id(status.session_id());
     request.set_expected_reference_epoch(status.reference_epoch());
@@ -264,7 +250,7 @@ struct DeviceTransport::Impl {
     request.set_freshness_ticket(last_freshness_ticket);
     request.set_configured_mask(parameters.configured_mask);
     auto pending = std::make_shared<DeviceManagementRequest>();
-    if (wire::DummyManageV1RequestCodec::encode(
+    if (wire::DummyManageV2RequestCodec::encode(
             request, pending->request.data(), pending->request.size()) != wire::CodecResult::kOk) return {};
     return pending;
   }
@@ -283,9 +269,7 @@ struct DeviceTransport::Impl {
         (!system.commands_active() && !inactive_prime) || boot == 0U ||
         record.identity.boot != boot || record.identity.session != status.session_id() ||
         record.identity.reference_epoch != status.reference_epoch() ||
-        record.identity.motion_epoch != status.motion_epoch() || record.identity.ticket == 0U ||
-        !std::equal(parameters.client_instance_id.begin(), parameters.client_instance_id.end(),
-                    status.client_instance_id())) {
+        record.identity.motion_epoch != status.motion_epoch() || record.identity.ticket == 0U) {
       ++rejected_commands;
       pending_command.reset();
       return;
@@ -294,7 +278,7 @@ struct DeviceTransport::Impl {
     // freshness are checked again before every retry; no new sample is made.
     if(!system.copy_state(&snapshot)) return;
     Command message;
-    message.set_schema_major(1U);
+    message.set_schema_major(2U);
     message.set_schema_minor(0U);
     std::uint8_t device[16]{}, client[16]{};
     std::copy(parameters.device_id.begin(), parameters.device_id.end(), device);
@@ -323,7 +307,7 @@ struct DeviceTransport::Impl {
   }
 
   bool run_connected() {
-    const dp::comm::StaticStorageConfig storage_config{1U, 1U, 2U, 0U, 8U, 618U, 96U, 0U, 1U, 1U, 1U};
+    const dp::comm::StaticStorageConfig storage_config{1U, 1U, 2U, 0U, 8U, 301U, 96U, 0U, 1U, 1U, 1U};
     dp::comm::StaticStorage storage(storage_config);
     const dp::comm::TransportConfig transport{"client", parameters.endpoint.c_str(), "", "dummy_ros_control"};
     auto initialized = dp::comm::Context::init(storage,
@@ -341,10 +325,10 @@ struct DeviceTransport::Impl {
     std::string route = "/dpsdk/dummy_robot/";
     for (auto byte : parameters.device_id) { route += hex[byte >> 4U]; route += hex[byte & 15U]; }
     route += "/ref_control/";
-    auto state_result = node.create_subscription<State>((route + "state_v1").c_str(), {}, receive_state, this);
-    auto status_result = node.create_subscription<Status>((route + "status_v1").c_str(), {}, receive_status, this);
-    auto command_result = node.create_publisher<Command>((route + "command_v1").c_str(), {});
-    auto management_result=node.create_client<Management>((route+"manage_v1").c_str());
+    auto state_result = node.create_subscription<State>((route + "state_v2").c_str(), {}, receive_state, this);
+    auto status_result = node.create_subscription<Status>((route + "status_v2").c_str(), {}, receive_status, this);
+    auto command_result = node.create_publisher<Command>((route + "command_v2").c_str(), {});
+    auto management_result=node.create_client<Management>((route+"manage_v2").c_str());
     if (!state_result.has_value() || !status_result.has_value() || !command_result.has_value() || !management_result.has_value()) return false;
     auto state_subscription = std::move(state_result).take_value();
     auto status_subscription = std::move(status_result).take_value();
@@ -364,7 +348,7 @@ struct DeviceTransport::Impl {
       if(queued) {
         management_handle.reset(); active_management=std::move(queued);
         Management::Request decoded;
-        if(wire::DummyManageV1RequestCodec::decode(active_management->request.data(),active_management->request.size(),&decoded)!=wire::CodecResult::kOk)
+        if(wire::DummyManageV2RequestCodec::decode(active_management->request.data(),active_management->request.size(),&decoded)!=wire::CodecResult::kOk)
           active_management->failed=true;
         else {
           auto sent=management_client.async_request(decoded,management_reply,active_management.get(),dp::comm::Duration::from_milliseconds(1000));
@@ -381,7 +365,7 @@ struct DeviceTransport::Impl {
           ++stop_request_failures;
         } else {
           Management::Request decoded;
-          if (wire::DummyManageV1RequestCodec::decode(active_management->request.data(),
+          if (wire::DummyManageV2RequestCodec::decode(active_management->request.data(),
                 active_management->request.size(), &decoded) != wire::CodecResult::kOk) {
             active_management->failed = true;
             ++stop_request_failures;

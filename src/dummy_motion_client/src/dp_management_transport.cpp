@@ -1,6 +1,6 @@
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v1_dp_comm.hpp"
+#include "dp_dummy_robot_v2_dp_comm.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include <algorithm>
 #include <atomic>
@@ -9,8 +9,8 @@
 #include <thread>
 #include <stdexcept>
 namespace dummy_motion_client {
-namespace wire=dp::protocol::dummy_robot_v1;
-using Service=dp::protocol::services::DummyManageV1RawFixed;
+namespace wire=dp::protocol::dummy_robot_v2;
+using Service=dp::protocol::services::DummyManageV2RawFixed;
 std::uint64_t management_now_us() noexcept {
   return std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -20,7 +20,7 @@ struct DpManagementTransport::Impl {
     explicit SharedHandle(std::shared_ptr<dummy_ros_control::DeviceManagementRequest> value):pending(std::move(value)) {}
     ~SharedHandle() override { pending->canceled=true; }
     std::optional<std::vector<std::uint8_t>> poll() override {
-      if(pending->failed) throw std::runtime_error("shared manage_v1 request failed");
+      if(pending->failed) throw std::runtime_error("shared manage_v2 request failed");
       if(delivered || !pending->complete.load(std::memory_order_acquire)) return {};
       delivered=true;
       return std::vector<std::uint8_t>(pending->response.begin(),pending->response.end());
@@ -38,7 +38,7 @@ struct DpManagementTransport::Impl {
     explicit Handle(std::shared_ptr<Pending> value): pending(std::move(value)) {}
     ~Handle() override { pending->canceled=true; }
     std::optional<std::vector<std::uint8_t>> poll() override {
-      if(pending->failed) throw std::runtime_error("manage_v1 transport request failed");
+      if(pending->failed) throw std::runtime_error("manage_v2 transport request failed");
       std::unique_lock<std::mutex> lock(pending->mutex,std::try_to_lock);
       if(!lock || !pending->response) return {};
       auto result=std::move(pending->response); pending->response.reset(); return result;
@@ -63,8 +63,8 @@ struct DpManagementTransport::Impl {
                     const dp::comm::ResponseInfo &,void *context) {
     auto &pending=*static_cast<Pending *>(context);
     if(result!=dp::comm::Result::kOk || !response) { pending.failed=true; return; }
-    std::vector<std::uint8_t> bytes(wire::DummyManageV1ResponseCodec::kEncodedSize);
-    if(wire::DummyManageV1ResponseCodec::encode(*response,bytes.data(),bytes.size())!=wire::CodecResult::kOk) {
+    std::vector<std::uint8_t> bytes(wire::DummyManageV2ResponseCodec::kEncodedSize);
+    if(wire::DummyManageV2ResponseCodec::encode(*response,bytes.data(),bytes.size())!=wire::CodecResult::kOk) {
       pending.failed=true; return;
     }
     std::lock_guard<std::mutex> lock(pending.mutex); pending.response=std::move(bytes);
@@ -73,7 +73,7 @@ struct DpManagementTransport::Impl {
   static void receive(dp::comm::BorrowedMessage<Message> borrowed,void *context) {
     Message value; if(borrowed.copy_to(&value)!=dp::comm::Result::kOk) return;
     auto &self=*static_cast<Impl *>(context);
-    if(value.schema_major()!=1 || value.schema_minor()!=0 ||
+    if(value.schema_major()!=2 || value.schema_minor()!=0 ||
        value.profile_id()!=self.parameters.profile || value.configured_mask()!=self.parameters.mask ||
        !std::equal(self.parameters.device.begin(),self.parameters.device.end(),value.device_id())) return;
     std::vector<std::uint8_t> bytes(Codec::kEncodedSize);
@@ -85,7 +85,7 @@ struct DpManagementTransport::Impl {
   void run() noexcept {
     std::shared_ptr<Pending> active;
     try {
-      dp::comm::StaticStorage storage({1,0,2,0,8,618,96,0,1,1,1});
+      dp::comm::StaticStorage storage({1,0,2,0,8,301,96,0,1,1,1});
       const dp::comm::TransportConfig config{"client",parameters.endpoint.c_str(),"","device_action_gate"};
       auto initialized=dp::comm::Context::init(storage,{dp::comm::MemoryMode::kStaticOnly,&config,nullptr});
       if(!initialized.has_value()) throw std::runtime_error("dp_comm init");
@@ -97,11 +97,11 @@ struct DpManagementTransport::Impl {
       const char *hex="0123456789abcdef"; std::string route="/dpsdk/dummy_robot/";
       for(auto byte:parameters.device) { route+=hex[byte>>4]; route+=hex[byte&15]; }
       route+="/ref_control/";
-      auto created=node.create_client<Service>((route+"manage_v1").c_str());
-      auto states=node.create_subscription<wire::DummyJointStateV1>((route+"state_v1").c_str(),{},
-          receive<wire::DummyJointStateV1,wire::DummyJointStateV1Codec,true>,this);
-      auto statuses=node.create_subscription<wire::DummyDeviceStatusV1>((route+"status_v1").c_str(),{},
-          receive<wire::DummyDeviceStatusV1,wire::DummyDeviceStatusV1Codec,false>,this);
+      auto created=node.create_client<Service>((route+"manage_v2").c_str());
+      auto states=node.create_subscription<wire::DummyJointStateV2>((route+"state_v2").c_str(),{},
+          receive<wire::DummyJointStateV2,wire::DummyJointStateV2Codec,true>,this);
+      auto statuses=node.create_subscription<wire::DummyDeviceStatusV2>((route+"status_v2").c_str(),{},
+          receive<wire::DummyDeviceStatusV2,wire::DummyDeviceStatusV2Codec,false>,this);
       if(!created.has_value() || !states.has_value() || !statuses.has_value()) throw std::runtime_error("dp_comm entities");
       auto client=std::move(created).take_value(); auto state=std::move(states).take_value();
       auto status=std::move(statuses).take_value(); dp::comm::StaticExecutor executor;
@@ -167,7 +167,7 @@ std::unique_ptr<ManagementTransport::RequestHandle> DpManagementTransport::send(
   if(!ready()) return {};
   if(impl_->connection==Connection::kDeviceWorker) {
     const auto channel=impl_->shared_channel();
-    if(!channel || bytes.size()!=233) return {};
+    if(!channel || bytes.size()!=wire::DummyManageV2RequestCodec::kEncodedSize) return {};
     auto pending=std::make_shared<dummy_ros_control::DeviceManagementRequest>();
     std::copy(bytes.begin(),bytes.end(),pending->request.begin());
     std::unique_lock<std::mutex> lock(channel->mutex,std::try_to_lock);
@@ -175,7 +175,7 @@ std::unique_ptr<ManagementTransport::RequestHandle> DpManagementTransport::send(
     channel->queued=pending; return std::make_unique<Impl::SharedHandle>(std::move(pending));
   }
   auto pending=std::make_shared<Impl::Pending>();
-  if(wire::DummyManageV1RequestCodec::decode(bytes.data(),bytes.size(),&pending->request)!=wire::CodecResult::kOk) return {};
+  if(wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&pending->request)!=wire::CodecResult::kOk) return {};
   std::unique_lock<std::mutex> lock(impl_->mutex,std::try_to_lock);
   if(!lock || (impl_->queued && !impl_->queued->canceled)) return {};
   impl_->queued=pending; return std::make_unique<Impl::Handle>(std::move(pending));

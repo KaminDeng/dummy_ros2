@@ -14,8 +14,8 @@ endif()
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
-install(FILES ../../contracts/dummy_robot_v1/model/model.yaml
-  DESTINATION share/${PROJECT_NAME}/contracts/dummy_robot_v1/model)
+install(FILES ../../contracts/dummy_robot_v2/model/model.yaml
+  DESTINATION share/${PROJECT_NAME}/contracts/dummy_robot_v2/model)
 install(PROGRAMS
   scripts/action_gate_probe.py
   scripts/gazebo_runtime_probe.py

@@ -1,0 +1,65 @@
+{
+  "format": "dummy_wire_release_v2",
+  "payload_sorted_sha256": "914074d31391b455d90d8edc833bfebbe082d1ef1f411df21e5e9fe23f9b28f8",
+  "payloads": [
+    {
+      "path": "codec/dp_dummy_robot_v2.hpp",
+      "sha256": "a2e79a40cc22413ab024f60ac5682c1c34f36344de02c5df9e62d31ca1bcba17"
+    },
+    {
+      "path": "codec/dp_dummy_robot_v2_dp_comm.hpp",
+      "sha256": "c946647248dcd20494f54746094d7f81489209f17de987ea5a056ad9808570a3"
+    },
+    {
+      "path": "codec/dp_dummy_robot_v2_static_requirements.h",
+      "sha256": "ff73da86a9e2d51b5df3f2ea6fc0e96a00c6ee9c02890b22b578122b456eb3b2"
+    },
+    {
+      "path": "codec/wire_layout.json",
+      "sha256": "20754905cfd4f62d3d450f10f9be7a2c7d4bf7cb0a0747402a8bf022c8fd59e7"
+    },
+    {
+      "path": "enums/dummy_enum_values_v2.json",
+      "sha256": "57c44005f26a9072b5da78e9378d96dacbf8ec7f3a48ae5141ce7ae4dd94db94"
+    },
+    {
+      "path": "idl/DummyDeviceStatusV2.msg",
+      "sha256": "13b3cff6eef969251e74c25b48d577103a026186297f935e39ea518483d8d42a"
+    },
+    {
+      "path": "idl/DummyJointCommandV2.msg",
+      "sha256": "302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714"
+    },
+    {
+      "path": "idl/DummyJointStateV2.msg",
+      "sha256": "4c68ebf3664488169e31b13e5ad2d240a62cadde93c3bb3ace916a1b28263b1f"
+    },
+    {
+      "path": "idl/DummyManageV2.srv",
+      "sha256": "5d8ae7e7d6cb05388f248f8c225cefa29f4cc45aec567cd133a3976b0ba3e6c7"
+    },
+    {
+      "path": "metadata/dummy_robot_v2.yaml",
+      "sha256": "076f0cac8a2241bc11e9645e53dc41807d08acfb0506426578fbfcd57d626c67"
+    },
+    {
+      "path": "model/model.yaml",
+      "sha256": "b1ebe5560acc25ae9d02ecdbef37cf4c81bf8bb05f1e174e041faf8cde07e0f5"
+    },
+    {
+      "path": "profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac"
+    },
+    {
+      "path": "profiles/sil_6dof.yaml",
+      "sha256": "634259d10b65d71b399c9dd096b6c405d449e7653a257b90af9205a1816be923"
+    },
+    {
+      "path": "profiles/sil_j1.yaml",
+      "sha256": "dfc7f1e525c474d701ba871a956931001d494134c2ee6405bcf5adeff5c3fe5e"
+    }
+  ],
+  "release_id": "dummy-wire-v2",
+  "schema_major": 2,
+  "schema_minor": 0
+}

@@ -15,8 +15,8 @@ import PyKDL
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 REFERENCE_CHAIN = WORKSPACE_ROOT / "src/dummy-ros2_description/urdf/dummy_reference_chain.urdf"
-FIXED_CASES = WORKSPACE_ROOT / "contracts/dummy_robot_v1/fixtures/fk_cases.json"
-RANDOM_CASES = WORKSPACE_ROOT / "contracts/dummy_robot_v1/evidence/fk_random_cases.json"
+FIXED_CASES = WORKSPACE_ROOT / "contracts/dummy_robot_v2/fixtures/fk_cases.json"
+RANDOM_CASES = WORKSPACE_ROOT / "contracts/dummy_robot_v2/evidence/fk_random_cases.json"
 
 
 def vector(text: str) -> tuple[float, float, float]:

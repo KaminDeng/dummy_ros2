@@ -30,7 +30,7 @@ def main():
     ]
     missing = subprocess.run(options, env=env, capture_output=True, text=True, timeout=3)
     assert missing.returncode != 0 and "bundle" in missing.stderr, "missing profile bundle must fail startup"
-    bundle = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "dummy_robot_v1"
+    bundle = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "dummy_robot_v2"
     with tempfile.TemporaryFile(mode="w+") as log:
         process = subprocess.Popen(options + ["-p", f"contract_bundle:={bundle}", "-p", "profile_name:=sil_j1"],
                                    env=env, stdout=log, stderr=log)

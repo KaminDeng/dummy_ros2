@@ -229,7 +229,7 @@ def _real_action_e2e() -> dict[str, Any]:
         str(ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"),
         str(ROOT / "build_dummy/dummy_motion_client/device_action_gate"),
         str(DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"),
-        str(ROOT / "contracts/dummy_robot_v1"), "real"], cwd=ROOT,
+        str(ROOT / "contracts/dummy_robot_v2"), "real"], cwd=ROOT,
         capture_output=True, text=True, check=False, timeout=60)
     if completed.returncode:
         raise RuntimeError(f"real device action E2E failed ({completed.returncode}):\n{completed.stdout}{completed.stderr[-4000:]}")

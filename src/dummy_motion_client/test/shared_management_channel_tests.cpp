@@ -20,7 +20,7 @@ int main() {
     const auto cached=facade.observe();
     if(!cached || cached->state_received_us!=100) return 3;
   }
-  std::vector<std::uint8_t> bytes(233);
+  std::vector<std::uint8_t> bytes(dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize);
   auto first=facade.send(bytes); if(!first || facade.send(bytes)) return 4;
   first.reset(); if(!facade.send(bytes)) return 5;
   auto wrong=parameters; wrong.profile_id=3;
