@@ -63,12 +63,17 @@ def _dpsdk_peer_current() -> bool:
     peer = DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"
     if not peer.is_file():
         return False
-    inputs = [DPSDK_ROOT / "contracts/dummy_robot_v2/manifest.json"]
+    inputs = []
     for directory in (
+        DPSDK_ROOT / "contracts/dummy_robot_v2",
         DPSDK_ROOT / "applications/dummy_ref_control",
-        DPSDK_ROOT / "libraries/dp_protocol/generated",
     ):
-        inputs.extend(path for path in directory.rglob("*") if path.is_file())
+        inputs.extend(
+            path for path in directory.rglob("*")
+            if path.is_file() and path.name != "dummy_ref_control_main.cpp"
+        )
+    generated = DPSDK_ROOT / "libraries/dp_protocol/generated/include"
+    inputs.extend(path for path in generated.glob("dp_dummy_robot_v2*") if path.is_file())
     inputs.append(DPSDK_ROOT / "config/products/posix_demo.cmake")
     return peer.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in inputs)
 
