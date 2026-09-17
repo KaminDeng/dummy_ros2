@@ -18,6 +18,7 @@ def strict_load(path):
                       parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
 
 def is_hash(value): return isinstance(value,str) and len(value)==64 and set(value)<=HEX
+def is_device_id(value): return isinstance(value,str) and len(value)==32 and set(value)<=HEX
 def canonical_policy(policy):
     value={key:item for key,item in policy.items() if key!="note"}
     return json.dumps(value,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
@@ -84,7 +85,8 @@ def validate(activation,policy,runtime,evidence_root):
     if not math.isfinite(cap32) or cap32*51200.0<1.0 or cap32*51200.0>=2147483648.0:
         raise ValueError("CAN cap")
     policy_hash=hashlib.sha256(canonical_policy(policy)).hexdigest()
-    for key in ("device_id","firmware_sha256","contract_sha256","profile_sha256"):
+    if not is_device_id(activation.get("device_id")): raise ValueError("device_id")
+    for key in ("firmware_sha256","contract_sha256","profile_sha256"):
         if not is_hash(activation.get(key)): raise ValueError(key)
     if activation["approval_state"] not in {"TRIAL_APPROVED","MEASURED_APPROVED"} or not isinstance(activation.get("operator_acknowledgement"),str) or not activation["operator_acknowledgement"]:
         raise ValueError("approval")

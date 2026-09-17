@@ -122,7 +122,8 @@ class DeviceActionGate final : public rclcpp::Node {
     bootstrap_identity.set_device_id(device); bootstrap_identity.set_client_instance_id(client_id);
     bootstrap_identity.set_expected_session_id(static_cast<std::uint64_t>(session));
     const auto permit=hex_id<32>(permit_text);
-    bootstrap_=std::make_unique<BootstrapCoordinator>(*client_,bootstrap_identity,permit,permit_us);
+    bootstrap_=std::make_unique<BootstrapCoordinator>(
+      *client_,bootstrap_identity,permit,device_profile_.profile_hash,permit_us);
     gate_=std::make_unique<ActionGate>(*client_,port_,profile_,2000000);
     enable_service_=create_service<std_srvs::srv::Trigger>("~/enable",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -136,7 +137,7 @@ class DeviceActionGate final : public rclcpp::Node {
     bootstrap_status_service_=create_service<std_srvs::srv::Trigger>("~/bootstrap_status",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         const bool operation_complete=management_request_.load()==0 && bootstrap_ && bootstrap_->operation_complete();
-        response->success=(enabled_ && gate_->ready()) || operation_complete;
+        response->success=enabled_ ? gate_->ready() : operation_complete;
         response->message=enabled_ && gate_->ready() ? "ENABLED_HOLD" :
           (operation_complete ? "OPERATION_COMPLETE" :
           (bootstrap_ && bootstrap_->phase()==BootstrapPhase::kFault ? bootstrap_->error() : "BOOTSTRAP_PENDING"));
@@ -146,7 +147,9 @@ class DeviceActionGate final : public rclcpp::Node {
         [this,operation](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                          std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
           int expected=0;
-          response->success=explicit_operation_available_.load() &&
+          const bool available=operation==ManageOperation::kSetPermit ?
+            permit_operation_available_.load() : explicit_operation_available_.load();
+          response->success=available &&
             management_request_.compare_exchange_strong(expected,static_cast<int>(wire_value(operation)));
           response->message=response->success ? "Operation queued; poll bootstrap_status for final result" :
             "Operation unavailable or another management request is pending";
@@ -245,8 +248,13 @@ class DeviceActionGate final : public rclcpp::Node {
       return reject("STATE");
     }
     if((state.raw_position_valid_mask() & parameters_.mask)!=parameters_.mask) return reject("RAW");
+    if ((status.session_id()!=0U && status.control_mode()==0U) ||
+       (status.reference_epoch()!=0U && status.reference_kind()==0U) ||
+       (status.real_motion_permitted() != (status.permit_remaining_us()!=0U))) return reject("AUTHORITY");
     latest_bootstrap_={status.boot_epoch(),status.session_id(),status.reference_epoch(),status.motion_epoch(),
-      status.management_epoch(),state.freshness_ticket(),parameters_.profile,parameters_.mask,true,status.motion_supported()};
+      status.management_epoch(),state.freshness_ticket(),parameters_.profile,parameters_.mask,true,
+      status.motion_supported(),status.control_mode(),status.reference_kind(),status.real_motion_permitted(),
+      status.permit_remaining_us()};
     if(bootstrap_) bootstrap_->observe(latest_bootstrap_);
     const int requested=management_request_.exchange(0);
     if(requested!=0) {
@@ -266,6 +274,9 @@ class DeviceActionGate final : public rclcpp::Node {
     enable_available_=!enabled_ && bootstrap_ && bootstrap_->phase()==BootstrapPhase::kIdle && transport_->ready();
     explicit_operation_available_=!enabled_ && bootstrap_ &&
       (bootstrap_->phase()==BootstrapPhase::kIdle || bootstrap_->operation_complete()) && transport_->ready();
+    permit_operation_available_=explicit_operation_available_.load() ||
+      (enabled_ && gate_->permit_refresh_allowed() && bootstrap_ &&
+       (bootstrap_->ready() || bootstrap_->operation_complete()) && transport_->ready());
     single_enable_available_=!enabled_ && bootstrap_ && bootstrap_->operation_complete() &&
       bootstrap_->last_operation()==ManageOperation::kSetPermit && transport_->ready();
     if(enable_available_ && enable_requested_.exchange(false)) bootstrap_->start(latest_bootstrap_,now);
@@ -275,6 +286,11 @@ class DeviceActionGate final : public rclcpp::Node {
   void bootstrap_tick(std::uint64_t now) {
     if(!bootstrap_ || bootstrap_->phase()==BootstrapPhase::kIdle || bootstrap_->phase()==BootstrapPhase::kFault) return;
     bootstrap_->tick(now);
+    if(enabled_ && bootstrap_->operation_complete() &&
+       bootstrap_->last_operation()==ManageOperation::kSetPermit) {
+      if(const auto authorization=bootstrap_->authorization())
+        (void)gate_->renew_permit(*authorization);
+    }
     if(!enabled_ && single_enable_requested_.exchange(false)) {
       const auto authorization=bootstrap_->authorization();
       if(!authorization || !transport_->allow_inactive_prime(true) || !gate_->enable(*authorization,now)) {
@@ -373,6 +389,7 @@ class DeviceActionGate final : public rclcpp::Node {
   std::atomic<bool> enable_requested_{false}, enable_available_{false};
   std::atomic<bool> single_enable_requested_{false}, single_enable_available_{false};
   std::atomic<bool> explicit_operation_available_{false};
+  std::atomic<bool> permit_operation_available_{false};
   std::atomic<int> management_request_{0};
   std::uint64_t state_max_age_us_=250000U;
   std::mutex goal_mutex_;

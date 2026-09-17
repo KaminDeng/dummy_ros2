@@ -8,7 +8,7 @@ from dummy_test_support.task_adapters import run_unittest_case
 
 
 TARGETS = {
-    "GEN07": "scripts.dummy.tests.test_r01_contract.R01ContractTest.test_model_bundle_is_complete_and_hash_verified",
+    "GEN07": "scripts.dummy.tests.test_r01_contract.R01ContractTest.test_wire_v2_mirror_matches_current_dpsdk_release",
     "MOD01": "src.dummy_moveit_config.test.test_model_alignment.ModelAlignmentTest.test_joint1_bench_mapping_applies_anchor_once_and_round_trips",
     "MOD02": "src.dummy_moveit_config.test.test_reference_chain_fk.ReferenceChainFkTest.test_fixed_and_random_evidence_match_kdl",
     "MOD03": "src.dummy_moveit_config.test.test_reference_chain_fk.ReferenceChainFkTest.test_literal_legacy_axis3_row_diverges_from_actual_fk",

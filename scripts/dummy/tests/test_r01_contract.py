@@ -11,6 +11,7 @@ import unittest
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 BUNDLE = WORKSPACE_ROOT / "contracts" / "dummy_robot_v1"
+DPSDK_BUNDLE = WORKSPACE_ROOT.parent / "dpsdk" / "contracts" / "dummy_robot_v1"
 
 
 class R01ContractTest(unittest.TestCase):
@@ -21,7 +22,7 @@ class R01ContractTest(unittest.TestCase):
 
         self.assertIn(
             (manifest["release_id"], manifest["stage"]),
-            (("dummy-model-v1", "model"), ("dummy-wire-v1", "wire")),
+            (("dummy-model-v1", "model"), ("dummy-wire-v2", "wire")),
         )
         payloads = manifest["payloads"]
         paths = [entry["path"] for entry in payloads]
@@ -51,6 +52,19 @@ class R01ContractTest(unittest.TestCase):
             manifest["payload_sorted_sha256"],
             hashlib.sha256(listing.encode()).hexdigest(),
         )
+
+    def test_wire_v2_mirror_matches_current_dpsdk_release(self):
+        self.assertTrue(DPSDK_BUNDLE.is_dir(), "sibling DPSDK contract bundle is missing")
+        ros_manifest = json.loads((BUNDLE / "manifest.json").read_text())
+        dpsdk_manifest = json.loads((DPSDK_BUNDLE / "manifest.json").read_text())
+        self.assertEqual("dummy-wire-v2", ros_manifest["release_id"])
+        self.assertEqual(dpsdk_manifest, ros_manifest)
+        for entry in dpsdk_manifest["payloads"]:
+            self.assertEqual(
+                (DPSDK_BUNDLE / entry["path"]).read_bytes(),
+                (BUNDLE / entry["path"]).read_bytes(),
+                entry["path"],
+            )
 
 
 if __name__ == "__main__":

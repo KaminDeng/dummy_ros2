@@ -15,7 +15,7 @@
     "parent_commit": null,
     "patch_sha256": null
   },
-  "payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
+  "payload_sorted_sha256": "39c460051675e0defe3529cb6c6e5ec518327576a3c8ed1607522a612daebaf1",
   "payloads": [
     {
       "path": "codec/dp_dummy_robot_v1.hpp",
@@ -87,7 +87,7 @@
     },
     {
       "path": "model/dummy_model.hpp",
-      "sha256": "e490b268d86af26790d9d2f3c83f0801aa331e70fb843f24c70dc54da3e1b13c"
+      "sha256": "c9fb2155a8531d3ea5d8febe2c2a17c549659b0fb6008d651c90bcb9462a2c7b"
     },
     {
       "path": "model/geometry_reference.yaml",
@@ -95,7 +95,7 @@
     },
     {
       "path": "model/model.yaml",
-      "sha256": "dcf36ac3588e5e23c277c8b0fcc960efab4fc963f770c373686055e101d7c593"
+      "sha256": "b1ebe5560acc25ae9d02ecdbef37cf4c81bf8bb05f1e174e041faf8cde07e0f5"
     },
     {
       "path": "policy/f405_j1_activation.template.json",
@@ -107,7 +107,7 @@
     },
     {
       "path": "policy/validate_activation.py",
-      "sha256": "f9069e07c810713ae67a8546352b964dc12c114e803e738b41a2f12b73091c06"
+      "sha256": "9a7d16215030132eac0cede2476bc198725c9a83869cadd1f1e64fe0563ca59f"
     },
     {
       "path": "profiles/f405_j1_bench.yaml",
@@ -135,7 +135,7 @@
     }
   ],
   "r03_commit": "2f9ebf1",
-  "release_id": "dummy-wire-v1",
+  "release_id": "dummy-wire-v2",
   "source_hashes": {
     "legacy_fk": "a0efaf04f70f0d6f683b5154e29dfb1ddbe1adbd3fbb5b5e2bd9abd9389c1ca3",
     "legacy_robot": "c270028ccefb47adb87f53295cbc8a57fc627b3d2c97afebfbd22269d368be73"

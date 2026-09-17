@@ -1,7 +1,7 @@
 {
   "task": "R02",
   "status": "PASS_WITH_LIMITATION",
-  "current_evidence": "build_dummy/reports/R02-repair.json",
+  "current_evidence": "build_dummy/reports/R02.json",
   "current_case_count": 6,
   "current_public_action": "/arm_controller/follow_joint_trajectory",
   "current_internal_controller": "_internal_arm_controller",

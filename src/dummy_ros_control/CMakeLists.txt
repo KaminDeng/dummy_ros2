@@ -24,7 +24,7 @@ set(DUMMY_DP_COMM_SDK_SOURCES
   "${DPSDK_ROOT}/platform/posix_native/dp_comm_zenohc_port/dp_comm_port.cpp")
 set(DUMMY_DP_COMM_SDK_HASHES
   5e9ac76a760546738173b7f227f0adfa6dbe5c543dcb58d0b036823d0e48d65c
-  0719ece00499f43d8d8df58df22cc317808a14c97970f720b25df86d38034f43
+  c2f6a2ebdc691486a6daa98eb00ec0cc0c385b79983423eb7e086e9529face04
   05a927e73df40d57ae8ed3fb889cc714f081b8907fd8f5fc23ebf1b9ad01037e)
 set(source_index 0)
 foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)

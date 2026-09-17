@@ -22,7 +22,8 @@ using State = wire::DummyJointStateV1;
 using Status = wire::DummyDeviceStatusV1;
 using Service = dp::protocol::services::DummyManageV1RawFixed;
 
-constexpr std::uint16_t kEnable = 5U, kBegin = 6U, kCancel = 7U, kStop = 8U, kQuery = 11U, kComplete = 13U;
+constexpr std::uint16_t kEnable = 5U, kBegin = 6U, kCancel = 7U, kStop = 8U, kQuery = 11U,
+    kComplete = 13U, kSetPermit = 14U;
 constexpr std::uint16_t kEnablingHold = 3U, kHold = 4U, kRunning = 5U, kCompleting = 6U, kStopping = 7U;
 constexpr std::uint16_t kAccepted = 1U, kRunningOperation = 2U, kSucceeded = 3U, kRejected = 5U;
 constexpr std::uint8_t kQueued = 1U;
@@ -145,11 +146,21 @@ class Peer {
     for (std::size_t axis = 0U; axis < 6U; ++axis)
       if ((options_.mask & (1U << axis)) != 0U && (!std::isfinite(r.terminal_position_rad()[axis]) || std::abs(r.terminal_position_rad()[axis] - position_[axis]) > 1e-9)) terminal_position = false;
     const bool terminal = r.operation() == kComplete && core_ == kRunning && accepted_ != 0U && r.terminal_producer_seq() == accepted_ && terminal_position;
-    const bool allowed = (r.operation() == kEnable && core_ == kHold && motion_ == 0U) || (r.operation() == kBegin && core_ == kHold && motion_ != 0U) || ((r.operation() == kCancel || r.operation() == kStop) && (core_ == kRunning || core_ == kCompleting)) || terminal;
-    if (!allowed || (r.operation() != kEnable && r.operation() != kBegin && r.operation() != kCancel && r.operation() != kStop && r.operation() != kComplete)) { reject(r, out); return dp::comm::Result::kOk; }
+    const bool allowed = (r.operation() == kEnable && core_ == kHold && motion_ == 0U) ||
+        (r.operation() == kSetPermit && core_ == kHold) ||
+        (r.operation() == kBegin && core_ == kHold && motion_ != 0U) ||
+        ((r.operation() == kCancel || r.operation() == kStop) && (core_ == kRunning || core_ == kCompleting)) || terminal;
+    if (!allowed || (r.operation() != kEnable && r.operation() != kBegin && r.operation() != kCancel &&
+        r.operation() != kStop && r.operation() != kComplete && r.operation() != kSetPermit)) {
+      reject(r, out); return dp::comm::Result::kOk;
+    }
     if (r.operation() == kComplete || r.operation() == kCancel) capture_hold();
     Operation &item = operations_[cursor_++ % operations_.size()]; item = {r.request_id(), next_operation_++, r.operation()}; ++management_;
-    if (r.operation() == kEnable) { ++motion_; core_ = kEnablingHold; settle_ = 1U; } else if (r.operation() == kBegin) { ++motion_; core_ = kRunning; } else if (r.operation() == kComplete) { core_ = kCompleting; settle_ = 2U; } else { ++motion_; core_ = kStopping; settle_ = 1U; }
+    if (r.operation() == kEnable) { ++motion_; core_ = kEnablingHold; settle_ = 1U; }
+    else if (r.operation() == kSetPermit) {}
+    else if (r.operation() == kBegin) { ++motion_; core_ = kRunning; }
+    else if (r.operation() == kComplete) { core_ = kCompleting; settle_ = 2U; }
+    else { ++motion_; core_ = kStopping; settle_ = 1U; }
     base(r, out); out->set_receipt(kQueued); out->set_core_request_id(r.request_id()); out->set_accepted(true); out->set_result_code(kPending); out->set_operation_result_valid(false); out->set_operation_id(item.id); out->set_operation_status(kAccepted); out->set_snapshot_valid(true);
     std::cout << "{\"event\":\"manage\",\"operation\":" << r.operation() << ",\"request_id\":" << r.request_id() << ",\"operation_id\":" << item.id << ",\"core_state\":" << core_ << ",\"motion_epoch\":" << motion_ << "}" << std::endl; return dp::comm::Result::kOk;
   }
@@ -182,7 +193,7 @@ class Peer {
     const auto &issued=ticket_times_[ticket%ticket_times_.size()];
     return ticket!=0 && issued.first==ticket && now_us()-issued.second<=50000;
   }
-  std::uint8_t contract_[32] = {0xd4U,0x80U,0x62U,0xc1U,0x6aU,0x50U,0x6aU,0x43U,0xedU,0xa5U,0x2dU,0x89U,0x03U,0x0eU,0x91U,0xc2U,0xa5U,0x30U,0x98U,0xb5U,0xccU,0xdcU,0x78U,0xe3U,0x77U,0x0eU,0x1eU,0x8cU,0x77U,0xd1U,0xe7U,0x3aU};
+  std::uint8_t contract_[32] = {0x39U,0xc4U,0x60U,0x05U,0x16U,0x75U,0xe0U,0xdeU,0xfeU,0x35U,0x29U,0xcbU,0x6cU,0x6eU,0x5eU,0xc5U,0x18U,0x32U,0x75U,0x76U,0xa3U,0xc8U,0xedU,0x16U,0x07U,0x52U,0x2aU,0x61U,0x2dU,0xaeU,0xbaU,0xf1U};
   std::uint8_t model_[32]{}, profile_hash_[32]{};
   static std::atomic<bool> stopping_;
 };

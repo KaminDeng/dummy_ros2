@@ -30,7 +30,8 @@ struct TransportStatistics {
   std::uint64_t commands_published = 0U;
   std::uint64_t rejected_commands = 0U;
   std::uint64_t invalidations = 0U;
-  std::uint64_t blocked_stop_requests = 0U;
+  std::uint64_t stop_requests_sent = 0U;
+  std::uint64_t stop_request_failures = 0U;
   bool ready = false;
   bool initialization_failed = false;
 };

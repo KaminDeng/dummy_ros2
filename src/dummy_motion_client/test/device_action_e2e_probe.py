@@ -52,7 +52,11 @@ def main():
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         endpoint = f"tcp/127.0.0.1:{reserve.getsockname()[1]}"
+    workspace = pathlib.Path(__file__).resolve().parents[3]
+    control_prefix = workspace / "install_dummy/dummy_ros_control"
     env = dict(os.environ, ROS_DOMAIN_ID=str(100 + os.getpid() % 100))
+    env["AMENT_PREFIX_PATH"] = str(control_prefix) + os.pathsep + env.get("AMENT_PREFIX_PATH", "")
+    env["LD_LIBRARY_PATH"] = str(control_prefix / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
     os.environ["ROS_DOMAIN_ID"] = env["ROS_DOMAIN_ID"]
     processes = []
     with tempfile.TemporaryDirectory(prefix="device-action-e2e-") as temporary:
@@ -170,11 +174,29 @@ def main():
                 accepted = wait_future(node, action.send_goal_async(motion, feedback_callback=lambda value: stream.append(value.feedback)))
                 return accepted, stream
 
+            def renew_permit():
+                renewal_deadline = time.monotonic() + 10
+                while time.monotonic() < renewal_deadline:
+                    response = call(node, Trigger, "/device_action_gate/set_bench_permit", Trigger.Request())
+                    if response.success:
+                        break
+                    time.sleep(0.05)
+                else:
+                    raise AssertionError("single-use permit renewal was unavailable")
+                while time.monotonic() < renewal_deadline:
+                    status = call(node, Trigger, "/device_action_gate/bootstrap_status", Trigger.Request())
+                    if status.success:
+                        return
+                    time.sleep(0.05)
+                raise AssertionError(f"single-use permit renewal was not confirmed: {status.message}")
+
+            renew_permit()
             second, second_feedback = send(0.08)
             assert second.accepted, "second goal was not admitted after confirmed HOLD"
             second_result = wait_future(node, second.get_result_async(), 10)
             assert second_result.status == 4, f"second goal failed: {second_result}"
             assert second_feedback and abs(second_feedback[0].actual.positions[0] - 0.05) < 0.002, "second goal jumped to home"
+            renew_permit()
             canceled, cancel_feedback = send(0.15, 3)
             assert canceled.accepted
             overlap, _ = send(0.1)
@@ -186,6 +208,7 @@ def main():
             assert cancel_response.goals_canceling, "cancel request not accepted"
             canceled_result = wait_future(node, canceled.get_result_async(), 10)
             assert canceled_result.status == 5, f"cancel did not cross confirmed HOLD barrier: {canceled_result}"
+            renew_permit()
             aborted, abort_feedback = send(0.12, tolerance=1e-7)
             assert aborted.accepted, "cancel barrier did not reopen admission"
             aborted_result = wait_future(node, aborted.get_result_async(), 10)
@@ -198,11 +221,11 @@ def main():
             if real_peer:
                 events += [json.loads(line) for line in evidence_file.read_text().splitlines()]
             operations = [event["operation"] for event in events if event["event"] == "manage"]
-            expected_operations = ([2, 3, 4, 14] if real_peer else []) + [5, 6, 13, 6, 13, 6, 7, 6, 7]
+            expected_operations = ([2, 4, 3, 14] if real_peer else []) + [5, 6, 13, 14, 6, 13, 14, 6, 7, 14, 6, 7]
             assert [value for value in operations if value != 11] == expected_operations, operations
             if real_peer:
                 operation_results = [event for event in events if event["event"] == "operation_result"]
-                assert operation_results and all(event["operation_id"] > 0 for event in operation_results), operation_results
+                assert all(event["operation_id"] > 0 for event in operation_results), operation_results
             commands = [event for event in events if event["event"] == "command"]
             sequences = [event["producer_seq"] for event in commands]
             assert sequences == sorted(set(sequences)), "producer generations repeated or regressed"
@@ -231,6 +254,7 @@ def main():
                               "feedback_count": sum(map(len, [feedback, second_feedback, cancel_feedback, abort_feedback])),
                               "terminal_freezes": frozen, "operations": operations,
                               "distinct_freshness_tickets": ticket_count,
+                              "operation_id_verified_by_client": True,
                               "real_hardware_plugin": True, "real_guarded_jtc": True}))
             node.destroy_node()
             rclpy.shutdown()

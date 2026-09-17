@@ -1,13 +1,13 @@
 {
   "task": "R01",
   "status": "PASS",
-  "current_evidence": "build_dummy/reports/R01-repair.json",
+  "current_evidence": "build_dummy/reports/R01.json",
   "current_case_count": 7,
   "hardware": "none",
   "contract": {
     "release_id": "dummy-model-v1",
-    "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634",
-    "manifest_file_sha256": "b417b4f3171a07815456afc359b9ff29d7a1cab07b1f063bae4dc9750bdf52cd",
+    "payload_sorted_sha256": "dd7ae00d40325f34e80e5e49beca96a9074eaece1dd4657f5b63b5b1f0c29f43",
+    "manifest_file_sha256": "4d166e2f834e123a96673ee83de5189a1106813fca1980c92fdfe74834875056",
     "legacy_fk_source_sha256": "a0efaf04f70f0d6f683b5154e29dfb1ddbe1adbd3fbb5b5e2bd9abd9389c1ca3"
   },
   "results": {

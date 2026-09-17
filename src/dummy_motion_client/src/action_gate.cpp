@@ -122,6 +122,22 @@ bool ActionGate::enable(const Authorization &authorization,std::uint64_t now) {
       !authorization.permit || authorization.identity.expected_session_id()==0) return false;
   authorization_=authorization; return issue(ManageOperation::kEnable,now);
 }
+bool ActionGate::renew_permit(const Authorization &authorization) {
+  const auto &current=authorization_.identity;
+  const auto &next=authorization.identity;
+  if (phase_!=Phase::kHold || request_!=0U || !authorization.session ||
+      !authorization.reference || !authorization.permit ||
+      current.expected_boot_epoch()!=next.expected_boot_epoch() ||
+      current.expected_session_id()!=next.expected_session_id() ||
+      current.expected_reference_epoch()!=next.expected_reference_epoch() ||
+      current.expected_profile_id()!=next.expected_profile_id() ||
+      current.configured_mask()!=next.configured_mask() ||
+      !std::equal(std::begin(current.device_id()),std::end(current.device_id()),std::begin(next.device_id())) ||
+      !std::equal(std::begin(current.client_instance_id()),std::end(current.client_instance_id()),
+                  std::begin(next.client_instance_id()))) return false;
+  authorization_=authorization;
+  return true;
+}
 bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
   if (!ready() || !authorization_.session || !authorization_.reference || !authorization_.permit) return false;
   const auto validated=validate_trajectory(trajectory,profile_); if (!validated) return false;
@@ -213,6 +229,7 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
     if (!prime(reply,Phase::kPrimeHold,now)) return;
   } else if (operation_==ManageOperation::kBegin && phase_==Phase::kHold && reply.motion_epoch>epoch_) {
     if (!prime(reply,Phase::kPrimeMotion,now)) return;
+    authorization_.permit=false;
   } else if (operation_==ManageOperation::kComplete && phase_==Phase::kCompleting && reply.motion_epoch>epoch_ && reply.hold_available) {
     if (!prime(reply,Phase::kPrimeCompletionHold,now)) return;
   } else if (operation_==ManageOperation::kCancel && phase_==Phase::kStopping && reply.motion_epoch>epoch_ && reply.hold_available) {

@@ -205,12 +205,22 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   valid.state.set_management_epoch(10U);
   valid.state.set_state_seq(2U);
   if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 51;
+  auto asynchronous_epoch = valid;
+  asynchronous_epoch.status.set_motion_epoch(valid.status.motion_epoch() + 1U);
+  asynchronous_epoch.state.set_motion_epoch(asynchronous_epoch.status.motion_epoch());
+  asynchronous_epoch.state.set_state_seq(3U);
+  const auto before_asynchronous_epoch = transport.statistics().invalidations;
+  if (!wait_for([&] {
+        send(asynchronous_epoch);
+        return system.copy_state(&snapshot) && snapshot.envelope.state_seq == 3U;
+      }) || transport.statistics().invalidations <= before_asynchronous_epoch) return 53;
+  valid = asynchronous_epoch;
   auto reordered = valid;
   reordered.status.set_management_epoch(9U);
   reordered.status.set_session_id(0U);
   std::uint8_t no_client[16]{};
   reordered.status.set_client_instance_id(no_client);
-  reordered.state.set_state_seq(3U);
+  reordered.state.set_state_seq(4U);
   const auto before_reordered = transport.statistics().invalidations;
   if (!wait_for([&] { send(reordered); return system.copy_state(&snapshot); }) ||
       transport.statistics().invalidations != before_reordered) return 52;

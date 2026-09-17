@@ -21,6 +21,7 @@ using Status = wire::DummyDeviceStatusV1;
 using Command = wire::DummyJointCommandV1;
 using Management = dp::protocol::services::DummyManageV1RawFixed;
 constexpr std::uint16_t kWireEnablingHold = 3U;
+constexpr std::uint16_t kWireStopAndDisarm = 8U;
 std::mutex channel_registry_mutex;
 std::weak_ptr<DeviceManagementChannel> channel_registry;
 
@@ -86,10 +87,14 @@ struct DeviceTransport::Impl {
   std::atomic<bool> running{false}, ready{false}, failed{false};
   std::thread worker;
   std::atomic<std::uint64_t> states{0}, statuses{0}, rejected_states{0}, commands{0};
-  std::atomic<std::uint64_t> rejected_commands{0}, invalidations{0}, blocked_stops{0};
+  std::atomic<std::uint64_t> rejected_commands{0}, invalidations{0};
+  std::atomic<std::uint64_t> stop_requests_sent{0}, stop_request_failures{0};
   Status status{};
   std::uint64_t boot = 0U, anchor_us = 0U, last_received_us = 0U;
   std::uint32_t last_sequence = 0U;
+  std::uint64_t last_freshness_ticket = 0U;
+  std::uint64_t next_stop_request_id = 0x8000000000000001ULL;
+  std::uint32_t next_stop_request_seq = 0x80000001U;
   bool has_sequence = false;
   std::optional<CommandGenerationRecord> pending_command;
   std::array<std::uint64_t, 16> retired_boots{};
@@ -160,8 +165,14 @@ struct DeviceTransport::Impl {
         self.retired_boots.end()) return;
     if (self.boot == value.boot_epoch() && self.status.boot_epoch() == value.boot_epoch()) {
       if (!sequence_at_or_after(value.management_epoch(), self.status.management_epoch())) return;
-      if (value.management_epoch() == self.status.management_epoch() &&
-          !self.matches_authority(value)) return;
+      if (value.management_epoch() == self.status.management_epoch()) {
+        const bool same_owner_reference = value.session_id() == self.status.session_id() &&
+            value.reference_epoch() == self.status.reference_epoch() &&
+            std::equal(std::begin(value.client_instance_id()), std::end(value.client_instance_id()),
+                       std::begin(self.status.client_instance_id()));
+        if (!same_owner_reference ||
+            !sequence_at_or_after(value.motion_epoch(), self.status.motion_epoch())) return;
+      }
     }
     if (self.boot != 0U && self.boot != value.boot_epoch()) {
       if (self.retired_count >= self.retired_boots.size()) {
@@ -195,6 +206,7 @@ struct DeviceTransport::Impl {
       return;
     }
     const auto now = transport_steady_now_us();
+    self.last_freshness_ticket = value.freshness_ticket();
     const StateExpectation expected{self.boot, self.parameters.profile_id, self.last_sequence,
         self.has_sequence, self.parameters.configured_mask, self.anchor_us, now,
         self.parameters.max_state_age_us};
@@ -228,6 +240,33 @@ struct DeviceTransport::Impl {
       request.failed=true; return;
     }
     request.complete.store(true,std::memory_order_release);
+  }
+
+  std::shared_ptr<DeviceManagementRequest> make_stop_request() noexcept {
+    if (status.boot_epoch() == 0U || status.profile_id() != parameters.profile_id) return {};
+    Management::Request request;
+    request.set_schema_major(1U);
+    request.set_schema_minor(0U);
+    std::uint8_t device[16]{}, client[16]{};
+    std::copy(parameters.device_id.begin(), parameters.device_id.end(), device);
+    std::copy(parameters.client_instance_id.begin(), parameters.client_instance_id.end(), client);
+    request.set_device_id(device);
+    request.set_client_instance_id(client);
+    request.set_request_id(next_stop_request_id++);
+    request.set_request_seq(next_stop_request_seq++);
+    request.set_operation(kWireStopAndDisarm);
+    request.set_expected_boot_epoch(status.boot_epoch());
+    request.set_expected_session_id(status.session_id());
+    request.set_expected_reference_epoch(status.reference_epoch());
+    request.set_expected_motion_epoch(status.motion_epoch());
+    request.set_expected_management_epoch(status.management_epoch());
+    request.set_expected_profile_id(parameters.profile_id);
+    request.set_freshness_ticket(last_freshness_ticket);
+    request.set_configured_mask(parameters.configured_mask);
+    auto pending = std::make_shared<DeviceManagementRequest>();
+    if (wire::DummyManageV1RequestCodec::encode(
+            request, pending->request.data(), pending->request.size()) != wire::CodecResult::kOk) return {};
+    return pending;
   }
 
   void publish_pending(dp::comm::Publisher<Command> &publisher) noexcept {
@@ -334,9 +373,30 @@ struct DeviceTransport::Impl {
         }
       }
       if (system.take_stop_request()) {
-        // C05 Stop differs from the committed DPSDK dispatch enum. Keep a visible
-        // blocked request; never send the legacy numeric operation on the wire.
-        ++blocked_stops;
+        if (active_management && !active_management->complete.load(std::memory_order_acquire))
+          active_management->failed.store(true, std::memory_order_release);
+        management_handle.reset();
+        active_management = make_stop_request();
+        if (!active_management) {
+          ++stop_request_failures;
+        } else {
+          Management::Request decoded;
+          if (wire::DummyManageV1RequestCodec::decode(active_management->request.data(),
+                active_management->request.size(), &decoded) != wire::CodecResult::kOk) {
+            active_management->failed = true;
+            ++stop_request_failures;
+          } else {
+            auto sent = management_client.async_request(
+                decoded, management_reply, active_management.get(), dp::comm::Duration::from_milliseconds(1000));
+            if (sent.has_value()) {
+              management_handle.emplace(std::move(sent).take_value());
+              ++stop_requests_sent;
+            } else {
+              active_management->failed = true;
+              ++stop_request_failures;
+            }
+          }
+        }
         invalidate();
       }
       const auto spun=executor.spin_some(dp::comm::Duration::from_milliseconds(2U));
@@ -348,8 +408,9 @@ struct DeviceTransport::Impl {
       while (context.take_link_event(&event)) {
         if (event.state != dp::comm::LinkState::kReady) invalidate();
       }
-      if (last_received_us != 0U && transport_steady_now_us() - last_received_us > parameters.max_state_age_us)
+      if (last_received_us != 0U && transport_steady_now_us() - last_received_us > parameters.max_state_age_us) {
         invalidate();
+      }
       if (management->inactive_prime_allowed.load(std::memory_order_acquire) ||
           status.core_state() == kWireEnablingHold)
         system.transfer_control_update();
@@ -372,7 +433,7 @@ struct DeviceTransport::Impl {
         management->queued.reset(); management->observation={};
       }
       invalidate();
-      if (system.take_stop_request()) ++blocked_stops;
+      if (system.take_stop_request()) ++stop_request_failures;
       if (running) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
@@ -389,12 +450,23 @@ bool DeviceTransport::start() {
   return true;
 }
 void DeviceTransport::stop() {
+  if (impl_->running.load(std::memory_order_acquire) && impl_->system.stop_request_pending()) {
+    const auto completed_before = impl_->stop_requests_sent.load(std::memory_order_acquire) +
+        impl_->stop_request_failures.load(std::memory_order_acquire);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    while (impl_->stop_requests_sent.load(std::memory_order_acquire) +
+               impl_->stop_request_failures.load(std::memory_order_acquire) == completed_before &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
   impl_->running = false;
   if (impl_->worker.joinable()) impl_->worker.join();
 }
 TransportStatistics DeviceTransport::statistics() const noexcept {
   return {impl_->states.load(), impl_->statuses.load(), impl_->rejected_states.load(), impl_->commands.load(),
-          impl_->rejected_commands.load(), impl_->invalidations.load(), impl_->blocked_stops.load(),
+          impl_->rejected_commands.load(), impl_->invalidations.load(), impl_->stop_requests_sent.load(),
+          impl_->stop_request_failures.load(),
           impl_->ready.load(), impl_->failed.load()};
 }
 std::shared_ptr<DeviceManagementChannel> DeviceTransport::management_channel(const TransportParameters &parameters) noexcept {

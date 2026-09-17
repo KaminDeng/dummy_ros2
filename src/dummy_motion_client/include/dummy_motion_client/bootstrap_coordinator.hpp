@@ -23,12 +23,17 @@ struct BootstrapSnapshot {
   std::uint8_t configured_mask = 0;
   bool raw_ready = false;
   bool motion_supported = false;
+  std::uint16_t control_mode = 0;
+  std::uint16_t reference_kind = 0;
+  bool real_motion_permitted = false;
+  std::uint64_t permit_remaining_us = 0;
 };
 
 class BootstrapCoordinator {
  public:
   BootstrapCoordinator(ManagementClient &client, ManageRequest identity,
                        std::array<std::uint8_t, 32> permit_digest,
+                       std::array<std::uint8_t, 32> compiled_policy_digest,
                        std::uint64_t permit_remaining_us);
   bool start(const BootstrapSnapshot &snapshot, std::uint64_t now_us);
   bool start_operation(const BootstrapSnapshot &snapshot, ManageOperation operation,
@@ -46,9 +51,11 @@ class BootstrapCoordinator {
   bool issue(ManageOperation operation, std::uint64_t now_us);
   bool precondition_for_next() const noexcept;
   void advance(std::uint64_t now_us);
+  bool advance_permit_digest() noexcept;
   ManagementClient &client_;
   ManageRequest identity_{};
   std::array<std::uint8_t, 32> permit_digest_{};
+  std::array<std::uint8_t, 32> compiled_policy_digest_{};
   std::uint64_t permit_remaining_us_ = 0;
   BootstrapSnapshot snapshot_{};
   BootstrapPhase phase_ = BootstrapPhase::kIdle;

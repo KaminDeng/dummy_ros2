@@ -5,7 +5,7 @@
   "test_count": 8,
   "current_evidence": "build_dummy/reports/R07.json",
   "ros_commit": "93c30d0b9d1fdea90baf122a5ba46d996e3e838c",
-  "dpsdk_commit": "34fcf117c7200e4c1a4cc0db8993222b4ef0678c",
+  "dpsdk_commit": "78092cb84cb8a856938736d26497fb1e7512ee15",
   "dpsdk_fault_injection_commit": "eb9a63f4f974864325880f1fbfca9e6be4fc8c3b",
   "launches": {
     "sil_j1": "D08 peer profile_id=2 configured_mask=1 + production device_action_gate",

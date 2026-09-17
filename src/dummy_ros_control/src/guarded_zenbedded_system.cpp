@@ -66,6 +66,7 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_activate(
 hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_deactivate(
     const rclcpp_lifecycle::State &) {
   active_ = false;
+  stop_requested_.store(true, std::memory_order_release);
   clear_command_identity();
   return CallbackReturn::SUCCESS;
 }

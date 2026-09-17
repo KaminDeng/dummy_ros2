@@ -68,16 +68,18 @@ int main(int argc, char **argv) {
          std::chrono::steady_clock::now() < command_deadline) std::this_thread::yield();
   if (transferred && statistics().rejected_commands == 0U) return 13;
   system.on_error(rclcpp_lifecycle::State());
-  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-  while (statistics().blocked_stop_requests == 0U &&
-         std::chrono::steady_clock::now() < until) std::this_thread::yield();
-  if (statistics().blocked_stop_requests != 1U || statistics().commands_published != 0U) return 9;
   system.on_cleanup(rclcpp_lifecycle::State());
-  std::printf("D06 real_peer negative_path (no authorized motion): state=%llu status=%llu invalid=%llu command=%llu stop_blocked=%llu\n",
+  std::fprintf(stderr, "stop sent=%llu failed=%llu commands=%llu\n",
+      static_cast<unsigned long long>(statistics().stop_requests_sent),
+      static_cast<unsigned long long>(statistics().stop_request_failures),
+      static_cast<unsigned long long>(statistics().commands_published));
+  if (statistics().stop_requests_sent != 1U || statistics().stop_request_failures != 0U ||
+      statistics().commands_published != 0U) return 9;
+  std::printf("D06 real_peer negative_path (no authorized motion): state=%llu status=%llu invalid=%llu command=%llu stop_sent=%llu\n",
       static_cast<unsigned long long>(statistics().state_messages),
       static_cast<unsigned long long>(statistics().status_messages),
       static_cast<unsigned long long>(statistics().rejected_states),
       static_cast<unsigned long long>(statistics().commands_published),
-      static_cast<unsigned long long>(statistics().blocked_stop_requests));
+      static_cast<unsigned long long>(statistics().stop_requests_sent));
   return 0;
 }

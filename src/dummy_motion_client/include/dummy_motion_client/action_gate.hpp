@@ -36,6 +36,7 @@ class ActionGate {
  public:
   ActionGate(ManagementClient &, ActionPort &, JointProfile, std::uint64_t timeout_us=1000000);
   bool enable(const Authorization &, std::uint64_t now);
+  bool renew_permit(const Authorization &);
   bool submit(const Trajectory &, std::uint64_t now);
   void tick(std::uint64_t now);
   void observe(const ManageReply &, std::uint64_t now);
@@ -46,7 +47,11 @@ class ActionGate {
   void cancel(std::uint64_t now);
   void abort(const std::string &, std::uint64_t now);
   void invalidate_authorization(std::uint64_t now);
-  bool ready() const { return phase_==Phase::kHold && request_==0; }
+  bool ready() const { return phase_==Phase::kHold && request_==0 && authorization_.permit; }
+  bool permit_refresh_allowed() const {
+    return phase_==Phase::kHold && request_==0 && authorization_.session &&
+        authorization_.reference && !authorization_.permit;
+  }
   Terminal terminal() const { return terminal_; }
   std::uint64_t generation() const { return generation_; }
   const std::string &error() const { return error_; }

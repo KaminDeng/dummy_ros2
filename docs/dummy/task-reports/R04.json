@@ -1,14 +1,14 @@
 {
   "task": "R04",
   "status": "PASS",
-  "current_evidence": "build_dummy/reports/R04-repair.json",
+  "current_evidence": "build_dummy/reports/R04.json",
   "current_case_count": 10,
   "production_transport_ctest": "15/15 PASS",
   "production_transport_scope": "D06 real negative path plus synthetic component positive paths; no authorized real positive peer claimed",
   "hardware": "none",
   "contract": {
-    "release_id": "dummy-wire-v1",
-    "payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
+    "release_id": "dummy-wire-v2",
+    "payload_sorted_sha256": "39c460051675e0defe3529cb6c6e5ec518327576a3c8ed1607522a612daebaf1",
     "c04_commit": "803eff5",
     "c05_commit": "2c9392a"
   },

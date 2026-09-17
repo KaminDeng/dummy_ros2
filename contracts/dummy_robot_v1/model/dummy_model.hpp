@@ -4,7 +4,7 @@
 namespace dummy::model {
 struct Joint { const char* name; uint8_t can_node; int8_t direction; double gear_ratio; double lower; double upper; };
 inline constexpr Joint kJoints[6] = {
-    {"Joint1", 1U, -1, 30.0, -2.9670597283903604, 2.9670597283903604},
+    {"Joint1", 1U, -1, 50.0, -2.9670597283903604, 2.9670597283903604},
     {"Joint2", 2U, 1, 30.0, -1.2740903539558606, 1.5707963267948966},
     {"Joint3", 3U, -1, 30.0, 0.6108652381980153, 3.1415926535897931},
     {"Joint4", 4U, 1, 24.0, -3.1415926535897931, 3.1415926535897931},

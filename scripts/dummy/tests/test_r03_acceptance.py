@@ -17,9 +17,26 @@ C03_INCLUDE = ROOT / "contracts/dummy_robot_v1/codec"
 class R03AcceptanceTest(unittest.TestCase):
     def test_c05_wire_release_is_pinned_to_the_r03_handoff(self):
         manifest = json.loads((ROOT / "contracts/dummy_robot_v1/manifest.json").read_text())
-        self.assertEqual("dummy-wire-v1", manifest["release_id"])
+        self.assertEqual("dummy-wire-v2", manifest["release_id"])
         self.assertEqual("wire", manifest["stage"])
         self.assertEqual("2f9ebf1", manifest["r03_commit"])
+
+    def test_c03_prototype_is_pinned_and_not_mislabeled_wire_v1(self):
+        prefix = "contracts/dummy_robot_v1/c03_prototype/generated"
+        listing = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "2f9ebf1", prefix],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+        self.assertTrue(listing)
+        manifest = json.loads((ROOT / "contracts/dummy_robot_v1/manifest.json").read_text())
+        self.assertEqual("dummy-wire-v2", manifest["release_id"])
+        self.assertFalse(any(entry["path"].startswith("c03_prototype/") for entry in manifest["payloads"]))
+        for relative in listing:
+            expected = subprocess.run(
+                ["git", "show", f"2f9ebf1:{relative}"], cwd=ROOT,
+                capture_output=True, check=True,
+            ).stdout
+            self.assertEqual(expected, (ROOT / relative).read_bytes(), relative)
 
     def compile_and_run(self, source: Path) -> None:
         self.assertTrue(source.is_file(), f"missing R03 SUT: {source}")

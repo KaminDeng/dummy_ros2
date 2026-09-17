@@ -52,6 +52,8 @@ int main() {
       dummy_ros_control::GuardedZenbeddedSystem::active_joint_count_supported(2U)) return 10;
   if (system.on_error(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS ||
       !system.take_stop_request() || system.take_stop_request()) return 11;
+  if (system.on_deactivate(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS ||
+      !system.take_stop_request() || system.take_stop_request()) return 13;
   dummy_ros_control::JointStateSnapshot j1{};
   j1.envelope = {7U, 1U, 1U, 100U, 1U, 1U, 0U};
   j1.position.fill(NAN);

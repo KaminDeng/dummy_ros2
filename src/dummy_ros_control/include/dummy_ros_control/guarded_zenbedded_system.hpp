@@ -49,6 +49,9 @@ class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface 
   bool transfer_control_update() noexcept;
   std::uint64_t publish_drops() const noexcept;
   bool take_stop_request() noexcept;
+  bool stop_request_pending() const noexcept {
+    return stop_requested_.load(std::memory_order_acquire);
+  }
   TransportStatistics transport_statistics() const noexcept;
   void invalidate_transport_state(const CommandIdentity *retired_authority = nullptr) noexcept;
   void invalidate_authority_state(const CommandIdentity &retired_authority) noexcept;

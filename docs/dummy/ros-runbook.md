@@ -49,15 +49,20 @@ GET_OPERATION 终态，返回 `OPERATION_COMPLETE` 后才能继续：
 
 ```sh
 ros2 service call /device_action_gate/select_control_mode std_srvs/srv/Trigger
-ros2 service call /device_action_gate/grant_session std_srvs/srv/Trigger
 ros2 service call /device_action_gate/capture_bench_reference std_srvs/srv/Trigger
+ros2 service call /device_action_gate/grant_session std_srvs/srv/Trigger
 ros2 service call /device_action_gate/set_bench_permit std_srvs/srv/Trigger
 ros2 service call /device_action_gate/enable_hold std_srvs/srv/Trigger
 ```
 
 `/device_action_gate/enable` 保留为显式操作员便利入口，按顺序执行经过验证的
-Select/Grant/Capture/Permit/Enable bootstrap。launch、read/write 与硬件生命周期
+Select/Capture/Grant/Permit/Enable bootstrap。launch、read/write 与硬件生命周期
 回调均不会调用该服务。
+
+Permit 是单次运动授权。每个成功、取消或失败动作后，会话、reference 与 HOLD
+保持，但公开 action 会关闭新目标接收；操作员必须再次调用
+`/device_action_gate/set_bench_permit` 并等待 `bootstrap_status` 返回
+`OPERATION_COMPLETE`。coordinator 为每次显式授权生成不重复 nonce，不会重放已消费 digest。
 
 ## 实体 J1 只读声明
 

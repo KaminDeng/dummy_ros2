@@ -5,13 +5,13 @@
   "test_count": 23,
   "current_evidence": "build_dummy/reports/R06.json",
   "ros_commit": "93c30d0b9d1fdea90baf122a5ba46d996e3e838c",
-  "dpsdk_commit": "34fcf117c7200e4c1a4cc0db8993222b4ef0678c",
+  "dpsdk_commit": "78092cb84cb8a856938736d26497fb1e7512ee15",
   "dpsdk_fault_injection_commit": "eb9a63f4f974864325880f1fbfca9e6be4fc8c3b",
   "real_peer_bootstrap": {
     "sequence": [
       "SELECT_CONTROL_MODE",
-      "GRANT_SESSION",
       "CAPTURE_BENCH_REFERENCE",
+      "GRANT_SESSION",
       "SET_BENCH_PERMIT",
       "ENABLE_HOLD",
       "FIRST_HOLD_SAMPLE"
@@ -30,6 +30,7 @@
     "异常终止路径",
     "Complete 到新 HOLD 首拍",
     "不同 freshness ticket",
+    "每个后续动作使用新的单次 permit nonce",
     "未注册内部入口不能写设备"
   ],
   "not_run": [

@@ -48,7 +48,11 @@ struct Harness {
     require(client.requests.back().terminal_producer_seq()==17);
     ++epoch; gate.observe(response(),15); require(gate.terminal()==Terminal::kNone);
     require(gate.record_update(gate.generation(),epoch,1,Position{}));
-    gate.observe(response(true),16); require(gate.ready());
+    gate.observe(response(true),16); require(!gate.ready());
+    Authorization renewed; renewed.session=renewed.reference=renewed.permit=true;
+    renewed.identity.set_expected_session_id(1);
+    require(gate.renew_permit(renewed));
+    require(gate.ready());
   }
 };
 }  // namespace action_test

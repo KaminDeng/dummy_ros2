@@ -21,6 +21,11 @@ class R08Acceptance(unittest.TestCase):
         self.assertTrue(values["source_lock_present"])
         self.assertFalse(values["runtime_not_run_as_pass"])
         self.assertTrue(values["ros_gazebo_record_separate"])
+        self.assertTrue(values["wire_lock_matches_bundle"])
+        self.assertTrue(values["dpsdk_commit_matches"])
+        self.assertTrue(values["dpsdk_contract_clean"])
+        self.assertTrue(values["dpsdk_peer_current"])
+        self.assertTrue(values["runtime_reports_current"])
         self.assertTrue(values["requirement_observed"])
 
 

@@ -4,8 +4,8 @@
   "status": "RESOLVED",
   "hardware": "none",
   "wire_authority": {
-    "release": "dummy-wire-v1",
-    "payload_sorted_sha256": "d48062c16a506a43eda52d89030e91c2a53098b5ccdc78e3770e1e8c77d1e73a",
+    "release": "dummy-wire-v2",
+    "payload_sorted_sha256": "39c460051675e0defe3529cb6c6e5ec518327576a3c8ed1607522a612daebaf1",
     "operations": {
       "ENABLE_HOLD": 5,
       "BEGIN_MOTION": 6,
@@ -24,7 +24,7 @@
     }
   },
   "observed_dpsdk": {
-    "commit": "648582f",
+    "commit": "78092cb84cb8a856938736d26497fb1e7512ee15",
     "enum_alignment_commit": "a24c017",
     "source": "applications/dummy_ref_control/include/dummy_ref/core_types.hpp",
     "operations": {
@@ -40,15 +40,14 @@
   "impact": [
     "The operation/receipt/result/core-state enum drift is resolved by DPSDK commit a24c017.",
     "Runtime status identity is resolved by DPSDK commit 648582f.",
-    "DummyNode manage_v1 responses do not set device_id, profile_id, or operation_status; the production client rejects SELECT_CONTROL_MODE receipt identity before continuing bootstrap."
+    "DummyNode populates device_id, profile_id and operation_status; Capture-before-Grant and the rebuilt D08 peer pass ROS R06/R07."
   ],
   "ros_behavior": "ROS uses the published C05 values, accepts no legacy aliases, and retains strict runtime contract/profile/permit validation.",
   "resolution_required": [
     "Resolved: DPSDK maps published wire operation values and D06 passes 26/26.",
     "Resolved: D08 publishes runtime hashes and authorization status, with DISARMED raw-state visibility.",
-    "Every manage_v1 receipt/query response must populate device_id and profile_id from the addressed device/request.",
-    "GET_OPERATION terminal responses must populate the C05 operation_status value in addition to result_code.",
-    "D06/D08 acceptance must assert these decoded response fields for SELECT, GRANT, CAPTURE, PERMIT and ENABLE.",
-    "ROS reruns R06 and R07 cross-process cases against that committed artifact."
+    "Resolved: every manage_v1 receipt/query response populates device_id and profile_id.",
+    "Resolved: GET_OPERATION terminal responses populate operation_status and result_code.",
+    "Resolved: ROS R06 and R07 pass against the rebuilt Capture-before-Grant D08 peer."
   ]
 }

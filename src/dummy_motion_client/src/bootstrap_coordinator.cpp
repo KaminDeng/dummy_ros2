@@ -3,10 +3,20 @@
 #include <algorithm>
 
 namespace dummy_motion_client {
+bool BootstrapCoordinator::advance_permit_digest() noexcept {
+  for (std::size_t index=permit_digest_.size();index>0U;--index) {
+    if (++permit_digest_[index-1U] != 0U) return true;
+  }
+  return false;
+}
+
 BootstrapCoordinator::BootstrapCoordinator(
     ManagementClient &client, ManageRequest identity,
-    std::array<std::uint8_t, 32> permit_digest, std::uint64_t permit_remaining_us)
+    std::array<std::uint8_t, 32> permit_digest,
+    std::array<std::uint8_t, 32> compiled_policy_digest,
+    std::uint64_t permit_remaining_us)
     : client_(client), identity_(identity), permit_digest_(permit_digest),
+      compiled_policy_digest_(compiled_policy_digest),
       permit_remaining_us_(permit_remaining_us) {}
 
 bool BootstrapCoordinator::issue(ManageOperation operation, std::uint64_t now_us) {
@@ -14,7 +24,8 @@ bool BootstrapCoordinator::issue(ManageOperation operation, std::uint64_t now_us
   request.set_operation(wire_value(operation));
   request.set_expected_boot_epoch(snapshot_.boot_epoch);
   request.set_expected_session_id(
-      operation == ManageOperation::kSelectMode ? 0U : identity_.expected_session_id());
+      operation == ManageOperation::kSelectMode || operation == ManageOperation::kCaptureReference
+          ? 0U : identity_.expected_session_id());
   request.set_expected_reference_epoch(snapshot_.reference_epoch);
   request.set_expected_motion_epoch(snapshot_.motion_epoch);
   request.set_expected_management_epoch(snapshot_.management_epoch);
@@ -26,6 +37,8 @@ bool BootstrapCoordinator::issue(ManageOperation operation, std::uint64_t now_us
     std::uint8_t digest[32]{};
     std::copy(permit_digest_.begin(), permit_digest_.end(), digest);
     request.set_permit_sha256(digest);
+    std::copy(compiled_policy_digest_.begin(), compiled_policy_digest_.end(), digest);
+    request.set_compiled_policy_sha256(digest);
     request.set_permit_remaining_us(permit_remaining_us_);
     request.set_operator_confirmed(true);
   }
@@ -34,6 +47,12 @@ bool BootstrapCoordinator::issue(ManageOperation operation, std::uint64_t now_us
   if (request_id_ == 0U) {
     phase_ = BootstrapPhase::kFault;
     error_ = "BOOTSTRAP_TRANSPORT";
+    return false;
+  }
+  if (operation == ManageOperation::kSetPermit && !advance_permit_digest()) {
+    phase_ = BootstrapPhase::kFault;
+    error_ = "PERMIT_NONCE_EXHAUSTED";
+    request_id_ = 0U;
     return false;
   }
   return true;
@@ -45,7 +64,8 @@ bool BootstrapCoordinator::start(const BootstrapSnapshot &snapshot, std::uint64_
       snapshot.freshness_ticket == 0U || !snapshot.raw_ready ||
       !snapshot.motion_supported || identity_.expected_session_id() == 0U ||
       permit_remaining_us_ == 0U ||
-      std::all_of(permit_digest_.begin(), permit_digest_.end(), [](auto value) { return value == 0U; }))
+      std::all_of(permit_digest_.begin(), permit_digest_.end(), [](auto value) { return value == 0U; }) ||
+      std::all_of(compiled_policy_digest_.begin(), compiled_policy_digest_.end(), [](auto value) { return value == 0U; }))
     return false;
   snapshot_ = snapshot;
   automatic_ = true;
@@ -56,7 +76,8 @@ bool BootstrapCoordinator::start(const BootstrapSnapshot &snapshot, std::uint64_
 
 bool BootstrapCoordinator::start_operation(
     const BootstrapSnapshot &snapshot, ManageOperation operation, std::uint64_t now_us) {
-  if ((phase_ != BootstrapPhase::kIdle && phase_ != BootstrapPhase::kOperationComplete) ||
+  if ((phase_ != BootstrapPhase::kIdle && phase_ != BootstrapPhase::kOperationComplete &&
+       !(phase_ == BootstrapPhase::kReady && operation == ManageOperation::kSetPermit)) ||
       snapshot.boot_epoch == 0U || snapshot.profile_id == 0U ||
       snapshot.configured_mask == 0U || snapshot.freshness_ticket == 0U ||
       !snapshot.raw_ready || !snapshot.motion_supported) return false;
@@ -92,10 +113,15 @@ bool BootstrapCoordinator::precondition_for_next() const noexcept {
   if (snapshot_.management_epoch <= issued_management_epoch_) return false;
   switch (phase_) {
     case BootstrapPhase::kSelectMode: return snapshot_.session_id == 0U;
-    case BootstrapPhase::kGrantSession:
     case BootstrapPhase::kCaptureReference:
+      return snapshot_.session_id == 0U && snapshot_.reference_epoch != 0U && snapshot_.reference_kind != 0U;
+    case BootstrapPhase::kGrantSession:
+      return snapshot_.session_id == identity_.expected_session_id() && snapshot_.control_mode != 0U &&
+          snapshot_.reference_epoch != 0U && snapshot_.reference_kind != 0U;
     case BootstrapPhase::kSetPermit:
-      return snapshot_.session_id == identity_.expected_session_id();
+      return snapshot_.session_id == identity_.expected_session_id() && snapshot_.control_mode != 0U &&
+          snapshot_.reference_epoch != 0U && snapshot_.reference_kind != 0U &&
+          snapshot_.real_motion_permitted && snapshot_.permit_remaining_us != 0U;
     default: return false;
   }
 }
@@ -103,13 +129,12 @@ bool BootstrapCoordinator::precondition_for_next() const noexcept {
 void BootstrapCoordinator::advance(std::uint64_t now_us) {
   if (!precondition_for_next()) return;
   if (phase_ == BootstrapPhase::kSelectMode) {
-    phase_ = BootstrapPhase::kGrantSession;
-    issue(ManageOperation::kGrantSession, now_us);
-  } else if (phase_ == BootstrapPhase::kGrantSession) {
     phase_ = BootstrapPhase::kCaptureReference;
     issue(ManageOperation::kCaptureReference, now_us);
   } else if (phase_ == BootstrapPhase::kCaptureReference) {
-    if (snapshot_.reference_epoch == 0U) return;
+    phase_ = BootstrapPhase::kGrantSession;
+    issue(ManageOperation::kGrantSession, now_us);
+  } else if (phase_ == BootstrapPhase::kGrantSession) {
     phase_ = BootstrapPhase::kSetPermit;
     issue(ManageOperation::kSetPermit, now_us);
   } else if (phase_ == BootstrapPhase::kSetPermit) {
@@ -152,6 +177,9 @@ void BootstrapCoordinator::tick(std::uint64_t now_us) {
 
 std::optional<Authorization> BootstrapCoordinator::authorization() const {
   if (!ready() && !(operation_complete() && last_operation_ == ManageOperation::kSetPermit)) return {};
+  if (snapshot_.session_id != identity_.expected_session_id() || snapshot_.control_mode == 0U ||
+      snapshot_.reference_epoch == 0U || snapshot_.reference_kind == 0U ||
+      !snapshot_.real_motion_permitted || snapshot_.permit_remaining_us == 0U) return {};
   auto request = identity_;
   request.set_expected_boot_epoch(snapshot_.boot_epoch);
   request.set_expected_reference_epoch(snapshot_.reference_epoch);

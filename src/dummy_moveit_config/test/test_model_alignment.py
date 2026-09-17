@@ -96,7 +96,7 @@ class ModelAlignmentTest(unittest.TestCase):
         position = 0.1
         motor_rev = anchor + joint["direction"] * joint["gear_ratio"] * position / (2.0 * math.pi)
         restored = joint["direction"] * 2.0 * math.pi * (motor_rev - anchor) / joint["gear_ratio"]
-        self.assertAlmostEqual(2.0 - 3.0 / (2.0 * math.pi), motor_rev, places=12)
+        self.assertAlmostEqual(2.0 - 5.0 / (2.0 * math.pi), motor_rev, places=12)
         self.assertAlmostEqual(position, restored, places=12)
 
     def test_all_zero_pose_is_rejected_by_joint3_contract_range(self):

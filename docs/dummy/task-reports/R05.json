@@ -1,12 +1,12 @@
 {
   "task": "R05",
   "status": "PASS_WITH_LIMITATION",
-  "current_evidence": "build_dummy/reports/R05-repair.json",
+  "current_evidence": "build_dummy/reports/R05.json",
   "current_case_count": 7,
   "hardware": "none",
   "contract": {
     "model_release": "dummy-model-v1",
-    "payload_sorted_sha256": "f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634"
+    "payload_sorted_sha256": "dd7ae00d40325f34e80e5e49beca96a9074eaece1dd4657f5b63b5b1f0c29f43"
   },
   "completed_cases": {
     "ROS04_scene_presence": "PASS: Gazebo world is generated from scene.yaml; /get_planning_scene WORLD_OBJECT_GEOMETRY contains planning_barrier",
@@ -72,5 +72,5 @@
     "move_group exits -11 on Ctrl-C teardown in this environment; active service calls succeeded.",
     "No hardware IO or DPSDK device process was opened."
   ],
-  "next_action": "R06 device-backed integration remains blocked by DPSDK wire enum drift and the missing committed positive SIL peer."
+  "next_action": "R06 device-backed integration requires a D08 peer built with Capture-before-Grant bootstrap semantics."
 }

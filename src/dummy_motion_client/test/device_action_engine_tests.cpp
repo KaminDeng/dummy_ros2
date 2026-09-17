@@ -72,8 +72,10 @@ int main() {
   client.replies.push_back(reply(3,3)); gate.tick(10); check(gate.terminal()==Terminal::kNone);
   check(gate.record_update(gate.generation(),3,1,Position{}));
   client.replies.push_back(reply(3,3,true)); gate.tick(11);
-  const bool completion_barrier=gate.terminal()==Terminal::kSucceeded && gate.ready();
+  const bool completion_barrier=gate.terminal()==Terminal::kSucceeded && !gate.ready() &&
+      gate.permit_refresh_allowed();
   check(completion_barrier);
+  check(gate.renew_permit(authorization) && gate.ready());
   check(gate.submit(trajectory(),12)); client.replies.push_back(reply(4,4)); gate.tick(13);
   gate.cancel(14);
   const bool cancel_pending=port.cancels==1 && !gate.submit(trajectory(),14) && gate.terminal()==Terminal::kNone;
@@ -82,8 +84,10 @@ int main() {
   client.replies.push_back(reply(5,5)); gate.tick(16);
   check(gate.record_update(gate.generation(),5,1,Position{}));
   client.replies.push_back(reply(5,5,true)); gate.tick(17);
-  const bool cancel_barrier=cancel_pending && gate.terminal()==Terminal::kCanceled && gate.ready();
+  const bool cancel_barrier=cancel_pending && gate.terminal()==Terminal::kCanceled && !gate.ready() &&
+      gate.permit_refresh_allowed();
   check(cancel_barrier);
+  check(gate.renew_permit(authorization) && gate.ready());
   check(gate.submit(trajectory(),18)); client.replies.push_back(reply(6,6)); gate.tick(19);
   check(gate.record_update(gate.generation(),6,1,Position{}));
   client.replies.push_back(reply(6,6,true)); gate.tick(20);
@@ -96,6 +100,7 @@ int main() {
   client.replies.push_back(reply(7,7,true)); gate.tick(24);
   const bool abort_preserved=gate.terminal()==Terminal::kAborted && gate.error()=="PATH_TOLERANCE";
   check(abort_preserved);
+  check(gate.renew_permit(authorization) && gate.ready());
   check(gate.submit(trajectory(),25)); gate.cancel(26); gate.tick(2000000);
   const bool stop_timeout_aborted=gate.terminal()==Terminal::kAborted && gate.error()=="STOP_FAILED";
   check(stop_timeout_aborted);
@@ -118,6 +123,7 @@ int main() {
   check(polling_gate.record_update(polling_gate.generation(),3,1,Position{}));
   polling.replies.push_back(reply(3,3,true)); polling_gate.tick(9);
   check(polling_gate.terminal()==Terminal::kAborted && polling_gate.error()=="RESULT_UNCONFIRMED");
+  check(polling_gate.renew_permit(authorization) && polling_gate.ready());
   check(polling_gate.submit(trajectory(),10)); polling.replies.push_back(reply(4,4)); polling_gate.tick(11);
   check(polling_gate.record_update(polling_gate.generation(),4,1,Position{}));
   polling.replies.push_back(reply(4,4,true)); polling_gate.tick(12);
