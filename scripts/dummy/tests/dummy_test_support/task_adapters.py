@@ -73,6 +73,7 @@ def run_unittest_case(
     source_paths: tuple[str, ...],
     runtime_action: str | None = None,
     sut_kind: str = "document_utility",
+    python_executable: str | None = None,
 ) -> dict[str, Any]:
     expected = {"case_id": case_id, "hardware": "none", "test_only": True}
     if stimulus != expected:
@@ -106,7 +107,7 @@ def run_unittest_case(
             }
     try:
         completed = subprocess.run(
-            [sys.executable, "-m", "unittest", target, "-v"], cwd=ROOT,
+            [python_executable or sys.executable, "-m", "unittest", target, "-v"], cwd=ROOT,
             capture_output=True, text=True, check=False, timeout=90,
         )
         output = completed.stdout + completed.stderr

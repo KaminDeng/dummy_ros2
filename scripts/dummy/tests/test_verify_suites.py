@@ -81,30 +81,34 @@ class VerifySuitesTest(unittest.TestCase):
 
     def test_r01_runs_registered_model_suite(self):
         code, report = self.run_suite("R01")
-        self.assertEqual(4, code)
-        self.assertEqual("NOT_RUN", report["status"])
-        self.assertEqual(5, report["executed_test_count"])
+        self.assertEqual(0, code)
+        self.assertEqual("PASS", report["status"])
+        self.assertEqual(7, report["executed_test_count"])
 
     def test_r03_runs_registered_wire_rpc_suite(self):
         code, report = self.run_suite("R03")
-        self.assertEqual(4, code)
-        self.assertEqual("NOT_RUN", report["status"])
-        self.assertEqual(6, report["executed_test_count"])
+        self.assertEqual(0, code)
+        self.assertEqual("PASS", report["status"])
+        self.assertEqual(7, report["executed_test_count"])
 
     def test_r05_without_runtime_is_not_run(self):
         code, report = self.run_suite("R05")
         self.assertEqual(4, code)
         self.assertEqual("NOT_RUN", report["status"])
 
-    def test_r05_keeps_model_and_controller_contract_cases_offline(self):
+    def test_r05_executes_model_contract_and_requires_live_controller(self):
         from dummy_test_support.adapters import r05
 
-        for case_id in ("MOD06", "ROS11"):
-            evidence = r05.run_r05_case(case_id, {
-                "case_id": case_id, "hardware": "none", "test_only": True,
-            })
-            self.assertEqual("NOT_RUN", evidence["status"])
-            self.assertFalse(evidence["executed"])
+        model = r05.run_r05_case("MOD06", {
+            "case_id": "MOD06", "hardware": "none", "test_only": True,
+        })
+        self.assertEqual("PASS", model["status"])
+        self.assertTrue(model["executed"])
+        controller = r05.run_r05_case("ROS11", {
+            "case_id": "ROS11", "hardware": "none", "test_only": True,
+        })
+        self.assertEqual("NOT_RUN", controller["status"])
+        self.assertFalse(controller["executed"])
 
     def test_r04_runs_nonblocking_plugin_suite(self):
         code, report = self.run_suite("R04")

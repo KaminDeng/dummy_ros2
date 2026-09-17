@@ -17,31 +17,34 @@ DPSDK_BUNDLE = WORKSPACE_ROOT.parent / "dpsdk" / "contracts" / "dummy_robot_v2"
 class R01ContractTest(unittest.TestCase):
     def test_model_bundle_is_complete_and_hash_verified(self):
         manifest_path = BUNDLE / "manifest.json"
-        self.assertTrue(manifest_path.is_file(), "C02 model-v1 mirror is missing")
+        self.assertTrue(manifest_path.is_file(), "wire-v2 bundle is missing")
         manifest = json.loads(manifest_path.read_text())
 
-        self.assertIn(
-            (manifest["release_id"], manifest["stage"]),
-            (("dummy-model-v1", "model"), ("dummy-wire-v2", "wire")),
-        )
+        self.assertEqual("dummy_wire_release_v2", manifest["format"])
+        self.assertEqual("dummy-wire-v2", manifest["release_id"])
+        self.assertEqual(2, manifest["schema_major"])
         payloads = manifest["payloads"]
         paths = [entry["path"] for entry in payloads]
         self.assertEqual(sorted(paths), paths)
         self.assertEqual(len(paths), len(set(paths)))
 
         required = {
+            "codec/dp_dummy_robot_v2.hpp",
+            "codec/dp_dummy_robot_v2_dp_comm.hpp",
+            "codec/dp_dummy_robot_v2_static_requirements.h",
+            "codec/wire_layout.json",
+            "enums/dummy_enum_values_v2.json",
+            "idl/DummyDeviceStatusV2.msg",
+            "idl/DummyJointCommandV2.msg",
+            "idl/DummyJointStateV2.msg",
+            "idl/DummyManageV2.srv",
+            "metadata/dummy_robot_v2.yaml",
             "model/model.yaml",
-            "model/geometry_reference.yaml",
-            "profiles/profile_schema.json",
-            "profiles/gazebo_6dof.yaml",
             "profiles/sil_6dof.yaml",
             "profiles/sil_j1.yaml",
-            "profiles/f405_j1_passive.yaml",
             "profiles/f405_j1_bench.yaml",
-            "fixtures/can_golden.json",
-            "fixtures/fk_cases.json",
         }
-        self.assertTrue(required.issubset(paths))
+        self.assertEqual(required, set(paths))
         for entry in payloads:
             payload = BUNDLE / entry["path"]
             self.assertTrue(payload.is_file())

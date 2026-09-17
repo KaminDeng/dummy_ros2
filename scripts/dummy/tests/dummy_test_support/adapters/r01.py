@@ -29,4 +29,6 @@ def run_r01_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
         target = TARGETS[case_id]
     except KeyError as error:
         raise ValueError(f"unsupported R01 case: {case_id}") from error
-    return run_unittest_case(case_id, stimulus, target, SOURCES)
+    python_executable = "/usr/bin/python3" if case_id in {"MOD02", "MOD03"} else None
+    return run_unittest_case(
+        case_id, stimulus, target, SOURCES, python_executable=python_executable)
