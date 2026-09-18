@@ -66,7 +66,8 @@ inline bool position_only_capability_matches(const PositionOnlyCapability &expec
                                              const PositionOnlyCapability &observed) noexcept {
   if (!(expected.has_policy_hash && expected.has_limits && expected.has_control_timebase &&
         observed.has_policy_hash && observed.has_limits && observed.has_control_timebase &&
-        expected.configured_mask == 0x3fU && observed.configured_mask == expected.configured_mask &&
+        (expected.configured_mask == 0x01U || expected.configured_mask == 0x3fU) &&
+        observed.configured_mask == expected.configured_mask &&
         expected.capabilities == kPositionOnlyCapability &&
         (observed.capabilities & expected.capabilities) == expected.capabilities &&
         expected.control_timebase_us != 0U && expected.state_publish_period_us != 0U &&

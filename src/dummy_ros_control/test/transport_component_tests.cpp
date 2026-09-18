@@ -150,14 +150,47 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
       stimulus.state.set_produced_at_us(transport_steady_now_us());
     return ::write(output, &stimulus, sizeof(stimulus)) == sizeof(stimulus);
   };
+  auto send_rejected_state = [&](Stimulus stimulus) {
+    const auto before = transport.statistics();
+    return wait_for([&] {
+      if (!send(stimulus)) return false;
+      const auto after = transport.statistics();
+      return after.state_messages > before.state_messages &&
+             after.rejected_states > before.rejected_states;
+    });
+  };
   JointStateSnapshot snapshot{};
   auto unbound = valid;
   unbound.send_status = false;
   if (!wait_for([&] { send(unbound); return transport.statistics().rejected_states != 0U; }) ||
       system.copy_state(&snapshot)) return 48;
   if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 12;
+  auto stable_sequence = valid.state.state_seq();
+  auto observed_invalidations = transport.statistics().invalidations;
+  auto stable_since = std::chrono::steady_clock::now();
+  if (!wait_for([&] {
+        const auto statistics = transport.statistics();
+        if (statistics.invalidations != observed_invalidations) {
+          observed_invalidations = statistics.invalidations;
+          valid.state.set_state_seq(++stable_sequence);
+          stable_since = std::chrono::steady_clock::now();
+        }
+        send(valid);
+        if (!system.copy_state(&snapshot) || snapshot.envelope.state_seq != stable_sequence) {
+          stable_since = std::chrono::steady_clock::now();
+          return false;
+        }
+        return std::chrono::steady_clock::now() - stable_since >= std::chrono::milliseconds(100);
+      })) return 54;
   if (snapshot.position[0] != 0.25 ||
       (six_axis ? snapshot.position[1] != 0.2 : !std::isnan(snapshot.position[1]))) return 13;
+  auto restore_valid_snapshot = [&] {
+    valid.state.set_state_seq(++stable_sequence);
+    return wait_for([&] {
+      send(valid);
+      return system.copy_state(&snapshot) && snapshot.envelope.state_seq == stable_sequence;
+    });
+  };
   if (system.on_activate(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 14;
   set_command_identity({7U, 8U, 9U, 10U, 9007199254740997ULL});
   const auto generation = publish_control_update(positions, six_axis ? 6U : 1U, 0, nullptr);
@@ -177,27 +210,32 @@ int run_parent(const std::string &endpoint, int input, int output, bool six_axis
   auto invalid = valid;
   const double wrong_position[6]{0.75, NAN, NAN, NAN, NAN, NAN};
   invalid.state.set_position_rad(wrong_position);
-  const auto rejects = transport.statistics().rejected_states;
-  send(invalid);
-  if (!wait_for([&] { return transport.statistics().rejected_states > rejects; }) ||
+  if (!send_rejected_state(invalid) ||
       !system.copy_state(&snapshot) || snapshot.position[0] != 0.25) return 18;
   for (unsigned fault = 0U; fault < 9U; ++fault) {
-    auto wrong = valid;
-    wrong.state.set_state_seq(2U);
-    wrong.state.set_produced_at_us(transport_steady_now_us());
-    if (fault == 0U) { std::uint8_t other[16]{3U}; wrong.state.set_device_id(other); }
-    if (fault == 1U) wrong.state.set_profile_id(2U);
-    if (fault == 2U) wrong.state.set_configured_mask(six_axis ? 1U : 63U);
-    if (fault == 3U) wrong.state.set_produced_at_us(transport_steady_now_us() + 2000000U);
-    if (fault == 4U) wrong.state.set_produced_at_us(transport_steady_now_us() - 2000000U);
-    if (fault == 5U) wrong.state.set_session_id(99U);
-    if (fault == 6U) wrong.state.set_boot_epoch(99U);
-    if (fault == 7U) wrong.state.set_reference_epoch(99U);
-    if (fault == 8U) wrong.state.set_motion_epoch(99U);
-    const auto before = transport.statistics().rejected_states;
-    if (::write(output, &wrong, sizeof(wrong)) != sizeof(wrong) ||
-        !wait_for([&] { return transport.statistics().rejected_states > before; }) ||
-        !system.copy_state(&snapshot) || snapshot.position[0] != 0.25) return 21 + fault;
+    bool rejected_while_snapshot_retained = false;
+    for (unsigned attempt = 0U; attempt < 3U && !rejected_while_snapshot_retained; ++attempt) {
+      auto wrong = valid;
+      const auto sequence = stable_sequence + 1U;
+      wrong.state.set_state_seq(sequence);
+      wrong.state.set_produced_at_us(transport_steady_now_us());
+      if (fault == 0U) { std::uint8_t other[16]{3U}; wrong.state.set_device_id(other); }
+      if (fault == 1U) wrong.state.set_profile_id(2U);
+      if (fault == 2U) wrong.state.set_configured_mask(six_axis ? 1U : 63U);
+      if (fault == 3U) wrong.state.set_produced_at_us(transport_steady_now_us() + 2000000U);
+      if (fault == 4U) wrong.state.set_produced_at_us(transport_steady_now_us() - 2000000U);
+      if (fault == 5U) wrong.state.set_session_id(99U);
+      if (fault == 6U) wrong.state.set_boot_epoch(99U);
+      if (fault == 7U) wrong.state.set_reference_epoch(99U);
+      if (fault == 8U) wrong.state.set_motion_epoch(99U);
+      rejected_while_snapshot_retained = send_rejected_state(wrong) &&
+          system.copy_state(&snapshot) && snapshot.position[0] == 0.25;
+      if (!rejected_while_snapshot_retained && !restore_valid_snapshot()) return 21 + fault;
+    }
+    if (!rejected_while_snapshot_retained) return 21 + fault;
+    valid.state.set_state_seq(++stable_sequence);
+    if (!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
+                                  snapshot.envelope.state_seq == stable_sequence; })) return 30 + fault;
   }
   // A status authority transition must immediately invalidate old state and commands.
   // State carrying the previous authority cannot repopulate the snapshot.

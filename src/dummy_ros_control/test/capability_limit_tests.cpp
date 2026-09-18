@@ -21,6 +21,11 @@ int main() {
 
   auto observed = expected;
   if (!position_only_capability_matches(expected, observed)) return 1;
+  expected.configured_mask = 0x01U;
+  observed = expected;
+  if (!position_only_capability_matches(expected, observed)) return 12;
+  expected.configured_mask = 0x3fU;
+  observed = expected;
   observed.firmware_hash[0] = 6U;
   if (position_only_capability_matches(expected, observed)) return 2;
   observed = expected;
