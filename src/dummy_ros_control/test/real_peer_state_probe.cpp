@@ -49,7 +49,18 @@ int main(int argc, char **argv) {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  if (!observation) return 5;
+  if (!observation) {
+    const auto statistics = transport.statistics();
+    std::cerr << "transport_timeout states=" << statistics.state_messages
+              << " statuses=" << statistics.status_messages
+              << " rejected_states=" << statistics.rejected_states
+              << " bootstrap_rejections=" << statistics.bootstrap_rejections
+              << " invalidations=" << statistics.invalidations
+              << " ready=" << statistics.ready
+              << " initialization_failed=" << statistics.initialization_failed << '\n';
+    transport.stop();
+    return 5;
+  }
   namespace wire = dp::protocol::dummy_robot_v2;
   wire::DummyJointStateV2 state;
   wire::DummyDeviceStatusV2 status;

@@ -433,14 +433,22 @@ struct DeviceTransport::Impl {
     const dp::comm::TransportConfig transport{"peer", parameters.endpoint.c_str(), "", "dummy_ros_control"};
     auto initialized = dp::comm::Context::init(storage,
         dp::comm::InitOptions{dp::comm::MemoryMode::kStaticOnly, &transport, nullptr});
-    if (!initialized.has_value()) return false;
+    if (!initialized.has_value()) {
+      fprintf(stderr, "device transport context init failed result=%u endpoint=%s\\n",
+              static_cast<unsigned>(initialized.result()), parameters.endpoint.c_str());
+      return false;
+    }
     auto context = std::move(initialized).take_value();
     dp::comm::NodeOptions options{};
     options.product_name = "dummy_robot";
     std::copy(parameters.client_instance_id.begin(), parameters.client_instance_id.end(), options.device_id.bytes);
     options.node_name = "ros_control";
     auto created = context.create_node(options);
-    if (!created.has_value()) return false;
+    if (!created.has_value()) {
+      fprintf(stderr, "device transport node create failed result=%u\\n",
+              static_cast<unsigned>(created.result()));
+      return false;
+    }
     auto node = std::move(created).take_value();
     static constexpr char hex[] = "0123456789abcdef";
     std::string route = "/dpsdk/dummy_robot/";
@@ -450,13 +458,24 @@ struct DeviceTransport::Impl {
     auto status_result = node.create_subscription<Status>((route + "status_v2").c_str(), {}, receive_status, this);
     auto command_result = node.create_publisher<Command>((route + "command_v2").c_str(), {});
     auto management_result=node.create_client<Management>((route+"manage_v2").c_str());
-    if (!state_result.has_value() || !status_result.has_value() || !command_result.has_value() || !management_result.has_value()) return false;
+    if (!state_result.has_value() || !status_result.has_value() || !command_result.has_value() || !management_result.has_value()) {
+      fprintf(stderr, "device transport endpoint setup failed state=%u status=%u command=%u management=%u\\n",
+              static_cast<unsigned>(state_result.result()), static_cast<unsigned>(status_result.result()),
+              static_cast<unsigned>(command_result.result()), static_cast<unsigned>(management_result.result()));
+      return false;
+    }
     auto state_subscription = std::move(state_result).take_value();
     auto status_subscription = std::move(status_result).take_value();
     auto command_publisher = std::move(command_result).take_value();
     auto management_client=std::move(management_result).take_value();
     dp::comm::StaticExecutor executor;
-    if (executor.add_node(node) != dp::comm::Result::kOk || node.activate() != dp::comm::Result::kOk) return false;
+    const auto add_result = executor.add_node(node);
+    const auto activate_result = add_result == dp::comm::Result::kOk ? node.activate() : add_result;
+    if (add_result != dp::comm::Result::kOk || activate_result != dp::comm::Result::kOk) {
+      fprintf(stderr, "device transport activate failed add=%u activate=%u\\n",
+              static_cast<unsigned>(add_result), static_cast<unsigned>(activate_result));
+      return false;
+    }
     anchor_us = transport_steady_now_us();
     ready = true;
     management->ready=true;
