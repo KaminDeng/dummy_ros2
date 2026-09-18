@@ -128,6 +128,8 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_transport_peer_test.py"
     "${DPSDK_ROOT}/build/posix-zenohc/applications/dummy_ref_control/dummy_ref_posix_node"
     "$<TARGET_FILE:production_transport_tests>")
+  add_test(NAME production_transport_peer_discovery_tests COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/run_transport_peer_test_tests.py")
   set_tests_properties(production_transport_tests PROPERTIES TIMEOUT 40)
   set_tests_properties(production_transport_tests PROPERTIES LABELS "d06_real_peer;negative_path")
   foreach(r04_test IN ITEMS producer_tests stale_state_tests nonblocking_tests)
