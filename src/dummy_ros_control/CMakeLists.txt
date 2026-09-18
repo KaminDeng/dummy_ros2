@@ -177,6 +177,12 @@ if(BUILD_TESTING)
   target_link_libraries(command_channel_tests dummy_command_channel)
   add_test(NAME command_channel_tests COMMAND command_channel_tests)
 
+  foreach(position_only_test IN ITEMS capability_limit_tests latest_only_stream_tests)
+    add_executable(${position_only_test} test/${position_only_test}.cpp)
+    target_link_libraries(${position_only_test} dummy_guarded_zenbedded_system)
+    add_test(NAME ${position_only_test} COMMAND ${position_only_test})
+  endforeach()
+
   add_executable(dp_comm_worker_tests test/dp_comm_worker_tests.cpp)
   target_compile_definitions(dp_comm_worker_tests PRIVATE
     DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000 DP_COMM_TESTING=1)

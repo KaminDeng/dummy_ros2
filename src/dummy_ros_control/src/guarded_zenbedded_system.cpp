@@ -182,6 +182,12 @@ bool GuardedZenbeddedSystem::take_stop_request() noexcept {
   return stop_requested_.exchange(false, std::memory_order_acq_rel);
 }
 
+void GuardedZenbeddedSystem::request_transport_stop() noexcept {
+  active_.store(false, std::memory_order_release);
+  stop_requested_.store(true, std::memory_order_release);
+  clear_command_identity();
+}
+
 TransportStatistics GuardedZenbeddedSystem::transport_statistics() const noexcept {
   return transport_ ? transport_->statistics() : TransportStatistics{};
 }

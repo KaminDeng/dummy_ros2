@@ -76,6 +76,12 @@ bool parse_transport_parameters(
     if (!parse_number(age->second, &age_us) || age_us > 1000000U) return false;
     parsed.max_state_age_us = age_us;
   }
+  const auto state_period = values.find("state_publish_period_us");
+  if (state_period != values.end()) {
+    std::uint32_t period_us = 0U;
+    if (!parse_number(state_period->second, &period_us) || period_us > 1000000U) return false;
+    parsed.state_publish_period_us = period_us;
+  }
   *output = std::move(parsed);
   return true;
 }
@@ -89,6 +95,7 @@ struct DeviceTransport::Impl {
   std::atomic<std::uint64_t> states{0}, statuses{0}, rejected_states{0}, commands{0};
   std::atomic<std::uint64_t> rejected_commands{0}, invalidations{0};
   std::atomic<std::uint64_t> stop_requests_sent{0}, stop_request_failures{0};
+  std::atomic<std::uint64_t> heartbeat_warnings{0}, heartbeat_stops{0}, bootstrap_rejections{0};
   Status status{};
   std::uint64_t boot = 0U, anchor_us = 0U, last_received_us = 0U;
   std::uint32_t last_sequence = 0U;
@@ -96,13 +103,20 @@ struct DeviceTransport::Impl {
   std::uint64_t next_stop_request_id = 0x8000000000000001ULL;
   std::uint32_t next_stop_request_seq = 0x80000001U;
   bool has_sequence = false;
-  std::optional<CommandGenerationRecord> pending_command;
+  LatestOnlyCommandStream command_stream;
+  TransportHeartbeat heartbeat;
+  std::uint64_t group_sent_deadline_us = 0U;
+  bool bootstrap_ready = false;
+  bool heartbeat_warned = false;
+  bool heartbeat_stopped = false;
+  bool command_sent = false;
   std::array<std::uint64_t, 16> retired_boots{};
   std::size_t retired_count = 0U;
 
   Impl(GuardedZenbeddedSystem &target, TransportParameters config)
       : system(target), parameters(std::move(config)),
-        management(std::make_shared<DeviceManagementChannel>(parameters)) {
+        management(std::make_shared<DeviceManagementChannel>(parameters)),
+        heartbeat(parameters.state_publish_period_us) {
     std::lock_guard<std::mutex> lock(channel_registry_mutex);
     if(channel_registry.expired()) channel_registry=management;
   }
@@ -116,9 +130,10 @@ struct DeviceTransport::Impl {
     }
     if (retired_authority != nullptr) system.invalidate_authority_state(identity);
     else system.invalidate_transport_state();
-    if(pending_command && (!retired_authority || !command_record_current(*pending_command))) {
-      pending_command.reset(); ++rejected_commands;
-    }
+    bootstrap_ready = false;
+    group_sent_deadline_us = 0U;
+    command_sent = false;
+    command_stream.close_session();
     CommandGenerationRecord record{};
     while (system.take_publish_record(&record)) ++rejected_commands;
     boot = 0U;
@@ -173,6 +188,29 @@ struct DeviceTransport::Impl {
     if (self.boot != 0U && !self.matches_authority(value)) self.invalidate(&self.status);
     self.boot = value.boot_epoch();
     self.status = value;
+    PositionOnlyCapability observed{};
+    observed.configured_mask = value.configured_mask();
+    observed.capabilities = value.capabilities();
+    std::copy(std::begin(value.contract_sha256()), std::end(value.contract_sha256()), observed.contract_hash.begin());
+    std::copy(std::begin(value.model_sha256()), std::end(value.model_sha256()), observed.model_hash.begin());
+    std::copy(std::begin(value.profile_sha256()), std::end(value.profile_sha256()), observed.profile_hash.begin());
+    std::copy(std::begin(value.firmware_sha256()), std::end(value.firmware_sha256()), observed.firmware_hash.begin());
+    // v2 deliberately has no policy hash, per-axis limits, or control timebase.
+    observed.has_policy_hash = false;
+    observed.has_limits = false;
+    observed.has_control_timebase = false;
+    PositionOnlyCapability expected{};
+    expected.configured_mask = self.parameters.configured_mask;
+    expected.capabilities = kPositionOnlyCapability;
+    self.bootstrap_ready = position_only_capability_matches(expected, observed);
+    if (!self.bootstrap_ready) {
+      ++self.bootstrap_rejections;
+      self.system.invalidate_transport_state();
+    }
+    if (self.command_stream.acknowledge_committed(value.committed_producer_seq())) {
+      self.group_sent_deadline_us = 0U;
+      self.command_sent = false;
+    }
     {
       std::lock_guard<std::mutex> lock(self.management->mutex);
       auto &observation=self.management->observation;
@@ -186,12 +224,19 @@ struct DeviceTransport::Impl {
     State value;
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) return;
     ++self.states;
-    if (!self.matches(value) || self.boot == 0U || value.boot_epoch() != self.boot ||
+    const auto now = transport_steady_now_us();
+    const bool current_transport_state = self.matches(value) && self.boot != 0U &&
+        value.boot_epoch() == self.boot && self.matches_authority(value);
+    if (current_transport_state) {
+      self.heartbeat.observe_state(now);
+      self.heartbeat_warned = false;
+      self.heartbeat_stopped = false;
+    }
+    if (!self.bootstrap_ready || !self.matches(value) || self.boot == 0U || value.boot_epoch() != self.boot ||
         !self.matches_authority(value)) {
       ++self.rejected_states;
       return;
     }
-    const auto now = transport_steady_now_us();
     self.last_freshness_ticket = value.freshness_ticket();
     const StateExpectation expected{self.boot, self.parameters.profile_id, self.last_sequence,
         self.has_sequence, self.parameters.configured_mask, self.anchor_us, now,
@@ -256,12 +301,14 @@ struct DeviceTransport::Impl {
   }
 
   void publish_pending(dp::comm::Publisher<Command> &publisher) noexcept {
-    if(!pending_command) {
-      CommandGenerationRecord next{};
-      if(!system.take_publish_record(&next)) return;
-      pending_command=next;
-    }
-    const auto &record=*pending_command;
+    CommandGenerationRecord next{};
+    while (system.take_publish_record(&next)) command_stream.offer(next);
+    const auto candidate = command_sent ? std::optional<CommandGenerationRecord>{}
+                                        : (command_stream.has_in_flight()
+                                               ? command_stream.in_flight_record()
+                                               : command_stream.begin_send());
+    if (!candidate.has_value()) return;
+    const auto &record = *candidate;
     JointStateSnapshot snapshot{};
     const bool inactive_prime = management->inactive_prime_allowed.load(std::memory_order_acquire) ||
         status.core_state() == kWireEnablingHold;
@@ -269,9 +316,11 @@ struct DeviceTransport::Impl {
         (!system.commands_active() && !inactive_prime) || boot == 0U ||
         record.identity.boot != boot || record.identity.session != status.session_id() ||
         record.identity.reference_epoch != status.reference_epoch() ||
-        record.identity.motion_epoch != status.motion_epoch() || record.identity.ticket == 0U) {
+        record.identity.motion_epoch != status.motion_epoch() || record.identity.ticket == 0U ||
+        !bootstrap_ready) {
       ++rejected_commands;
-      pending_command.reset();
+      command_stream.discard_in_flight();
+      command_sent = false;
       return;
     }
     // On a busy state read, keep the original unsent generation. Authority and
@@ -301,9 +350,15 @@ struct DeviceTransport::Impl {
     message.set_position_rad(position);
     const auto published=publisher.publish(message);
     if(published==dp::comm::Result::kBusy || published==dp::comm::Result::kQueueFull) return;
-    if(published==dp::comm::Result::kOk) ++commands;
-    else ++rejected_commands;
-    pending_command.reset();
+    if(published==dp::comm::Result::kOk) {
+      ++commands;
+      command_sent = true;
+      group_sent_deadline_us = transport_steady_now_us() + parameters.state_publish_period_us;
+    } else {
+      ++rejected_commands;
+      command_stream.discard_in_flight();
+      command_sent = false;
+    }
   }
 
   bool run_connected() {
@@ -392,8 +447,25 @@ struct DeviceTransport::Impl {
       while (context.take_link_event(&event)) {
         if (event.state != dp::comm::LinkState::kReady) invalidate();
       }
-      if (last_received_us != 0U && transport_steady_now_us() - last_received_us > parameters.max_state_age_us) {
+      const auto now = transport_steady_now_us();
+      if (last_received_us != 0U && now - last_received_us > parameters.max_state_age_us) {
         invalidate();
+      }
+      const auto heartbeat_action = heartbeat.poll(now);
+      if (heartbeat_action == HeartbeatAction::kWarn && !heartbeat_warned) {
+        ++heartbeat_warnings;
+        heartbeat_warned = true;
+      }
+      if (heartbeat_action == HeartbeatAction::kStop && !heartbeat_stopped) {
+        ++heartbeat_stops;
+        heartbeat_stopped = true;
+        system.request_transport_stop();
+      }
+      if (group_sent_deadline_us != 0U && now > group_sent_deadline_us &&
+          (status.can_sent_mask() & parameters.configured_mask) != parameters.configured_mask) {
+        ++heartbeat_stops;
+        group_sent_deadline_us = 0U;
+        system.request_transport_stop();
       }
       if (management->inactive_prime_allowed.load(std::memory_order_acquire) ||
           status.core_state() == kWireEnablingHold)
@@ -450,7 +522,8 @@ void DeviceTransport::stop() {
 TransportStatistics DeviceTransport::statistics() const noexcept {
   return {impl_->states.load(), impl_->statuses.load(), impl_->rejected_states.load(), impl_->commands.load(),
           impl_->rejected_commands.load(), impl_->invalidations.load(), impl_->stop_requests_sent.load(),
-          impl_->stop_request_failures.load(),
+          impl_->stop_request_failures.load(), impl_->heartbeat_warnings.load(), impl_->heartbeat_stops.load(),
+          impl_->bootstrap_rejections.load(),
           impl_->ready.load(), impl_->failed.load()};
 }
 std::shared_ptr<DeviceManagementChannel> DeviceTransport::management_channel(const TransportParameters &parameters) noexcept {
