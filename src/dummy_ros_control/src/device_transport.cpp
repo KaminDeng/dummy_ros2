@@ -428,9 +428,9 @@ struct DeviceTransport::Impl {
   }
 
   bool run_connected() {
-    const dp::comm::StaticStorageConfig storage_config{1U, 1U, 2U, 0U, 8U, 301U, 96U, 0U, 1U, 1U, 1U};
+    const dp::comm::StaticStorageConfig storage_config{1U, 2U, 2U, 0U, 8U, 640U, 96U, 1U, 1U, 1U, 1U};
     dp::comm::StaticStorage storage(storage_config);
-    const dp::comm::TransportConfig transport{"client", parameters.endpoint.c_str(), "", "dummy_ros_control"};
+    const dp::comm::TransportConfig transport{"peer", parameters.endpoint.c_str(), "", "dummy_ros_control"};
     auto initialized = dp::comm::Context::init(storage,
         dp::comm::InitOptions{dp::comm::MemoryMode::kStaticOnly, &transport, nullptr});
     if (!initialized.has_value()) return false;
