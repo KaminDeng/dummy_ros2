@@ -5,6 +5,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstring>
+#include <sstream>
 #include <thread>
 
 #include "dp_comm/dp_comm.hpp"
@@ -39,6 +40,30 @@ bool parse_id(const std::string &text, std::array<std::uint8_t, 16> *id) {
   return combined != 0U;
 }
 
+bool parse_hash(const std::string &text, std::array<std::uint8_t, 32> *hash) {
+  if (text.size() != 64U) return false;
+  unsigned combined = 0U;
+  for (std::size_t index = 0U; index < hash->size(); ++index) {
+    unsigned value = 0U;
+    const char *begin = text.data() + index * 2U;
+    const auto parsed = std::from_chars(begin, begin + 2, value, 16);
+    if (parsed.ec != std::errc{} || parsed.ptr != begin + 2) return false;
+    (*hash)[index] = static_cast<std::uint8_t>(value);
+    combined |= value;
+  }
+  return combined != 0U;
+}
+
+bool parse_six_doubles(const std::string &text, std::array<double, 6> *values) {
+  std::istringstream input(text);
+  for (std::size_t axis = 0U; axis < values->size(); ++axis) {
+    if (!(input >> (*values)[axis]) || !std::isfinite((*values)[axis])) return false;
+    if (axis + 1U != values->size() && input.peek() == ',') input.get();
+  }
+  input >> std::ws;
+  return input.eof();
+}
+
 bool parse_number(const std::string &text, std::uint32_t *value) {
   const auto parsed = std::from_chars(text.data(), text.data() + text.size(), *value);
   return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && *value != 0U;
@@ -57,7 +82,11 @@ bool parse_transport_parameters(
     const std::unordered_map<std::string, std::string> &values,
     std::size_t joint_count, TransportParameters *output) {
   if (!output || (joint_count != 1U && joint_count != 6U)) return false;
-  for (const char *key : {"endpoint", "device_id", "client_instance_id", "profile_id", "configured_mask"})
+  for (const char *key : {"endpoint", "device_id", "client_instance_id", "profile_id", "configured_mask",
+                          "contract_sha256", "model_sha256", "profile_sha256", "firmware_sha256",
+                          "compiled_policy_sha256", "position_min_rad", "position_max_rad",
+                          "velocity_max_rad_s", "acceleration_max_rad_s", "control_period_us",
+                          "state_publish_period_us"})
     if (values.find(key) == values.end()) return false;
   TransportParameters parsed;
   parsed.endpoint = values.at("endpoint");
@@ -70,17 +99,29 @@ bool parse_transport_parameters(
       !parse_number(values.at("configured_mask"), &mask) ||
       mask != (joint_count == 1U ? 1U : 63U)) return false;
   parsed.configured_mask = static_cast<std::uint8_t>(mask);
+  std::uint32_t control_period_us = 0U;
+  std::uint32_t state_period_us = 0U;
+  if (!parse_hash(values.at("contract_sha256"), &parsed.contract_hash) ||
+      !parse_hash(values.at("model_sha256"), &parsed.model_hash) ||
+      !parse_hash(values.at("profile_sha256"), &parsed.profile_hash) ||
+      !parse_hash(values.at("firmware_sha256"), &parsed.firmware_hash) ||
+      !parse_hash(values.at("compiled_policy_sha256"), &parsed.policy_hash) ||
+      !parse_six_doubles(values.at("position_min_rad"), &parsed.position_min) ||
+      !parse_six_doubles(values.at("position_max_rad"), &parsed.position_max) ||
+      !parse_six_doubles(values.at("velocity_max_rad_s"), &parsed.velocity_max) ||
+      !parse_six_doubles(values.at("acceleration_max_rad_s"), &parsed.acceleration_max) ||
+      !parse_number(values.at("control_period_us"), &control_period_us) ||
+      !parse_number(values.at("state_publish_period_us"), &state_period_us)) return false;
+  parsed.control_period_us = control_period_us;
+  parsed.state_publish_period_us = state_period_us;
+  for (std::size_t axis = 0U; axis < parsed.position_min.size(); ++axis)
+    if (parsed.position_min[axis] >= parsed.position_max[axis] || parsed.velocity_max[axis] <= 0.0 ||
+        parsed.acceleration_max[axis] <= 0.0) return false;
   const auto age = values.find("max_state_age_us");
   if (age != values.end()) {
     std::uint32_t age_us = 0U;
     if (!parse_number(age->second, &age_us) || age_us > 1000000U) return false;
     parsed.max_state_age_us = age_us;
-  }
-  const auto state_period = values.find("state_publish_period_us");
-  if (state_period != values.end()) {
-    std::uint32_t period_us = 0U;
-    if (!parse_number(state_period->second, &period_us) || period_us > 1000000U) return false;
-    parsed.state_publish_period_us = period_us;
   }
   *output = std::move(parsed);
   return true;
@@ -144,11 +185,19 @@ struct DeviceTransport::Impl {
   }
 
   template <typename Message>
-  bool matches(const Message &message) const noexcept {
-    return message.schema_major() == 2U && message.schema_minor() == 0U &&
+  bool matches_common(const Message &message) const noexcept {
+    return
            std::equal(parameters.device_id.begin(), parameters.device_id.end(), message.device_id()) &&
            message.profile_id() == parameters.profile_id &&
            message.configured_mask() == parameters.configured_mask && message.boot_epoch() != 0U;
+  }
+
+  bool matches_status(const Status &message) const noexcept {
+    return message.schema_major() == 2U && message.schema_minor() >= 1U && matches_common(message);
+  }
+
+  bool matches_state(const State &message) const noexcept {
+    return message.schema_major() == 2U && message.schema_minor() == 0U && matches_common(message);
   }
 
   template <typename Message>
@@ -163,7 +212,7 @@ struct DeviceTransport::Impl {
     Status value;
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) return;
     ++self.statuses;
-    if (!self.matches(value)) return;
+    if (!self.matches_status(value)) return;
     if (std::find(self.retired_boots.begin(), self.retired_boots.end(), value.boot_epoch()) !=
         self.retired_boots.end()) return;
     if (self.boot == value.boot_epoch() && self.status.boot_epoch() == value.boot_epoch()) {
@@ -195,13 +244,30 @@ struct DeviceTransport::Impl {
     std::copy(std::begin(value.model_sha256()), std::end(value.model_sha256()), observed.model_hash.begin());
     std::copy(std::begin(value.profile_sha256()), std::end(value.profile_sha256()), observed.profile_hash.begin());
     std::copy(std::begin(value.firmware_sha256()), std::end(value.firmware_sha256()), observed.firmware_hash.begin());
-    // v2 deliberately has no policy hash, per-axis limits, or control timebase.
-    observed.has_policy_hash = false;
-    observed.has_limits = false;
-    observed.has_control_timebase = false;
+    std::copy(std::begin(value.compiled_policy_sha256()), std::end(value.compiled_policy_sha256()),
+              observed.policy_hash.begin());
+    for (std::size_t axis = 0U; axis < observed.limits.size(); ++axis) {
+      observed.limits[axis] = {value.position_min_rad()[axis], value.position_max_rad()[axis]};
+      observed.velocity_max[axis] = value.velocity_max_rad_s()[axis];
+      observed.acceleration_max[axis] = value.acceleration_max_rad_s()[axis];
+    }
+    observed.control_timebase_us = value.control_period_us();
+    observed.state_publish_period_us = value.state_publish_period_us();
     PositionOnlyCapability expected{};
     expected.configured_mask = self.parameters.configured_mask;
     expected.capabilities = kPositionOnlyCapability;
+    expected.contract_hash = self.parameters.contract_hash;
+    expected.model_hash = self.parameters.model_hash;
+    expected.profile_hash = self.parameters.profile_hash;
+    expected.firmware_hash = self.parameters.firmware_hash;
+    expected.policy_hash = self.parameters.policy_hash;
+    expected.control_timebase_us = self.parameters.control_period_us;
+    expected.state_publish_period_us = self.parameters.state_publish_period_us;
+    for (std::size_t axis = 0U; axis < expected.limits.size(); ++axis) {
+      expected.limits[axis] = {self.parameters.position_min[axis], self.parameters.position_max[axis]};
+      expected.velocity_max[axis] = self.parameters.velocity_max[axis];
+      expected.acceleration_max[axis] = self.parameters.acceleration_max[axis];
+    }
     self.bootstrap_ready = position_only_capability_matches(expected, observed);
     if (!self.bootstrap_ready) {
       ++self.bootstrap_rejections;
@@ -225,14 +291,14 @@ struct DeviceTransport::Impl {
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) return;
     ++self.states;
     const auto now = transport_steady_now_us();
-    const bool current_transport_state = self.matches(value) && self.boot != 0U &&
+    const bool current_transport_state = self.matches_state(value) && self.boot != 0U &&
         value.boot_epoch() == self.boot && self.matches_authority(value);
     if (current_transport_state) {
       self.heartbeat.observe_state(now);
       self.heartbeat_warned = false;
       self.heartbeat_stopped = false;
     }
-    if (!self.bootstrap_ready || !self.matches(value) || self.boot == 0U || value.boot_epoch() != self.boot ||
+    if (!self.bootstrap_ready || !self.matches_state(value) || self.boot == 0U || value.boot_epoch() != self.boot ||
         !self.matches_authority(value)) {
       ++self.rejected_states;
       return;

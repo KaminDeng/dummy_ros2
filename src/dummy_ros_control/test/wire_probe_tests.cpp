@@ -27,7 +27,7 @@ int main() {
   namespace wire = dp::protocol::dummy_robot_v2;
   static_assert(wire::DummyJointCommandV2Codec::kEncodedSize == 133U);
   static_assert(wire::DummyJointStateV2Codec::kEncodedSize == 301U);
-  static_assert(wire::DummyDeviceStatusV2Codec::kEncodedSize == 257U);
+  static_assert(wire::DummyDeviceStatusV2Codec::kEncodedSize == 497U);
   static_assert(wire::DummyManageV2RequestCodec::kEncodedSize == 225U);
   static_assert(wire::DummyManageV2ResponseCodec::kEncodedSize == 105U);
   static_assert(dp::comm::MessageCodec<wire::DummyManageV2Request>::kInterfaceId == 4141U);
@@ -50,6 +50,33 @@ int main() {
       decoded_command.session_id() != 9007199254740995ULL ||
       decoded_command.freshness_ticket() != 9007199254740997ULL ||
       decoded_command.position_rad()[5] != positions[5]) return 3;
+
+  wire::DummyDeviceStatusV2 status;
+  status.set_schema_major(2U);
+  status.set_schema_minor(1U);
+  status.set_configured_mask(0x3FU);
+  status.set_capabilities(1ULL << 2U);
+  status.set_control_period_us(10000U);
+  status.set_state_publish_period_us(10000U);
+  std::uint8_t policy[32]{};
+  policy[0] = 1U;
+  status.set_compiled_policy_sha256(policy);
+  const double position_min[6]{-1, -1, -1, -1, -1, -1};
+  const double position_max[6]{1, 1, 1, 1, 1, 1};
+  const double velocity_max[6]{1, 1, 1, 1, 1, 1};
+  const double acceleration_max[6]{2, 2, 2, 2, 2, 2};
+  status.set_position_min_rad(position_min);
+  status.set_position_max_rad(position_max);
+  status.set_velocity_max_rad_s(velocity_max);
+  status.set_acceleration_max_rad_s(acceleration_max);
+  std::uint8_t status_bytes[wire::DummyDeviceStatusV2Codec::kEncodedSize]{};
+  wire::DummyDeviceStatusV2 decoded_status;
+  if (wire::DummyDeviceStatusV2Codec::encode(status, status_bytes, sizeof(status_bytes)) != wire::CodecResult::kOk ||
+      wire::DummyDeviceStatusV2Codec::decode(status_bytes, sizeof(status_bytes), &decoded_status) != wire::CodecResult::kOk ||
+      decoded_status.schema_minor() != 1U || decoded_status.compiled_policy_sha256()[0] != 1U ||
+      decoded_status.position_min_rad()[0] != -1.0 || decoded_status.position_max_rad()[5] != 1.0 ||
+      decoded_status.velocity_max_rad_s()[2] != 1.0 || decoded_status.acceleration_max_rad_s()[4] != 2.0 ||
+      decoded_status.control_period_us() != 10000U || decoded_status.state_publish_period_us() != 10000U) return 13;
 
   wire::DummyManageV2Response queued;
   queued.set_schema_major(2U);

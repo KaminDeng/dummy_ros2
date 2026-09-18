@@ -140,7 +140,7 @@ if(BUILD_TESTING)
   add_executable(wire_probe_tests test/wire_probe_tests.cpp)
   target_compile_features(wire_probe_tests PRIVATE cxx_std_17)
   target_include_directories(wire_probe_tests PRIVATE
-    "${C03_PROTOTYPE_INCLUDE}"
+    "${DUMMY_WIRE_INCLUDE}"
     "${DPSDK_ROOT}/libraries/dp_comm/include")
   add_test(NAME wire_probe_tests COMMAND wire_probe_tests)
 

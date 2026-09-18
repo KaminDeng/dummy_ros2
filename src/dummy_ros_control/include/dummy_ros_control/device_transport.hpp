@@ -22,6 +22,16 @@ struct TransportParameters {
   std::uint8_t configured_mask = 0U;
   std::uint64_t max_state_age_us = 100000U;
   std::uint64_t state_publish_period_us = 10000U;
+  std::array<std::uint8_t, 32> contract_hash{};
+  std::array<std::uint8_t, 32> model_hash{};
+  std::array<std::uint8_t, 32> profile_hash{};
+  std::array<std::uint8_t, 32> firmware_hash{};
+  std::array<std::uint8_t, 32> policy_hash{};
+  std::array<double, 6> position_min{};
+  std::array<double, 6> position_max{};
+  std::array<double, 6> velocity_max{};
+  std::array<double, 6> acceleration_max{};
+  std::uint64_t control_period_us = 0U;
 };
 
 // The current v2 status cannot carry policy, limits, or timebase evidence.
@@ -41,8 +51,11 @@ struct PositionOnlyCapability {
   std::array<std::uint8_t, 32> firmware_hash{};
   std::array<std::uint8_t, 32> policy_hash{};
   std::array<PositionLimit, 6> limits{};
+  std::array<double, 6> velocity_max{};
+  std::array<double, 6> acceleration_max{};
   std::uint64_t capabilities = 0U;
   std::uint64_t control_timebase_us = 0U;
+  std::uint64_t state_publish_period_us = 0U;
   std::uint8_t configured_mask = 0U;
   bool has_policy_hash = true;
   bool has_limits = true;
@@ -56,13 +69,22 @@ inline bool position_only_capability_matches(const PositionOnlyCapability &expec
         expected.configured_mask == 0x3fU && observed.configured_mask == expected.configured_mask &&
         expected.capabilities == kPositionOnlyCapability &&
         (observed.capabilities & expected.capabilities) == expected.capabilities &&
+        expected.control_timebase_us != 0U && expected.state_publish_period_us != 0U &&
         observed.control_timebase_us == expected.control_timebase_us &&
+        observed.state_publish_period_us == expected.state_publish_period_us &&
         expected.contract_hash == observed.contract_hash && expected.model_hash == observed.model_hash &&
         expected.profile_hash == observed.profile_hash && expected.firmware_hash == observed.firmware_hash &&
         expected.policy_hash == observed.policy_hash)) return false;
-  for (std::size_t axis = 0U; axis < expected.limits.size(); ++axis)
+  for (std::size_t axis = 0U; axis < expected.limits.size(); ++axis) {
     if (expected.limits[axis].lower != observed.limits[axis].lower ||
-        expected.limits[axis].upper != observed.limits[axis].upper) return false;
+        expected.limits[axis].upper != observed.limits[axis].upper ||
+        !std::isfinite(expected.limits[axis].lower) || !std::isfinite(expected.limits[axis].upper) ||
+        expected.limits[axis].lower >= expected.limits[axis].upper ||
+        !std::isfinite(expected.velocity_max[axis]) || expected.velocity_max[axis] <= 0.0 ||
+        !std::isfinite(expected.acceleration_max[axis]) || expected.acceleration_max[axis] <= 0.0 ||
+        observed.velocity_max[axis] != expected.velocity_max[axis] ||
+        observed.acceleration_max[axis] != expected.acceleration_max[axis]) return false;
+  }
   return true;
 }
 

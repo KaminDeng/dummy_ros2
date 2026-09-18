@@ -16,7 +16,15 @@ int main(int argc, char **argv) {
       {"endpoint", argv[1]},
       {"device_id", "01000000000000000000000000000000"},
       {"client_instance_id", "02000000000000000000000000000000"},
-      {"profile_id", "1"}, {"configured_mask", "1"}};
+      {"profile_id", "1"}, {"configured_mask", "1"},
+      {"contract_sha256", "0101010101010101010101010101010101010101010101010101010101010101"},
+      {"model_sha256", "0202020202020202020202020202020202020202020202020202020202020202"},
+      {"profile_sha256", "0303030303030303030303030303030303030303030303030303030303030303"},
+      {"firmware_sha256", "0404040404040404040404040404040404040404040404040404040404040404"},
+      {"compiled_policy_sha256", "0505050505050505050505050505050505050505050505050505050505050505"},
+      {"position_min_rad", "-1,-1,-1,-1,-1,-1"}, {"position_max_rad", "1,1,1,1,1,1"},
+      {"velocity_max_rad_s", "1,1,1,1,1,1"}, {"acceleration_max_rad_s", "1,1,1,1,1,1"},
+      {"control_period_us", "10000"}, {"state_publish_period_us", "10000"}};
   if (!parse_transport_parameters(valid, 1U, &parameters)) return 1;
   if (parse_transport_parameters(valid, 6U, &parameters)) return 2;
   auto invalid = valid;
