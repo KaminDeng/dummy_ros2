@@ -27,7 +27,7 @@ int main() {
   namespace wire = dp::protocol::dummy_robot_v2;
   static_assert(wire::DummyJointCommandV2Codec::kEncodedSize == 133U);
   static_assert(wire::DummyJointStateV2Codec::kEncodedSize == 301U);
-  static_assert(wire::DummyDeviceStatusV2Codec::kEncodedSize == 497U);
+  static_assert(wire::DummyDeviceStatusV2Codec::kEncodedSize == 534U);
   static_assert(wire::DummyManageV2RequestCodec::kEncodedSize == 225U);
   static_assert(wire::DummyManageV2ResponseCodec::kEncodedSize == 105U);
   static_assert(dp::comm::MessageCodec<wire::DummyManageV2Request>::kInterfaceId == 4141U);

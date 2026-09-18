@@ -14,7 +14,7 @@ struct DeviceManagementRequest {
 };
 struct DeviceManagementObservation {
   std::array<std::uint8_t,301> state{};
-  std::array<std::uint8_t,257> status{};
+  std::array<std::uint8_t,534> status{};
   std::uint64_t state_received_us=0, status_received_us=0;
 };
 struct DeviceManagementChannel {
