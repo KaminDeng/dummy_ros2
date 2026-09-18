@@ -6,8 +6,8 @@ endif()
 set(paths
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp
-  build/posix-zenohc/core/dp_sdk_core/dp_osal/libdp_osal.a
-  build/posix-zenohc/thirdparty/zenoh-c/debug/target/debug/libzenohc.a)
+  build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a
+  build_dummy/g6-host/lib/libzenohpico.a)
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 foreach(changed IN LISTS paths)
   string(SHA256 case_id "${changed}")

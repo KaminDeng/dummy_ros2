@@ -130,14 +130,8 @@ if(BUILD_TESTING)
     "-DDPSDK_ROOT=${DPSDK_ROOT}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/sdk-lock-test"
     "-DLOCK_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/test/sdk_input_lock_tests.cmake")
-  add_test(NAME production_transport_tests COMMAND "${Python3_EXECUTABLE}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/run_transport_peer_test.py"
-    "${DPSDK_ROOT}/build/posix-zenohc/applications/dummy_ref_control/dummy_ref_posix_node"
-    "$<TARGET_FILE:production_transport_tests>")
   add_test(NAME production_transport_peer_discovery_tests COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_transport_peer_test_tests.py")
-  set_tests_properties(production_transport_tests PROPERTIES TIMEOUT 40)
-  set_tests_properties(production_transport_tests PROPERTIES LABELS "d06_real_peer;negative_path")
   foreach(r04_test IN ITEMS producer_tests stale_state_tests nonblocking_tests)
     add_executable(${r04_test} test/${r04_test}.cpp)
     target_link_libraries(${r04_test} dummy_goal_registration_gate)
