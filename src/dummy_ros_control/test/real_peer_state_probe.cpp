@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <thread>
@@ -23,6 +24,27 @@ int main(int argc, char **argv) {
   parameters.profile_id = profile;
   parameters.configured_mask = mask;
   parameters.max_state_age_us = 1000000U;
+  const auto parse_hash = [](const char *text, std::array<std::uint8_t, 32> *out) {
+    for (std::size_t i = 0; i < out->size(); ++i) {
+      unsigned value = 0U;
+      if (std::sscanf(text + i * 2U, "%2x", &value) != 1) return false;
+      (*out)[i] = static_cast<std::uint8_t>(value);
+    }
+    return true;
+  };
+  parse_hash("daaea5b72d4d38e3b71873b5c4db5f7272d0a9e708aa9f43ecffbf28aae59b0f", &parameters.contract_hash);
+  parse_hash("a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713", &parameters.model_hash);
+  parse_hash("9678a26c2614e02e715ca037d8c5512e6536b44fdf91385d96b50145a852373e", &parameters.profile_hash);
+  parse_hash("aa9e703cb390518d01e2ae46af1b84989ad33a70f60e7b16c9ec11c89bce67dc", &parameters.firmware_hash);
+  parse_hash("9678a26c2614e02e715ca037d8c5512e6536b44fdf91385d96b50145a852373e", &parameters.policy_hash);
+  parameters.position_min = {-3.2, -1.2740903539558606, 0.6108652381980153,
+                             -3.141592653589793, -2.0943951023931953, -12.566370614359172};
+  parameters.position_max = {3.2, 1.5707963267948966, 3.141592653589793,
+                             3.141592653589793, 2.0943951023931953, 12.566370614359172};
+  parameters.velocity_max.fill(0.5);
+  parameters.acceleration_max.fill(1.0);
+  parameters.control_period_us = 10000U;
+  parameters.state_publish_period_us = 50000U;
   dummy_ros_control::GuardedZenbeddedSystem system;
   dummy_ros_control::DeviceTransport transport(system, parameters);
   if (!transport.start()) return 4;
