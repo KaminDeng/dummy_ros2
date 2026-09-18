@@ -3,13 +3,13 @@
 set(sdk_locked_paths
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp
-  build/posix-zenohc/core/dp_sdk_core/dp_osal/libdp_osal.a
-  build/posix-zenohc/thirdparty/zenoh-c/debug/target/debug/libzenohc.a)
+  build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a
+  build_dummy/g6-host/lib/libzenohpico.a)
 set(sdk_locked_hashes
   6820ff1ae0d480f0f380a71d52cf8f08dcb50bba8b4c7486d3ed8c4f9148c6fa
   a069575a7eda2747036e8bf5b53bf0aa792b2ae9cb07ce7dfa6b309e3363ac0b
-  277d7411e0dd488244c4462e708c36a0c84f61fc99b5dddd61d2b77a4368b261
-  35893ad6c4814de71685b35a2316e04fba6b8d6d17497e0981968d8acf6806b3)
+  a3077be71373c41ddde0a3b50acba5d933e14b3f303cdfb3096b374b10db0d50
+  57748f3b30661cc1e90904f08d178a1b60663883bb5a4ddcfb26ef8d0f7173ab)
 set(sdk_lock_index 0)
 foreach(path IN LISTS sdk_locked_paths)
   if(NOT EXISTS "${DPSDK_ROOT}/${path}")

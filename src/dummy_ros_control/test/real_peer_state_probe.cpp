@@ -49,7 +49,6 @@ int main(int argc, char **argv) {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  transport.stop();
   if (!observation) return 5;
   namespace wire = dp::protocol::dummy_robot_v2;
   wire::DummyJointStateV2 state;
@@ -75,5 +74,7 @@ int main(int argc, char **argv) {
             << ",\"core_state\":" << status.core_state()
             << ",\"missing_axis\":" << static_cast<unsigned>(missing_axis)
             << ",\"auto_degraded\":false}\n";
+  std::cout.flush();
+  transport.stop();
   return valid ? 0 : 7;
 }

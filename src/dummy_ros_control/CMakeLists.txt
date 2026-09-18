@@ -21,11 +21,11 @@ add_library(dummy_dp_comm INTERFACE)
 set(DUMMY_DP_COMM_SDK_SOURCES
   "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like.cpp"
   "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like_transport.cpp"
-  "${DPSDK_ROOT}/platform/posix_native/dp_comm_zenohc_port/dp_comm_port.cpp")
+  "${DPSDK_ROOT}/platform/common/dp_comm_pico_port/dp_comm_port.cpp")
 set(DUMMY_DP_COMM_SDK_HASHES
   5e9ac76a760546738173b7f227f0adfa6dbe5c543dcb58d0b036823d0e48d65c
   c2f6a2ebdc691486a6daa98eb00ec0cc0c385b79983423eb7e086e9529face04
-  05a927e73df40d57ae8ed3fb889cc714f081b8907fd8f5fc23ebf1b9ad01037e)
+  0c4a4433cfaa3448b38bfe63c6ef1a5392f0a82af57217c6da7e060ae88a87ce)
 set(source_index 0)
 foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
   if(NOT EXISTS "${source}")
@@ -41,32 +41,38 @@ foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
 endforeach()
 # The prebuilt runtime uses a local-exec TLS relocation and cannot be loaded by
 # pluginlib. Compile only the unchanged transport sources as PIC in this build.
-add_library(dummy_dp_comm_pic STATIC ${DUMMY_DP_COMM_SDK_SOURCES})
+add_library(dummy_dp_comm_pic STATIC ${DUMMY_DP_COMM_SDK_SOURCES} src/zenoh_pico_log_shim.cpp)
 set_target_properties(dummy_dp_comm_pic PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(dummy_dp_comm_pic PUBLIC cxx_std_17)
 target_compile_definitions(dummy_dp_comm_pic PUBLIC
-  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
+  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=640 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
 target_compile_definitions(dummy_dp_comm_pic PRIVATE
-  DP_COMM_ZENOHC_TRUSTED_TRANSPORT=1 DP_COMM_DEFAULT_LOCAL_ONLY=1)
+  DP_COMM_DEFAULT_LOCAL_ONLY=1 ZENOH_LINUX ZENOH_C_STANDARD=11 ZENOH_COMPILER_GCC ZENOH_LOG_INFO
+  DPSDK_ALLOW_UNSAFE_LIBC_HEAP_FALLBACK=0 DPSDK_ENABLE_TLSF_HEAP=1
+  DP_OSAL_ENABLE_CHRONO=1 DP_OSAL_ENABLE_CONDITION_VAR=1 DP_OSAL_ENABLE_MEMORY_MANAGER=1
+  DP_OSAL_ENABLE_RW_LOCK=1 DP_OSAL_ENABLE_SPIN_LOCK=1 DP_OSAL_ENABLE_STATIC_ALLOC=0
+  DP_OSAL_ENABLE_THREAD_POOL=1 DP_OSAL_ENABLE_THREAD_SNAPSHOT=1 DP_OSAL_ENABLE_TIMER=1)
 target_include_directories(dummy_dp_comm_pic PRIVATE
   "${DPSDK_ROOT}/libraries/dp_comm/include"
   "${DPSDK_ROOT}/libraries/dp_comm/src"
-  "${DPSDK_ROOT}/platform/posix_native/dp_comm_zenohc_port"
+  "${DPSDK_ROOT}/platform/common/dp_comm_pico_port"
   "${DPSDK_ROOT}/platform/posix_native/kernel_port"
   "${DPSDK_ROOT}/platform/common/console_device"
   "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src"
   "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/interface"
   "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/debug"
   "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/impl/posix/include"
-  "${DPSDK_ROOT}/build/posix-zenohc/thirdparty/zenoh-c/debug/include")
+  "${DPSDK_ROOT}/build_dummy/g6-host"
+  "${DPSDK_ROOT}/platform/common/zenoh_port"
+  "${DPSDK_ROOT}/thirdparty/zenoh-pico/include")
 target_include_directories(dummy_dp_comm INTERFACE
   "${DUMMY_WIRE_INCLUDE}" "${DPSDK_ROOT}/libraries/dp_comm/include")
 target_compile_definitions(dummy_dp_comm INTERFACE
-  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
+  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=640 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
 target_link_libraries(dummy_dp_comm INTERFACE
   dummy_dp_comm_pic
-  "${DPSDK_ROOT}/build/posix-zenohc/core/dp_sdk_core/dp_osal/libdp_osal.a"
-  "${DPSDK_ROOT}/build/posix-zenohc/thirdparty/zenoh-c/debug/target/debug/libzenohc.a"
+  "${DPSDK_ROOT}/build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a"
+  "${DPSDK_ROOT}/build_dummy/g6-host/lib/libzenohpico.a"
   rt pthread m dl)
 if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v2.hpp")
   message(FATAL_ERROR "ROS C03 prototype mirror does not contain the Dummy generated codec")
