@@ -23,7 +23,7 @@ class DpCommCommandWorker {
     if (!system_->take_publish_record(&record)) return dp::comm::Result::kNotReady;
     WireCommand message;
     message.set_schema_major(2U);
-    message.set_schema_minor(0U);
+    message.set_schema_minor(4U);
     message.set_boot_epoch(record.identity.boot);
     message.set_session_id(record.identity.session);
     message.set_reference_epoch(record.identity.reference_epoch);

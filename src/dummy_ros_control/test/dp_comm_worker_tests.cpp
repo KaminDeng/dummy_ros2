@@ -14,7 +14,8 @@ void receive(dp::comm::BorrowedMessage<Message> borrowed, void *context) {
 }  // namespace
 
 int main() {
-  dp::comm::StaticStorageConfig config{1U, 2U, 2U, 0U, 6U, 618U, 96U};
+  dp::comm::StaticStorageConfig config{1U, 2U, 2U, 0U, 6U,
+      dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kEncodedSize, 96U};
   dp::comm::StaticStorage storage(config);
   auto context_result = dp::comm::Context::init(storage, dp::comm::MemoryMode::kStaticOnly);
   if (!context_result.has_value()) return 1;
@@ -53,7 +54,7 @@ int main() {
       worker.publish_one() != dp::comm::Result::kNotReady) return 6;
   State feedback;
   feedback.set_schema_major(2U);
-  feedback.set_schema_minor(0U);
+  feedback.set_schema_minor(4U);
   feedback.set_boot_epoch(9U);
   feedback.set_profile_id(7U);
   feedback.set_state_seq(101U);

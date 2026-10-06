@@ -46,6 +46,16 @@ def main():
             response = enable.call_async(Trigger.Request())
             rclpy.spin_until_future_complete(node, response, timeout_sec=2)
             assert response.done() and not response.result().success, "enable without device authority was accepted"
+            renewal = node.create_client(Trigger, "/device_action_gate/renew_session_lease")
+            assert renewal.wait_for_service(timeout_sec=2), "explicit lease renewal service missing"
+            response = renewal.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(node, response, timeout_sec=2)
+            assert response.done() and not response.result().success, "renewal without device authority was accepted"
+            rejection = node.create_client(Trigger, "/device_action_gate/last_goal_rejection")
+            assert rejection.wait_for_service(timeout_sec=2), "goal rejection receipt service missing"
+            response = rejection.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(node, response, timeout_sec=2)
+            assert response.done() and not response.result().success, "receipt exists before goal rejection"
             variants = ("nan", "infinity", "unknown_joint", "empty", "negative_time", "terminal_velocity", "out_of_range")
             for variant in variants:
                 goal = FollowJointTrajectory.Goal()
@@ -63,6 +73,9 @@ def main():
                 future = client.send_goal_async(goal)
                 rclpy.spin_until_future_complete(node, future, timeout_sec=3)
                 assert future.done() and not future.result().accepted, variant
+            response = rejection.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(node, response, timeout_sec=2)
+            assert response.done() and not response.result().success, "invalid goals produced a renewal receipt"
             time.sleep(0.1)
             log.seek(0)
             output = log.read()

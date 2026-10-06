@@ -1,5 +1,17 @@
 <?xml version="1.0" ?>
 <robot name="dummy-ros2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="Joint1_lower" default="-2.9670597283903604"/>
+  <xacro:arg name="Joint1_upper" default="2.9670597283903604"/>
+  <xacro:arg name="Joint2_lower" default="-1.2740903539558606"/>
+  <xacro:arg name="Joint2_upper" default="1.5707963267948966"/>
+  <xacro:arg name="Joint3_lower" default="0.6108652381980153"/>
+  <xacro:arg name="Joint3_upper" default="3.141592653589793"/>
+  <xacro:arg name="Joint4_lower" default="-3.141592653589793"/>
+  <xacro:arg name="Joint4_upper" default="3.141592653589793"/>
+  <xacro:arg name="Joint5_lower" default="-2.0943951023931953"/>
+  <xacro:arg name="Joint5_upper" default="2.0943951023931953"/>
+  <xacro:arg name="Joint6_lower" default="-12.566370614359172"/>
+  <xacro:arg name="Joint6_upper" default="12.566370614359172"/>
 
 <xacro:include filename="$(find dummy-ros2_description)/urdf/materials.xacro" />
 <xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.trans" />
@@ -156,8 +168,8 @@
   <child link="link1_1_1"/>
   <axis xyz="0.0 -0.0 -1.0"/>
   <limit
-    lower="-2.9670597283903604"
-    upper="2.9670597283903604"
+    lower="$(arg Joint1_lower)"
+    upper="$(arg Joint1_upper)"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -168,8 +180,8 @@
   <child link="link2_1_1"/>
   <axis xyz="-1.0 -0.0 0.0"/>
   <limit
-    lower="-1.2740903539558606"
-    upper="1.5707963267948966"
+    lower="$(arg Joint2_lower)"
+    upper="$(arg Joint2_upper)"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -180,8 +192,8 @@
   <child link="link3_1_1"/>
   <axis xyz="-1.0 0.0 -0.0"/>
   <limit
-    lower="0.6108652381980153"
-    upper="3.141592653589793"
+    lower="$(arg Joint3_lower)"
+    upper="$(arg Joint3_upper)"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -192,8 +204,8 @@
   <child link="link4_1_1"/>
   <axis xyz="0.0 -1.0 0.0"/>
   <limit
-    lower="-3.141592653589793"
-    upper="3.141592653589793"
+    lower="$(arg Joint4_lower)"
+    upper="$(arg Joint4_upper)"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -204,8 +216,8 @@
   <child link="link5_1_1"/>
   <axis xyz="-1.0 0.0 -0.0"/>
   <limit
-    lower="-2.0943951023931953"
-    upper="2.0943951023931953"
+    lower="$(arg Joint5_lower)"
+    upper="$(arg Joint5_upper)"
     effort="150"
     velocity="3.15" />
 </joint>
@@ -216,8 +228,8 @@
   <child link="link6_1_1"/>
   <axis xyz="-0.0 -1.0 0.0"/>
   <limit
-    lower="-12.566370614359172"
-    upper="12.566370614359172"
+    lower="$(arg Joint6_lower)"
+    upper="$(arg Joint6_upper)"
     effort="150"
     velocity="3.15" />
 </joint>

@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<robot name="dummy-ros2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.xacro"/>
+
+  <xacro:arg name="endpoint" default=""/>
+  <xacro:arg name="device_id" default=""/>
+  <xacro:arg name="client_instance_id" default=""/>
+  <xacro:arg name="profile_id" default=""/>
+  <xacro:arg name="configured_mask" default=""/>
+  <xacro:arg name="contract_sha256" default=""/>
+  <xacro:arg name="model_sha256" default=""/>
+  <xacro:arg name="profile_sha256" default=""/>
+  <xacro:arg name="firmware_sha256" default=""/>
+  <xacro:arg name="compiled_policy_sha256" default=""/>
+  <xacro:arg name="position_min_rad" default=""/>
+  <xacro:arg name="position_max_rad" default=""/>
+  <xacro:arg name="velocity_max_rad_s" default=""/>
+  <xacro:arg name="acceleration_max_rad_s" default=""/>
+  <xacro:arg name="control_period_us" default=""/>
+  <xacro:arg name="state_publish_period_us" default=""/>
+  <xacro:arg name="max_state_age_us" default=""/>
+  <xacro:arg name="heartbeat_stop_budget_us" default=""/>
+  <xacro:arg name="raw_evidence_path" default=""/>
+
+  <xacro:macro name="required_param" params="key value">
+    <param name="${key}">${value if value else 1/0}</param>
+  </xacro:macro>
+
+  <ros2_control name="dummy_ref_real_6dof" type="system">
+    <hardware>
+      <plugin>dummy_ros_control/GuardedZenbeddedSystem</plugin>
+      <xacro:required_param key="endpoint" value="$(arg endpoint)"/>
+      <param name="device_id">${'$(arg device_id)' if '$(arg device_id)' else 1/0}</param>
+      <param name="client_instance_id">${'$(arg client_instance_id)' if '$(arg client_instance_id)' else 1/0}</param>
+      <xacro:required_param key="profile_id" value="$(arg profile_id)"/>
+      <xacro:required_param key="configured_mask" value="$(arg configured_mask)"/>
+      <param name="contract_sha256">${'$(arg contract_sha256)' if '$(arg contract_sha256)' else 1/0}</param>
+      <param name="model_sha256">${'$(arg model_sha256)' if '$(arg model_sha256)' else 1/0}</param>
+      <param name="profile_sha256">${'$(arg profile_sha256)' if '$(arg profile_sha256)' else 1/0}</param>
+      <param name="firmware_sha256">${'$(arg firmware_sha256)' if '$(arg firmware_sha256)' else 1/0}</param>
+      <param name="compiled_policy_sha256">${'$(arg compiled_policy_sha256)' if '$(arg compiled_policy_sha256)' else 1/0}</param>
+      <xacro:required_param key="position_min_rad" value="$(arg position_min_rad)"/>
+      <xacro:required_param key="position_max_rad" value="$(arg position_max_rad)"/>
+      <xacro:required_param key="velocity_max_rad_s" value="$(arg velocity_max_rad_s)"/>
+      <xacro:required_param key="acceleration_max_rad_s" value="$(arg acceleration_max_rad_s)"/>
+      <xacro:required_param key="control_period_us" value="$(arg control_period_us)"/>
+      <xacro:required_param key="state_publish_period_us" value="$(arg state_publish_period_us)"/>
+      <xacro:required_param key="max_state_age_us" value="$(arg max_state_age_us)"/>
+      <xacro:required_param key="heartbeat_stop_budget_us" value="$(arg heartbeat_stop_budget_us)"/>
+      <xacro:if value="${bool(xacro.arg('raw_evidence_path'))}">
+        <param name="raw_evidence_path">$(arg raw_evidence_path)</param>
+      </xacro:if>
+    </hardware>
+    <joint name="Joint1"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
+    <joint name="Joint2"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
+    <joint name="Joint3"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
+    <joint name="Joint4"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
+    <joint name="Joint5"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
+    <joint name="Joint6"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
+  </ros2_control>
+</robot>

@@ -23,7 +23,8 @@ if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp")
   message(FATAL_ERROR "The published DPSDK manage_v2 wire codec is required")
 endif()
 add_library(dummy_device_action STATIC
-  src/action_gate.cpp src/bootstrap_coordinator.cpp src/management_client.cpp)
+  src/action_gate.cpp src/bench_permit.cpp src/bootstrap_coordinator.cpp src/management_client.cpp)
+target_link_libraries(dummy_device_action PUBLIC OpenSSL::Crypto)
 target_compile_features(dummy_device_action PUBLIC cxx_std_17)
 target_include_directories(dummy_device_action PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -31,6 +32,7 @@ target_include_directories(dummy_device_action PUBLIC
   $<INSTALL_INTERFACE:include>)
 add_executable(native_action_gate src/native_action_gate.cpp)
 add_library(dummy_dp_management STATIC src/dp_management_transport.cpp)
+target_compile_definitions(dummy_dp_management PUBLIC DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=651)
 target_link_libraries(dummy_dp_management PUBLIC dummy_device_action dummy_ros_control::dummy_dp_comm
   dummy_ros_control::dummy_guarded_zenbedded_system)
 add_library(dummy_device_profile STATIC src/device_profile.cpp)
@@ -38,52 +40,138 @@ target_link_libraries(dummy_device_profile PUBLIC dummy_device_action PRIVATE ya
 add_library(dummy_native_goal_validation STATIC src/native_goal_validation.cpp)
 target_link_libraries(dummy_native_goal_validation dummy_device_action)
 ament_target_dependencies(dummy_native_goal_validation control_msgs)
+add_library(dummy_goal_timeline STATIC src/goal_timeline.cpp)
+target_include_directories(dummy_goal_timeline PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(dummy_goal_timeline PUBLIC cxx_std_17)
 target_link_libraries(native_action_gate dummy_native_goal_validation)
 target_compile_features(native_action_gate PRIVATE cxx_std_17)
 ament_target_dependencies(native_action_gate control_msgs rclcpp rclcpp_action)
 add_executable(device_action_gate src/device_action_gate.cpp)
 target_link_libraries(device_action_gate dummy_dp_management dummy_native_goal_validation dummy_device_profile
-  dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel)
+  dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
+  dummy_goal_timeline)
 ament_target_dependencies(device_action_gate controller_manager control_msgs rclcpp rclcpp_action
   controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
 install(TARGETS device_action_gate DESTINATION lib/${PROJECT_NAME})
 install(TARGETS native_action_gate DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
+  add_executable(goal_timeline_tests test/goal_timeline_tests.cpp)
+  target_link_libraries(goal_timeline_tests PRIVATE dummy_goal_timeline Threads::Threads)
+  add_test(NAME goal_timeline_tests COMMAND goal_timeline_tests)
+  set_tests_properties(goal_timeline_tests PROPERTIES LABELS "component_only;offline")
+  add_executable(serial_pty_bridge test/serial_pty_bridge.cpp)
+  target_link_libraries(serial_pty_bridge PRIVATE Threads::Threads)
+  add_executable(bench_permit_tests test/bench_permit_tests.cpp)
+  target_link_libraries(bench_permit_tests dummy_device_action)
+  add_test(NAME bench_permit_tests COMMAND bench_permit_tests)
   add_executable(c05_action_peer test/c05_action_peer.cpp)
   target_link_libraries(c05_action_peer dummy_dp_management dummy_device_profile)
   add_executable(device_profile_tests test/device_profile_tests.cpp)
   target_link_libraries(device_profile_tests dummy_device_profile)
-  add_test(NAME device_profile_tests COMMAND device_profile_tests "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2")
+  add_test(NAME device_profile_tests COMMAND device_profile_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2"
+    "${DPSDK_ROOT}/contracts/dummy_robot_v2")
+  add_executable(application_hold_candidate_profile_tests test/application_hold_candidate_profile_tests.cpp)
+  target_link_libraries(application_hold_candidate_profile_tests dummy_device_profile)
+  add_test(NAME application_hold_candidate_profile_tests COMMAND application_hold_candidate_profile_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../dpsdk/build_dummy/reports/no-load-dev-candidate-7d89-20261001"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../dpsdk/contracts/dummy_robot_v2")
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME device_action_e2e_fixture
+    COMMAND ${Python3_EXECUTABLE} -m pytest -q
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_device_action_e2e_fixture.py)
+  set_tests_properties(device_action_e2e_fixture PROPERTIES
+    ENVIRONMENT "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" LABELS "component_only;offline")
+  add_test(NAME device_action_activation_wiring
+    COMMAND ${Python3_EXECUTABLE} -m pytest -q
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_device_action_activation_wiring.py)
+  set_tests_properties(device_action_activation_wiring PROPERTIES
+    ENVIRONMENT "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" LABELS "component_only;offline")
   add_test(NAME device_action_public_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_public_probe.py $<TARGET_FILE:device_action_gate>)
   set_tests_properties(device_action_public_probe PROPERTIES TIMEOUT 30 LABELS "component_only;ros_action")
+  set(DUMMY_D08_PEER_EXECUTABLE "$ENV{DUMMY_D08_PEER_EXECUTABLE}" CACHE FILEPATH
+    "DPSDK D08 peer executable for device_action_e2e_probe")
+  if(NOT DUMMY_D08_PEER_EXECUTABLE)
+    set(DUMMY_D08_PEER_EXECUTABLE
+      "${DPSDK_ROOT}/build_dummy/v2-tests/applications/dummy_ref_control/dummy_ref_d08_device_peer")
+  endif()
   add_test(NAME device_action_e2e_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    ${DPSDK_ROOT}/build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer
+    "${DUMMY_D08_PEER_EXECUTABLE}"
     ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real)
+  add_test(NAME device_action_smoke_probe COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
+    "${DUMMY_D08_PEER_EXECUTABLE}"
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real_smoke)
+  add_test(NAME device_action_six_axis_smoke_probe COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
+    "${DUMMY_D08_PEER_EXECUTABLE}"
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real_six_axis_smoke)
   add_test(NAME device_motion_unsupported_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
     $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 unsupported)
+  add_test(NAME device_motion_supported_probe COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
+    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2)
+  add_test(NAME device_motion_six_axis_smoke_probe COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
+    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 six_axis_smoke)
   set_tests_properties(device_action_e2e_probe PROPERTIES
-    TIMEOUT 60 SKIP_RETURN_CODE 77 LABELS "real_dpsdk_peer;ros_action")
+    TIMEOUT 60 ENVIRONMENT "DUMMY_E2E_TRANSPORT=serial"
+    LABELS "real_dpsdk_peer;ros_action;bench_release")
+  set_tests_properties(device_action_smoke_probe PROPERTIES
+    TIMEOUT 45 ENVIRONMENT "DUMMY_E2E_TRANSPORT=serial;DUMMY_E2E_STATE_PERIOD_US=20000"
+    LABELS "real_dpsdk_peer;ros_action;offline_smoke")
+  set_tests_properties(device_action_six_axis_smoke_probe PROPERTIES
+    TIMEOUT 45 ENVIRONMENT "DUMMY_E2E_TRANSPORT=serial;DUMMY_E2E_STATE_PERIOD_US=20000"
+    LABELS "real_dpsdk_peer;ros_action;offline_smoke;six_axis")
   set_tests_properties(device_motion_unsupported_probe PROPERTIES
-    TIMEOUT 45 LABELS "component_only;synthetic_peer;ros_action")
+    TIMEOUT 45 ENVIRONMENT "DUMMY_E2E_TRANSPORT=serial" LABELS "component_only;synthetic_peer;ros_action")
+  set_tests_properties(device_motion_supported_probe PROPERTIES
+    TIMEOUT 60 ENVIRONMENT "DUMMY_E2E_TRANSPORT=serial;DUMMY_E2E_STATE_PERIOD_US=20000"
+    LABELS "component_only;synthetic_peer;ros_action")
+  set_tests_properties(device_motion_six_axis_smoke_probe PROPERTIES
+    TIMEOUT 45 ENVIRONMENT "DUMMY_E2E_TRANSPORT=serial"
+    LABELS "component_only;synthetic_peer;ros_action;offline_smoke;six_axis")
+  set_property(TEST device_action_e2e_fixture device_action_e2e_probe device_action_smoke_probe
+    device_action_six_axis_smoke_probe device_motion_unsupported_probe
+    device_motion_supported_probe device_motion_six_axis_smoke_probe
+    APPEND PROPERTY ENVIRONMENT "DUMMY_SERIAL_BRIDGE_EXECUTABLE=$<TARGET_FILE:serial_pty_bridge>")
   add_executable(device_goal_validation_tests test/device_goal_validation_tests.cpp)
   target_link_libraries(device_goal_validation_tests dummy_native_goal_validation)
   ament_target_dependencies(device_goal_validation_tests control_msgs)
   add_test(NAME device_goal_validation_tests COMMAND device_goal_validation_tests)
   add_executable(dp_management_transport_tests test/dp_management_transport_tests.cpp)
   target_link_libraries(dp_management_transport_tests dummy_dp_management)
+  ament_target_dependencies(dp_management_transport_tests hardware_interface)
   add_test(NAME dp_management_transport_tests COMMAND dp_management_transport_tests)
-  set_tests_properties(dp_management_transport_tests PROPERTIES TIMEOUT 15 LABELS "component_only;synthetic_peer")
+  add_test(NAME dp_management_raw_first_page_tests
+    COMMAND dp_management_transport_tests raw_first_page)
+  set_tests_properties(dp_management_raw_first_page_tests PROPERTIES LABELS "component_only;offline")
+  add_test(NAME release_transition_tests COMMAND dp_management_transport_tests release_transition)
+  set_tests_properties(release_transition_tests PROPERTIES LABELS "component_only;offline")
+  add_test(NAME dp_management_transport_tcp_untrusted_tests COMMAND dp_management_transport_tests tcp)
+  add_executable(management_request_minor_tests test/management_request_minor_tests.cpp)
+  target_link_libraries(management_request_minor_tests dummy_device_action)
+  add_test(NAME management_request_minor_tests COMMAND management_request_minor_tests)
+  set_tests_properties(dp_management_transport_tests dp_management_transport_tcp_untrusted_tests PROPERTIES
+    TIMEOUT 25 LABELS "component_only;synthetic_peer")
   add_executable(shared_management_channel_tests test/shared_management_channel_tests.cpp)
   target_link_libraries(shared_management_channel_tests dummy_dp_management)
   ament_target_dependencies(shared_management_channel_tests hardware_interface)
   add_test(NAME shared_management_channel_tests COMMAND shared_management_channel_tests)
-  set_tests_properties(dp_management_transport_tests shared_management_channel_tests PROPERTIES
+  set_tests_properties(dp_management_transport_tests dp_management_transport_tcp_untrusted_tests
+    dp_management_raw_first_page_tests release_transition_tests
+    shared_management_channel_tests PROPERTIES
     ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:dummy_ros_control::dummy_command_channel>:$<TARGET_FILE_DIR:dummy_ros_control::dummy_guarded_zenbedded_system>:$ENV{LD_LIBRARY_PATH}"
-    TIMEOUT 15)
+    TIMEOUT 25)
+  set_tests_properties(dp_management_raw_first_page_tests PROPERTIES
+    ENVIRONMENT "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/../dummy_ros_control:$<TARGET_FILE_DIR:dummy_ros_control::dummy_command_channel>:$<TARGET_FILE_DIR:dummy_ros_control::dummy_guarded_zenbedded_system>:$ENV{LD_LIBRARY_PATH}")
+  set_tests_properties(shared_management_channel_tests PROPERTIES TIMEOUT 15)
   find_package(dummy_ros_control REQUIRED)
   find_package(controller_interface REQUIRED)
   find_package(joint_trajectory_controller REQUIRED)
@@ -116,6 +204,20 @@ if(BUILD_TESTING)
   add_executable(update_generation_tests test/update_generation_tests.cpp)
   target_link_libraries(update_generation_tests dummy_ros_control::dummy_command_channel)
   add_test(NAME update_generation_tests COMMAND update_generation_tests)
+  add_executable(direct_hold_handoff_tests test/direct_hold_handoff_tests.cpp)
+  target_link_libraries(direct_hold_handoff_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+    dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
+    dummy_goal_timeline)
+  ament_target_dependencies(direct_hold_handoff_tests controller_manager control_msgs rclcpp rclcpp_action
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+  add_test(NAME direct_hold_handoff_tests COMMAND direct_hold_handoff_tests)
+  add_executable(device_lease_transition_tests test/device_lease_transition_tests.cpp)
+  target_link_libraries(device_lease_transition_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+    dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
+    dummy_goal_timeline)
+  ament_target_dependencies(device_lease_transition_tests controller_manager control_msgs rclcpp rclcpp_action
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+  add_test(NAME device_lease_transition_tests COMMAND device_lease_transition_tests)
   add_executable(review_boundary_tests test/review_boundary_tests.cpp)
   target_link_libraries(review_boundary_tests dummy_device_action)
   foreach(scenario IN ITEMS enum deadline tolerance unused_nan hold_mask)
@@ -127,8 +229,11 @@ if(BUILD_TESTING)
 endif()
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2" DESTINATION share/${PROJECT_NAME}/contracts)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_application_hold_no_load_candidate"
+  DESTINATION share/${PROJECT_NAME}/contracts)
 install(FILES "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp" DESTINATION include)
-install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_management dummy_device_profile EXPORT export_dummy_device_action ARCHIVE DESTINATION lib)
+install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_management dummy_device_profile
+  dummy_goal_timeline EXPORT export_dummy_device_action ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_device_action)
 ament_export_dependencies(dummy_ros_control control_msgs yaml-cpp OpenSSL)
 ament_package()

@@ -1,0 +1,33 @@
+{
+  "format":"dummy_6dof_compiled_policy_v1","profile_id":201,"motion_supported":true,"test_only":false,
+  "active_axes":["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"],
+  "mapping_source":"model-v2","reference_kind":"BENCH_SESSION",
+  "deployment_stop_policy":"APPLICATION_HOLD","no_load_bench":true,"gravity_loaded":false,
+  "safe_terminal_action":"DisableAndReleaseNoLoadBench",
+  "bench_acceleration_advisory_only":true,
+  "axes":[
+    {"gear_ratio":50,"velocity_max_rad_s":0.5,"acceleration_max_rad_s2":1.0,"jerk_max_rad_s3":null,"trial_min_rad":-0.6,"trial_max_rad":0.6,"motor_velocity_cap_motor_rev_s":1.2,"effective_velocity_max_rad_s":0.15079644737231007},
+    {"gear_ratio":50,"velocity_max_rad_s":0.5,"acceleration_max_rad_s2":1.0,"jerk_max_rad_s3":null,"trial_min_rad":-0.6,"trial_max_rad":0.6,"motor_velocity_cap_motor_rev_s":1.2,"effective_velocity_max_rad_s":0.15079644737231007},
+    {"gear_ratio":50,"velocity_max_rad_s":0.5,"acceleration_max_rad_s2":1.0,"jerk_max_rad_s3":null,"trial_min_rad":-0.6,"trial_max_rad":0.6,"motor_velocity_cap_motor_rev_s":1.2,"effective_velocity_max_rad_s":0.15079644737231007},
+    {"gear_ratio":50,"velocity_max_rad_s":0.5,"acceleration_max_rad_s2":1.0,"jerk_max_rad_s3":null,"trial_min_rad":-0.6,"trial_max_rad":0.6,"motor_velocity_cap_motor_rev_s":1.2,"effective_velocity_max_rad_s":0.15079644737231007},
+    {"gear_ratio":50,"velocity_max_rad_s":0.5,"acceleration_max_rad_s2":1.0,"jerk_max_rad_s3":null,"trial_min_rad":-0.6,"trial_max_rad":0.6,"motor_velocity_cap_motor_rev_s":1.2,"effective_velocity_max_rad_s":0.15079644737231007},
+    {"gear_ratio":50,"velocity_max_rad_s":0.5,"acceleration_max_rad_s2":1.0,"jerk_max_rad_s3":null,"trial_min_rad":-0.6,"trial_max_rad":0.6,"motor_velocity_cap_motor_rev_s":1.2,"effective_velocity_max_rad_s":0.15079644737231007}
+  ],
+  "limits":{"position_min_rad":-3.2,"position_max_rad":3.2,"velocity_max_rad_s":0.5,
+    "acceleration_max_rad_s2":1.0,"stop_deceleration_rad_s2":4.0,"max_trial_travel_rad":10.0,
+    "stop_max_distance_rad":0.35,"stationary_position_tolerance_rad":0.003,
+    "stationary_velocity_tolerance_rad_s":0.01,"max_tracking_error_rad":0.05,
+    "max_feedback_step_rad":0.05,"can_velocity_cap_rev_s":1.2,
+    "first_sample_position_tolerance_rad":0.02,"hold_position_tolerance_rad":0.003,
+    "tracking_uncertainty_margin_rad":0.005},
+  "timing":{"control_period_us":20000,"state_publish_period_us":20000,"command_timeout_us":5000000,
+    "freshness_ticket_window_us":1000000,"can_feedback_timeout_us":1000000,"stationary_window_us":200000,
+    "stop_max_duration_us":1500000,"trial_max_duration_us":660000000,"first_sample_timeout_us":2000000,
+    "max_can_tx_residence_us":100000,"tracking_error_window_us":200000,"max_control_dt_us":1000000,
+    "ref_supervision_gap_budget_us":100000,"state_query_refresh_us":20000,"completion_max_duration_us":3000000,
+    "session_lease_us":30000000,"max_goal_duration_us":10000000,"local_hold_budget_us":5000000},
+  "capacity":{"ticket_ring_slots":64,"management_client_slots":4,"operation_result_slots":16,
+    "operation_retention_us":5000000,"permit_ledger_slots":64,"minimum_stationary_samples":3},
+  "note":"未资格的六轴无负载 APPLICATION_HOLD 台架候选；保持 50Hz 控制和原始限幅。仅 no_load_bench，禁止视为生产或机械臂安全配置；Host 与固件必须使用同一编译策略哈希。",
+  "model_sha256":"a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713"
+}

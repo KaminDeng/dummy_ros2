@@ -1,0 +1,527 @@
+"""离线验证真实 DPSDK peer 的测试夹具路径。"""
+
+import importlib.util
+import ctypes
+import io
+import json
+import os
+from pathlib import Path
+import select
+import subprocess
+import tempfile
+import threading
+import time
+import tty
+from types import SimpleNamespace
+import xml.etree.ElementTree as ET
+
+import pytest
+
+
+TEST_DIR = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("device_action_e2e_probe", TEST_DIR / "device_action_e2e_probe.py")
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+
+
+def test_ctest_uses_v2_fixture_under_configured_dpsdk_root():
+    cmake = (TEST_DIR.parent / "CMakeLists.txt").read_text()
+    assert "${DPSDK_ROOT}/build_dummy/v2-tests/applications/dummy_ref_control/dummy_ref_d08_device_peer" in cmake
+    assert "${DUMMY_D08_PEER_EXECUTABLE}" in cmake
+
+
+def test_six_axis_smoke_uses_all_axes_and_sil_profile():
+    cmake = (TEST_DIR.parent / "CMakeLists.txt").read_text()
+    assert "device_action_six_axis_smoke_probe" in cmake
+    assert "real_six_axis_smoke" in cmake
+    assert "device_motion_six_axis_smoke_probe" in cmake
+    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    dpsdk_manifest = bundle.parents[2] / "dpsdk/contracts/dummy_robot_v2/manifest.json"
+    capability = probe.real_peer_capability(bundle, "sil_6dof")
+    description = ET.fromstring(probe.urdf("serial//dev/pts/1#baudrate=3000000", capability, 6))
+    joint_names = [joint.attrib["name"] for joint in description.findall("./ros2_control/joint")]
+    parameters = {entry.attrib["name"]: entry.text for entry in description.findall("./ros2_control/hardware/param")}
+
+    assert joint_names == [f"Joint{axis}" for axis in range(1, 7)]
+    assert parameters["profile_id"] == "1"
+    assert parameters["configured_mask"] == "63"
+    assert capability["profile_sha256"] != probe.real_peer_capability(bundle)["profile_sha256"]
+    assert capability["contract_sha256"] != json.loads(dpsdk_manifest.read_text())["payload_sorted_sha256"]
+    assert capability["position_min_rad"] == [-0.3] * 6
+    assert capability["position_max_rad"] == [0.3] * 6
+    points = probe.smooth_motion_points([0] * 6, probe.SIX_AXIS_TARGET)
+    assert list(points[-1].positions) == list(probe.SIX_AXIS_TARGET)
+
+
+def test_missing_fixture_reports_expected_path_without_other_profile_fallback():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        other = root / "build_dummy/qualification/host-cadence/applications/dummy_ref_control/dummy_ref_d08_device_peer"
+        other.parent.mkdir(parents=True)
+        other.write_text("other profile")
+        expected = root / "build_dummy/v2-tests/applications/dummy_ref_control/dummy_ref_d08_device_peer"
+
+        with pytest.raises(FileNotFoundError, match="DPSDK D08 peer fixture") as error:
+            probe.validate_peer_fixture(expected)
+
+        assert str(expected) in str(error.value)
+
+
+def test_explicit_fixture_rejects_wrong_executable_name():
+    with tempfile.TemporaryDirectory() as directory:
+        other = Path(directory) / "device_action_gate"
+        other.write_text("wrong executable")
+
+        with pytest.raises(ValueError, match="dummy_ref_d08_device_peer"):
+            probe.validate_peer_fixture(other)
+
+
+def test_valid_executable_fixture_is_accepted():
+    with tempfile.TemporaryDirectory() as directory:
+        peer = Path(directory) / "dummy_ref_d08_device_peer"
+        peer.write_text("fixture")
+        peer.chmod(0o755)
+
+        assert probe.validate_peer_fixture(peer) == peer
+
+
+def test_non_executable_fixture_fails_before_launch():
+    with tempfile.TemporaryDirectory() as directory:
+        peer = Path(directory) / "dummy_ref_d08_device_peer"
+        peer.write_text("fixture")
+        peer.chmod(0o644)
+
+        with pytest.raises(PermissionError, match="not executable"):
+            probe.validate_peer_fixture(peer)
+
+
+def test_probe_honors_configured_ros_domain_id(monkeypatch):
+    monkeypatch.setenv("ROS_DOMAIN_ID", "187")
+    assert probe.selected_ros_domain_id() == "187"
+
+
+def test_probe_chooses_valid_domain_when_unset(monkeypatch):
+    monkeypatch.delenv("ROS_DOMAIN_ID", raising=False)
+    assert 0 <= int(probe.selected_ros_domain_id()) <= 232
+
+
+def test_serial_fixture_forwards_bytes_in_both_directions():
+    with probe.serial_peer_endpoints() as (host_endpoint, peer_endpoint):
+        assert host_endpoint != peer_endpoint
+        assert host_endpoint.startswith("serial//dev/pts/")
+        assert peer_endpoint.startswith("serial//dev/pts/")
+        assert host_endpoint.endswith("#baudrate=3000000")
+        assert peer_endpoint.endswith("#baudrate=3000000")
+        host = os.open(host_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        peer = os.open(peer_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        try:
+            tty.setraw(host)
+            tty.setraw(peer)
+            os.write(host, b"host-to-peer")
+            assert select.select([peer], [], [], 1)[0]
+            assert os.read(peer, 12) == b"host-to-peer"
+            os.write(peer, b"peer-to-host")
+            assert select.select([host], [], [], 1)[0]
+            assert os.read(host, 12) == b"peer-to-host"
+        finally:
+            os.close(host)
+            os.close(peer)
+
+
+def test_serial_fixture_keeps_reverse_direction_live_under_backpressure():
+    with probe.serial_peer_endpoints() as (host_endpoint, peer_endpoint):
+        host = os.open(host_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        peer = os.open(peer_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        stop = threading.Event()
+        try:
+            tty.setraw(host)
+            tty.setraw(peer)
+            os.set_blocking(peer, False)
+
+            def flood():
+                while not stop.is_set():
+                    try:
+                        os.write(peer, b"x" * 4096)
+                    except BlockingIOError:
+                        time.sleep(0.001)
+
+            writer = threading.Thread(target=flood, daemon=True)
+            writer.start()
+            time.sleep(0.1)
+            os.write(host, b"reverse")
+            assert select.select([peer], [], [], 0.5)[0]
+            assert os.read(peer, 7) == b"reverse"
+        finally:
+            stop.set()
+            writer.join(timeout=1)
+            os.close(host)
+            os.close(peer)
+
+
+def test_serial_fixture_reports_bidirectional_transfer_timing():
+    diagnostics = {}
+    with probe.serial_peer_endpoints(diagnostics) as (host_endpoint, peer_endpoint):
+        host = os.open(host_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        peer = os.open(peer_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        try:
+            tty.setraw(host)
+            tty.setraw(peer)
+            os.write(host, b"command")
+            assert select.select([peer], [], [], 1)[0]
+            assert os.read(peer, 7) == b"command"
+            os.write(peer, b"state")
+            assert select.select([host], [], [], 1)[0]
+            assert os.read(host, 5) == b"state"
+        finally:
+            os.close(host)
+            os.close(peer)
+
+    assert diagnostics["host_to_peer"]["bytes"] >= 7
+    assert diagnostics["peer_to_host"]["bytes"] >= 5
+    assert diagnostics["host_to_peer"]["last_at_us"] > 0
+    assert diagnostics["peer_to_host"]["last_at_us"] > 0
+    for direction in ("host_to_peer", "peer_to_host"):
+        chunk = diagnostics[direction]["recent_chunks"][-1]
+        assert chunk["ingress_at_us"] > 0
+        assert chunk["egress_at_us"] >= chunk["ingress_at_us"]
+        assert chunk["at_us"] == chunk["ingress_at_us"]
+
+
+def test_six_axis_bootstrap_failure_emits_incomplete_latency_trace(monkeypatch, capsys, tmp_path):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_endpoints(diagnostics, _threshold):
+        try:
+            yield ("serial/host", "serial/peer")
+        finally:
+            diagnostics.update({"clock": "steady_monotonic_us"})
+
+    def fail_probe(*_args, trace_capture, **_kwargs):
+        trace_capture.append({"stage": "peer_state_publish", "sequence": 7,
+                              "at_us": 1000, "clock": "steady_monotonic_us"})
+        raise AssertionError("bootstrap did not reach HOLD")
+
+    monkeypatch.setattr(probe, "fixture_capability", lambda *_args: {"state_publish_period_us": 50000})
+    monkeypatch.setattr(probe, "serial_peer_endpoints", fake_endpoints)
+    monkeypatch.setattr(probe, "run_probe", fail_probe)
+    monkeypatch.setattr(probe.sys, "argv", ["probe", "/tmp/gate", "/tmp/peer",
+                                                "/tmp/bundle", "six_axis_smoke"])
+    monkeypatch.setenv("DUMMY_E2E_TRANSPORT", "serial")
+    report_path = tmp_path / "c05-trace.json"
+    monkeypatch.setenv("DUMMY_C05_TRACE_OUTPUT", str(report_path))
+
+    with pytest.raises(AssertionError, match="bootstrap did not reach HOLD"):
+        probe.main()
+
+    report_line = next(line for line in capsys.readouterr().err.splitlines()
+                       if line.startswith('{"bridge"'))
+    report = json.loads(report_line)
+    assert report["event"] == "c05_latency_trace"
+    assert report["status"] == "INCOMPLETE"
+    assert report["strict_50ms_pass"] is False
+    assert report["state"][0]["sequence"] == 7
+    assert json.loads(report_path.read_text()) == report
+
+
+def test_serial_fixture_forwards_while_probe_holds_python_interpreter():
+    diagnostics = {}
+    with probe.serial_peer_endpoints(diagnostics) as (host_endpoint, peer_endpoint):
+        host = os.open(host_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        peer = os.open(peer_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        try:
+            tty.setraw(host)
+            tty.setraw(peer)
+            time.sleep(0.05)
+            os.write(host, b"during-probe")
+            ctypes.PyDLL(None).usleep(200000)
+            resumed_at_us = time.monotonic_ns() // 1000
+            assert select.select([peer], [], [], 1)[0]
+            assert os.read(peer, 12) == b"during-probe"
+        finally:
+            os.close(host)
+            os.close(peer)
+
+    assert diagnostics["host_to_peer"]["last_at_us"] < resumed_at_us - 100000
+
+
+def test_serial_fixture_uses_native_forwarder():
+    executable = probe.serial_bridge_executable()
+    assert executable.name == "serial_pty_bridge"
+    assert executable.is_file()
+
+
+def test_serial_fixture_honors_cmake_bridge_path(monkeypatch):
+    monkeypatch.setenv("DUMMY_SERIAL_BRIDGE_EXECUTABLE", "/tmp/offline-serial-bridge")
+    assert probe.serial_bridge_executable() == Path("/tmp/offline-serial-bridge")
+
+
+def test_serial_fixture_closes_all_ptys_when_bridge_spawn_fails(monkeypatch):
+    opened = []
+    original = probe.pty.openpty
+
+    def tracked_openpty():
+        descriptors = original()
+        opened.extend(descriptors)
+        return descriptors
+
+    monkeypatch.setattr(probe.pty, "openpty", tracked_openpty)
+    monkeypatch.setattr(probe.subprocess, "Popen", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("spawn failed")))
+    try:
+        with pytest.raises(OSError, match="spawn failed"):
+            with probe.serial_peer_endpoints():
+                pass
+        assert all(not descriptor_open(descriptor) for descriptor in opened)
+    finally:
+        for descriptor in opened:
+            if descriptor_open(descriptor):
+                os.close(descriptor)
+
+
+def test_serial_fixture_closes_first_pty_when_second_open_fails(monkeypatch):
+    opened = []
+    original = probe.pty.openpty
+
+    def fail_second_open():
+        if opened:
+            raise OSError("second PTY failed")
+        descriptors = original()
+        opened.extend(descriptors)
+        return descriptors
+
+    monkeypatch.setattr(probe.pty, "openpty", fail_second_open)
+    try:
+        with pytest.raises(OSError, match="second PTY failed"):
+            with probe.serial_peer_endpoints():
+                pass
+        assert all(not descriptor_open(descriptor) for descriptor in opened)
+    finally:
+        for descriptor in opened:
+            if descriptor_open(descriptor):
+                os.close(descriptor)
+
+
+def descriptor_open(descriptor):
+    try:
+        os.fstat(descriptor)
+        return True
+    except OSError:
+        return False
+
+
+def test_serial_fixture_kills_bridge_after_second_shutdown_timeout(monkeypatch):
+    opened = []
+    original = probe.pty.openpty
+
+    def tracked_openpty():
+        descriptors = original()
+        opened.extend(descriptors)
+        return descriptors
+
+    class HungBridge:
+        stdout = io.StringIO("READY\n")
+        returncode = None
+        calls = 0
+        killed = False
+
+        def communicate(self, **kwargs):
+            self.calls += 1
+            if self.calls < 3:
+                raise subprocess.TimeoutExpired("serial bridge", 2)
+            return "{}", ""
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+    bridge = HungBridge()
+    monkeypatch.setattr(probe.pty, "openpty", tracked_openpty)
+    monkeypatch.setattr(probe.subprocess, "Popen", lambda *args, **kwargs: bridge)
+    monkeypatch.setattr(probe.select, "select", lambda readable, *args: (readable, [], []))
+    try:
+        with pytest.raises(RuntimeError, match="serial fixture bridge exited"):
+            with probe.serial_peer_endpoints():
+                pass
+        assert bridge.killed
+        assert all(not descriptor_open(descriptor) for descriptor in opened)
+    finally:
+        for descriptor in opened:
+            if descriptor_open(descriptor):
+                os.close(descriptor)
+
+
+def test_six_axis_evidence_rejects_swapped_signed_joints():
+    target = probe.SIX_AXIS_TARGET
+    assert len(target) == len(set(target)) == 6
+    feedback = [SimpleNamespace(actual=SimpleNamespace(positions=target))]
+    commands = [{"position": list(target)}]
+    probe.validate_six_axis_evidence(feedback, commands, target)
+    swapped = list(target)
+    swapped[0], swapped[1] = swapped[1], swapped[0]
+    with pytest.raises(AssertionError, match="axis 1"):
+        probe.validate_six_axis_evidence(feedback, [{"position": swapped}], target)
+    with pytest.raises(AssertionError, match="axis 1"):
+        probe.validate_six_axis_evidence(
+            [SimpleNamespace(actual=SimpleNamespace(positions=swapped))], commands, target)
+
+
+def test_serial_fixture_identifies_chunks_around_maximum_gap():
+    diagnostics = {}
+    with probe.serial_peer_endpoints(diagnostics, gap_threshold_us=20000) as (_, peer_endpoint):
+        peer = os.open(peer_endpoint.removeprefix("serial/").split("#", 1)[0], os.O_RDWR)
+        try:
+            tty.setraw(peer)
+            os.write(peer, b"a")
+            time.sleep(0.03)
+            os.write(peer, b"b")
+            time.sleep(0.08)
+        finally:
+            os.close(peer)
+
+    observed = diagnostics["peer_to_host"]
+    assert observed["max_gap_us"] >= 20000
+    assert observed["max_gap_before_chunk"] == 1
+    assert observed["max_gap_after_chunk"] == 2
+    assert observed["max_gap_before_at_us"] < observed["max_gap_after_at_us"]
+    assert observed["long_gaps"][0]["before_seq"] == 1
+    assert observed["long_gaps"][0]["after_seq"] == 2
+
+
+def test_real_peer_capability_comes_from_verified_bundle():
+    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    capability = probe.real_peer_capability(bundle)
+    manifest = probe.json.loads((bundle / "manifest.json").read_text())
+    payloads = {entry["path"]: entry["sha256"] for entry in manifest["payloads"]}
+    profile = probe.yaml.safe_load((bundle / "profiles/sil_j1.yaml").read_text())
+    model = probe.yaml.safe_load((bundle / "model/model.yaml").read_text())
+
+    assert capability["contract_sha256"] == manifest["payload_sorted_sha256"]
+    assert capability["model_sha256"] == payloads["model/model.yaml"]
+    assert capability["profile_sha256"] == payloads["profiles/sil_j1.yaml"]
+    assert capability["compiled_policy_sha256"] == capability["profile_sha256"]
+    assert capability["control_period_us"] == profile["timing"]["control_period_us"]
+    assert capability["state_publish_period_us"] == profile["timing"]["state_publish_period_us"]
+    assert capability["position_min_rad"] == [joint["model_limits_rad"][0] for joint in model["joints"]]
+    assert capability["position_max_rad"] == [joint["model_limits_rad"][1] for joint in model["joints"]]
+    assert capability["velocity_max_rad_s"] == [profile["simulation"]["velocity_limit_rad_s"]] * 6
+    assert capability["acceleration_max_rad_s2"] == [profile["simulation"]["acceleration_limit_rad_s2"]] * 6
+
+    hardware = ET.fromstring(probe.urdf("tcp/127.0.0.1:12345", capability)).find("./ros2_control/hardware")
+    params = {item.attrib["name"]: item.text for item in hardware.findall("param")}
+    for key in ("contract_sha256", "model_sha256", "profile_sha256", "compiled_policy_sha256"):
+        assert params[key] == capability[key]
+    for key in ("control_period_us", "state_publish_period_us"):
+        assert params[key] == str(capability[key])
+
+
+def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture():
+    bundle = TEST_DIR.parents[3] / "dpsdk/contracts/dummy_robot_v2"
+    with pytest.raises(ValueError, match="untrusted SIL fixture"):
+        probe.real_peer_capability(bundle)
+
+
+def test_c05_ticket_expires_at_profile_window():
+    executable = TEST_DIR.parents[2] / "build_dummy/dummy_motion_client/c05_action_peer"
+    control_library = TEST_DIR.parents[2] / "install_dummy/dummy_ros_control/lib"
+    completed = subprocess.run([str(executable), "--self-test"], capture_output=True,
+                               text=True, check=True, env={**os.environ, "LD_LIBRARY_PATH":
+                                   str(control_library) + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")})
+    evidence = json.loads(completed.stdout)
+    assert evidence["ticket_window_us"] == 50000
+    assert evidence["before_deadline_valid"] is True
+    assert evidence["after_deadline_rejected"] is True
+
+
+def test_50ms_candidate_changes_only_runtime_state_period(monkeypatch):
+    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    baseline = probe.real_peer_capability(bundle)
+    monkeypatch.setenv("DUMMY_E2E_STATE_PERIOD_US", "50000")
+
+    candidate = probe.fixture_capability(bundle)
+
+    assert candidate == {**baseline, "state_publish_period_us": 50000}
+    assert baseline["state_publish_period_us"] == 10000
+
+
+def test_20ms_candidate_changes_only_runtime_state_period(monkeypatch):
+    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    baseline = probe.real_peer_capability(bundle)
+    monkeypatch.setenv("DUMMY_E2E_STATE_PERIOD_US", "20000")
+
+    assert probe.fixture_capability(bundle) == {**baseline, "state_publish_period_us": 20000}
+
+
+def test_controller_update_rate_matches_sil_control_period():
+    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    capability = probe.real_peer_capability(bundle)
+
+    assert capability["control_period_us"] == 10000
+    assert probe.controller_update_rate(capability) == 100
+
+
+def test_synthetic_peer_pending_result_matches_v24_enum():
+    root = TEST_DIR.parents[2]
+    peer = root / "build_dummy/dummy_motion_client/c05_action_peer"
+    library_path = root / "install_dummy/dummy_ros_control/lib"
+    env = {**os.environ, "LD_LIBRARY_PATH": str(library_path) + os.pathsep +
+           os.environ.get("LD_LIBRARY_PATH", "")}
+    completed = subprocess.run([str(peer), "--self-test"], capture_output=True,
+                               text=True, check=True, env=env)
+    event = json.loads(completed.stdout)
+    enum_values = json.loads((root / "contracts/dummy_robot_v2/enums/dummy_enum_values_v2.json").read_text())
+
+    assert event["pending_result_code"] == enum_values["result_code"]["PENDING"]
+
+
+def test_smooth_goal_respects_sil_command_derivative_limits():
+    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    capability = probe.real_peer_capability(bundle)
+    control_dt = capability["control_period_us"] / 1000000
+    points = probe.smooth_motion_points(0.0, 0.05, duration_s=5)
+    previous_position = 0.0
+    previous_velocity = 0.0
+    for point in points:
+        velocity = (point.positions[0] - previous_position) / control_dt
+        acceleration = (velocity - previous_velocity) / control_dt
+        assert abs(velocity) < capability["velocity_max_rad_s"][0]
+        assert abs(acceleration) < capability["acceleration_max_rad_s2"][0]
+        previous_position = point.positions[0]
+        previous_velocity = velocity
+
+    assert list(points[-1].positions) == [0.05]
+    assert points[-1].time_from_start.sec == 5
+
+
+def test_smooth_goal_keeps_derivative_margin_after_coalesced_ros_sample():
+    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    capability = probe.real_peer_capability(bundle)
+    control_dt = capability["control_period_us"] / 1000000
+    points = probe.smooth_motion_points(0.0, 0.05)
+    for index in range(1, len(points) - 3):
+        prior = points[index - 1].positions[0]
+        current = points[index].positions[0]
+        later = points[index + 2].positions[0] + 0.3 * (
+            points[index + 3].positions[0] - points[index + 2].positions[0])
+        prior_velocity = (current - prior) / control_dt
+        coalesced_velocity = (later - current) / (2 * control_dt)
+        acceleration = (coalesced_velocity - prior_velocity) / (2 * control_dt)
+        assert abs(acceleration) < capability["acceleration_max_rad_s2"][0]
+
+
+def test_peer_command_tail_keeps_only_recent_accepted_commands():
+    with tempfile.TemporaryDirectory() as directory:
+        evidence = Path(directory) / "peer.jsonl"
+        evidence.write_text("\n".join(json.dumps({"event": "command", "producer_seq": seq,
+                                                     "position": [seq / 1000]}) for seq in range(5)) + "\n")
+
+        tail = probe.peer_command_tail(evidence, limit=2)
+
+        assert [event["producer_seq"] for event in tail] == [3, 4]
+
+
+def test_smoke_goal_is_distinct_from_full_e2e_goal():
+    assert probe.first_goal_target("real_smoke") == 0.02
+    assert probe.first_goal_target("real") == 0.05

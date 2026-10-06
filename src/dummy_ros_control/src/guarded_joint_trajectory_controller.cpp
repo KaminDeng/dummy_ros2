@@ -2,17 +2,68 @@
 #include "dummy_ros_control/command_channel.hpp"
 
 #include "pluginlib/class_list_macros.hpp"
-#include "rclcpp/serialization.hpp"
 #include <openssl/sha.h>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace dummy_ros_control {
+namespace {
+void append_u32(std::vector<std::uint8_t> &bytes, std::uint32_t value) {
+  for (int shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<std::uint8_t>(value >> shift));
+}
+
+void append_stamp(std::vector<std::uint8_t> &bytes, std::int32_t sec, std::uint32_t nanosec) {
+  if (nanosec >= 1000000000U) throw std::invalid_argument("trajectory nanosec outside range");
+  append_u32(bytes, static_cast<std::uint32_t>(sec));
+  append_u32(bytes, nanosec);
+}
+
+void append_length(std::vector<std::uint8_t> &bytes, std::size_t length) {
+  if (length > std::numeric_limits<std::uint32_t>::max())
+    throw std::invalid_argument("trajectory sequence outside uint32 range");
+  append_u32(bytes, static_cast<std::uint32_t>(length));
+}
+
+void append_string(std::vector<std::uint8_t> &bytes, const std::string &value) {
+  append_length(bytes, value.size());
+  bytes.insert(bytes.end(), value.begin(), value.end());
+}
+
+void append_doubles(std::vector<std::uint8_t> &bytes, const std::vector<double> &values) {
+  append_length(bytes, values.size());
+  for (double value : values) {
+    if (!std::isfinite(value)) throw std::invalid_argument("trajectory values must be finite");
+    const double normalized = value == 0.0 ? 0.0 : value;
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &normalized, sizeof(bits));
+    for (int shift = 0; shift < 64; shift += 8)
+      bytes.push_back(static_cast<std::uint8_t>(bits >> shift));
+  }
+}
+}  // namespace
+
 TrajectoryDigest trajectory_digest(const trajectory_msgs::msg::JointTrajectory &trajectory) {
-  rclcpp::Serialization<trajectory_msgs::msg::JointTrajectory> serializer;
-  rclcpp::SerializedMessage serialized;
-  serializer.serialize_message(&trajectory,&serialized);
-  const auto &bytes=serialized.get_rcl_serialized_message();
-  TrajectoryDigest digest{}; SHA256(bytes.buffer,bytes.buffer_length,digest.data()); return digest;
+  std::vector<std::uint8_t> bytes{'D','P','S','D','K','-','J','T','-','1',0};
+  append_stamp(bytes, trajectory.header.stamp.sec, trajectory.header.stamp.nanosec);
+  append_string(bytes, trajectory.header.frame_id);
+  append_length(bytes, trajectory.joint_names.size());
+  for (const auto &name : trajectory.joint_names) append_string(bytes, name);
+  append_length(bytes, trajectory.points.size());
+  for (const auto &point : trajectory.points) {
+    append_doubles(bytes, point.positions);
+    append_doubles(bytes, point.velocities);
+    append_doubles(bytes, point.accelerations);
+    append_doubles(bytes, point.effort);
+    append_stamp(bytes, point.time_from_start.sec, point.time_from_start.nanosec);
+  }
+  TrajectoryDigest digest{};
+  SHA256(bytes.data(), bytes.size(), digest.data());
+  return digest;
 }
 
 controller_interface::return_type GuardedJointTrajectoryController::update(
@@ -50,14 +101,16 @@ controller_interface::CallbackReturn GuardedJointTrajectoryController::on_config
   joint_command_subscriber_.reset();
   action_server_.reset();
   subscriber_is_active_.store(false);
-  set_update_sink(controller_update_sink, nullptr);
+  // The action gate arms this sink only after it primes the hold target.
+  set_update_sink(nullptr, nullptr);
   return result;
 }
 
 controller_interface::CallbackReturn GuardedJointTrajectoryController::on_deactivate(
     const rclcpp_lifecycle::State &previous_state) {
+  const bool owned_command_sink=update_sink_.load(std::memory_order_acquire)!=nullptr;
   set_update_sink(nullptr, nullptr);
-  clear_command_identity();
+  if(owned_command_sink) clear_command_identity();
   return JointTrajectoryController::on_deactivate(previous_state);
 }
 
@@ -73,8 +126,13 @@ bool GuardedJointTrajectoryController::submit_registered_goal(
     const GoalCredential &credential,
     const std::shared_ptr<trajectory_msgs::msg::JointTrajectory> &trajectory) {
   std::lock_guard<std::mutex> lock(gate_mutex_);
-  if (!gate_.permits(credential) || !trajectory || trajectory_digest(*trajectory)!=credential.digest ||
-      !validate_trajectory_msg(*trajectory)) return false;
+  if (!gate_.permits(credential) || !trajectory) return false;
+  try {
+    if (trajectory_digest(*trajectory) != credential.digest) return false;
+  } catch (const std::invalid_argument &) {
+    return false;
+  }
+  if (!validate_trajectory_msg(*trajectory)) return false;
   auto ordered = std::make_shared<trajectory_msgs::msg::JointTrajectory>(*trajectory);
   if (ordered->joint_names.size() != command_joint_names_.size()) return false;
   sort_to_local_joint_order(ordered);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -22,6 +23,11 @@ struct TransportParameters {
   std::uint8_t configured_mask = 0U;
   std::uint64_t max_state_age_us = 100000U;
   std::uint64_t state_publish_period_us = 10000U;
+  // Zero retains the transport's legacy 5x state-period Stop threshold.
+  std::uint64_t heartbeat_stop_budget_us = 0U;
+  // Zero uses max_state_age_us until an observed host ACK budget is configured.
+  std::uint64_t group_sent_ack_timeout_us = 0U;
+  std::uint64_t stop_confirmation_timeout_us = 0U;
   std::array<std::uint8_t, 32> contract_hash{};
   std::array<std::uint8_t, 32> model_hash{};
   std::array<std::uint8_t, 32> profile_hash{};
@@ -32,7 +38,42 @@ struct TransportParameters {
   std::array<double, 6> velocity_max{};
   std::array<double, 6> acceleration_max{};
   std::uint64_t control_period_us = 0U;
+  std::string raw_evidence_path;
 };
+
+struct HistoricalIdleBaselineContext {
+  std::uint64_t current_boot = 0U, historical_run_boot = 0U,
+                historical_run_id = 0U,
+                last_status_run_id = 0U, pages_written = 0U,
+                terminal_written_run_id = 0U;
+  std::array<std::uint8_t, 32> historical_chain{};
+};
+
+template <typename Status>
+bool historical_released_idle_baseline(const Status &value,
+                                       const HistoricalIdleBaselineContext &context) noexcept {
+  const bool released_attempt =
+      (value.attempt_kind() == 1U && value.parent_run_id() == 0U &&
+       value.final_state() == 2U) ||
+      (value.attempt_kind() == 3U && value.run_id() > 1U &&
+       value.parent_run_id() == value.run_id()-1U && value.final_state() == 8U);
+  const bool clean_idle = value.boot_epoch() != 0U && value.run_id() != 0U &&
+      value.session_id() == 0U && value.reference_epoch() == 0U &&
+      value.core_state() == 1U && value.release_committed() &&
+      !value.real_motion_permitted() && value.permit_remaining_us() == 0U &&
+      !value.evidence_lost();
+  const bool cold_start = context.current_boot == 0U &&
+      context.historical_run_boot == 0U && context.historical_run_id == 0U &&
+      context.last_status_run_id == 0U &&
+      context.pages_written == 0U && context.terminal_written_run_id == 0U;
+  const bool same_historical_run = context.historical_run_id != 0U &&
+      context.historical_run_boot == value.boot_epoch() &&
+      context.historical_run_id == value.run_id() &&
+      std::equal(context.historical_chain.begin(), context.historical_chain.end(),
+                 std::begin(value.evidence_chain_sha256()));
+  return released_attempt && clean_idle && context.pages_written == 0U &&
+      context.terminal_written_run_id == 0U && (cold_start || same_historical_run);
+}
 
 // The current v2 status cannot carry policy, limits, or timebase evidence.
 // These fields remain explicit so bootstrap fails closed until the wire format
@@ -107,10 +148,19 @@ class TransportHeartbeat {
  public:
   explicit TransportHeartbeat(std::uint64_t period_us) noexcept : period_us_(period_us) {}
   void observe_state(std::uint64_t now_us) noexcept { last_state_us_ = now_us; }
+  void reset() noexcept { last_state_us_ = 0U; }
   HeartbeatAction poll(std::uint64_t now_us) const noexcept {
     if (last_state_us_ == 0U || now_us <= last_state_us_ || period_us_ == 0U) return HeartbeatAction::kNone;
     const auto elapsed = now_us - last_state_us_;
     if (elapsed >= period_us_ * 5U) return HeartbeatAction::kStop;
+    if (elapsed >= period_us_ * 2U) return HeartbeatAction::kWarn;
+    return HeartbeatAction::kNone;
+  }
+  HeartbeatAction poll(std::uint64_t now_us, std::uint64_t max_state_age_us) const noexcept {
+    if (last_state_us_ == 0U || now_us <= last_state_us_ ||
+        period_us_ == 0U || max_state_age_us == 0U) return HeartbeatAction::kNone;
+    const auto elapsed = now_us - last_state_us_;
+    if (elapsed > max_state_age_us) return HeartbeatAction::kStop;
     if (elapsed >= period_us_ * 2U) return HeartbeatAction::kWarn;
     return HeartbeatAction::kNone;
   }
@@ -157,22 +207,109 @@ class LatestOnlyCommandStream {
   std::optional<CommandGenerationRecord> pending_;
 };
 
+class GroupSentAck {
+ public:
+  void begin(const CommandGenerationRecord &record, std::uint64_t sent_at_us,
+             std::uint64_t timeout_us, std::uint32_t reject_count = 0U,
+             std::uint32_t committed_before = 0U) noexcept {
+    identity_ = record.identity;
+    sequence_ = wire_producer_sequence(record.generation);
+    reject_count_ = reject_count;
+    committed_before_ = committed_before;
+    deadline_us_ = sent_at_us > UINT64_MAX - timeout_us ? UINT64_MAX : sent_at_us + timeout_us;
+    pending_ = true;
+  }
+  bool command_rejected(std::uint64_t boot, std::uint64_t session,
+                        std::uint32_t reference_epoch, std::uint32_t motion_epoch,
+                        std::uint32_t committed_sequence, std::uint32_t reject_count,
+                        std::uint64_t observed_at_us) const noexcept {
+    return pending_ && observed_at_us <= deadline_us_ &&
+           boot == identity_.boot && session == identity_.session &&
+           reference_epoch == identity_.reference_epoch &&
+           motion_epoch == identity_.motion_epoch &&
+           committed_sequence == committed_before_ && reject_count > reject_count_;
+  }
+  bool observe(std::uint64_t boot, std::uint64_t session, std::uint32_t reference_epoch,
+               std::uint32_t motion_epoch, std::uint32_t committed_sequence,
+               std::uint8_t /* can_sent_mask */, std::uint64_t observed_at_us) noexcept {
+    if (!pending_ || observed_at_us > deadline_us_ ||
+        boot != identity_.boot || session != identity_.session ||
+        reference_epoch != identity_.reference_epoch || motion_epoch != identity_.motion_epoch ||
+        committed_sequence != sequence_) return false;
+    reset();
+    return true;
+  }
+  bool overdue(std::uint64_t now_us) const noexcept {
+    return pending_ && now_us > deadline_us_;
+  }
+  bool pending() const noexcept { return pending_; }
+  std::uint32_t sequence() const noexcept { return sequence_; }
+  void reset() noexcept { pending_ = false; deadline_us_ = 0U; }
+
+ private:
+  CommandIdentity identity_{};
+  std::uint32_t sequence_ = 0U;
+  std::uint64_t deadline_us_ = 0U;
+  std::uint32_t reject_count_ = 0U, committed_before_ = 0U;
+  bool pending_ = false;
+};
+
+struct TransportStopCauses {
+  bool state_stale = false;
+  bool ack_timed_out = false;
+  bool ack_unconfirmed_on_state_stale_stop = false;
+};
+
+inline TransportStopCauses classify_transport_stop_causes(
+    const GroupSentAck &ack, std::uint64_t now_us, std::uint64_t last_state_us,
+    std::uint64_t max_state_age_us) noexcept {
+  const bool state_stale = last_state_us != 0U && now_us > last_state_us &&
+      now_us - last_state_us > max_state_age_us;
+  const bool ack_timed_out = ack.overdue(now_us);
+  return {state_stale, ack_timed_out,
+          state_stale && ack.pending() && !ack_timed_out};
+}
+
 bool parse_transport_parameters(
     const std::unordered_map<std::string, std::string> &values,
     std::size_t joint_count, TransportParameters *output);
 
 struct TransportStatistics {
+  std::uint64_t state_callbacks = 0U;
   std::uint64_t state_messages = 0U;
   std::uint64_t status_messages = 0U;
+  std::uint64_t stale_run_status_rejections = 0U;
   std::uint64_t rejected_states = 0U;
+  std::uint64_t state_decode_rejections = 0U;
+  std::uint64_t state_identity_rejections = 0U;
+  std::uint64_t state_authority_rejections = 0U;
+  std::uint64_t state_sequence_rejections = 0U;
+  std::uint64_t state_ingest_rejections = 0U;
+  std::uint64_t stop_latched_state_rejections = 0U;
   std::uint64_t commands_published = 0U;
   std::uint64_t rejected_commands = 0U;
   std::uint64_t invalidations = 0U;
   std::uint64_t stop_requests_sent = 0U;
   std::uint64_t stop_request_failures = 0U;
+  std::uint64_t stop_requests_confirmed = 0U;
+  std::uint64_t unconfirmed_stop_requests = 0U;
   std::uint64_t heartbeat_warnings = 0U;
   std::uint64_t heartbeat_stops = 0U;
+  std::uint64_t group_sent_ack_timeouts = 0U;
+  std::uint64_t group_sent_ack_misses = 0U;
+  std::uint64_t state_stale_stops = 0U;
+  std::uint64_t raw_idle_reobservations = 0U;
+  // Stop began with an unconfirmed ACK before its timeout; CAN SENT is unknown.
+  std::uint64_t ack_unconfirmed_on_state_stale_stop = 0U;
   std::uint64_t bootstrap_rejections = 0U;
+  std::uint64_t stale_payload_rejections = 0U;
+  std::uint64_t clock_skew_rejections = 0U;
+  std::uint64_t state_heartbeat_gap_stops = 0U;
+  std::uint64_t last_state_gap_us = 0U;
+  std::uint64_t raw_evidence_written = 0U;
+  std::uint64_t raw_evidence_pages_written = 0U;
+  std::uint64_t raw_evidence_last_terminal_written_run = 0U;
+  std::uint8_t raw_evidence_failure = 0U;
   bool ready = false;
   bool initialization_failed = false;
 };

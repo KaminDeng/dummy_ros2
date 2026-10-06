@@ -1,6 +1,6 @@
 // Auto-generated Dummy static requirements. Do not edit.
 #pragma once
-#define DP_DUMMY_RAW_FIXED_MAX_MESSAGE_BYTES 301U
+#define DP_DUMMY_RAW_FIXED_MAX_MESSAGE_BYTES 651U
 #define DP_DUMMY_RAW_FIXED_SERVICE_SLOTS 1U
 #define DP_DUMMY_RAW_FIXED_REQUEST_SLOTS 1U
 #define DP_DUMMY_RAW_FIXED_RESPONSE_SLOTS 1U

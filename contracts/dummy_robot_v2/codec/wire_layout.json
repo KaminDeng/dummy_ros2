@@ -1,8 +1,231 @@
 {
   "format": "raw_fixed_little_endian_no_padding",
   "payloads": {
+    "DummyAttemptEvidenceV2": {
+      "encoded_size": 372,
+      "fields": [
+        {
+          "count": 1,
+          "name": "schema_major",
+          "offset": 0,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "schema_minor",
+          "offset": 2,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "run_id",
+          "offset": 4,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "evidence_seq",
+          "offset": 12,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "group_id",
+          "offset": 16,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "producer_seq",
+          "offset": 24,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "motion_epoch",
+          "offset": 28,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "category",
+          "offset": 32,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "expected_mask",
+          "offset": 33,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "submitted_mask",
+          "offset": 34,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "sent_mask",
+          "offset": 35,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "failed_mask",
+          "offset": 36,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "final",
+          "offset": 37,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "first_failure_source",
+          "offset": 38,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "first_failure_axis_mask",
+          "offset": 40,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "queued_at_us",
+          "offset": 41,
+          "size": 48,
+          "type": "uint64"
+        },
+        {
+          "count": 6,
+          "name": "taken_at_us",
+          "offset": 89,
+          "size": 48,
+          "type": "uint64"
+        },
+        {
+          "count": 6,
+          "name": "submitted_at_us",
+          "offset": 137,
+          "size": 48,
+          "type": "uint64"
+        },
+        {
+          "count": 6,
+          "name": "sent_at_us",
+          "offset": 185,
+          "size": 48,
+          "type": "uint64"
+        },
+        {
+          "count": 6,
+          "name": "abort_at_us",
+          "offset": 233,
+          "size": 48,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "group_count",
+          "offset": 281,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "attempt_id",
+          "offset": 285,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "attempt_kind",
+          "offset": 293,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "parent_run_id",
+          "offset": 294,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "motion_complete",
+          "offset": 302,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "release_committed",
+          "offset": 303,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "final_state",
+          "offset": 304,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "terminal_reason",
+          "offset": 305,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 32,
+          "name": "previous_chain_sha256",
+          "offset": 307,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "chain_sha256",
+          "offset": 339,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "evidence_lost",
+          "offset": 371,
+          "size": 1,
+          "type": "bool"
+        }
+      ],
+      "interface_id": 4143
+    },
     "DummyDeviceStatusV2": {
-      "encoded_size": 257,
+      "encoded_size": 651,
       "fields": [
         {
           "count": 1,
@@ -234,6 +457,195 @@
           "offset": 241,
           "size": 16,
           "type": "uint8"
+        },
+        {
+          "count": 32,
+          "name": "compiled_policy_sha256",
+          "offset": 257,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "position_min_rad",
+          "offset": 289,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 6,
+          "name": "position_max_rad",
+          "offset": 337,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 6,
+          "name": "velocity_max_rad_s",
+          "offset": 385,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 6,
+          "name": "acceleration_max_rad_s",
+          "offset": 433,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 1,
+          "name": "control_period_us",
+          "offset": 481,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "state_publish_period_us",
+          "offset": 489,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 6,
+          "name": "feedback_period_us",
+          "offset": 497,
+          "size": 24,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "mailbox_turnover",
+          "offset": 521,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "tx_event_overflow",
+          "offset": 525,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "rx_overflow",
+          "offset": 529,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "bus_off",
+          "offset": 533,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "run_id",
+          "offset": 534,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "attempt_id",
+          "offset": 542,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "final_state",
+          "offset": 550,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "failure_source",
+          "offset": 551,
+          "size": 2,
+          "type": "uint16"
+        },
+        {
+          "count": 1,
+          "name": "failure_axis_mask",
+          "offset": 553,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "cleanup_state",
+          "offset": 554,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 6,
+          "name": "can_queue_to_submit_us",
+          "offset": 555,
+          "size": 24,
+          "type": "uint32"
+        },
+        {
+          "count": 6,
+          "name": "can_submit_to_sent_us",
+          "offset": 579,
+          "size": 24,
+          "type": "uint32"
+        },
+        {
+          "count": 1,
+          "name": "group_count",
+          "offset": 603,
+          "size": 4,
+          "type": "uint32"
+        },
+        {
+          "count": 32,
+          "name": "evidence_chain_sha256",
+          "offset": 607,
+          "size": 32,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "evidence_lost",
+          "offset": 639,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "attempt_kind",
+          "offset": 640,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "parent_run_id",
+          "offset": 641,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "motion_complete",
+          "offset": 649,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "release_committed",
+          "offset": 650,
+          "size": 1,
+          "type": "bool"
         }
       ],
       "interface_id": 4137
@@ -573,7 +985,7 @@
       "interface_id": 4139
     },
     "DummyManageV2Request": {
-      "encoded_size": 225,
+      "encoded_size": 233,
       "fields": [
         {
           "count": 1,
@@ -735,12 +1147,19 @@
           "offset": 177,
           "size": 48,
           "type": "float64"
+        },
+        {
+          "count": 1,
+          "name": "requested_session_lease_us",
+          "offset": 225,
+          "size": 8,
+          "type": "uint64"
         }
       ],
       "interface_id": 4141
     },
     "DummyManageV2Response": {
-      "encoded_size": 105,
+      "encoded_size": 132,
       "fields": [
         {
           "count": 1,
@@ -888,6 +1307,48 @@
           "offset": 104,
           "size": 1,
           "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "run_id",
+          "offset": 105,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "attempt_id",
+          "offset": 113,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "attempt_kind",
+          "offset": 121,
+          "size": 1,
+          "type": "uint8"
+        },
+        {
+          "count": 1,
+          "name": "parent_run_id",
+          "offset": 122,
+          "size": 8,
+          "type": "uint64"
+        },
+        {
+          "count": 1,
+          "name": "motion_complete",
+          "offset": 130,
+          "size": 1,
+          "type": "bool"
+        },
+        {
+          "count": 1,
+          "name": "release_committed",
+          "offset": 131,
+          "size": 1,
+          "type": "bool"
         }
       ],
       "interface_id": 4142

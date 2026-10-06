@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Component-only C05 peer, real ros2_control hardware/JTC, and public FJT probe."""
 import json
+import hashlib
+from contextlib import contextmanager
 import os
 import pathlib
+import pty
+import select
 import socket
 import subprocess
 import sys
 import tempfile
 import time
+
+from c05_latency_trace import host_callback_events, peer_events, summarize, write_report
 
 import rclpy
 import yaml
@@ -17,6 +23,9 @@ from control_msgs.msg import JointTolerance
 from controller_manager_msgs.srv import ConfigureController, LoadController, SetHardwareComponentState, SwitchController
 from std_srvs.srv import Trigger
 from trajectory_msgs.msg import JointTrajectoryPoint
+
+OFFLINE_SIL_CONTRACT_SHA256 = "940bb20807d06e1c32a37fa8d29b0e1bdf24b87876e7409cbce61ea88b350a8b"
+SIX_AXIS_TARGET = (0.007, -0.010, 0.013, -0.016, 0.019, -0.022)
 
 
 def wait_future(node, future, timeout=5):
@@ -31,50 +40,312 @@ def call(node, service_type, name, request):
     return wait_future(node, client.call_async(request))
 
 
-def urdf(endpoint):
-    return f'''<robot name="component_dummy"><link name="base_link"/><link name="link1"/>
-<joint name="Joint1" type="revolute"><parent link="base_link"/><child link="link1"/>
-<axis xyz="0 0 1"/><limit lower="-0.5" upper="0.5" velocity="0.25" effort="1"/></joint>
+def real_peer_capability(bundle, profile_name="sil_j1"):
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    if manifest.get("release_id") != "dummy-wire-v2.4":
+        raise ValueError("D08 fixture requires a v2.4 bundle")
+    payloads = {}
+    listing = []
+    for entry in manifest["payloads"]:
+        relative = pathlib.PurePosixPath(entry["path"])
+        if relative.is_absolute() or ".." in relative.parts or (bundle / relative).is_symlink():
+            raise ValueError("unsafe bundle payload path")
+        digest = hashlib.sha256((bundle / relative).read_bytes()).hexdigest()
+        if digest != entry["sha256"] or entry["path"] in payloads:
+            raise ValueError("D08 fixture bundle payload hash mismatch")
+        payloads[entry["path"]] = digest
+        listing.append(f"{entry['path']}:{digest}")
+    if listing != sorted(listing) or hashlib.sha256("\n".join(listing).encode()).hexdigest() != manifest["payload_sorted_sha256"]:
+        raise ValueError("D08 fixture bundle aggregate hash mismatch")
+    if manifest["payload_sorted_sha256"] != OFFLINE_SIL_CONTRACT_SHA256:
+        raise ValueError("untrusted SIL fixture bundle")
+    if profile_name not in ("sil_j1", "sil_6dof"):
+        raise ValueError("unsupported D08 fixture profile")
+    profile = yaml.safe_load((bundle / "profiles" / f"{profile_name}.yaml").read_text())
+    model = yaml.safe_load((bundle / "model/model.yaml").read_text())
+    axes = [f"Joint{axis}" for axis in range(1, 7 if profile_name == "sil_6dof" else 2)]
+    profile_id = 1 if profile_name == "sil_6dof" else 2
+    if profile["profile_id"] != profile_id or profile["active_axes"] != axes:
+        raise ValueError(f"D08 fixture requires the {profile_name} profile")
+    speed = profile["simulation"]["velocity_limit_rad_s"]
+    acceleration = profile["simulation"]["acceleration_limit_rad_s2"]
+    if profile_name == "sil_6dof":
+        if profile["reference_kind"] != "BENCH_SESSION":
+            raise ValueError("six-axis SIL requires BENCH_SESSION")
+        lower, upper = profile["bench_position_range_rad"]
+        travel = profile["simulation"]["max_trial_travel_rad"]
+        if not -travel <= lower < 0 < upper <= travel:
+            raise ValueError("six-axis SIL trial range exceeds Core travel")
+        position_min = [lower] * 6
+        position_max = [upper] * 6
+    else:
+        position_min = [joint["model_limits_rad"][0] for joint in model["joints"]]
+        position_max = [joint["model_limits_rad"][1] for joint in model["joints"]]
+    return {
+        "contract_sha256": manifest["payload_sorted_sha256"],
+        "model_sha256": payloads["model/model.yaml"],
+        "profile_sha256": payloads[f"profiles/{profile_name}.yaml"],
+        "compiled_policy_sha256": payloads[f"profiles/{profile_name}.yaml"],
+        "firmware_sha256": "d8" + "00" * 31,
+        "position_min_rad": position_min,
+        "position_max_rad": position_max,
+        "velocity_max_rad_s": [speed] * 6,
+        "acceleration_max_rad_s2": [acceleration] * 6,
+        "control_period_us": profile["timing"]["control_period_us"],
+        "state_publish_period_us": profile["timing"]["state_publish_period_us"],
+    }
+
+
+def fixture_capability(bundle, profile_name="sil_j1"):
+    capability = real_peer_capability(bundle, profile_name)
+    candidate = os.environ.get("DUMMY_E2E_STATE_PERIOD_US")
+    if candidate is None:
+        return capability
+    if candidate not in ("20000", "50000"):
+        raise ValueError("DUMMY_E2E_STATE_PERIOD_US supports only explicit 20000us or 50000us candidates")
+    return {**capability, "state_publish_period_us": int(candidate)}
+
+
+def controller_update_rate(capability):
+    period_us = capability["control_period_us"]
+    if not isinstance(period_us, int) or period_us <= 0 or 1000000 % period_us:
+        raise ValueError("control period must divide one second")
+    return 1000000 // period_us
+
+
+def smooth_motion_points(start, target, duration_s=7):
+    if duration_s <= 0:
+        raise ValueError("trajectory duration must be positive")
+    start_positions = [start] if isinstance(start, (int, float)) else list(start)
+    target_positions = [target] if isinstance(target, (int, float)) else list(target)
+    if len(start_positions) != len(target_positions):
+        raise ValueError("trajectory axis count changed")
+    samples = duration_s * 20
+    points = []
+    for index in range(1, samples + 1):
+        progress = index / samples
+        blend = progress * progress * (3 - 2 * progress)
+        point = JointTrajectoryPoint(positions=[initial + (final - initial) * blend
+                                                 for initial, final in zip(start_positions, target_positions)])
+        elapsed_ns = index * 50000000
+        point.time_from_start.sec = elapsed_ns // 1000000000
+        point.time_from_start.nanosec = elapsed_ns % 1000000000
+        points.append(point)
+    return points
+
+
+def peer_command_tail(path, limit=8):
+    if not path.is_file():
+        return []
+    events = (json.loads(line) for line in path.read_text().splitlines() if line)
+    return [event for event in events if event.get("event") == "command"][-limit:]
+
+
+def validate_six_axis_evidence(feedback, commands, target):
+    assert feedback and commands, "six-axis feedback or commands missing"
+    for axis, expected in enumerate(target):
+        assert abs(commands[-1]["position"][axis] - expected) < 0.001, \
+            f"axis {axis + 1} command target missing"
+        assert abs(feedback[-1].actual.positions[axis] - expected) < 0.002, \
+            f"axis {axis + 1} feedback target missing"
+
+
+def first_goal_target(mode):
+    return 0.02 if mode in ("real_smoke", "smoke") else 0.05
+
+
+def urdf(endpoint, capability=None, joint_count=1):
+    capability = capability or {
+        "contract_sha256": "01" * 32, "model_sha256": "02" * 32,
+        "profile_sha256": "03" * 32, "firmware_sha256": "04" * 32,
+        "compiled_policy_sha256": "05" * 32,
+        "position_min_rad": [-1] * 6, "position_max_rad": [1] * 6,
+        "velocity_max_rad_s": [1] * 6, "acceleration_max_rad_s2": [1] * 6,
+        "control_period_us": 10000, "state_publish_period_us": 10000,
+    }
+    values = {key: ",".join(format(item, ".17g") for item in value) if isinstance(value, list) else value
+              for key, value in capability.items()}
+    if joint_count not in (1, 6):
+        raise ValueError("D08 fixture supports one or six axes")
+    links = '<link name="base_link"/>' + "".join(f'<link name="link{axis}"/>'
+                                                 for axis in range(1, joint_count + 1))
+    joints = "".join(
+        f'<joint name="Joint{axis}" type="revolute"><parent link="{("base_link" if axis == 1 else f"link{axis - 1}")}"/>'
+        f'<child link="link{axis}"/><axis xyz="0 0 1"/>'
+        f'<limit lower="{capability["position_min_rad"][axis - 1]}" '
+        f'upper="{capability["position_max_rad"][axis - 1]}" velocity="0.25" effort="1"/></joint>'
+        for axis in range(1, joint_count + 1))
+    controls = "".join(
+        f'<joint name="Joint{axis}"><command_interface name="position"/>'
+        '<state_interface name="position"><param name="initial_value">0</param></state_interface>'
+        '<state_interface name="velocity"><param name="initial_value">0</param></state_interface></joint>'
+        for axis in range(1, joint_count + 1))
+    return f'''<robot name="component_dummy">{links}{joints}
 <ros2_control name="dummy" type="system"><hardware>
 <plugin>dummy_ros_control/GuardedZenbeddedSystem</plugin>
 <param name="endpoint">{endpoint}</param><param name="device_id">01000000000000000000000000000000</param>
 <param name="client_instance_id">02000000000000000000000000000000</param>
-<param name="profile_id">2</param><param name="configured_mask">1</param><param name="max_state_age_us">1000000</param>
-</hardware><joint name="Joint1"><command_interface name="position"/>
-<state_interface name="position"><param name="initial_value">0</param></state_interface>
-<state_interface name="velocity"><param name="initial_value">0</param></state_interface></joint></ros2_control></robot>'''
+<param name="profile_id">{1 if joint_count == 6 else 2}</param><param name="configured_mask">{63 if joint_count == 6 else 1}</param><param name="max_state_age_us">1000000</param>
+<param name="heartbeat_stop_budget_us">250000</param>
+<param name="contract_sha256">{values['contract_sha256']}</param><param name="model_sha256">{values['model_sha256']}</param>
+<param name="profile_sha256">{values['profile_sha256']}</param><param name="firmware_sha256">{values['firmware_sha256']}</param>
+<param name="compiled_policy_sha256">{values['compiled_policy_sha256']}</param>
+<param name="position_min_rad">{values['position_min_rad']}</param>
+<param name="position_max_rad">{values['position_max_rad']}</param>
+<param name="velocity_max_rad_s">{values['velocity_max_rad_s']}</param>
+<param name="acceleration_max_rad_s">{values['acceleration_max_rad_s2']}</param>
+<param name="control_period_us">{values['control_period_us']}</param><param name="state_publish_period_us">{values['state_publish_period_us']}</param>
+</hardware>{controls}</ros2_control></robot>'''
 
+
+def validate_peer_fixture(peer):
+    if peer.name != "dummy_ref_d08_device_peer":
+        raise ValueError(f"DPSDK D08 peer fixture must be dummy_ref_d08_device_peer: {peer}")
+    if not peer.is_file():
+        raise FileNotFoundError(
+            f"DPSDK D08 peer fixture is missing: {peer}; build the DPSDK v2-tests profile "
+            "or set DUMMY_D08_PEER_EXECUTABLE at CMake configure time")
+    if not os.access(peer, os.X_OK):
+        raise PermissionError(f"DPSDK D08 peer fixture is not executable: {peer}")
+    return peer
+
+
+def selected_ros_domain_id():
+    configured = os.environ.get("ROS_DOMAIN_ID")
+    if configured is not None:
+        domain = int(configured)
+        if not 0 <= domain <= 232:
+            raise ValueError("ROS_DOMAIN_ID must be between 0 and 232")
+        return str(domain)
+    return str(100 + os.getpid() % 100)
+
+
+def serial_bridge_executable():
+    configured = os.environ.get("DUMMY_SERIAL_BRIDGE_EXECUTABLE")
+    if configured:
+        return pathlib.Path(configured)
+    return pathlib.Path(__file__).resolve().parents[3] / "build_dummy/dummy_motion_client/serial_pty_bridge"
+
+
+@contextmanager
+def serial_peer_endpoints(diagnostics=None, gap_threshold_us=100000):
+    host_master, host_slave = pty.openpty()
+    try:
+        peer_master, peer_slave = pty.openpty()
+    except BaseException:
+        os.close(host_master)
+        os.close(host_slave)
+        raise
+    if diagnostics is None:
+        diagnostics = {}
+    worker = None
+    try:
+        worker = subprocess.Popen(
+            [str(serial_bridge_executable()), str(host_master), str(peer_master),
+             str(gap_threshold_us)], pass_fds=(host_master, peer_master),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if not select.select([worker.stdout], [], [], 5)[0] or worker.stdout.readline().strip() != "READY":
+            raise RuntimeError("serial fixture bridge did not start")
+        yield (f"serial/{os.ttyname(host_slave)}#baudrate=3000000",
+               f"serial/{os.ttyname(peer_slave)}#baudrate=3000000")
+    finally:
+        try:
+            if worker is not None:
+                try:
+                    output, error = worker.communicate(input="stop\n", timeout=2)
+                except subprocess.TimeoutExpired:
+                    worker.terminate()
+                    try:
+                        output, error = worker.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        worker.kill()
+                        output, error = worker.communicate(timeout=2)
+                if worker.returncode == 0:
+                    diagnostics.update(json.loads(output))
+                else:
+                    raise RuntimeError(f"serial fixture bridge exited with {worker.returncode}: {error}")
+        finally:
+            for descriptor in (host_master, host_slave, peer_master, peer_slave):
+                os.close(descriptor)
 
 def main():
     gate, peer, bundle = (pathlib.Path(value).resolve() for value in sys.argv[1:4])
-    unsupported = len(sys.argv) > 4 and sys.argv[4] == "unsupported"
-    real_peer = len(sys.argv) > 4 and sys.argv[4] == "real"
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        endpoint = f"tcp/127.0.0.1:{reserve.getsockname()[1]}"
+    mode = sys.argv[4] if len(sys.argv) > 4 else "synthetic"
+    if mode not in ("synthetic", "unsupported", "real", "real_smoke", "smoke",
+                    "real_six_axis_smoke", "six_axis_smoke"):
+        raise ValueError(f"unsupported probe mode: {mode}")
+    unsupported = mode == "unsupported"
+    real_peer = mode in ("real", "real_smoke", "real_six_axis_smoke")
+    smoke = mode in ("real_smoke", "smoke", "real_six_axis_smoke", "six_axis_smoke")
+    six_axis = mode in ("real_six_axis_smoke", "six_axis_smoke")
+    if real_peer:
+        peer = validate_peer_fixture(peer)
+    capability = fixture_capability(bundle, "sil_6dof" if six_axis else "sil_j1")
+    transport = os.environ.get("DUMMY_E2E_TRANSPORT", "serial")
+    if transport == "serial":
+        bridge_diagnostics = {}
+        trace_events = []
+        try:
+            with serial_peer_endpoints(bridge_diagnostics,
+                                       2 * capability["state_publish_period_us"]) as (endpoint, peer_endpoint):
+                trace_events = run_probe(gate, peer, bundle, unsupported, real_peer, capability,
+                                         endpoint, peer_endpoint, first_goal_target(mode), smoke, six_axis,
+                                         trace_capture=trace_events)
+            if trace_events is not None:
+                report = {"event": "c05_latency_trace",
+                          **summarize(trace_events, bridge_diagnostics)}
+                if output_path := os.environ.get("DUMMY_C05_TRACE_OUTPUT"):
+                    write_report(output_path, report)
+                print(json.dumps(report, sort_keys=True))
+        except BaseException as error:
+            if six_axis and not real_peer:
+                report = {"event": "c05_latency_trace", "probe_error": str(error),
+                          **summarize(trace_events, bridge_diagnostics)}
+                if output_path := os.environ.get("DUMMY_C05_TRACE_OUTPUT"):
+                    write_report(output_path, report)
+                print(json.dumps(report, sort_keys=True), file=sys.stderr)
+            print(f"serial_bridge: {json.dumps(bridge_diagnostics, sort_keys=True)}", file=sys.stderr)
+            raise
+    elif transport == "tcp":
+        with socket.socket() as reserve:
+            reserve.bind(("127.0.0.1", 0))
+            endpoint = f"tcp/127.0.0.1:{reserve.getsockname()[1]}"
+        run_probe(gate, peer, bundle, unsupported, real_peer, capability,
+                  endpoint, endpoint, first_goal_target(mode), smoke, six_axis)
+    else:
+        raise ValueError(f"unsupported DUMMY_E2E_TRANSPORT: {transport}")
+
+
+def run_probe(gate, peer, bundle, unsupported, real_peer, capability, endpoint, peer_endpoint,
+              first_target, smoke, six_axis=False, trace_capture=None):
+    profile_name = "sil_6dof" if six_axis else "sil_j1"
+    profile_id = 1 if six_axis else 2
+    mask = 63 if six_axis else 1
+    joint_names = [f"Joint{axis}" for axis in range(1, 7 if six_axis else 2)]
     workspace = pathlib.Path(__file__).resolve().parents[3]
     control_prefix = workspace / "install_dummy/dummy_ros_control"
-    env = dict(os.environ, ROS_DOMAIN_ID=str(100 + os.getpid() % 100))
+    env = dict(os.environ, ROS_DOMAIN_ID=selected_ros_domain_id(), ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST")
     env["AMENT_PREFIX_PATH"] = str(control_prefix) + os.pathsep + env.get("AMENT_PREFIX_PATH", "")
     env["LD_LIBRARY_PATH"] = str(control_prefix / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")
     os.environ["ROS_DOMAIN_ID"] = env["ROS_DOMAIN_ID"]
+    os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = env["ROS_AUTOMATIC_DISCOVERY_RANGE"]
     processes = []
     with tempfile.TemporaryDirectory(prefix="device-action-e2e-") as temporary:
         directory = pathlib.Path(temporary)
         params = {
-            "controller_manager": {"ros__parameters": {"update_rate": 20,
+            "controller_manager": {"ros__parameters": {"update_rate": controller_update_rate(capability),
                 "hardware_components_initial_state": {"inactive": ["dummy"]},
                 "arm_controller": {"type": "dummy_ros_control/GuardedJointTrajectoryController"}}},
-            "arm_controller": {"ros__parameters": {"joints": ["Joint1"],
+            "arm_controller": {"ros__parameters": {"joints": joint_names,
                 "command_interfaces": ["position"], "state_interfaces": ["position", "velocity"],
                 "allow_partial_joints_goal": False, "allow_nonzero_velocity_at_trajectory_end": False}},
             "device_action_gate": {"ros__parameters": {"endpoint": endpoint,
                 "device_id": "01000000000000000000000000000000", "client_instance_id": "02000000000000000000000000000000",
-                "profile_id": 2, "configured_mask": 1, "session_id": 11,
+                "profile_id": profile_id, "configured_mask": mask, "session_id": 11,
                 "state_max_age_us": 1000000,
                 "permit_sha256": "01" + "00" * 31, "permit_remaining_us": 60000000,
-                "contract_bundle": str(bundle), "profile_name": "sil_j1"}},
-            "robot_state_publisher": {"ros__parameters": {"robot_description": urdf(endpoint)}},
+                "contract_bundle": str(bundle), "profile_name": profile_name}},
+            "robot_state_publisher": {"ros__parameters": {"robot_description": urdf(endpoint, capability, len(joint_names))}},
         }
         configuration = directory / "params.yaml"
         configuration.write_text(yaml.safe_dump(params))
@@ -88,15 +359,29 @@ def main():
             return process
 
         try:
-            peer_command = [str(peer), "--endpoint", endpoint, "--client-id",
-                            "02000000000000000000000000000000", "--profile-id", "2", "--configured-mask", "1"]
+            peer_command = [str(peer), "--endpoint", peer_endpoint, "--client-id",
+                            "02000000000000000000000000000000", "--profile-id", str(profile_id),
+                            "--configured-mask", str(mask)]
             evidence_file = directory / "peer-command-evidence.jsonl"
             if real_peer:
                 peer_command += ["--evidence-file", str(evidence_file)]
+                peer_command += ["--contract-sha256", capability["contract_sha256"],
+                                 "--model-sha256", capability["model_sha256"],
+                                 "--profile-sha256", capability["profile_sha256"]]
+                for field, option in (("position_min_rad", "--position-min-rad"),
+                                      ("position_max_rad", "--position-max-rad")):
+                    peer_command += [option, ",".join(format(value, ".17g") for value in capability[field])]
+                peer_command += ["--velocity-limit-rad-s", str(capability["velocity_max_rad_s"][0]),
+                                 "--acceleration-limit-rad-s2", str(capability["acceleration_max_rad_s2"][0]),
+                                 "--control-period-us", str(capability["control_period_us"]),
+                                 "--state-publish-period-us", str(capability["state_publish_period_us"])]
             if not real_peer:
                 peer_command += ["--device-id", "01000000000000000000000000000000",
-                                 "--contract-bundle", str(bundle), "--profile-name", "sil_j1",
+                                 "--contract-bundle", str(bundle), "--profile-name", profile_name,
+                                 "--state-publish-period-us", str(capability["state_publish_period_us"]),
                                  "--motion-supported", "false" if unsupported else "true"]
+                if six_axis:
+                    peer_command.append("--trace")
             launch("peer", peer_command)
             time.sleep(0.4)
             launch("gate", [str(gate), "--ros-args", "--params-file", str(configuration)])
@@ -144,10 +429,13 @@ def main():
             assert action.wait_for_server(timeout_sec=5)
             time.sleep(0.3)
             goal = FollowJointTrajectory.Goal()
-            goal.trajectory.joint_names = ["Joint1"]
-            point = JointTrajectoryPoint(positions=[0.05])
-            point.time_from_start.sec = 1
-            goal.trajectory.points = [point]
+            goal.trajectory.joint_names = joint_names
+            if six_axis:
+                initial = [0.0] * 6
+                target = SIX_AXIS_TARGET
+                goal.trajectory.points = smooth_motion_points(initial, target)
+            else:
+                goal.trajectory.points = smooth_motion_points(0.0, first_target)
             goal.goal_time_tolerance.sec = 1
             feedback = []
             handle = wait_future(node, action.send_goal_async(goal, feedback_callback=lambda value: feedback.append(value.feedback)))
@@ -155,24 +443,91 @@ def main():
             result = wait_future(node, handle.get_result_async(), 10)
             assert result.status == 4 and result.result.error_code == 0, f"motion did not succeed: {result}"
             assert feedback, "public FJT did not publish feedback"
-            assert all(item.joint_names == ["Joint1"] and len(item.actual.positions) == 1 and
-                       len(item.desired.positions) == 1 for item in feedback), "feedback axis shape"
-            assert any(abs(item.actual.positions[0] - 0.05) > 0.005 for item in feedback), "actual feedback mirrored goal"
+            assert all(item.joint_names == joint_names and len(item.actual.positions) == len(joint_names) and
+                       len(item.desired.positions) == len(joint_names) for item in feedback), "feedback axis shape"
+            if six_axis:
+                processes[0].terminate()
+                processes[0].wait(timeout=5)
+                if real_peer:
+                    commands = peer_command_tail(evidence_file, limit=4096)
+                else:
+                    logs["peer"].seek(0)
+                    peer_lines = logs["peer"].read().splitlines()
+                    commands = [event for line in peer_lines
+                                if line.startswith('{"event":"command"')
+                                for event in (json.loads(line),)]
+                assert commands and all(len(event["position"]) == 6 for event in commands)
+                validate_six_axis_evidence(feedback, commands, target)
+                print(json.dumps({"evidence_scope": "real_dpsdk_peer" if real_peer else "component_only",
+                                  "six_axis_fjt_succeeded": True,
+                                  "target_rad": target,
+                                  "contract_identity_scope": "local_synthetic_sil_fixture",
+                                  "contract_sha256": capability["contract_sha256"],
+                                  "hardware_activation_evidence": False,
+                                  "joint_names": joint_names, "feedback_count": len(feedback),
+                                  "command_count": len(commands)}))
+                node.destroy_node()
+                rclpy.shutdown()
+                return peer_events(peer_lines) if not real_peer else None
+            assert any(abs(item.actual.positions[0] - first_target) > 0.005 for item in feedback), "actual feedback mirrored goal"
             elapsed = [item.actual.time_from_start.sec + item.actual.time_from_start.nanosec * 1e-9 for item in feedback]
-            assert elapsed == sorted(elapsed) and 0 <= elapsed[0] < 0.1 and elapsed[-1] < 2, "feedback clock"
+            assert elapsed == sorted(elapsed) and 0 <= elapsed[0] < 0.1 and elapsed[-1] < 8, "feedback clock"
 
-            def send(target, duration=1, tolerance=None):
+            if smoke:
+                processes[0].terminate()
+                processes[0].wait(timeout=5)
+                logs["peer"].seek(0)
+                events = [json.loads(line) for line in logs["peer"].read().splitlines()
+                          if line.startswith('{"event"')]
+                commands = peer_command_tail(evidence_file, limit=4096) if real_peer else [
+                    event for event in events if event["event"] == "command"]
+                assert commands and max(event["position"][0] for event in commands) > 0.015
+                operations = [event["operation"] for event in events if event["event"] == "manage"]
+                assert operations[:7] == [1, 2, 3, 5, 6, 7, 8], operations
+                print(json.dumps({"evidence_scope": "real_dpsdk_peer" if real_peer else "component_only",
+                                  "smoke_fjt_succeeded": True, "goal_rad": first_target,
+                                  "feedback_count": len(feedback), "command_count": len(commands),
+                                  "operations": operations}))
+                node.destroy_node()
+                rclpy.shutdown()
+                return
+
+            def send(start, target, duration=7, tolerance=None):
                 motion = FollowJointTrajectory.Goal()
                 motion.trajectory.joint_names = ["Joint1"]
-                sample = JointTrajectoryPoint(positions=[target])
-                sample.time_from_start.sec = duration
-                motion.trajectory.points = [sample]
+                motion.trajectory.points = smooth_motion_points(start, target, duration)
                 motion.goal_time_tolerance.sec = 1
                 if tolerance is not None:
                     motion.path_tolerance = [JointTolerance(name="Joint1", position=tolerance)]
                 stream = []
                 accepted = wait_future(node, action.send_goal_async(motion, feedback_callback=lambda value: stream.append(value.feedback)))
                 return accepted, stream
+
+            if real_peer:
+                status = call(node, Trigger, "/device_action_gate/bootstrap_status", Trigger.Request())
+                assert not status.success, "BENCH_RELEASE reopened admission after Complete"
+                second, _ = send(first_target, 0.08)
+                assert not second.accepted, "BENCH_RELEASE admitted a second goal after Complete"
+                release = call(node, Trigger, "/device_action_gate/disable_and_release", Trigger.Request())
+                assert not release.success and release.message == "RELEASE_UNAVAILABLE", \
+                    f"software-only SIL unexpectedly permitted Release: {release.message}"
+                processes[0].terminate()
+                processes[0].wait(timeout=5)
+                logs["peer"].seek(0)
+                events = [json.loads(line) for line in logs["peer"].read().splitlines()
+                          if line.startswith('{"event"')]
+                operations = [event["operation"] for event in events if event["event"] == "manage"]
+                assert operations == [1, 2, 3, 5, 6, 7, 8], operations
+                commands = peer_command_tail(evidence_file, limit=4096)
+                assert commands and len({event["freshness_ticket"] for event in commands}) > 20
+                assert all(event["motion_epoch"] <= 3 for event in commands), "second motion run began"
+                print(json.dumps({"evidence_scope": "real_dpsdk_peer", "deployment_stop_policy": "BENCH_RELEASE",
+                                  "public_fjt_succeeded": True, "second_goal_rejected": True,
+                                  "software_only_release_rejected": True, "operations": operations,
+                                  "distinct_freshness_tickets": len({event["freshness_ticket"] for event in commands})}))
+                node.destroy_node()
+                rclpy.shutdown()
+                return
 
             def renew_permit():
                 renewal_deadline = time.monotonic() + 10
@@ -182,7 +537,10 @@ def main():
                         break
                     time.sleep(0.05)
                 else:
-                    raise AssertionError("single-use permit renewal was unavailable")
+                    status = call(node, Trigger, "/device_action_gate/bootstrap_status", Trigger.Request())
+                    raise AssertionError(
+                        f"single-use permit renewal was unavailable: {response.message}; "
+                        f"bootstrap_status={status.success}:{status.message}")
                 while time.monotonic() < renewal_deadline:
                     status = call(node, Trigger, "/device_action_gate/bootstrap_status", Trigger.Request())
                     if status.success:
@@ -191,15 +549,15 @@ def main():
                 raise AssertionError(f"single-use permit renewal was not confirmed: {status.message}")
 
             renew_permit()
-            second, second_feedback = send(0.08)
+            second, second_feedback = send(0.05, 0.08)
             assert second.accepted, "second goal was not admitted after confirmed HOLD"
             second_result = wait_future(node, second.get_result_async(), 10)
             assert second_result.status == 4, f"second goal failed: {second_result}"
             assert second_feedback and abs(second_feedback[0].actual.positions[0] - 0.05) < 0.002, "second goal jumped to home"
             renew_permit()
-            canceled, cancel_feedback = send(0.15, 3)
+            canceled, cancel_feedback = send(0.08, 0.15)
             assert canceled.accepted
-            overlap, _ = send(0.1)
+            overlap, _ = send(0.08, 0.1)
             assert not overlap.accepted, "overlapping public goal accepted"
             until_cancel = time.monotonic() + 0.2
             while time.monotonic() < until_cancel:
@@ -209,19 +567,19 @@ def main():
             canceled_result = wait_future(node, canceled.get_result_async(), 10)
             assert canceled_result.status == 5, f"cancel did not cross confirmed HOLD barrier: {canceled_result}"
             renew_permit()
-            aborted, abort_feedback = send(0.12, tolerance=1e-7)
+            abort_start = cancel_feedback[-1].actual.positions[0] if cancel_feedback else 0.08
+            aborted, abort_feedback = send(abort_start, 0.12, tolerance=1e-7)
             assert aborted.accepted, "cancel barrier did not reopen admission"
             aborted_result = wait_future(node, aborted.get_result_async(), 10)
             assert aborted_result.status == 6 and "PATH_TOLERANCE" in aborted_result.result.error_string, f"abort path not confirmed: {aborted_result}"
-            if real_peer:
-                processes[0].terminate()
-                processes[0].wait(timeout=5)
+            processes[0].terminate()
+            processes[0].wait(timeout=5)
             logs["peer"].seek(0)
             events = [json.loads(line) for line in logs["peer"].read().splitlines() if line.startswith('{"event"')]
             if real_peer:
                 events += [json.loads(line) for line in evidence_file.read_text().splitlines()]
             operations = [event["operation"] for event in events if event["event"] == "manage"]
-            expected_operations = ([1, 3, 2, 5] if real_peer else []) + [6, 7, 8, 5, 7, 8, 5, 7, 9, 5, 7, 9]
+            expected_operations = [1, 2, 3, 5, 6, 7, 8, 5, 7, 8, 5, 7, 9, 5, 7, 9]
             assert operations == expected_operations, operations
             if real_peer:
                 operation_results = [event for event in events if event["event"] == "operation_result"]
@@ -259,22 +617,33 @@ def main():
             node.destroy_node()
             rclpy.shutdown()
         except BaseException as error:
+            if processes and processes[0].poll() is None:
+                processes[0].terminate()
+                try:
+                    processes[0].wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    processes[0].kill()
+                    processes[0].wait()
+            if six_axis and not real_peer and trace_capture is not None:
+                logs["peer"].seek(0)
+                trace_capture.extend(peer_events(logs["peer"].read().splitlines()))
+            if real_peer:
+                print(f"peer_command_tail: {json.dumps(peer_command_tail(evidence_file))}", file=sys.stderr)
             gate_output = ""
-            for name, log in logs.items():
+            for (name, log), process in zip(logs.items(), processes):
                 log.seek(0)
-                output = log.read()[-18000:]
+                full_output = log.read()
+                output = full_output[-18000:]
+                if name == "peer" and not real_peer:
+                    diagnostic_lines = [line for line in full_output.splitlines()
+                                        if not line.startswith('{"event":"command"') and
+                                        not line.startswith('{"event":"state_trace"')]
+                    output = "\n".join(diagnostic_lines)[-18000:]
                 if name == "gate":
                     gate_output = output
-                print(f"{name}:\n{output}", file=sys.stderr)
-            if real_peer and isinstance(error, AssertionError) and \
-                    "explicit enable unavailable" in str(error) and \
-                    "DEVICE_BOOTSTRAP_INPUT_REJECTED_HASH" in gate_output:
-                print(json.dumps({
-                    "evidence_scope": "real_dpsdk_peer",
-                    "status": "NOT_RUN",
-                    "reason": "D08 peer omitted required contract/model/profile hash evidence",
-                }))
-                raise SystemExit(77)
+                    if six_axis and not real_peer and trace_capture is not None:
+                        trace_capture.extend(host_callback_events(full_output.splitlines()))
+                print(f"{name} (returncode={process.poll()}):\n{output}", file=sys.stderr)
             raise
         finally:
             for process in reversed(processes):

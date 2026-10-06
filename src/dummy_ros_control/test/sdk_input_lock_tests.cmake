@@ -7,6 +7,7 @@ set(paths
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp
   build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a
+  build_dummy/g6-host/platform_common_console_device/libdp_console_device.a
   build_dummy/g6-host/lib/libzenohpico.a)
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 foreach(changed IN LISTS paths)

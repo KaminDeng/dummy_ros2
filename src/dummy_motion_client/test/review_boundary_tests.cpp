@@ -7,7 +7,8 @@ bool state_case(bool partial_hold_mask) {
   Harness harness; Authorization auth; auth.session=auth.reference=auth.permit=true;
   auth.identity.set_expected_session_id(1); auth.identity.set_configured_mask(1);
   require(harness.gate.enable(auth,1));
-  wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_state_seq(1);
+  wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(4U);
+  state.set_state_seq(1);
   state.set_session_id(1); state.set_configured_mask(1); state.set_position_valid_mask(1);
   state.set_hold_ready(!partial_hold_mask); state.set_motion_epoch(1);
   state.set_core_state(partial_hold_mask?4:3);
@@ -29,7 +30,7 @@ int main(int argc,char **argv) {
     require(static_cast<unsigned>(ManageOperation::kQuery)==12);
     require(static_cast<unsigned>(ManageOperation::kComplete)==8);
     require(wire_value(WireReceipt::kQueued)==1);
-    require(wire_value(WireResult::kPending)==8);
+    require(wire_value(WireResult::kPending)==23);
     require(wire_value(WireCoreState::kEnablingHold)==3);
     require(wire_value(WireCoreState::kHold)==4);
     require(wire_value(WireCoreState::kRunning)==5);

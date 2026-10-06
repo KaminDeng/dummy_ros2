@@ -66,7 +66,9 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_activate(
 hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_deactivate(
     const rclcpp_lifecycle::State &) {
   active_ = false;
-  stop_requested_.store(true, std::memory_order_release);
+  auto none = StopRequestKind::kNone;
+  stop_requested_.compare_exchange_strong(none, StopRequestKind::kDeactivation,
+                                          std::memory_order_acq_rel);
   clear_command_identity();
   return CallbackReturn::SUCCESS;
 }
@@ -74,7 +76,7 @@ hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_deactivate(
 hardware_interface::CallbackReturn GuardedZenbeddedSystem::on_error(
     const rclcpp_lifecycle::State &) {
   active_ = false;
-  stop_requested_.store(true, std::memory_order_release);
+  stop_requested_.store(StopRequestKind::kSafety, std::memory_order_release);
   clear_command_identity();
   return CallbackReturn::SUCCESS;
 }
@@ -179,12 +181,16 @@ std::uint64_t GuardedZenbeddedSystem::publish_drops() const noexcept {
 }
 
 bool GuardedZenbeddedSystem::take_stop_request() noexcept {
-  return stop_requested_.exchange(false, std::memory_order_acq_rel);
+  return take_stop_request_kind() != StopRequestKind::kNone;
+}
+
+GuardedZenbeddedSystem::StopRequestKind GuardedZenbeddedSystem::take_stop_request_kind() noexcept {
+  return stop_requested_.exchange(StopRequestKind::kNone, std::memory_order_acq_rel);
 }
 
 void GuardedZenbeddedSystem::request_transport_stop() noexcept {
   active_.store(false, std::memory_order_release);
-  stop_requested_.store(true, std::memory_order_release);
+  stop_requested_.store(StopRequestKind::kSafety, std::memory_order_release);
   clear_command_identity();
 }
 

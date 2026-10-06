@@ -20,7 +20,7 @@ timing:
   stop_max_duration_us: 1500000
   trial_max_duration_us: 10000000
   first_sample_timeout_us: 100000
-  max_can_tx_residence_us: 30000
+  max_can_tx_residence_us: 10000
   tracking_error_window_us: 200000
   max_control_dt_us: 20000
   state_publish_period_us: 10000
@@ -70,5 +70,8 @@ seed_schema_status: 'DESIGN_ONLY: map into existing SDK profile generator during
   not an existing runtime format'
 profile_name: sil_6dof
 uses_dpsdk_device: true
-reference_kind: SIM_FIXED
+reference_kind: BENCH_SESSION
+bench_position_range_rad:
+- -0.3
+- 0.3
 profile_id: 1

@@ -41,6 +41,18 @@ template <> struct MessageCodec<dp::protocol::dummy_robot_v2::DummyJointStateV2>
     }
 };
 
+template <> struct MessageCodec<dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2> {
+    static constexpr size_t kEncodedSize = dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::kEncodedSize;
+    static constexpr uint32_t kInterfaceId = 4143U;
+    static constexpr bool kPortable = true;
+    static bool encode(const dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2& value, uint8_t* out, size_t size) {
+        return dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::encode(value, out, size) == dp::protocol::dummy_robot_v2::CodecResult::kOk;
+    }
+    static bool decode(const uint8_t* in, size_t size, dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2* value) {
+        return dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::decode(in, size, value) == dp::protocol::dummy_robot_v2::CodecResult::kOk;
+    }
+};
+
 template <> struct MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Request> {
     static constexpr size_t kEncodedSize = dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize;
     static constexpr uint32_t kInterfaceId = 4141U;
@@ -69,7 +81,7 @@ template <> struct MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Respo
 
 namespace dp::protocol::dummy_robot_v2 {
 inline constexpr dp::comm::StaticRequirements kStaticRequirements{
-    1U, 2U, 1U, 0U, 8U, 301U, 96U, 0U,
+    1U, 3U, 1U, 0U, 8U, 651U, 96U, 0U,
     static_cast<uint16_t>(kMaxObjectAlignment), 1U, 1U, 1U, 1U};
 }  // namespace dp::protocol::dummy_robot_v2
 

@@ -23,6 +23,7 @@ struct JointStateSnapshot {
 
 class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface {
  public:
+  enum class StopRequestKind : std::uint8_t { kNone, kDeactivation, kSafety };
   GuardedZenbeddedSystem();
   ~GuardedZenbeddedSystem() override;
   CallbackReturn on_init(
@@ -49,9 +50,10 @@ class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface 
   bool transfer_control_update() noexcept;
   std::uint64_t publish_drops() const noexcept;
   bool take_stop_request() noexcept;
+  StopRequestKind take_stop_request_kind() noexcept;
   void request_transport_stop() noexcept;
   bool stop_request_pending() const noexcept {
-    return stop_requested_.load(std::memory_order_acquire);
+    return stop_requested_.load(std::memory_order_acquire) != StopRequestKind::kNone;
   }
   TransportStatistics transport_statistics() const noexcept;
   void invalidate_transport_state(const CommandIdentity *retired_authority = nullptr) noexcept;
@@ -72,7 +74,7 @@ class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface 
   std::atomic<bool> read_state_valid_{false};
   std::atomic<bool> active_{false};
   std::atomic<std::uint64_t> state_deadline_us_{0U};
-  std::atomic<bool> stop_requested_{false};
+  std::atomic<StopRequestKind> stop_requested_{StopRequestKind::kNone};
   std::size_t active_joint_count_ = 0;
   std::uint64_t consumed_generation_ = 0;
   BoundedPublishQueue<4> publish_queue_;

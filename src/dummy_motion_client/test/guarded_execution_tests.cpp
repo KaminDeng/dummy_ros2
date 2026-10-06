@@ -25,6 +25,7 @@ int main(int argc,char **argv) {
   std::array<double,6> prime{}; prime[0]=0.25;
   set_command_identity({7,8,9,10,11});
   if(!controller.prime_position(prime)) return 2;
+  controller.set_update_sink(controller_update_sink,nullptr);
   const auto origin=controller.get_node()->now();
   controller.update(origin,rclcpp::Duration::from_seconds(0.01));
   const auto sampled=consume_control_update(0);

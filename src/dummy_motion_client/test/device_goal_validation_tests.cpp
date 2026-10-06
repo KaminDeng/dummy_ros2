@@ -16,4 +16,9 @@ int main() {
   if(validated_device_trajectory(goal,profile)) return 3;
   goal.path_tolerance.clear(); goal.trajectory.header.stamp.sec=1;
   if(validated_device_trajectory(goal,profile)) return 4;
+  goal.trajectory.header.stamp.sec=0;
+  goal.trajectory.points[0].velocities={4e-19};
+  if(!validated_device_trajectory(goal,profile)) return 5;
+  goal.trajectory.points[0].velocities={1e-4};
+  if(validated_device_trajectory(goal,profile)) return 6;
 }

@@ -22,10 +22,12 @@ struct Client : ManagementClient {
 };
 struct Port : ActionPort {
   int primes=0, starts=0, disables=0, cancels=0;
+  bool stream_hold=false;
   void prime(const Position &, std::uint32_t, std::uint64_t) override { ++primes; }
   void start(const Trajectory &, std::uint64_t) override { ++starts; }
   void disable() override { ++disables; }
   void cancel() override { ++cancels; }
+  bool freeze_hold() override { if (!stream_hold) return false; disable(); return true; }
 };
 Trajectory trajectory() { return {{"Joint1"}, {{{0.2},{0.0},{},1.0}}, {}, {},0.0}; }
 JointProfile profile() { return {{"Joint1"}, {-1}, {1}, {1}, {2}, {0.1}, {0.1}}; }
@@ -34,9 +36,318 @@ ManageReply reply(std::uint64_t id, std::uint32_t epoch, bool success=false) {
   result.result_valid=success; result.succeeded=success; result.snapshot_valid=true;
   result.motion_epoch=epoch; result.position={}; result.hold_position={};
   result.hold_available=true; result.hold_ready=success; result.accepted_seq=1;
+  result.session_id=9U;
   return result;
 }
+void cancel_receipt_rejects_foreign_owner() {
+  for (const bool wrong_session : {true,false}) {
+    Client client; Port port; ActionGate gate(client,port,profile());
+    Authorization authorization;
+    authorization.session=authorization.reference=authorization.permit=true;
+    authorization.identity.set_expected_session_id(9U);
+    authorization.identity.set_expected_reference_epoch(3U);
+    check(gate.enable(authorization,1U));
+    client.replies.push_back(reply(1U,1U)); gate.tick(2U);
+    check(gate.record_update(gate.generation(),1U,1U,Position{}));
+    client.replies.push_back(reply(1U,1U,true)); gate.tick(3U);
+    check(gate.submit(trajectory(),4U));
+    client.replies.push_back(reply(2U,2U)); gate.tick(5U);
+    check(gate.record_update(gate.generation(),2U,1U,Position{}));
+    client.replies.push_back(reply(2U,2U,true)); gate.tick(6U);
+    gate.cancel(7U);
+    client.replies.push_back(reply(3U,3U)); gate.tick(8U);
+    if(!gate.record_update(gate.generation(),3U,1U,Position{}))
+      throw std::runtime_error("foreign owner stop hold update rejected");
+    auto committed=reply(3U,3U,true);
+    committed.transaction_phase=wire_value(WireTransactionPhase::kCommitted);
+    committed.session_id=wrong_session ? 8U : 9U;
+    committed.reference_epoch=wrong_session ? 3U : 4U;
+    client.replies.push_back(committed); gate.tick(9U);
+    if(gate.terminal()!=Terminal::kCanceled)
+      throw std::runtime_error("foreign owner setup did not reach canceled terminal");
+    check(!gate.confirmed_cancel_receipt());
+  }
+}
+void hold_prime_outside_planning_range() {
+  Client client; Port port;
+  auto limits=profile();
+  limits.lower[0]=0.6108652382;
+  limits.upper[0]=3.1415926536;
+  ActionGate gate(client,port,limits);
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_session_id(9U);
+  check(gate.enable(authorization,1U));
+  client.replies.push_back(reply(1U,1U));
+  gate.tick(2U);
+  check(port.primes==1);
+  check(gate.record_update(gate.generation(),1U,1U,Position{}));
+  client.replies.push_back(reply(1U,1U,true));
+  gate.tick(3U);
+  check(gate.ready());
+  check(gate.record_update(gate.generation(),1U,2U,Position{}));
+  Position changed{}; changed[0]=0.1;
+  check(!gate.record_update(gate.generation(),1U,3U,changed));
+}
+void repeated_authorization_loss_is_idempotent() {
+  Client client; Port port; ActionGate gate(client,port,profile());
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_session_id(9U);
+  check(gate.enable(authorization,1U));
+  gate.invalidate_authorization(2U);
+  const auto generation=gate.generation();
+  const int disables=port.disables;
+  const int cancels=port.cancels;
+  gate.invalidate_authorization(3U);
+  check(gate.generation()==generation && port.disables==disables && port.cancels==cancels);
+  check(gate.terminal()==Terminal::kAborted && gate.error()=="SESSION_CHANGED");
+}
+void enable_preserves_bootstrap_motion_epoch() {
+  Client client; Port port; ActionGate gate(client,port,profile());
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_boot_epoch(14003434958659749721ULL);
+  authorization.identity.set_expected_session_id(6420589637319258177ULL);
+  authorization.identity.set_expected_reference_epoch(1U);
+  authorization.identity.set_expected_motion_epoch(4U);
+  authorization.identity.set_expected_management_epoch(12U);
+  check(gate.enable(authorization,1U));
+  check(client.requests.size()==1U);
+  const auto &enable=client.requests.front();
+  check(enable.operation()==wire_value(ManageOperation::kEnable));
+  check(enable.expected_boot_epoch()==authorization.identity.expected_boot_epoch());
+  check(enable.expected_session_id()==authorization.identity.expected_session_id());
+  check(enable.expected_reference_epoch()==1U);
+  check(enable.expected_motion_epoch()==4U);
+  check(enable.expected_management_epoch()==12U);
+  gate.observe(reply(1U,4U),2U);
+  check(port.primes==0 && gate.phase()==Phase::kIdle);
+  gate.observe(reply(1U,5U),3U);
+  check(port.primes==1);
+  check(gate.record_update(gate.generation(),5U,1U,Position{}));
+  gate.observe(reply(1U,5U,true),4U);
+  check(gate.ready());
+  check(gate.submit(trajectory(),5U));
+  check(client.requests.back().operation()==wire_value(ManageOperation::kBegin));
+  check(client.requests.back().expected_motion_epoch()==5U);
+  gate.observe(reply(2U,6U),6U);
+  const auto generation=gate.generation();
+  check(gate.record_update(generation,6U,1U,Position{}));
+  gate.observe(reply(2U,6U,true),7U);
+  Position terminal{}; terminal[0]=0.2;
+  check(gate.record_update(generation,6U,2U,terminal));
+  gate.inner_result(generation,Terminal::kSucceeded,"",8U);
+  auto accepted=reply(2U,6U,true);
+  accepted.accepted_seq=2U;
+  gate.observe(accepted,9U);
+  check(client.requests.back().operation()==wire_value(ManageOperation::kComplete));
+  check(client.requests.back().expected_motion_epoch()==6U);
+}
+void begin_waits_for_final_hold_commit() {
+  namespace wire=dp::protocol::dummy_robot_v2;
+  auto six_axis=profile();
+  six_axis.joints={"Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"};
+  six_axis.lower.assign(6U,-1.0); six_axis.upper.assign(6U,1.0);
+  six_axis.velocity.assign(6U,1.0); six_axis.acceleration.assign(6U,2.0);
+  six_axis.path_tolerance.assign(6U,0.1); six_axis.goal_tolerance.assign(6U,0.1);
+  auto motion=trajectory(); motion.joints=six_axis.joints;
+  motion.points.front().positions.assign(6U,0.2);
+  motion.points.front().velocities.assign(6U,0.0);
+  Client client; Port port; port.stream_hold=true; ActionGate gate(client,port,six_axis);
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_boot_epoch(7U);
+  authorization.identity.set_expected_session_id(9U);
+  authorization.identity.set_expected_profile_id(1U);
+  authorization.identity.set_configured_mask(0x3FU);
+  check(gate.enable(authorization,1U));
+  gate.observe(reply(1U,1U),2U);
+  check(gate.record_update(gate.generation(),1U,1U,Position{}));
+  gate.observe(reply(1U,1U,true),3U);
+  check(gate.ready());
+  check(gate.submit(motion,4U));
+  check(port.disables==2 && client.requests.size()==1U && !gate.ready());
+  wire::DummyJointStateV2 state;
+  state.set_schema_major(2U); state.set_schema_minor(4U); state.set_boot_epoch(7U);
+  state.set_session_id(9U); state.set_profile_id(1U);
+  state.set_configured_mask(0x3FU); state.set_position_valid_mask(0x3FU);
+  state.set_core_state(wire_value(WireCoreState::kHold));
+  state.set_motion_epoch(1U); state.set_hold_ready(true);
+  state.set_can_submitted_mask(0x3FU); state.set_can_sent_mask(0x1FU);
+  auto observe=[&](std::uint32_t state_seq,std::uint32_t committed,std::uint64_t now) {
+    state.set_state_seq(state_seq); state.set_committed_producer_seq(committed);
+    std::vector<std::uint8_t> bytes(wire::DummyJointStateV2Codec::kEncodedSize);
+    check(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
+    check(gate.observe_state(bytes.data(),bytes.size(),now));
+  };
+  observe(1U,1U,5U);
+  check(client.requests.size()==1U);
+  state.set_can_submitted_mask(0x3FU); state.set_can_sent_mask(0x3FU);
+  observe(2U,1U,6U);
+  check(client.requests.size()==1U);
+  gate.observe_hold_drain({7U,9U,1U,0U,1U,1U},7U);
+  observe(3U,1U,8U);
+  check(client.requests.size()==2U &&
+        client.requests.back().operation()==wire_value(ManageOperation::kBegin));
+}
+void discarded_local_hold_generation_does_not_block_begin() {
+  namespace wire=dp::protocol::dummy_robot_v2;
+  Client client; Port port; port.stream_hold=true;
+  ActionGate gate(client,port,profile());
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_session_id(9U);
+  authorization.identity.set_configured_mask(1U);
+  check(gate.enable(authorization,1U));
+  gate.observe(reply(1U,1U),2U);
+  check(gate.record_update(gate.generation(),1U,342U,Position{}));
+  gate.observe(reply(1U,1U,true),3U);
+  wire::DummyJointStateV2 state;
+  state.set_schema_major(2U); state.set_schema_minor(4U);
+  state.set_session_id(9U); state.set_configured_mask(1U);
+  state.set_position_valid_mask(1U); state.set_motion_epoch(1U);
+  state.set_core_state(wire_value(WireCoreState::kHold)); state.set_hold_ready(true);
+  state.set_committed_producer_seq(342U);
+  state.set_can_submitted_mask(1U); state.set_can_sent_mask(1U);
+  auto observe=[&](std::uint32_t seq,std::uint64_t now) {
+    state.set_state_seq(seq);
+    std::vector<std::uint8_t> bytes(wire::DummyJointStateV2Codec::kEncodedSize);
+    check(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
+    check(gate.observe_state(bytes.data(),bytes.size(),now));
+  };
+  observe(1U,4U);
+  check(gate.record_update(gate.generation(),1U,343U,Position{}));
+  check(gate.submit(trajectory(),5U));
+  check(client.requests.size()==1U);
+  gate.observe_hold_drain({0U,9U,343U,0U,1U,342U},6U);
+  observe(2U,7U);
+  check(client.requests.size()==2U &&
+        client.requests.back().operation()==wire_value(ManageOperation::kBegin));
+}
+void pending_hold_drain_can_cancel_or_timeout() {
+  const auto make_ready=[](Client &client,ActionGate &gate) {
+    Authorization authorization;
+    authorization.session=authorization.reference=authorization.permit=true;
+    authorization.identity.set_expected_session_id(9U);
+    check(gate.enable(authorization,1U));
+    gate.observe(reply(1U,1U),2U);
+    check(gate.record_update(gate.generation(),1U,1U,Position{}));
+    gate.observe(reply(1U,1U,true),3U);
+    check(gate.ready());
+    check(gate.submit(trajectory(),4U));
+    check(client.requests.size()==1U && !gate.ready());
+  };
+  Client canceled_client; Port canceled_port; canceled_port.stream_hold=true;
+  ActionGate canceled(canceled_client,canceled_port,profile());
+  make_ready(canceled_client,canceled);
+  canceled.cancel(5U);
+  check(canceled_client.requests.size()==2U &&
+        canceled_client.requests.back().operation()==wire_value(ManageOperation::kCancel) &&
+        canceled_port.cancels==1);
+  Client timed_client; Port timed_port; timed_port.stream_hold=true;
+  ActionGate timed(timed_client,timed_port,profile());
+  make_ready(timed_client,timed);
+  timed.tick(1000004U);
+  check(timed_client.requests.size()==2U &&
+        timed_client.requests.back().operation()==wire_value(ManageOperation::kCancel) &&
+        timed.error()=="HOLD_DRAIN_TIMEOUT");
+}
+void typed_ack_reject_survives_session_invalidation() {
+  Client client; Port port; port.stream_hold=true;
+  ActionGate gate(client,port,profile());
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_session_id(9U);
+  check(gate.enable(authorization,1U));
+  gate.observe(reply(1U,1U),2U);
+  check(gate.record_update(gate.generation(),1U,1U,Position{}));
+  gate.observe(reply(1U,1U,true),3U);
+  check(gate.submit(trajectory(),4U));
+  gate.abort("DEVICE_COMMAND_REJECTED_DURING_ACK",5U);
+  gate.invalidate_authorization(6U);
+  check(gate.terminal()==Terminal::kAborted &&
+        gate.error()=="DEVICE_COMMAND_REJECTED_DURING_ACK");
+}
+void begin_drain_and_reply_share_deadline() {
+  Client client; Port port; port.stream_hold=true;
+  ActionGate gate(client,port,profile(),100U);
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_session_id(9U);
+  authorization.identity.set_configured_mask(1U);
+  check(gate.enable(authorization,1U));
+  gate.observe(reply(1U,1U),2U);
+  check(gate.record_update(gate.generation(),1U,1U,Position{}));
+  gate.observe(reply(1U,1U,true),3U);
+  check(gate.submit(trajectory(),4U));
+  gate.observe_hold_drain({0U,9U,1U,0U,1U,1U},102U);
+  dp::protocol::dummy_robot_v2::DummyJointStateV2 state;
+  state.set_schema_major(2U); state.set_schema_minor(4U);
+  state.set_session_id(9U); state.set_state_seq(1U);
+  state.set_motion_epoch(1U);
+  state.set_configured_mask(1U); state.set_position_valid_mask(1U);
+  state.set_core_state(wire_value(WireCoreState::kHold));
+  state.set_hold_ready(true); state.set_committed_producer_seq(1U);
+  state.set_can_submitted_mask(1U); state.set_can_sent_mask(1U);
+  std::vector<std::uint8_t> bytes(dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize);
+  check(dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::encode(
+    state,bytes.data(),bytes.size())==dp::protocol::dummy_robot_v2::CodecResult::kOk);
+  check(gate.observe_state(bytes.data(),bytes.size(),103U));
+  check(client.requests.size()==2U &&
+        client.requests.back().operation()==wire_value(ManageOperation::kBegin));
+  gate.tick(104U);
+  check(client.requests.size()==3U &&
+        client.requests.back().operation()==wire_value(ManageOperation::kCancel) &&
+        gate.error()=="RESULT_UNCONFIRMED");
+}
+void hold_drain_accepts_wrap_but_rejects_old_commit() {
+  namespace wire=dp::protocol::dummy_robot_v2;
+  Client client; Port port; port.stream_hold=true;
+  ActionGate gate(client,port,profile());
+  Authorization authorization;
+  authorization.session=authorization.reference=authorization.permit=true;
+  authorization.identity.set_expected_session_id(9U);
+  authorization.identity.set_configured_mask(1U);
+  check(gate.enable(authorization,1U));
+  gate.observe(reply(1U,1U),2U);
+  check(gate.record_update(gate.generation(),1U,UINT32_MAX-1U,Position{}));
+  gate.observe(reply(1U,1U,true),3U);
+  check(gate.record_update(gate.generation(),1U,UINT32_MAX,Position{}));
+  check(gate.record_update(gate.generation(),1U,1U,Position{}));
+  check(!gate.record_update(gate.generation(),1U,UINT32_MAX,Position{}));
+  wire::DummyJointStateV2 state;
+  state.set_schema_major(2U); state.set_schema_minor(4U);
+  state.set_session_id(9U); state.set_configured_mask(1U);
+  state.set_position_valid_mask(1U); state.set_motion_epoch(1U);
+  state.set_core_state(wire_value(WireCoreState::kHold)); state.set_hold_ready(true);
+  state.set_can_submitted_mask(1U); state.set_can_sent_mask(1U);
+  auto observe=[&](std::uint32_t state_seq,std::uint32_t committed,std::uint64_t now) {
+    state.set_state_seq(state_seq); state.set_committed_producer_seq(committed);
+    std::vector<std::uint8_t> bytes(wire::DummyJointStateV2Codec::kEncodedSize);
+    check(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
+    return gate.observe_state(bytes.data(),bytes.size(),now);
+  };
+  check(observe(UINT32_MAX-1U,UINT32_MAX,4U));
+  check(gate.submit(trajectory(),5U));
+  gate.observe_hold_drain({0U,9U,1U,0U,1U,UINT32_MAX},5U);
+  check(observe(UINT32_MAX,0x80000001U,6U));
+  check(client.requests.size()==1U);
+  check(observe(1U,1U,7U));
+  check(client.requests.size()==2U &&
+        client.requests.back().operation()==wire_value(ManageOperation::kBegin));
+}
 int main() {
+  cancel_receipt_rejects_foreign_owner();
+  discarded_local_hold_generation_does_not_block_begin();
+  begin_waits_for_final_hold_commit();
+  pending_hold_drain_can_cancel_or_timeout();
+  typed_ack_reject_survives_session_invalidation();
+  hold_drain_accepts_wrap_but_rejects_old_commit();
+  begin_drain_and_reply_share_deadline();
+  hold_prime_outside_planning_range();
+  repeated_authorization_loss_is_idempotent();
+  enable_preserves_bootstrap_motion_epoch();
   Client client; Port port; ActionGate gate(client,port,profile());
   Authorization authorization; authorization.session=true; authorization.reference=true;
   authorization.permit=true; authorization.identity.set_expected_session_id(9);
@@ -80,15 +391,22 @@ int main() {
   gate.cancel(14);
   const bool cancel_pending=port.cancels==1 && !gate.submit(trajectory(),14) && gate.terminal()==Terminal::kNone;
   check(cancel_pending);
+  check(!gate.confirmed_cancel_receipt());
   gate.inner_result(generation,Terminal::kSucceeded,"",15); check(gate.terminal()==Terminal::kNone);
   client.replies.push_back(reply(5,5)); gate.tick(16);
   check(gate.record_update(gate.generation(),5,1,Position{}));
-  client.replies.push_back(reply(5,5,true)); gate.tick(17);
+  auto committed_cancel=reply(5,5,true);
+  committed_cancel.transaction_phase=wire_value(WireTransactionPhase::kCommitted);
+  client.replies.push_back(committed_cancel); gate.tick(17);
   const bool cancel_barrier=cancel_pending && gate.terminal()==Terminal::kCanceled && !gate.ready() &&
       gate.permit_refresh_allowed();
   check(cancel_barrier);
+  const auto cancel_receipt=gate.confirmed_cancel_receipt();
+  check(cancel_receipt && cancel_receipt->request_id==5U && cancel_receipt->operation_id==105U);
   check(gate.renew_permit(authorization) && gate.ready());
-  check(gate.submit(trajectory(),18)); client.replies.push_back(reply(6,6)); gate.tick(19);
+  check(gate.submit(trajectory(),18));
+  check(!gate.confirmed_cancel_receipt());
+  client.replies.push_back(reply(6,6)); gate.tick(19);
   check(gate.record_update(gate.generation(),6,1,Position{}));
   client.replies.push_back(reply(6,6,true)); gate.tick(20);
   const auto aborted_generation=gate.generation();
@@ -100,6 +418,7 @@ int main() {
   client.replies.push_back(reply(7,7,true)); gate.tick(24);
   const bool abort_preserved=gate.terminal()==Terminal::kAborted && gate.error()=="PATH_TOLERANCE";
   check(abort_preserved);
+  check(!gate.confirmed_cancel_receipt());
   check(gate.renew_permit(authorization) && gate.ready());
   check(gate.submit(trajectory(),25)); gate.cancel(26); gate.tick(2000000);
   const bool stop_timeout_aborted=gate.terminal()==Terminal::kAborted && gate.error()=="STOP_FAILED";

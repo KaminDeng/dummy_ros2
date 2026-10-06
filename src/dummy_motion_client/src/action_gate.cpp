@@ -2,9 +2,18 @@
 #include "dummy_motion_client/deadline.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <unordered_set>
 namespace dummy_motion_client {
 namespace {
+constexpr double kTerminalVelocityZeroToleranceRadS=1e-9;
+bool sequence_newer(std::uint32_t candidate,std::uint32_t current) {
+  const auto distance=static_cast<std::uint32_t>(candidate-current);
+  return distance!=0U && distance<0x80000000U;
+}
+bool sequence_at_or_after(std::uint32_t candidate,std::uint32_t current) {
+  return static_cast<std::uint32_t>(candidate-current)<0x80000000U;
+}
 bool finite(const std::vector<double> &values) {
   return std::all_of(values.begin(),values.end(),[](double v) { return std::isfinite(v); });
 }
@@ -64,7 +73,8 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
           (!point.accelerations.empty() && std::abs(point.accelerations[i])>profile.acceleration[i])) return {};
     }
   }
-  for (double velocity:output.points.back().velocities) if (velocity!=0) return {};
+  for (double velocity:output.points.back().velocities)
+    if (std::abs(velocity)>kTerminalVelocityZeroToleranceRadS) return {};
   const bool position_only=std::all_of(output.points.begin(),output.points.end(),[](const auto &point) {
     return point.velocities.empty() && point.accelerations.empty();
   });
@@ -103,7 +113,7 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
 }
 ActionGate::ActionGate(ManagementClient &client, ActionPort &port, JointProfile profile, std::uint64_t timeout)
     : client_(client),port_(port),profile_(std::move(profile)),timeout_(timeout) {}
-bool ActionGate::issue(ManageOperation operation,std::uint64_t now) {
+bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t existing_deadline) {
   auto request=authorization_.identity; request.set_expected_motion_epoch(epoch_);
   request.set_operation(static_cast<std::uint16_t>(operation));
   if (operation==ManageOperation::kComplete) {
@@ -112,15 +122,33 @@ bool ActionGate::issue(ManageOperation operation,std::uint64_t now) {
     std::copy_n(frozen_q_.begin(),profile_.joints.size(),positions);
     request.set_terminal_position_rad(positions);
   }
-  operation_=operation; deadline_=saturating_deadline(now,timeout_); request_=client_.submit(request,now);
+  operation_=operation;
+  deadline_=existing_deadline ? existing_deadline : saturating_deadline(now,timeout_);
+  request_=client_.submit(request,now);
   management_evidence_={}; state_evidence_={};
+  cancel_request_id_=(operation==ManageOperation::kCancel && cancel_terminal_) ? request_ : 0U;
   if (!request_) { fail(operation==ManageOperation::kCancel ? "STOP_FAILED" : "TRANSPORT_UNAVAILABLE"); return false; }
   return true;
+}
+std::optional<CancelReceipt> ActionGate::confirmed_cancel_receipt() const noexcept {
+  const auto &reply=management_evidence_;
+  if(terminal_!=Terminal::kCanceled || phase_!=Phase::kHold || request_!=0U ||
+     operation_!=ManageOperation::kCancel || !cancel_terminal_ || cancel_request_id_==0U ||
+     reply.request_id!=cancel_request_id_ || reply.operation_id==0U ||
+     !reply.accepted || !reply.result_valid || !reply.succeeded ||
+     reply.transaction_phase!=wire_value(WireTransactionPhase::kCommitted) ||
+     reply.result_code!=wire_value(WireResult::kOk) || reply.motion_epoch!=epoch_ ||
+     reply.session_id!=authorization_.identity.expected_session_id() ||
+     reply.reference_epoch!=authorization_.identity.expected_reference_epoch())
+    return std::nullopt;
+  return CancelReceipt{cancel_request_id_,reply.operation_id};
 }
 bool ActionGate::enable(const Authorization &authorization,std::uint64_t now) {
   if (phase_!=Phase::kIdle || request_ || !authorization.session || !authorization.reference ||
       !authorization.permit || authorization.identity.expected_session_id()==0) return false;
-  authorization_=authorization; return issue(ManageOperation::kEnable,now);
+  authorization_=authorization;
+  epoch_=authorization.identity.expected_motion_epoch();
+  return issue(ManageOperation::kEnable,now);
 }
 bool ActionGate::renew_permit(const Authorization &authorization) {
   const auto &current=authorization_.identity;
@@ -142,23 +170,39 @@ bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
   if (!ready() || !authorization_.session || !authorization_.reference || !authorization_.permit) return false;
   const auto validated=validate_trajectory(trajectory,profile_); if (!validated) return false;
   trajectory_=*validated; terminal_=Terminal::kNone; error_.clear(); frozen_=false; frozen_seq_=0;
-  return issue(ManageOperation::kBegin,now);
+  if (!port_.freeze_hold()) return issue(ManageOperation::kBegin,now);
+  frozen_seq_=last_seq_; frozen_generation_=last_producer_generation_;
+  drained_generation_=0; drained_committed_seq_=0;
+  drain_worker_ready_=false; drain_state_fresh_=false; hold_drain_pending_=true;
+  std::fprintf(stderr,
+               "GATE_HOLD_DRAIN_FREEZE_DIAG frozen=%u generation=%llu committed=%u state=%u epoch=%u submitted=%u sent=%u\n",
+               frozen_seq_,static_cast<unsigned long long>(frozen_generation_),
+               hold_committed_seq_,state_seq_,epoch_,hold_submitted_mask_,hold_sent_mask_);
+  deadline_=saturating_deadline(now,timeout_);
+  return true;
 }
 bool ActionGate::prime(const ManageReply &reply,Phase phase,std::uint64_t now) {
   port_.disable(); ++generation_; epoch_=reply.motion_epoch; phase_=phase;
-  sampled_=false; last_seq_=0; prime_seq_=0; frozen_=false;
+  sampled_=false; last_seq_=0; last_producer_generation_=0;
+  prime_seq_=0; frozen_=false;
+  prime_producer_generation_=0; hold_state_observed_us_=0;
+  hold_committed_seq_=0; hold_submitted_mask_=hold_sent_mask_=0;
   prime_q_=phase==Phase::kPrimeMotion ? reply.position : reply.hold_position;
   if (phase==Phase::kPrimeMotion) {
     const auto validated=validate_trajectory(trajectory_,profile_,&prime_q_);
     if (!validated) { stop(false,"TRAJECTORY_LIMIT_VIOLATION",now); return false; }
     trajectory_=*validated;
   }
+  std::fprintf(stderr, "GATE_PRIME_DIAG phase=%u epoch=%u generation=%llu q0=%.9f\n",
+               static_cast<unsigned>(phase), epoch_,
+               static_cast<unsigned long long>(generation_), prime_q_[0]);
   port_.prime(prime_q_,epoch_,generation_);
   return true;
 }
 bool ActionGate::handshake(const ManageReply &reply) const {
   return reply.snapshot_valid && reply.motion_epoch==epoch_ && sampled_ &&
-      reply.accepted_seq>=prime_seq_ && reply.result_valid && reply.succeeded;
+      reply.accepted_seq!=0U && sequence_at_or_after(reply.accepted_seq,prime_seq_) &&
+      reply.result_valid && reply.succeeded;
 }
 void ActionGate::observe(const ManageReply &reply,std::uint64_t now) {
   if (reply.request_id!=request_) return;
@@ -169,12 +213,15 @@ void ActionGate::observe(const ManageReply &reply,std::uint64_t now) {
     combined.rejected=reply.rejected; combined.queued=false;
     advance(combined,now);
   } else advance(reply,now);
+  try_completion_hold(now);
 }
 bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::uint64_t now) {
   namespace wire=dp::protocol::dummy_robot_v2;
   wire::DummyJointStateV2 state;
   if (wire::DummyJointStateV2Codec::decode(bytes,size,&state)!=wire::CodecResult::kOk ||
-      state.schema_major()!=2 || state.state_seq()<=state_seq_ ||
+      state.schema_major()!=2 ||
+      (!state_seen_ && state.state_seq()==0U) ||
+      (state_seen_ && !sequence_newer(state.state_seq(),state_seq_)) ||
       state.boot_epoch()!=authorization_.identity.expected_boot_epoch() ||
       state.session_id()!=authorization_.identity.expected_session_id() ||
       state.reference_epoch()!=authorization_.identity.expected_reference_epoch() ||
@@ -190,9 +237,38 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
     if (!(state.configured_mask() & (1U<<axis))) continue;
     if (!std::isfinite(state.position_rad()[axis])) return false;
   }
-  state_seq_=state.state_seq();
+  state_seq_=state.state_seq(); state_seen_=true;
+  hold_state_observed_us_=0;
   authorization_.identity.set_expected_management_epoch(state.management_epoch());
   authorization_.identity.set_freshness_ticket(state.freshness_ticket());
+  if (state.motion_epoch()==epoch_ &&
+      state.core_state()==wire_value(WireCoreState::kHold) && hold_valid) {
+    hold_committed_seq_=state.committed_producer_seq();
+    hold_submitted_mask_=state.can_submitted_mask();
+    hold_sent_mask_=state.can_sent_mask();
+    hold_state_observed_us_=now;
+    if (hold_drain_pending_) drain_state_fresh_=true;
+  }
+  if (hold_drain_pending_ && state.core_state()==wire_value(WireCoreState::kFault)) {
+    fail("DEVICE_FAULT");
+    return true;
+  }
+  if (hold_drain_pending_ && deadline_ && now>=deadline_) {
+    stop(false,"HOLD_DRAIN_TIMEOUT",now);
+    return true;
+  }
+  if (hold_drain_pending_ && drain_worker_ready_ && drain_state_fresh_ &&
+      state.motion_epoch()==epoch_ &&
+      state.core_state()==wire_value(WireCoreState::kHold) && hold_valid &&
+      state.can_submitted_mask()==state.configured_mask() &&
+      state.can_sent_mask()==state.configured_mask() &&
+      state.committed_producer_seq()!=0U &&
+      sequence_at_or_after(state.committed_producer_seq(),drained_committed_seq_)) {
+    const auto begin_deadline=deadline_;
+    hold_drain_pending_=false;
+    issue(ManageOperation::kBegin,now,begin_deadline);
+    return true;
+  }
   if (!request_) return true;
   if (state.core_state()==wire_value(WireCoreState::kFault)) { fail("DEVICE_FAULT"); return true; }
   ManageReply evidence; evidence.request_id=request_; evidence.snapshot_valid=true;
@@ -209,7 +285,62 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
   std::copy(std::begin(state.position_rad()),std::end(state.position_rad()),evidence.position.begin());
   evidence.hold_position=evidence.position;
   evidence.result_valid=management_evidence_.result_valid; evidence.succeeded=management_evidence_.succeeded;
-  state_evidence_=evidence; advance(evidence,now); return true;
+  state_evidence_=evidence; advance(evidence,now);
+  // prime() may have advanced the epoch while handling this very State.
+  if(state.motion_epoch()==epoch_ && state.core_state()==wire_value(WireCoreState::kHold) && hold_valid) {
+    hold_committed_seq_=state.committed_producer_seq();
+    hold_submitted_mask_=state.can_submitted_mask(); hold_sent_mask_=state.can_sent_mask();
+    hold_state_observed_us_=now;
+  }
+  try_completion_hold(now); return true;
+}
+void ActionGate::observe_hold_drain(const HoldDrainEvidence &evidence,std::uint64_t now) {
+  completion_worker_=evidence;
+  try_completion_hold(now);
+  if (!hold_drain_pending_ || !evidence.processed_generation || !evidence.committed_seq ||
+      evidence.processed_generation<frozen_generation_ ||
+      evidence.boot_epoch!=authorization_.identity.expected_boot_epoch() ||
+      evidence.session_id!=authorization_.identity.expected_session_id() ||
+      evidence.reference_epoch!=authorization_.identity.expected_reference_epoch() ||
+      evidence.motion_epoch!=epoch_ || (deadline_ && now>=deadline_)) return;
+  if (!drain_worker_ready_)
+    std::fprintf(stderr,
+                 "GATE_HOLD_DRAIN_WORKER_DIAG frozen_generation=%llu processed=%llu target=%u epoch=%u\n",
+                 static_cast<unsigned long long>(frozen_generation_),
+                 static_cast<unsigned long long>(evidence.processed_generation),
+                 evidence.committed_seq,epoch_);
+  drained_generation_=evidence.processed_generation;
+  drained_committed_seq_=evidence.committed_seq;
+  drain_worker_ready_=true;
+}
+void ActionGate::try_completion_hold(std::uint64_t now) {
+  const auto &worker=completion_worker_;
+  const auto mask=authorization_.identity.configured_mask();
+  if(phase_!=Phase::kPrimeCompletionHold || operation_!=ManageOperation::kComplete ||
+     !request_ || !sampled_ || !prime_producer_generation_ ||
+     (deadline_ && now>=deadline_) || !management_evidence_.result_valid ||
+     !management_evidence_.succeeded || management_evidence_.request_id!=request_ ||
+     management_evidence_.motion_epoch!=epoch_ ||
+     !worker.quiescent || (worker.disposition!=1U && worker.disposition!=2U) ||
+     worker.processed_generation<prime_producer_generation_ || !worker.committed_seq ||
+     worker.boot_epoch!=authorization_.identity.expected_boot_epoch() ||
+     worker.session_id!=authorization_.identity.expected_session_id() ||
+     worker.reference_epoch!=authorization_.identity.expected_reference_epoch() ||
+     worker.motion_epoch!=epoch_ || !worker.observed_us || !worker.max_state_age_us ||
+     now<worker.observed_us || now-worker.observed_us>worker.max_state_age_us ||
+     !hold_state_observed_us_ || now<hold_state_observed_us_ ||
+     now-hold_state_observed_us_>worker.max_state_age_us ||
+     !state_evidence_.snapshot_valid || state_evidence_.motion_epoch!=epoch_ ||
+     !state_evidence_.hold_ready || !mask || hold_submitted_mask_!=mask || hold_sent_mask_!=mask ||
+     !sequence_at_or_after(hold_committed_seq_,worker.committed_seq)) return;
+  for(std::size_t axis=0;axis<prime_q_.size();++axis) {
+    if(!(mask & (1U<<axis))) continue;
+    const auto tolerance=worker.tolerance[axis];
+    if(!std::isfinite(tolerance) || tolerance<0.0 || !std::isfinite(worker.position[axis]) ||
+       std::abs(worker.position[axis]-prime_q_[axis])>tolerance ||
+       std::abs(state_evidence_.hold_position[axis]-prime_q_[axis])>tolerance) return;
+  }
+  terminal_=Terminal::kSucceeded; phase_=Phase::kHold; request_=0; deadline_=0;
 }
 void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
   if (!request_ || reply.request_id!=request_ || phase_==Phase::kFault) return;
@@ -244,6 +375,18 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
   }
 }
 void ActionGate::tick(std::uint64_t now) {
+  try_completion_hold(now);
+  if (hold_drain_pending_ && deadline_ && now>=deadline_) {
+    std::fprintf(stderr,
+                 "GATE_HOLD_DRAIN_TIMEOUT_DIAG frozen=%u generation=%llu local=%u processed=%llu target=%u committed=%u state=%u epoch=%u submitted=%u sent=%u\n",
+                 frozen_seq_,static_cast<unsigned long long>(frozen_generation_),last_seq_,
+                 static_cast<unsigned long long>(drained_generation_),drained_committed_seq_,
+                 hold_committed_seq_,state_seq_,epoch_,
+                 hold_submitted_mask_,hold_sent_mask_);
+    hold_drain_pending_=false;
+    stop(false,"HOLD_DRAIN_TIMEOUT",now);
+    return;
+  }
   if (request_ && deadline_ && now>=deadline_) {
     if (phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold) fail("STOP_FAILED");
     else if (operation_==ManageOperation::kEnable) fail("FIRST_SAMPLE_TIMEOUT");
@@ -260,16 +403,24 @@ void ActionGate::tick(std::uint64_t now) {
     else fail("RESULT_UNCONFIRMED");
   }
 }
-bool ActionGate::record_update(std::uint64_t generation,std::uint32_t epoch,std::uint32_t seq,const Position &q) {
-  if (generation!=generation_ || epoch!=epoch_ || !seq || seq<=last_seq_ || frozen_ ||
+bool ActionGate::record_update(std::uint64_t generation,std::uint32_t epoch,std::uint32_t seq,
+                               const Position &q,std::uint64_t producer_generation) {
+  if (generation!=generation_ || epoch!=epoch_ || !seq ||
+      (last_seq_ && !sequence_newer(seq,last_seq_)) || frozen_ ||
       phase_==Phase::kStopping || phase_==Phase::kFault || phase_==Phase::kIdle || phase_==Phase::kCompleting)
     return false;
   for (std::size_t i=0;i<profile_.joints.size();++i) {
-    if (!std::isfinite(q[i]) || q[i]<profile_.lower[i] || q[i]>profile_.upper[i]) return false;
+    if (!std::isfinite(q[i]) ||
+        (phase_==Phase::kRunning && (q[i]<profile_.lower[i] || q[i]>profile_.upper[i]))) return false;
     if ((phase_!=Phase::kRunning || !sampled_) && std::abs(q[i]-prime_q_[i])>1e-9) return false;
   }
-  if (!sampled_) prime_seq_=seq;
-  last_q_=q; last_seq_=seq; sampled_=true; return true;
+  if (!sampled_) {
+    prime_seq_=seq;
+    prime_producer_generation_=producer_generation ? producer_generation : seq;
+  }
+  last_q_=q; last_seq_=seq;
+  last_producer_generation_=producer_generation ? producer_generation : seq;
+  sampled_=true; return true;
 }
 void ActionGate::inner_result(std::uint64_t generation,Terminal result,const std::string &error,std::uint64_t now) {
   if (generation!=generation_ || phase_!=Phase::kRunning || terminal_!=Terminal::kNone) return;
@@ -285,20 +436,30 @@ void ActionGate::inner_result(std::uint64_t generation,Terminal result,const std
 void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) {
   if (phase_==Phase::kFault || phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold ||
       (ready() && terminal_!=Terminal::kNone)) return;
+  std::fprintf(stderr,"GATE_STOP_DIAG phase=%u operation=%u reason=%s request=%llu now=%llu\n",
+               static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),
+               static_cast<unsigned long long>(request_),static_cast<unsigned long long>(now));
   port_.disable(); ++generation_; port_.cancel(); cancel_terminal_=canceled;
-  error_=error; phase_=Phase::kStopping; frozen_=true;
+  error_=error; phase_=Phase::kStopping; frozen_=true; hold_drain_pending_=false;
   issue(ManageOperation::kCancel,now);
 }
-void ActionGate::cancel(std::uint64_t now) { if (request_) stop(true,"",now); }
-void ActionGate::abort(const std::string &error,std::uint64_t now) { if (request_) stop(false,error,now); }
+void ActionGate::cancel(std::uint64_t now) { if (request_ || hold_drain_pending_) stop(true,"",now); }
+void ActionGate::abort(const std::string &error,std::uint64_t now) {
+  if (request_ || hold_drain_pending_) stop(false,error,now);
+}
 void ActionGate::invalidate_authorization(std::uint64_t now) {
-  if (request_) stop(false,"SESSION_CHANGED",now);
+  if (phase_==Phase::kFault && !authorization_.session) return;
+  if (request_ || hold_drain_pending_) stop(false,"SESSION_CHANGED",now);
   authorization_.session=false; port_.disable(); ++generation_;
   fail("SESSION_CHANGED");
 }
 void ActionGate::fail(const std::string &error) {
+  if(phase_!=Phase::kFault || error_!=error)
+    std::fprintf(stderr,"GATE_FAIL_DIAG phase=%u operation=%u reason=%s request=%llu\n",
+                 static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),
+                 static_cast<unsigned long long>(request_));
   port_.disable(); port_.cancel(); ++generation_; phase_=Phase::kFault; terminal_=Terminal::kAborted;
   if (error_.empty() || error=="STOP_FAILED") error_=error;
-  request_=0; deadline_=0;
+  request_=0; deadline_=0; hold_drain_pending_=false;
 }
 }  // namespace dummy_motion_client

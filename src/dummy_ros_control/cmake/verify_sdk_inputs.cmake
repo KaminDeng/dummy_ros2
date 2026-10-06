@@ -4,12 +4,14 @@ set(sdk_locked_paths
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp
   contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp
   build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a
+  build_dummy/g6-host/platform_common_console_device/libdp_console_device.a
   build_dummy/g6-host/lib/libzenohpico.a)
 set(sdk_locked_hashes
-  6820ff1ae0d480f0f380a71d52cf8f08dcb50bba8b4c7486d3ed8c4f9148c6fa
-  a069575a7eda2747036e8bf5b53bf0aa792b2ae9cb07ce7dfa6b309e3363ac0b
-  a3077be71373c41ddde0a3b50acba5d933e14b3f303cdfb3096b374b10db0d50
-  57748f3b30661cc1e90904f08d178a1b60663883bb5a4ddcfb26ef8d0f7173ab)
+  466da9fe8e856938908aff06f9e7a6b930c9143987567b4d494e16124bdbe5c2
+  78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40
+  d399b0d7ae4477247977bc80796e03a9c968c57cfe5ac24ca47dfe2ce4c0f84b
+  b1b1aed93e6c79eb38a8fee66894583f64bd8c55ad1b2797b956e6fca125fc78
+  6b75d230874ff354ba9da31cc19b28b6ddefae2ffc0f81e77c1733c12f4956cf)
 set(sdk_lock_index 0)
 foreach(path IN LISTS sdk_locked_paths)
   if(NOT EXISTS "${DPSDK_ROOT}/${path}")

@@ -1,0 +1,46 @@
+{
+  "format": "dummy_wire_release_v2",
+  "release_id": "dummy-wire-v2.4",
+  "schema_major": 2,
+  "schema_minor": 4,
+  "artifact_kind": "application_hold_no_load_candidate",
+  "runtime_enabled": false,
+  "motion_permitted_on_real_hardware": false,
+  "profile_id": 201,
+  "configured_mask": 63,
+  "capability": {
+    "profile_id": 201,
+    "configured_mask": 63,
+    "motion_permitted_on_real_hardware": false,
+    "active_axes": ["Joint1", "Joint2", "Joint3", "Joint4", "Joint5", "Joint6"],
+    "reference_kind": "BENCH_SESSION",
+    "control_period_us": 20000,
+    "state_publish_period_us": 20000
+  },
+  "compiled_policy_sha256": "d4e439c5e1854cee53e07992a20af5a2115d77834cf12a3d87f2a93f6ab51c1c",
+  "firmware_image_sha256": "48c88ebb085fe8e4e0c726d5c135b3a9ecfd90cdcd74604e53ada8dfe804c96a",
+  "source_contract_sha256": "296f47c2a2c650a1bba8763afb06d8d35da9d2a3573e6aca7732e01445445470",
+  "model_sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713",
+  "source_policy": "dpsdk/configs/f405_6dof_application_hold_no_load_candidate.json",
+  "source_firmware_image": "dpsdk/build_dummy/reports/f405-p7-app-48c8-20260930.bin",
+  "qualification_gap": [
+    "formal_application_qualification_report",
+    "post_build_bindings_for_firmware_host_map_resource_and_qualification",
+    "six_axis_no_load_application_e2e_evidence"
+  ],
+  "payloads": [
+    {
+      "path": "model/model.yaml",
+      "sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713"
+    },
+    {
+      "path": "policy/application_hold_no_load.json",
+      "sha256": "995ecf129f45046c9ba461ef8713dca9189b82d9f3ea8f491e937e96eb25e41d"
+    },
+    {
+      "path": "profiles/f405_6dof_bench.yaml",
+      "sha256": "46f11edff66b3a5b30e9bca38f5325175a7b1d7c7e94a8fd9672d3774a34a6a9"
+    }
+  ],
+  "payload_sorted_sha256": "4db0041790cc2c5d8f185bdbcfdef549890437b3a5909e727e0bc4e9f30cadeb"
+}

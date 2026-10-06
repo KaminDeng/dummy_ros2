@@ -3,27 +3,89 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include "dp_dummy_robot_v2.hpp"
 #include "dummy_ros_control/device_transport.hpp"
+#include "dummy_ros_control/raw_evidence_collector.hpp"
 
 namespace dummy_ros_control {
 // One pending request and one latest observation: capacity is independent of traffic rate.
 struct DeviceManagementRequest {
-  std::array<std::uint8_t,225> request{};
-  std::array<std::uint8_t,105> response{};
+  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize> request{};
+  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::kEncodedSize> response{};
   std::atomic<bool> canceled{false}, failed{false}, complete{false};
 };
 struct DeviceManagementObservation {
-  std::array<std::uint8_t,301> state{};
-  std::array<std::uint8_t,534> status{};
+  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize> state{};
+  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kEncodedSize> status{};
   std::uint64_t state_received_us=0, status_received_us=0;
+  std::uint64_t rejected_ack_boot_epoch=0, rejected_ack_session_id=0, rejected_ack_received_us=0;
+  std::uint32_t rejected_ack_reference_epoch=0, rejected_ack_motion_epoch=0,
+                rejected_ack_sequence=0;
+};
+struct RawEvidenceTerminalFlushed {
+  std::uint64_t boot_epoch = 0U;
+  std::uint64_t session_id = 0U;
+  std::uint64_t run_id = 0U;
+  std::uint64_t parent_run_id = 0U;
+  std::uint8_t attempt_kind = 0U, final_state = 0U;
+  std::uint8_t first_failure_source = 0U, first_failure_axis_mask = 0U;
+  bool evidence_lost = false, motion_complete = false;
+  bool release_committed = false, chain_valid = false;
+  std::uint32_t safety_hold_motion_epoch = 0U;
+  bool safety_hold_valid = false;
+};
+struct HoldDrainSnapshot {
+  std::uint64_t boot_epoch=0U, session_id=0U, processed_generation=0U;
+  std::uint32_t reference_epoch=0U, motion_epoch=0U, committed_seq=0U;
+  std::uint8_t disposition=0U;
+  bool quiescent=false;
+  std::uint64_t observed_us=0U, max_state_age_us=0U;
+  std::array<double,6> position{}, tolerance{};
 };
 struct DeviceManagementChannel {
-  explicit DeviceManagementChannel(TransportParameters value):parameters(std::move(value)) {}
+  explicit DeviceManagementChannel(TransportParameters value)
+      : parameters(std::move(value)),
+        raw_evidence_capture_enabled(!parameters.raw_evidence_path.empty()) {}
+  RawEvidenceTerminalFlushed raw_evidence_terminal_flushed() const noexcept {
+    std::lock_guard<std::mutex> lock(raw_evidence_terminal_mutex_);
+    return raw_evidence_terminal_;
+  }
+  void publish_raw_evidence_terminal_flushed(
+      const RawEvidenceTerminalFlushed &receipt) noexcept {
+    std::lock_guard<std::mutex> lock(raw_evidence_terminal_mutex_);
+    raw_evidence_terminal_ = receipt;
+  }
+  void publish_raw_evidence_terminal_flushed(std::uint64_t boot_epoch,
+                                             std::uint64_t session_id,
+                                             std::uint64_t run_id) noexcept {
+    publish_raw_evidence_terminal_flushed({boot_epoch, session_id, run_id});
+  }
+  RawEvidenceFirstPageWritten raw_evidence_first_page_written() const noexcept {
+    std::lock_guard<std::mutex> lock(raw_evidence_first_page_mutex_);
+    return raw_evidence_first_page_;
+  }
+  void publish_raw_evidence_first_page_written(
+      const RawEvidenceFirstPageWritten &receipt) noexcept {
+    std::lock_guard<std::mutex> lock(raw_evidence_first_page_mutex_);
+    if (receipt.run_id > raw_evidence_first_page_.run_id)
+      raw_evidence_first_page_ = receipt;
+  }
   const TransportParameters parameters;
   std::mutex mutex;
   std::atomic<bool> ready{false};
   std::atomic<bool> inactive_prime_allowed{false};
+  std::atomic<bool> post_complete_begin_ready{true};
+  std::array<std::atomic<double>,6> post_complete_hold_tolerance_rad{};
+  std::atomic<bool> raw_evidence_capture_enabled{false};
+  // Zero means capture is disabled or has not failed; nonzero is sticky.
+  std::atomic<std::uint8_t> raw_evidence_failure{0U};
   std::shared_ptr<DeviceManagementRequest> queued;
   DeviceManagementObservation observation;
+  HoldDrainSnapshot hold_drain;
+ private:
+  mutable std::mutex raw_evidence_first_page_mutex_;
+  RawEvidenceFirstPageWritten raw_evidence_first_page_{};
+  mutable std::mutex raw_evidence_terminal_mutex_;
+  RawEvidenceTerminalFlushed raw_evidence_terminal_{};
 };
 }  // namespace dummy_ros_control
