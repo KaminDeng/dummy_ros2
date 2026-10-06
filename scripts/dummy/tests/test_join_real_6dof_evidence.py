@@ -1584,6 +1584,21 @@ def test_active_hold_page_may_precede_user_release_request(inputs):
     assert joiner.join_evidence(timeline, raw, action, context)["release"]["run_id"] == 5
 
 
+def test_release_dispatch_budget_ignores_prior_hold_but_bounds_late_pages():
+    page = lambda when, category: {"when": when, "fields": {"category": category}}
+    prior = page(100, 1)
+    near_hold = page(205, 1)
+    disable = page(210, 3)
+    assert joiner._release_dispatch_within_budget(
+        [prior, near_hold, disable], 200, 20)
+    assert not joiner._release_dispatch_within_budget(
+        [prior, near_hold, disable], 200, 9)
+    assert not joiner._release_dispatch_within_budget(
+        [prior, page(500, 1), page(510, 3)], 200, 20)
+    assert not joiner._release_dispatch_within_budget(
+        [prior, near_hold], 200, 20)
+
+
 def test_active_hold_page_may_precede_gate_pre_release_hold(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     hold = records.pop(10)
@@ -2629,6 +2644,12 @@ def refresh_hold_records(inputs):
     identity = {"client_id": "11" * 16, **{key: "11" * 32 for key in
         ("contract_hash", "model_hash", "profile_hash", "firmware_hash")}}
     next_raw = page(identity, 5, 2, 0, b"", epoch=2, parent=0)
+    next_fields = joiner._decode("DummyAttemptEvidenceV2", next_raw)
+    next_fields["sent_at_us"] = [6200] * 6
+    next_raw = bytearray(wire("DummyAttemptEvidenceV2", **next_fields))
+    next_raw[339:371] = hashlib.sha256(
+        next_raw[307:339] + next_raw[:307] + next_raw[371:372]).digest()
+    next_raw = bytes(next_raw)
     next_page = {"kind": 1, "when": 6400, "boot": 2, "session": 3,
                  "run": 5, "seq": 0, "raw": next_raw,
                  "fields": joiner._decode("DummyAttemptEvidenceV2", next_raw)}
@@ -2637,7 +2658,9 @@ def refresh_hold_records(inputs):
                               "attempt_id": 5, "parent_run_id": 0,
                               "final_state": 0, "motion_complete": 0,
                               "evidence_chain_sha256": "00" * 32}}
-    next_state = {**old_state, "when": 400010}
+    next_state = {**old_state, "when": 400010,
+                  "fields": {**old_state["fields"],
+                             "produced_at_us": 6600, "state_seq": 2}}
     return [old_terminal, old_status, old_state, next_page,
             next_status, next_state]
 
@@ -2659,6 +2682,169 @@ def test_canceled_hold_terminal_and_successor_can_prove_missing_old_status(input
     assert status["proof_source"] == "terminal_state_successor"
     assert status["fields"]["final_state"] == 7
     assert state["when"] == 6000
+
+
+def completed_hold_without_old_status(inputs):
+    _, _, _, _, raw_records = inputs
+    original = joiner._raw_records(b"DPRAW01\0" + b"".join(raw_records))
+    records = refresh_hold_records(inputs)
+    return [original[2], records[0], records[2], *records[3:]]
+
+
+def completed_hold_with_leading_group_counts(inputs):
+    records = completed_hold_without_old_status(inputs)
+    identity = {"client_id": "11" * 16, **{key: "11" * 32 for key in
+        ("contract_hash", "model_hash", "profile_hash", "firmware_hash")}}
+    first = bytearray(page(identity, 4, 2, 0, b"", group_count=3, group_id=7))
+    struct.pack_into("<I", first, 281, 2)
+    first[339:371] = hashlib.sha256(
+        first[307:339] + first[:307] + first[371:372]).digest()
+    second = page(identity, 4, 2, 1, first[339:371], group_count=3, group_id=8)
+    third = page(identity, 4, 2, 2, second[339:371], group_count=3, group_id=9)
+    terminal = page(identity, 4, 2, 3, third[339:371], group_count=3)
+    pages = [(3000, first), (3500, second), (4000, third), (4500, terminal)]
+    motion = [{"kind": 1, "when": when, "boot": 2, "session": 3,
+               "run": 4, "seq": seq, "raw": bytes(raw),
+               "fields": joiner._decode("DummyAttemptEvidenceV2", raw)}
+              for seq, (when, raw) in enumerate(pages)]
+    successor_raw = bytearray(records[3]["raw"])
+    struct.pack_into("<I", successor_raw, 281, 2)
+    successor_raw[339:371] = hashlib.sha256(
+        successor_raw[307:339] + successor_raw[:307] +
+        successor_raw[371:372]).digest()
+    successor = {**records[3], "raw": bytes(successor_raw),
+                 "fields": joiner._decode("DummyAttemptEvidenceV2", successor_raw)}
+    return [*motion, records[2], successor, *records[4:]]
+
+
+def test_completed_hold_accepts_leading_plateau_groups_and_successor_count_two(inputs):
+    status, state = joiner._hold_observations(
+        completed_hold_with_leading_group_counts(inputs), 400020,
+        (2, 3, 1, 2), 4, 250000, 4500, "11" * 16)
+    assert status["proof_source"] == "terminal_state_successor"
+    assert state["when"] == 6000
+
+
+@pytest.mark.parametrize("change", ("missing_page", "reordered_page",
+                                   "decreasing_count", "wrong_terminal_total"))
+def test_completed_hold_leading_groups_rejects_broken_sequence(inputs, change):
+    records = completed_hold_with_leading_group_counts(inputs)
+    if change == "missing_page":
+        records.pop(1)
+    elif change == "reordered_page":
+        records[1], records[2] = records[2], records[1]
+    elif change == "decreasing_count":
+        records[1] = {**records[1], "fields": {
+            **records[1]["fields"], "group_count": 1}}
+    else:
+        records[3] = {**records[3], "fields": {
+            **records[3]["fields"], "group_count": 2}}
+    with pytest.raises(ValueError):
+        joiner._hold_observations(records, 400020, (2, 3, 1, 2),
+                                  4, 250000, 4500, "11" * 16)
+
+
+def test_completed_hold_terminal_and_successor_can_prove_missing_old_status(inputs):
+    status, state = joiner._hold_observations(
+        completed_hold_without_old_status(inputs), 400020,
+        (2, 3, 1, 2), 4, 250000, 4500, "11" * 16)
+    assert status["proof_source"] == "terminal_state_successor"
+    assert (status["fields"]["run_id"], status["fields"]["final_state"]) == (4, 6)
+    assert status["fields"]["motion_complete"] == 1
+    assert state["when"] == 6000
+
+
+def test_completed_hold_successor_state_can_prove_missing_intermediate_state(inputs):
+    records = completed_hold_without_old_status(inputs)
+    records.pop(2)
+    status, state = joiner._hold_observations(
+        records, 400020, (2, 3, 1, 2), 4, 250000, 4500, "11" * 16)
+    assert status["proof_source"] == "terminal_state_successor"
+    assert state["when"] == 400010
+    records.pop()
+    with pytest.raises(ValueError):
+        joiner._hold_observations(
+            records, 400020, (2, 3, 1, 2), 4, 250000, 4500, "11" * 16)
+
+
+def test_completed_hold_rejects_delayed_pre_successor_state(inputs):
+    records = completed_hold_without_old_status(inputs)
+    records.pop(2)
+    records[-1] = {**records[-1], "fields": {
+        **records[-1]["fields"], "produced_at_us": 6100}}
+    with pytest.raises(ValueError, match="successor|HOLD"):
+        joiner._hold_observations(
+            records, 400020, (2, 3, 1, 2), 4, 250000, 4500, "11" * 16)
+
+
+@pytest.mark.parametrize("field,value", (("first_failure_source", 1),
+                                         ("first_failure_axis_mask", 1),
+                                         ("terminal_reason", 1)))
+def test_completed_hold_rejects_rehashed_failure_terminal(inputs, field, value):
+    records = completed_hold_without_old_status(inputs)
+    raw = bytearray(records[1]["raw"])
+    offset = {"first_failure_source": 38, "first_failure_axis_mask": 40,
+              "terminal_reason": 305}[field]
+    struct.pack_into("<B" if field == "first_failure_axis_mask" else "<H",
+                     raw, offset, value)
+    raw[339:371] = hashlib.sha256(
+        raw[307:339] + raw[:307] + raw[371:372]).digest()
+    records[1] = {**records[1], "raw": bytes(raw),
+                  "fields": joiner._decode("DummyAttemptEvidenceV2", raw)}
+    with pytest.raises(ValueError, match="terminal"):
+        joiner._hold_observations(records, 400020, (2, 3, 1, 2),
+                                  4, 250000, 4500, "11" * 16)
+
+
+@pytest.mark.parametrize("change", ("missing_state", "foreign_state", "partial_state",
+                                   "stale_state", "broken_terminal_chain",
+                                   "partial_terminal", "wrong_group_count",
+                                   "missing_first_page", "wrong_first_run",
+                                   "broken_successor_chain", "foreign_status",
+                                   "wrong_source_hash", "stale_successor_status"))
+def test_completed_hold_without_old_status_rejects_incomplete_proof(inputs, change):
+    records = completed_hold_without_old_status(inputs)
+    if change == "missing_state":
+        records.pop(5)
+        records.pop(2)
+    elif change == "foreign_state":
+        records[2] = {**records[2], "session": 99}
+    elif change == "partial_state":
+        records[2] = {**records[2], "fields": {
+            **records[2]["fields"], "position_valid_mask": 31}}
+    elif change == "stale_state":
+        records[2] = {**records[2], "when": 4501}
+        records[3] = {**records[3], "when": 400000}
+        records[5] = {**records[5], "when": 7000}
+    elif change == "broken_terminal_chain":
+        corrupted = bytearray(records[1]["raw"])
+        corrupted[339] ^= 1
+        records[1] = {**records[1], "raw": bytes(corrupted),
+                      "fields": joiner._decode("DummyAttemptEvidenceV2", corrupted)}
+    elif change == "partial_terminal":
+        records[1] = {**records[1], "fields": {
+            **records[1]["fields"], "final": 0}}
+    elif change == "wrong_group_count":
+        records[1] = {**records[1], "fields": {
+            **records[1]["fields"], "group_count": 2}}
+    elif change == "missing_first_page":
+        records.pop(3)
+    elif change == "wrong_first_run":
+        records[3] = {**records[3], "run": 6}
+    elif change == "broken_successor_chain":
+        corrupted = bytearray(records[3]["raw"])
+        corrupted[339] ^= 1
+        records[3] = {**records[3], "raw": bytes(corrupted)}
+    elif change == "foreign_status":
+        records[4] = {**records[4], "session": 99}
+    elif change == "wrong_source_hash":
+        records[4] = {**records[4], "fields": {
+            **records[4]["fields"], "firmware_sha256": "33" * 32}}
+    else:
+        records[4] = {**records[4], "when": 100000}
+    with pytest.raises(ValueError):
+        joiner._hold_observations(records, 400020, (2, 3, 1, 2),
+                                  4, 250000, 4500, "11" * 16)
 
 
 def test_canceled_hold_without_old_status_rejects_other_device_successor(inputs):
@@ -2703,6 +2889,7 @@ def test_canceled_hold_without_old_status_rejects_incomplete_raw_proof(inputs, c
                 "fields": joiner._decode("DummyAttemptEvidenceV2", final_raw)}
     records = [first, terminal, *refresh_hold_records(inputs)[2:]]
     if change == "missing_state":
+        records.pop(5)
         records.pop(2)
     elif change == "broken_terminal_chain":
         corrupted = bytearray(final_raw)

@@ -244,39 +244,66 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
                   terminal_when <= record["when"] < cutoff and
                   cutoff - record["when"] <= state_max_age]
     successor = later_pages[0]
-    if not old_states or terminal is None:
+    if terminal is None or (not old_states and
+                           (final_state not in (6, 7) or client_id is None)):
         raise ValueError("missing fresh completed-run HOLD observations")
     fresh_state = _prior(records, 2, when, identity, state_max_age)
     next_status = latest_status["fields"]
     if old_statuses:
         status = old_statuses[-1]
-    elif final_state == 7 and client_id is not None:
-        # A refreshed HOLD may create the successor run before the periodic
-        # Status publisher exposes the canceled run's completed snapshot.
-        # The terminal chain and old-epoch HOLD State must still be observed.
+    elif final_state in (6, 7) and client_id is not None:
+        # The successor can be published before the completed run's Status.
+        # Authenticate its terminal chain before deriving the missing snapshot.
         pages = _pages(records, run, identity[0], identity[1], 1, 0)
         seed = struct.pack("<QQ", run, identity[0]) + bytes.fromhex(client_id)
         seed += b"".join(bytes.fromhex(next_status[name]) for name in
                          ("contract_sha256", "model_sha256", "profile_sha256",
                           "firmware_sha256"))
         previous_chain = hashlib.sha256(seed.ljust(192, b"\0")).digest()
+        previous_group_count = 0
+        total_groups = len(pages) - 1
         for index, item in enumerate(pages):
             raw_page = item["raw"]
             fields = item["fields"]
-            if (raw_page[307:339] != previous_chain or raw_page[371] != 0 or
+            if (len(raw_page) != 372 or raw_page[307:339] != previous_chain or
+                    raw_page[371] != 0 or
                     raw_page[339:371] != hashlib.sha256(
                         previous_chain + raw_page[:307] + raw_page[371:372]).digest() or
+                    fields["group_count"] < previous_group_count or
+                    fields["group_count"] > total_groups or
                     (index < len(pages) - 1 and
-                     (fields["expected_mask"], fields["submitted_mask"],
+                     (fields["group_count"] < index + 1 or
+                      (fields["expected_mask"], fields["submitted_mask"],
                       fields["sent_mask"], fields["failed_mask"], fields["final"]) !=
-                     (63, 63, 63, 0, 1))):
-                raise ValueError("unverified canceled-run terminal chain")
+                      (63, 63, 63, 0, 1))) or
+                    (index < len(pages) - 1 and fields["category"] not in
+                     ((1,) if final_state == 6 else (1, 2))) or
+                    (index < len(pages) - 1 and fields["group_id"] == 0)):
+                raise ValueError("unverified completed-run terminal chain")
             previous_chain = raw_page[339:371]
-        if pages[-1] is not terminal:
-            raise ValueError("unlinked canceled-run terminal page")
+            previous_group_count = fields["group_count"]
+        terminal_fields = terminal["fields"]
+        if (pages[-1] is not terminal or terminal["boot"] != identity[0] or
+                terminal["session"] != identity[1] or
+                terminal_fields["final_state"] != final_state or
+                terminal_fields["motion_complete"] != int(final_state == 6) or
+                terminal_fields["release_committed"] or
+                (final_state == 6 and
+                 (terminal_fields["first_failure_source"] != 0 or
+                  terminal_fields["first_failure_axis_mask"] != 0 or
+                  terminal_fields["terminal_reason"] != 0)) or
+                terminal_fields["group_id"] != 0 or
+                terminal_fields["group_count"] != len(pages) - 1 or
+                terminal_fields["expected_mask"] != 0 or
+                terminal_fields["submitted_mask"] != 0 or
+                terminal_fields["sent_mask"] != 0 or
+                terminal_fields["failed_mask"] != 0 or
+                terminal_fields["final"] != 1):
+            raise ValueError("unlinked completed-run terminal page")
         proof_fields = {**next_status, "run_id": run, "attempt_id": run,
                         "core_state": 4, "attempt_kind": 1, "parent_run_id": 0,
-                        "final_state": 7, "motion_complete": 0,
+                        "final_state": final_state,
+                        "motion_complete": int(final_state == 6),
                         "evidence_lost": 0,
                         "evidence_chain_sha256": terminal["fields"]["chain_sha256"]}
         status = {"when": terminal_when, "boot": identity[0],
@@ -284,7 +311,14 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
                   "proof_source": "terminal_state_successor"}
     else:
         raise ValueError("missing fresh completed-run HOLD observations")
-    state = old_states[-1]
+    state = old_states[-1] if old_states else fresh_state
+    if not old_states:
+        sent_times = successor["fields"]["sent_at_us"]
+        produced = fresh_state["fields"]["produced_at_us"]
+        if (len(sent_times) != 6 or any(type(stamp) is not int or stamp <= 0
+                                        for stamp in sent_times) or
+                type(produced) is not int or produced <= max(sent_times)):
+            raise ValueError("unverified successor HOLD State production")
     old = status["fields"]
     new_state = fresh_state["fields"]
     page = successor["fields"]
@@ -301,7 +335,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
             page["attempt_id"] != later_run or page["attempt_kind"] != 1 or
             page["parent_run_id"] != 0 or page["category"] != 1 or
             page["motion_epoch"] != identity[3] or page["evidence_lost"] or
-            page["group_id"] == 0 or page["group_count"] != 1 or
+            page["group_id"] == 0 or page["group_count"] < 1 or
             page["expected_mask"] != 63 or page["submitted_mask"] != 63 or
             page["sent_mask"] != 63 or page["failed_mask"] != 0 or
             page["final"] != 1 or page["final_state"] != 0 or
@@ -1054,6 +1088,19 @@ def _joined_goal(rows, records, action, context):
     return goal, hashes, hold_row, pages[-1], pages[0]
 
 
+def _release_dispatch_within_budget(pages, request_when, budget_us):
+    if request_when <= 0 or budget_us <= 0:
+        return False
+    disable = next((page for page in pages if page["fields"]["category"] == 3), None)
+    if (disable is None or disable["when"] < request_when or
+            disable["when"] - request_when > budget_us):
+        return False
+    return all(page["when"] <= disable["when"] and
+               page["when"] - request_when <= budget_us
+               for page in pages if page["when"] >= request_when and
+               page["fields"]["category"] in (1, 2))
+
+
 def _release(records, goal, hold_row, terminal, state_max_age, hashes):
     boot, session, run, motion = (goal[key] for key in
                                   ("boot_epoch", "session_id", "run_id", "motion_epoch"))
@@ -1227,6 +1274,10 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
     first_required = min(record["when"] for record in required_groups)
     if len(release_requests) != 1 or release_requests[0]["when"] > first_required:
         raise ValueError("release request does not precede release CAN chain")
+    if (release["terminal"] == "CANCELED_AND_RELEASED" and
+            not _release_dispatch_within_budget(
+                release_groups, release_requests[0]["when"], state_max_age)):
+        raise ValueError("active release request-to-Disable observation budget exceeded")
     last = goals[-1]
     result = {"source": "ros_moveit_jtc_usb_ref_can", "profile_id": 201,
               "configured_mask": 63, "identity": {"client_id": context["client_id"],

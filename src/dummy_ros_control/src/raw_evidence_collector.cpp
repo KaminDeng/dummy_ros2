@@ -450,7 +450,6 @@ void RawEvidenceCollector::write_loop() noexcept {
     if (record.first_page.run_id != 0U && channel_ && failure() == Failure::kNone)
       channel_->publish_raw_evidence_first_page_written(record.first_page);
     if (record.terminal) {
-      terminal_written_run_id_.store(record.run_id, std::memory_order_release);
       if (channel_) channel_->publish_raw_evidence_terminal_flushed(
           {record.boot_epoch, record.session_id, record.run_id,
            record.parent_run_id, record.attempt_kind, record.final_state,
@@ -458,6 +457,7 @@ void RawEvidenceCollector::write_loop() noexcept {
            record.evidence_lost, record.motion_complete,
            record.release_committed, true, record.safety_hold_motion_epoch,
            record.safety_hold_valid});
+      terminal_written_run_id_.store(record.run_id, std::memory_order_release);
     }
     ++written_;
   }

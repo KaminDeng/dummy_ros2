@@ -55,6 +55,39 @@ bool clean_cancel_terminal(const RawTerminalIdentity &terminal,
     terminal.safety_hold_motion_epoch==run.motion_epoch+1U;
 }
 
+bool timeline_completed_refresh_hold_confirmed(
+    const wire::DummyDeviceStatusV2 &status,const wire::DummyJointStateV2 &state,
+    const TimelineIdentity &prior,const RawTerminalIdentity &terminal,
+    const RawFirstPageWritten &successor,bool raw_capture_enabled,
+    std::uint8_t raw_failure,std::uint8_t axis_mask) noexcept {
+  if(!raw_capture_enabled || raw_failure!=0U || axis_mask!=63U ||
+     prior.boot==0U || prior.session==0U || prior.reference_epoch==0U ||
+     prior.run_id==0U || prior.run_id==UINT64_MAX ||
+     prior.motion_epoch==0U || prior.motion_epoch==UINT32_MAX ||
+     !raw_terminal_matches(terminal,prior.boot,prior.session,prior.run_id) ||
+     !terminal.chain_valid || terminal.attempt_kind!=1U ||
+     terminal.parent_run_id!=0U || terminal.final_state!=6U ||
+     !terminal.motion_complete || terminal.evidence_lost ||
+     terminal.release_committed || terminal.first_failure_source!=0U ||
+     terminal.first_failure_axis_mask!=0U) return false;
+  const TimelineIdentity next{status.boot_epoch(),status.session_id(),
+      status.reference_epoch(),status.motion_epoch(),status.run_id()};
+  return next.boot==prior.boot && next.session==prior.session &&
+    next.reference_epoch==prior.reference_epoch &&
+    next.run_id==prior.run_id+1U && next.motion_epoch==prior.motion_epoch+1U &&
+    status.attempt_kind()==1U && status.parent_run_id()==0U &&
+    status.final_state()==0U && !status.motion_complete() &&
+    !status.evidence_lost() &&
+    status.core_state()==wire_value(WireCoreState::kHold) &&
+    state.boot_epoch()==next.boot && state.session_id()==next.session &&
+    state.reference_epoch()==next.reference_epoch &&
+    state.motion_epoch()==next.motion_epoch &&
+    state.management_epoch()==status.management_epoch() &&
+    state.core_state()==wire_value(WireCoreState::kHold) && state.hold_ready() &&
+    state.can_submitted_mask()==axis_mask && state.can_sent_mask()==axis_mask &&
+    state.can_failed_mask()==0U && verified_refresh_successor(successor,next);
+}
+
 bool timeline_cancel_hold_confirmed(const wire::DummyDeviceStatusV2 &status,
                                     const wire::DummyJointStateV2 &state,
                                     const TimelineIdentity &run,
@@ -1035,6 +1068,12 @@ class DeviceActionGate final : public rclcpp::Node {
       timeline_cancel_refresh_hold_confirmed(status,state,canceled_run,
         cancel_terminal,cancel_successor,cancel_receipt,raw_capture,
         raw_failure,parameters_.mask);
+    const TimelineIdentity completed_run{goal_boot_,goal_session_,
+      goal_before_identity_.reference_epoch,timeline_run_motion_epoch_,timeline_run_id_};
+    const bool completed_refresh_hold=goal_run_id_!=0U &&
+      goal_run_id_==timeline_run_id_ &&
+      timeline_completed_refresh_hold_confirmed(status,state,completed_run,
+        cancel_terminal,cancel_successor,raw_capture,raw_failure,parameters_.mask);
     if(!cancel_refresh_diagnostic_logged_ && timeline_ && timeline_goal_open_ &&
        timeline_after_ && timeline_run_id_!=UINT64_MAX &&
        goal_run_id_!=0U && goal_run_id_==timeline_run_id_ &&
@@ -1106,9 +1145,9 @@ class DeviceActionGate final : public rclcpp::Node {
     if(timeline_ && timeline_goal_open_ && timeline_after_ &&
        release_status_fresh && state_fresh &&
        refresh_observation_coherent(status,state) &&
-       (completed_hold || canceled_hold || canceled_refresh_hold)) {
+       (completed_hold || completed_refresh_hold || canceled_hold || canceled_refresh_hold)) {
       timeline_goal_hold_confirmed_=true;
-      timeline_goal_hold_identity_=canceled_refresh_hold ?
+      timeline_goal_hold_identity_=(completed_refresh_hold || canceled_refresh_hold) ?
         TimelineIdentity{goal_boot_,goal_session_,status.reference_epoch(),
           status.motion_epoch(),timeline_run_id_} : timeline_identity_;
     }
@@ -1812,7 +1851,7 @@ int main(int argc,char **argv) {
     });
     executor->spin(); rclcpp::shutdown(); control.join();
     discovery.reset();
-    executor->remove_node(gate); gate.reset(); executor->remove_node(manager); manager.reset();
+    executor->remove_node(gate); gate.reset(); manager.reset();
   } catch(const std::exception &error) {
     fprintf(stderr,"device_action_gate: %s\n",error.what()); rclcpp::shutdown(); return 1;
   }

@@ -4,6 +4,7 @@ import json
 import math
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -84,12 +85,15 @@ def main():
                               "rejected_variants": list(variants)}))
             node.destroy_node()
             rclpy.shutdown()
+            process.send_signal(signal.SIGINT)
+            assert process.wait(timeout=5) == 0, "gate did not exit cleanly after SIGINT"
         finally:
-            process.terminate()
-            try: process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+            if process.poll() is None:
+                process.terminate()
+                try: process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
 
 
 if __name__ == "__main__":

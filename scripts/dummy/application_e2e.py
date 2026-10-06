@@ -539,7 +539,7 @@ def validate_evidence(evidence):
         categories = [bytes.fromhex(page["raw_hex"])[32] for page in group_pages]
         group_epochs = [struct.unpack_from("<I", bytes.fromhex(page["raw_hex"]), 28)[0]
                         for page in group_pages]
-        if (release_epoch >= 0xffffffff or not 2 <= len(categories) <= 8 or
+        if (release_epoch >= 0xffffffff or len(categories) < 2 or
                 1 not in categories or
                 3 not in categories or
                 categories != sorted(categories) or

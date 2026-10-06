@@ -16,6 +16,7 @@
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/state_validator.hpp"
 #include "dummy_ros_control/raw_evidence_collector.hpp"
+#include "dummy_ros_control/management_admission_retry.hpp"
 
 namespace dummy_ros_control {
 namespace {
@@ -277,6 +278,13 @@ struct DeviceTransport::Impl {
   std::uint32_t refresh_in_flight_seq=0U;
   std::array<std::uint8_t,32> last_terminal_chain{};
   std::uint64_t last_terminal_chain_run=0U;
+  RawEvidenceTerminalFlushed accepted_completed_terminal{};
+  struct CompletedTerminalChain {
+    std::uint64_t boot_epoch=0U, session_id=0U, run_id=0U;
+    std::array<std::uint8_t,32> chain{};
+  };
+  std::array<CompletedTerminalChain,8U> completed_terminal_chains{};
+  std::size_t next_completed_terminal_chain=0U;
   std::uint64_t last_clean_cancel_boot=0U, last_clean_cancel_session=0U,
                 last_clean_cancel_run=0U;
   struct ObservedHold {
@@ -343,6 +351,9 @@ struct DeviceTransport::Impl {
     complete_boundary_hold_diag_logged=false;
     exported_motion_ready=false;
     exported_motion_chain={};
+    accepted_completed_terminal={};
+    completed_terminal_chains={};
+    next_completed_terminal_chain=0U;
     refresh_active_run_id=last_refresh_acked_us=0U;
     refresh_in_flight_seq=0U;
     observed_hold={};
@@ -820,6 +831,21 @@ struct DeviceTransport::Impl {
     if (!self.matches_status(value)) return;
     if (std::find(self.retired_boots.begin(), self.retired_boots.end(), value.boot_epoch()) !=
         self.retired_boots.end()) return;
+    if(value.final_state()==6U && value.run_id()!=0U) {
+      for(const auto &terminal:self.completed_terminal_chains) {
+        if(terminal.run_id!=value.run_id() ||
+           terminal.boot_epoch!=value.boot_epoch() ||
+           terminal.session_id!=value.session_id()) continue;
+        if(value.attempt_kind()!=1U || value.parent_run_id()!=0U ||
+           !value.motion_complete() || value.evidence_lost() ||
+           !std::equal(terminal.chain.begin(),terminal.chain.end(),
+                       value.evidence_chain_sha256())) {
+          self.raw_evidence.reject_invalid();
+          self.failed=true;
+          return;
+        }
+      }
+    }
     if (value.boot_epoch() == self.last_status_run_boot &&
         value.session_id() == self.last_status_run_session && value.run_id() != 0U &&
         value.run_id() < self.last_status_run_id) {
@@ -1273,7 +1299,42 @@ struct DeviceTransport::Impl {
         std::equal(self.last_terminal_chain.begin(), self.last_terminal_chain.end(),
             self.status.evidence_chain_sha256()) &&
         self.raw_evidence.failure() == RawEvidenceCollector::Failure::kNone;
-    const bool next_motion_first_page = !binding && !self.provisional_evidence_binding &&
+    const auto flushed_terminal = !binding && value.evidence_seq() == 0U
+        ? self.management->raw_evidence_terminal_flushed() : RawEvidenceTerminalFlushed{};
+    // A successor page may arrive after terminal chain validation but before
+    // the writer publishes its flush receipt. Binding is provisional only.
+    const bool terminal_writer_completed = self.accepted_completed_terminal.run_id != 0U &&
+        self.raw_evidence.terminal_written_run_id() >= self.accepted_completed_terminal.run_id;
+    const auto &completed_terminal = terminal_writer_completed ||
+        (flushed_terminal.run_id >= self.accepted_completed_terminal.run_id &&
+         flushed_terminal.run_id != 0U)
+        ? flushed_terminal : self.accepted_completed_terminal;
+    const bool completed_terminal_page_first_page =
+        self.status.core_state() == kWireEnablingHold &&
+        self.status.final_state() == 0U &&
+        self.status.motion_epoch() == value.motion_epoch() &&
+        completed_terminal.boot_epoch == self.boot &&
+        completed_terminal.boot_epoch == self.status.boot_epoch() &&
+        completed_terminal.session_id == self.status.session_id() &&
+        completed_terminal.run_id == self.status.run_id() &&
+        completed_terminal.run_id == self.last_terminal_chain_run &&
+        completed_terminal.attempt_kind == 1U &&
+        completed_terminal.parent_run_id == 0U &&
+        completed_terminal.final_state == 6U &&
+        completed_terminal.motion_complete && !completed_terminal.evidence_lost &&
+        !completed_terminal.release_committed && completed_terminal.chain_valid &&
+        completed_terminal.first_failure_source == 0U &&
+        completed_terminal.first_failure_axis_mask == 0U &&
+        self.raw_evidence.failure() == RawEvidenceCollector::Failure::kNone;
+    const bool prior_provisional_completed = self.provisional_evidence_binding &&
+        self.provisional_evidence_binding->run_id == self.status.run_id() &&
+        self.provisional_evidence_binding->boot_epoch == completed_terminal.boot_epoch &&
+        self.provisional_evidence_binding->session_id == completed_terminal.session_id &&
+        (!self.provisional_release_chain ||
+         *self.provisional_release_chain == self.last_terminal_chain) &&
+        completed_terminal_page_first_page;
+    const bool next_motion_first_page = !binding &&
+        (!self.provisional_evidence_binding || prior_provisional_completed) &&
         value.schema_major() == 2U && value.schema_minor() == 4U &&
         value.evidence_seq() == 0U && value.attempt_kind() == 1U &&
         value.parent_run_id() == 0U && value.category() == 1U &&
@@ -1290,7 +1351,8 @@ struct DeviceTransport::Impl {
         self.status.attempt_kind() == 1U && self.status.parent_run_id() == 0U &&
         !self.status.evidence_lost() &&
         self.status.run_id() != 0U && self.status.run_id() != UINT64_MAX &&
-        (completed_refresh_first_page || canceled_refresh_first_page) &&
+        (completed_refresh_first_page || completed_terminal_page_first_page ||
+         canceled_refresh_first_page) &&
         self.last_status_received_us != 0U &&
         received_at_us >= self.last_status_received_us &&
         received_at_us - self.last_status_received_us <= self.parameters.max_state_age_us &&
@@ -1302,6 +1364,7 @@ struct DeviceTransport::Impl {
               self.raw_evidence.terminal_written_run_id()) &&
           self.raw_evidence.expect_run(inferred.run_id)) {
         self.provisional_evidence_binding = inferred;
+        self.provisional_release_chain.reset();
         binding = self.find_evidence_binding(value.run_id());
       }
     }
@@ -1311,13 +1374,16 @@ struct DeviceTransport::Impl {
         wire::DummyAttemptEvidenceV2Codec::encode(value, page.raw.data(), page.raw.size()) !=
             wire::CodecResult::kOk) {
       std::fprintf(stderr,
-          "RAW_EVIDENCE_DIAG rejected run=%llu seq=%u kind=%u parent=%llu binding=%u binding_kind=%u binding_parent=%llu status_run=%llu terminal_written_run=%llu failure=%u\n",
+          "RAW_EVIDENCE_DIAG rejected run=%llu seq=%u kind=%u parent=%llu binding=%u binding_kind=%u binding_parent=%llu status_run=%llu status_core=%u status_motion=%u page_motion=%u terminal_written_run=%llu terminal_receipt_run=%llu terminal_receipt_final=%u failure=%u\n",
           static_cast<unsigned long long>(value.run_id()), value.evidence_seq(),
           value.attempt_kind(), static_cast<unsigned long long>(value.parent_run_id()),
           binding ? 1U : 0U, binding ? binding->attempt_kind : 0U,
           static_cast<unsigned long long>(binding ? binding->parent_run_id : 0U),
           static_cast<unsigned long long>(self.status.run_id()),
+          self.status.core_state(), self.status.motion_epoch(), value.motion_epoch(),
           static_cast<unsigned long long>(self.raw_evidence.terminal_written_run_id()),
+          static_cast<unsigned long long>(flushed_terminal.run_id),
+          flushed_terminal.final_state,
           static_cast<unsigned>(self.raw_evidence.failure()));
       self.raw_evidence.reject_invalid();
       self.failed = true;
@@ -1350,6 +1416,21 @@ struct DeviceTransport::Impl {
     else if(page.category==4U) {
       self.last_terminal_chain_run=page.run_id;
       self.last_terminal_chain=page.chain_sha256;
+      self.accepted_completed_terminal = page.attempt_kind==1U &&
+          page.parent_run_id==0U && page.final_state==6U &&
+          value.motion_complete() && !page.evidence_lost &&
+          !value.release_committed() && value.first_failure_source()==0U &&
+          value.first_failure_axis_mask()==0U
+          ? RawEvidenceTerminalFlushed{page.boot_epoch,page.session_id,page.run_id,
+                page.parent_run_id,page.attempt_kind,page.final_state,0U,0U,
+                false,true,false,true,0U,false}
+          : RawEvidenceTerminalFlushed{};
+      if(self.accepted_completed_terminal.run_id!=0U) {
+        auto &witness=self.completed_terminal_chains[self.next_completed_terminal_chain];
+        witness={page.boot_epoch,page.session_id,page.run_id,page.chain_sha256};
+        self.next_completed_terminal_chain=
+            (self.next_completed_terminal_chain+1U)%self.completed_terminal_chains.size();
+      }
       if (page.attempt_kind == 1U && page.parent_run_id == 0U &&
           page.final_state == 7U && value.first_failure_source() == 0U &&
           value.first_failure_axis_mask() == 0U && !page.evidence_lost &&
@@ -1693,8 +1774,13 @@ struct DeviceTransport::Impl {
     std::shared_ptr<DeviceManagementRequest> active_management;
     std::shared_ptr<DeviceManagementRequest> processed_management;
     std::optional<Management::Request> deferred_complete;
+    std::optional<ManagementAdmissionRetry> complete_admission_retry;
+    std::optional<Management::Request> admission_retry_request;
+    std::optional<ManagementAdmissionRetry> admission_retry_state;
     std::shared_ptr<DeviceManagementRequest> pending_stop;
     std::shared_ptr<DeviceManagementRequest> stop_query;
+    std::optional<ManagementAdmissionRetry> stop_admission_retry;
+    std::optional<ManagementAdmissionRetry> stop_query_admission_retry;
     Management::Request stop_original;
     bool stop_received = false;
     bool stop_terminal = false;
@@ -1720,12 +1806,16 @@ struct DeviceTransport::Impl {
       ++unconfirmed_stop_requests;
       pending_stop.reset();
       stop_query.reset();
+      stop_admission_retry.reset();
+      stop_query_admission_retry.reset();
       management_handle.reset();
     };
     while (running.load(std::memory_order_acquire)) {
       if(active_management && active_management->canceled) {
         log_management_handoff(*active_management,"canceled");
         management_handle.reset(); active_management.reset();
+        deferred_complete.reset(); complete_admission_retry.reset(); pending_complete={};
+        admission_retry_request.reset(); admission_retry_state.reset();
       }
       std::shared_ptr<DeviceManagementRequest> queued;
       { std::lock_guard<std::mutex> lock(management->mutex); queued=std::move(management->queued); }
@@ -1733,12 +1823,16 @@ struct DeviceTransport::Impl {
         { log_management_handoff(*queued,"stop_pending");
           queued->failed.store(true, std::memory_order_release); }
       else if(queued) {
+        if(admission_retry_request && active_management && !active_management->canceled)
+          active_management->failed.store(true,std::memory_order_release);
+        admission_retry_request.reset(); admission_retry_state.reset();
         if(deferred_complete) {
           if(active_management) {
             log_management_handoff(*active_management,"complete_superseded_by_queue");
             active_management->failed=true;
           }
           deferred_complete.reset();
+          complete_admission_retry.reset();
           pending_complete={};
         }
         management_handle.reset(); active_management=std::move(queued);
@@ -1826,12 +1920,22 @@ struct DeviceTransport::Impl {
             management_handle.emplace(std::move(sent).take_value());
           }
           else {
-            log_management_handoff(*active_management,"async_request_failed",sent.result());
-            active_management->failed=true;
+            if(sent.result()==dp::comm::Result::kQueueFull &&
+               (decoded.operation()!=8U || decoded.terminal_producer_seq()==0U)) {
+              admission_retry_request=decoded;
+              admission_retry_state.emplace(transport_steady_now_us());
+              (void)admission_retry_state->on_result(sent.result(),transport_steady_now_us(),false);
+              log_management_handoff(*active_management,"async_request_would_block",sent.result());
+            } else {
+              log_management_handoff(*active_management,"async_request_failed",sent.result());
+              active_management->failed=true;
+            }
           }
         }
       }
-      if(deferred_complete && pending_complete.queue_drained) {
+      const auto stop_kind = system.take_stop_request_kind();
+      if(deferred_complete && pending_complete.queue_drained &&
+         stop_kind == GuardedZenbeddedSystem::StopRequestKind::kNone) {
         const auto &request=*deferred_complete;
         const bool same_ack=last_ack_seq==pending_complete.terminal_seq &&
           last_ack_identity.boot==pending_complete.boot_epoch &&
@@ -1849,12 +1953,17 @@ struct DeviceTransport::Impl {
           in_flight->identity.motion_epoch==pending_complete.motion_epoch &&
           sequence_newer(wire_producer_sequence(in_flight->generation),pending_complete.terminal_seq);
         const auto elapsed=transport_steady_now_us()-pending_complete.started_us;
-        if(newer_ack || newer_in_flight || elapsed>2000000U) {
+        if(newer_ack || newer_in_flight || elapsed>2000000U ||
+           (complete_admission_retry &&
+            complete_admission_retry->expired(transport_steady_now_us()))) {
           log_management_handoff(*active_management,"complete_deferred_failed");
           active_management->failed=true;
           deferred_complete.reset(); pending_complete={};
+          complete_admission_retry.reset();
         } else if(same_ack && !group_sent_ack.pending() &&
-                  !command_stream.has_in_flight() && !command_stream.has_pending()) {
+                  !command_stream.has_in_flight() && !command_stream.has_pending() &&
+                  (!complete_admission_retry ||
+                   complete_admission_retry->ready(transport_steady_now_us()))) {
           auto sent=management_client.async_request(request,management_reply,
               active_management.get(),dp::comm::Duration::from_milliseconds(1000));
           if(sent.has_value()) {
@@ -1863,23 +1972,35 @@ struct DeviceTransport::Impl {
             last_motion_request_id=request.request_id();
             last_motion_operation_id=0U;
             management_handle.emplace(std::move(sent).take_value());
+            deferred_complete.reset(); complete_admission_retry.reset();
           } else {
-            log_management_handoff(*active_management,"async_request_failed",sent.result());
-            active_management->failed=true; pending_complete={};
+            const auto retry_now=transport_steady_now_us();
+            if(sent.result()==dp::comm::Result::kQueueFull && !complete_admission_retry)
+              complete_admission_retry.emplace(retry_now);
+            if(complete_admission_retry &&
+               complete_admission_retry->on_result(sent.result(),retry_now,
+                   stop_confirmation_pending.load(std::memory_order_acquire))==
+                   ManagementAdmissionRetry::Decision::kRetry) {
+              log_management_handoff(*active_management,"async_request_would_block",sent.result());
+            } else {
+              log_management_handoff(*active_management,"async_request_failed",sent.result());
+              active_management->failed=true; pending_complete={};
+              deferred_complete.reset(); complete_admission_retry.reset();
+            }
           }
-          deferred_complete.reset();
         }
       }
-      const auto stop_kind = system.take_stop_request_kind();
       if (stop_kind == GuardedZenbeddedSystem::StopRequestKind::kDeactivation &&
           released_idle_latched()) continue;
       if (stop_kind != GuardedZenbeddedSystem::StopRequestKind::kNone) {
+        admission_retry_request.reset(); admission_retry_state.reset();
         if(deferred_complete) {
           if(active_management) {
             log_management_handoff(*active_management,"complete_superseded_by_stop");
             active_management->failed=true;
           }
           deferred_complete.reset(); pending_complete={};
+          complete_admission_retry.reset();
         }
         stop_latched = true;
         if (stop_confirmation_pending.load(std::memory_order_acquire))
@@ -1918,14 +2039,102 @@ struct DeviceTransport::Impl {
               pending_stop = active_management;
               stop_original = decoded;
             } else {
-              log_management_handoff(*active_management,"async_request_failed",sent.result());
-              active_management->failed = true;
-              ++stop_request_failures;
-              fail_stop("Stop request dispatch failed");
+              if(sent.result()==dp::comm::Result::kQueueFull) {
+                pending_stop=active_management;
+                stop_original=decoded;
+                stop_admission_retry.emplace(transport_steady_now_us());
+                (void)stop_admission_retry->on_result(sent.result(),transport_steady_now_us(),false);
+                log_management_handoff(*active_management,"stop_would_block",sent.result());
+              } else {
+                log_management_handoff(*active_management,"async_request_failed",sent.result());
+                active_management->failed = true;
+                ++stop_request_failures;
+                fail_stop("Stop request dispatch failed");
+              }
             }
           }
         }
         invalidate();
+      }
+      if(stop_admission_retry &&
+         (stop_admission_retry->expired(transport_steady_now_us()) ||
+          transport_steady_now_us()>stop_deadline_us)) {
+        ++stop_request_failures;
+        fail_stop("Stop request admission deadline expired");
+      }
+      if(stop_confirmation_pending.load(std::memory_order_acquire) && pending_stop &&
+         stop_admission_retry && stop_admission_retry->ready(transport_steady_now_us())) {
+        auto sent=management_client.async_request(stop_original,management_reply,
+            pending_stop.get(),dp::comm::Duration::from_milliseconds(1000));
+        if(sent.has_value()) {
+          capture_sent_request(*pending_stop);
+          management_handle.emplace(std::move(sent).take_value());
+          ++stop_requests_sent;
+          stop_admission_retry.reset();
+        } else if(stop_admission_retry->on_result(sent.result(),transport_steady_now_us(),false)==
+                  ManagementAdmissionRetry::Decision::kRetry) {
+          log_management_handoff(*pending_stop,"stop_would_block",sent.result());
+        } else {
+          log_management_handoff(*pending_stop,"async_request_failed",sent.result());
+          ++stop_request_failures;
+          fail_stop("Stop request dispatch failed");
+        }
+      }
+      if(stop_query_admission_retry &&
+         (stop_query_admission_retry->expired(transport_steady_now_us()) ||
+          transport_steady_now_us()>stop_deadline_us))
+        fail_stop("Stop QueryResult admission deadline expired");
+      if(stop_confirmation_pending.load(std::memory_order_acquire) && stop_query &&
+         stop_query_admission_retry &&
+         stop_query_admission_retry->ready(transport_steady_now_us())) {
+        Management::Request query;
+        if(wire::DummyManageV2RequestCodec::decode(stop_query->request.data(),
+              stop_query->request.size(),&query)!=wire::CodecResult::kOk) {
+          fail_stop("Stop QueryResult decode failed");
+        } else {
+          auto sent=management_client.async_request(query,management_reply,
+              stop_query.get(),dp::comm::Duration::from_milliseconds(1000));
+          if(sent.has_value()) {
+            capture_sent_request(*stop_query);
+            active_management=stop_query;
+            management_handle.emplace(std::move(sent).take_value());
+            stop_query_admission_retry.reset();
+          } else if(stop_query_admission_retry->on_result(sent.result(),transport_steady_now_us(),false)==
+                    ManagementAdmissionRetry::Decision::kRetry) {
+            log_management_handoff(*stop_query,"stop_query_would_block",sent.result());
+          } else {
+            log_management_handoff(*stop_query,"async_request_failed",sent.result());
+            fail_stop("Stop QueryResult dispatch failed");
+          }
+        }
+      }
+      if(admission_retry_state && admission_retry_state->expired(transport_steady_now_us())) {
+        if(active_management) active_management->failed.store(true,std::memory_order_release);
+        admission_retry_request.reset(); admission_retry_state.reset();
+      }
+      if(admission_retry_request && admission_retry_state && active_management &&
+         !active_management->canceled &&
+         admission_retry_state->ready(transport_steady_now_us()) &&
+         !stop_confirmation_pending.load(std::memory_order_acquire)) {
+        const auto &request=*admission_retry_request;
+        auto sent=management_client.async_request(request,management_reply,
+            active_management.get(),dp::comm::Duration::from_milliseconds(1000));
+        if(sent.has_value()) {
+          capture_sent_request(*active_management);
+          if(motion_authorizing_operation(request.operation())) {
+            last_motion_request_id=request.request_id();
+            last_motion_operation_id=0U;
+          }
+          management_handle.emplace(std::move(sent).take_value());
+          admission_retry_request.reset(); admission_retry_state.reset();
+        } else if(admission_retry_state->on_result(sent.result(),transport_steady_now_us(),false)==
+                  ManagementAdmissionRetry::Decision::kRetry) {
+          log_management_handoff(*active_management,"async_request_would_block",sent.result());
+        } else {
+          log_management_handoff(*active_management,"async_request_failed",sent.result());
+          active_management->failed.store(true,std::memory_order_release);
+          admission_retry_request.reset(); admission_retry_state.reset();
+        }
       }
       const auto spun=executor.spin_some(dp::comm::Duration::from_milliseconds(2U));
       if (pending_stop && !stop_received && (pending_stop->complete.load(std::memory_order_acquire) ||
@@ -2016,8 +2225,14 @@ struct DeviceTransport::Impl {
               active_management = stop_query;
               management_handle.emplace(std::move(sent).take_value());
             } else {
-              log_management_handoff(*stop_query,"async_request_failed",sent.result());
-              fail_stop("Stop QueryResult dispatch failed");
+              if(sent.result()==dp::comm::Result::kQueueFull) {
+                stop_query_admission_retry.emplace(transport_steady_now_us());
+                (void)stop_query_admission_retry->on_result(sent.result(),transport_steady_now_us(),false);
+                log_management_handoff(*stop_query,"stop_query_would_block",sent.result());
+              } else {
+                log_management_handoff(*stop_query,"async_request_failed",sent.result());
+                fail_stop("Stop QueryResult dispatch failed");
+              }
             }
           }
         }

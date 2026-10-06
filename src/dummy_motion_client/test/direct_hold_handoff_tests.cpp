@@ -352,6 +352,120 @@ int main(int argc,char **argv) {
        run32_status_us+state_age_budget_us,state_age_budget_us))!="age_budget" ||
      std::string(refresh_wait_failure(run32,run31,true,true,run32_status_us,
        run32_status_us+state_age_budget_us-1U,state_age_budget_us))!="none") return 100;
+  // Captured run 1 final 6 was flushed before its Hold Status was observed.
+  const TimelineIdentity completed_run{8550615690737205600ULL,6553720987272504267ULL,
+                                       1U,2U,1U};
+  const TimelineIdentity completed_successor{completed_run.boot,completed_run.session,
+                                             completed_run.reference_epoch,3U,2U};
+  wire::DummyDeviceStatusV2 completed_status{};
+  completed_status.set_boot_epoch(completed_successor.boot);
+  completed_status.set_session_id(completed_successor.session);
+  completed_status.set_reference_epoch(completed_successor.reference_epoch);
+  completed_status.set_motion_epoch(completed_successor.motion_epoch);
+  completed_status.set_management_epoch(7U);
+  completed_status.set_run_id(completed_successor.run_id);
+  completed_status.set_attempt_kind(1U);
+  completed_status.set_parent_run_id(0U);
+  completed_status.set_final_state(0U);
+  completed_status.set_core_state(wire_value(WireCoreState::kHold));
+  wire::DummyJointStateV2 completed_state{};
+  completed_state.set_boot_epoch(completed_successor.boot);
+  completed_state.set_session_id(completed_successor.session);
+  completed_state.set_reference_epoch(completed_successor.reference_epoch);
+  completed_state.set_motion_epoch(completed_successor.motion_epoch);
+  completed_state.set_management_epoch(7U);
+  completed_state.set_core_state(wire_value(WireCoreState::kHold));
+  completed_state.set_hold_ready(true);
+  completed_state.set_can_submitted_mask(63U);
+  completed_state.set_can_sent_mask(63U);
+  const RawTerminalIdentity completed_terminal{completed_run.boot,completed_run.session,
+    completed_run.run_id,0U,1U,6U,0U,0U,false,true,false,true,0U,false};
+  RawFirstPageWritten completed_page{};
+  completed_page.boot_epoch=completed_successor.boot;
+  completed_page.session_id=completed_successor.session;
+  completed_page.run_id=completed_successor.run_id;
+  completed_page.motion_epoch=completed_successor.motion_epoch;
+  completed_page.evidence_seq=0U;
+  completed_page.group_count=2U;
+  completed_page.attempt_kind=1U;
+  completed_page.category=1U;
+  completed_page.expected_mask=completed_page.submitted_mask=completed_page.sent_mask=63U;
+  completed_page.final=completed_page.chain_valid=completed_page.full_six=
+    completed_page.strict_refresh_successor=true;
+  const auto completed_refresh_hold=[&](const wire::DummyDeviceStatusV2 &status,
+      const wire::DummyJointStateV2 &state,const TimelineIdentity &prior,
+      const RawTerminalIdentity &terminal,const RawFirstPageWritten &page) {
+    return timeline_completed_refresh_hold_confirmed(status,state,prior,terminal,page,
+      true,0U,63U);
+  };
+  const bool completed_prior_hold=completed_refresh_hold(completed_status,completed_state,
+    completed_run,completed_terminal,completed_page);
+  const TimelineIdentity inferred_prior_hold{completed_run.boot,completed_run.session,
+    completed_run.reference_epoch,completed_successor.motion_epoch,completed_run.run_id};
+  if(!completed_prior_hold ||
+     !timeline_refresh_closure_identity(completed_successor,inferred_prior_hold,
+       completed_prior_hold,true,
+       verified_refresh_successor(completed_page,completed_successor),true,true,true)) return 101;
+  if(timeline_completed_refresh_hold_confirmed(completed_status,completed_state,
+       completed_run,completed_terminal,completed_page,false,0U,63U) ||
+     timeline_completed_refresh_hold_confirmed(completed_status,completed_state,
+       completed_run,completed_terminal,completed_page,true,1U,63U)) return 115;
+  auto wrong_prior=completed_run;
+  wrong_prior.boot++;
+  if(completed_refresh_hold(completed_status,completed_state,wrong_prior,
+       completed_terminal,completed_page)) return 102;
+  wrong_prior=completed_run;
+  wrong_prior.session++;
+  if(completed_refresh_hold(completed_status,completed_state,wrong_prior,
+       completed_terminal,completed_page)) return 103;
+  wrong_prior=completed_run;
+  wrong_prior.run_id++;
+  if(completed_refresh_hold(completed_status,completed_state,wrong_prior,
+       completed_terminal,completed_page)) return 104;
+  auto bad_terminal=completed_terminal;
+  bad_terminal.boot_epoch++;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       bad_terminal,completed_page)) return 110;
+  bad_terminal=completed_terminal;
+  bad_terminal.session_id++;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       bad_terminal,completed_page)) return 111;
+  bad_terminal=completed_terminal;
+  bad_terminal.run_id++;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       bad_terminal,completed_page)) return 112;
+  bad_terminal=completed_terminal;
+  bad_terminal.final_state=7U;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       bad_terminal,completed_page)) return 105;
+  bad_terminal=completed_terminal;
+  bad_terminal.chain_valid=false;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       bad_terminal,completed_page)) return 106;
+  bad_terminal=completed_terminal;
+  bad_terminal.motion_complete=false;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       bad_terminal,completed_page)) return 113;
+  auto missing_page=completed_page;
+  missing_page.run_id=0U;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       completed_terminal,missing_page)) return 107;
+  missing_page=completed_page;
+  missing_page.strict_refresh_successor=false;
+  if(completed_refresh_hold(completed_status,completed_state,completed_run,
+       completed_terminal,missing_page)) return 114;
+  auto stale_status=completed_status;
+  stale_status.set_motion_epoch(2U);
+  if(completed_refresh_hold(stale_status,completed_state,completed_run,
+       completed_terminal,completed_page)) return 108;
+  auto fault_status=completed_status;
+  fault_status.set_evidence_lost(true);
+  if(completed_refresh_hold(fault_status,completed_state,completed_run,
+       completed_terminal,completed_page)) return 109;
+  fault_status=completed_status;
+  fault_status.set_motion_complete(true);
+  if(completed_refresh_hold(fault_status,completed_state,completed_run,
+       completed_terminal,completed_page)) return 116;
   run32_page.boot_epoch=run32.boot;
   run32_page.session_id=run32.session;
   run32_page.run_id=run32.run_id;

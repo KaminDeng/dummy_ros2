@@ -522,7 +522,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     valid.status.set_attempt_kind(1U);
   }
   if (raw_capture_mode) {
-    valid.status.set_run_id(raw_order_case >= 24U && raw_order_case <= 33U ? 123U :
+    valid.status.set_run_id(raw_order_case >= 34U && raw_order_case <= 50U ? 1U :
+        raw_order_case >= 24U && raw_order_case <= 33U ? 123U :
         raw_order_case >= 20U && raw_order_case <= 23U ? 121U :
         raw_order_case != 0U ? 1U : 3U);
     valid.status.set_attempt_kind(1U);
@@ -1535,19 +1536,31 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         message.set_attempt_kind(run == 2U &&
             (raw_order_case == 4U || (raw_order_case == 11U && sequence == 1U)) ? 2U : kind);
         message.set_parent_run_id(parent);
-        message.set_motion_epoch(10U);
+        message.set_motion_epoch(raw_order_case >= 43U && raw_order_case <= 50U ?
+            (run == 1U ? 1U : run == 2U && sequence == 0U ? 3U : 5U) :
+            raw_order_case >= 34U && raw_order_case <= 42U ?
+            (run == 1U ? 1U : 3U) : 10U);
+        if (run == 2U && sequence == 0U && raw_order_case == 38U)
+          message.set_motion_epoch(0U);
         if (run == 124U && sequence == 0U && raw_order_case == 31U)
           message.set_motion_epoch(0U);
         message.set_category(category);
         message.set_final(1U);
         message.set_group_count(group_count);
-        if (category == 4U) message.set_final_state(final_state);
+        if (category == 4U) {
+          message.set_final_state(final_state);
+          if (((run == 1U && raw_order_case >= 34U && raw_order_case <= 50U &&
+                raw_order_case != 41U) ||
+               (run >= 2U && raw_order_case >= 43U && raw_order_case <= 50U)))
+            message.set_motion_complete(true);
+        }
         else {
           message.set_group_id(run);
           message.set_expected_mask(63U);
           message.set_submitted_mask(63U);
           message.set_sent_mask(63U);
-          if (run == 124U && sequence == 0U && raw_order_case == 30U)
+          if ((run == 124U && sequence == 0U && raw_order_case == 30U) ||
+              (run == 2U && sequence == 0U && raw_order_case == 40U))
             message.set_sent_mask(31U);
         }
         std::uint8_t previous_digest[32]{};
@@ -1583,6 +1596,263 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         ::SHA256(seed.data(), seed.size(), previous.data());
         return previous;
       };
+      if (raw_order_case >= 43U && raw_order_case <= 50U) {
+        valid.status.set_core_state(3U);
+        valid.status.set_final_state(0U);
+        valid.status.set_motion_epoch(3U);
+        valid.status.set_management_epoch(7U);
+        valid.state.set_motion_epoch(3U);
+        valid.state.set_management_epoch(7U);
+        std::array<std::uint8_t, 32U> first_page{}, first_terminal{};
+        std::array<std::uint8_t, 32U> second_page{}, second_terminal{}, third_page{};
+        if (!send(valid) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);
+              Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) == wire::CodecResult::kOk && observed.run_id() == 1U;
+            }) || !publish_page(1U, 0U, 1U, 1U, 0U, seed_for(1U), &first_page) ||
+            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; }) ||
+            !publish_page(1U, 1U, 4U, 1U, 6U, first_page, &first_terminal) ||
+            !wait_for([&] { return transport.statistics().raw_evidence_last_terminal_written_run == 1U; }))
+          return 323;
+        const auto stale_receipt = channel->raw_evidence_terminal_flushed();
+        if (!publish_page(2U, 0U, 1U, 1U, 0U, seed_for(2U), &second_page) ||
+            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 3U ||
+                transport.statistics().raw_evidence_failure != 0U; }) ||
+            transport.statistics().raw_evidence_failure != 0U) return 324;
+        auto second_status = valid;
+        second_status.send_state = false;
+        second_status.status.set_run_id(2U);
+        second_status.status.set_motion_epoch(5U);
+        second_status.status.set_management_epoch(8U);
+        if (!send(second_status) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);
+              Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
+                  observed.core_state() == 3U && observed.final_state() == 0U &&
+                  observed.motion_epoch() == 5U;
+            })) return 325;
+        if (raw_order_case != 48U &&
+            (!publish_page(2U, 1U, 4U, 1U, 6U, second_page, &second_terminal) ||
+             !wait_for([&] {
+               const auto receipt = channel->raw_evidence_terminal_flushed();
+               return transport.statistics().raw_evidence_last_terminal_written_run == 2U &&
+                   receipt.run_id == 2U && receipt.final_state == 6U &&
+                   receipt.chain_valid && receipt.motion_complete;
+             }))) return 326;
+        {
+          std::lock_guard<std::mutex> lock(channel->mutex);
+          Status observed;
+          if (wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) != wire::CodecResult::kOk || observed.run_id() != 2U ||
+              observed.final_state() != 0U ||
+              std::any_of(std::begin(observed.evidence_chain_sha256()),
+                  std::end(observed.evidence_chain_sha256()),
+                  [](std::uint8_t byte) { return byte != 0U; })) return 327;
+        }
+        if (raw_order_case >= 44U && raw_order_case <= 47U) {
+          auto receipt = raw_order_case == 44U ? stale_receipt :
+              channel->raw_evidence_terminal_flushed();
+          if (raw_order_case == 45U) receipt.boot_epoch = 8U;
+          if (raw_order_case == 46U) receipt.session_id = 9U;
+          if (raw_order_case == 47U) receipt.run_id = 3U;
+          channel->publish_raw_evidence_terminal_flushed(receipt);
+        }
+        const auto before_third = transport.statistics();
+        if (!publish_page(3U, 0U, 1U, 1U, 0U, seed_for(3U), &third_page) ||
+            !wait_for([&] {
+              const auto stats = transport.statistics();
+              return stats.raw_evidence_pages_written > before_third.raw_evidence_pages_written ||
+                  stats.raw_evidence_failure != 0U;
+            })) return 328;
+        if (raw_order_case >= 49U) {
+          auto late_status = second_status;
+          late_status.status.set_core_state(4U);
+          late_status.status.set_final_state(6U);
+          late_status.status.set_motion_complete(true);
+          std::uint8_t late_digest[32]{};
+          std::copy(second_terminal.begin(), second_terminal.end(), late_digest);
+          if (raw_order_case == 49U) late_digest[0] ^= 1U;
+          late_status.status.set_evidence_chain_sha256(late_digest);
+          const auto before_late = transport.statistics().status_messages;
+          if (!send(late_status) || !wait_for([&] {
+                const auto stats = transport.statistics();
+                return stats.status_messages > before_late ||
+                    stats.raw_evidence_failure != 0U;
+              })) return 335;
+          if (raw_order_case == 49U) {
+            const auto rejected = transport.statistics();
+            transport.stop();
+            const auto stopped = transport.statistics();
+            return rejected.raw_evidence_failure == 6U &&
+                stopped.raw_evidence_failure == 6U &&
+                stopped.raw_evidence_pages_written == 5U ? 0 : 336;
+          }
+          if (!wait_for([&] {
+                std::lock_guard<std::mutex> lock(channel->mutex);
+                Status observed;
+                return wire::DummyDeviceStatusV2Codec::decode(
+                    channel->observation.status.data(), channel->observation.status.size(),
+                    &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
+                    observed.final_state() == 6U &&
+                    std::equal(second_terminal.begin(), second_terminal.end(),
+                               observed.evidence_chain_sha256());
+              }) || transport.statistics().raw_evidence_failure != 0U) return 337;
+        }
+        if (raw_order_case >= 44U && raw_order_case <= 48U) {
+          transport.stop();
+          const auto result = transport.statistics();
+          return result.raw_evidence_failure == 6U &&
+              result.raw_evidence_pages_written == before_third.raw_evidence_pages_written ? 0 : 329;
+        }
+        if (transport.statistics().raw_evidence_failure != 0U ||
+            transport.statistics().raw_evidence_pages_written != 5U) return 330;
+        auto third_status = second_status;
+        third_status.status.set_run_id(3U);
+        third_status.status.set_core_state(4U);
+        third_status.status.set_management_epoch(9U);
+        if (!send(third_status) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);
+              Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) == wire::CodecResult::kOk && observed.run_id() == 3U;
+            })) return 331;
+        std::array<std::uint8_t, 32U> third_terminal{};
+        if (!publish_page(3U, 1U, 4U, 1U, 6U, third_page, &third_terminal) ||
+            !wait_for([&] { return transport.statistics().raw_evidence_last_terminal_written_run == 3U; }))
+          return 332;
+        auto third_final = third_status;
+        third_final.status.set_final_state(6U);
+        third_final.status.set_motion_complete(true);
+        std::uint8_t third_digest[32]{};
+        std::copy(third_terminal.begin(), third_terminal.end(), third_digest);
+        third_final.status.set_evidence_chain_sha256(third_digest);
+        if (!send(third_final) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);
+              Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) == wire::CodecResult::kOk && observed.run_id() == 3U &&
+                  observed.final_state() == 6U &&
+                  std::equal(third_terminal.begin(), third_terminal.end(),
+                             observed.evidence_chain_sha256());
+            })) return 333;
+        transport.stop();
+        const auto result = transport.statistics();
+        return result.raw_evidence_failure == 0U &&
+            result.raw_evidence_pages_written == 6U &&
+            result.raw_evidence_last_terminal_written_run == 3U ? 0 : 334;
+      }
+      if (raw_order_case >= 34U && raw_order_case <= 42U) {
+        valid.status.set_core_state(3U);
+        valid.status.set_final_state(0U);
+        valid.status.set_motion_epoch(3U);
+        valid.status.set_management_epoch(7U);
+        valid.state.set_motion_epoch(3U);
+        valid.state.set_management_epoch(7U);
+        std::array<std::uint8_t, 32U> first_group{}, first_terminal{}, next_group{}, next_terminal{};
+        if (!send(valid) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);
+              Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) == wire::CodecResult::kOk && observed.run_id() == 1U &&
+                  observed.core_state() == 3U && observed.final_state() == 0U &&
+                  observed.motion_epoch() == 3U && observed.management_epoch() == 7U;
+            }) || !publish_page(1U, 0U, 1U, 1U, 0U, seed_for(1U), &first_group) ||
+            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; }))
+          return 307;
+        if (raw_order_case != 37U &&
+            (!publish_page(1U, 1U, 4U, 1U, 6U, first_group, &first_terminal) ||
+             !wait_for([&] {
+               const auto receipt = channel->raw_evidence_terminal_flushed();
+               return transport.statistics().raw_evidence_last_terminal_written_run == 1U &&
+                   receipt.boot_epoch == 7U && receipt.session_id == 8U &&
+                   receipt.run_id == 1U && receipt.attempt_kind == 1U &&
+                   receipt.final_state == 6U && receipt.chain_valid &&
+                   receipt.motion_complete == (raw_order_case != 41U);
+             }))) return 308;
+        if (raw_order_case == 35U || raw_order_case == 36U || raw_order_case == 42U) {
+          // Isolate receipt identity and publication order after the real terminal flush.
+          auto receipt = channel->raw_evidence_terminal_flushed();
+          if (raw_order_case == 35U) receipt.boot_epoch = 8U;
+          if (raw_order_case == 36U) receipt.session_id = 9U;
+          if (raw_order_case == 42U) receipt = {};
+          channel->publish_raw_evidence_terminal_flushed(receipt);
+        }
+        {
+          const auto before = transport.statistics();
+          std::lock_guard<std::mutex> lock(channel->mutex);
+          Status observed;
+          if (wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) != wire::CodecResult::kOk || observed.run_id() != 1U ||
+              observed.core_state() != 3U || observed.final_state() != 0U ||
+              observed.motion_epoch() != 3U || observed.management_epoch() != 7U ||
+              before.raw_evidence_last_terminal_written_run !=
+                  (raw_order_case == 37U ? 0U : 1U)) return 316;
+        }
+        const auto before_page = transport.statistics();
+        if (!publish_page(raw_order_case == 39U ? 3U : 2U, 0U, 1U, 1U, 0U,
+                          seed_for(raw_order_case == 39U ? 3U : 2U), &next_group) ||
+            !wait_for([&] {
+              const auto observed = transport.statistics();
+              return observed.raw_evidence_pages_written > before_page.raw_evidence_pages_written ||
+                  observed.raw_evidence_failure != 0U;
+            })) return 310;
+        const auto first_page = transport.statistics();
+        if (raw_order_case != 34U) {
+          transport.stop();
+          return first_page.raw_evidence_failure == 6U &&
+              first_page.raw_evidence_pages_written == before_page.raw_evidence_pages_written ? 0 : 311;
+        }
+        if (first_page.raw_evidence_failure != 0U ||
+            first_page.raw_evidence_pages_written != 3U ||
+            first_page.status_messages != before_page.status_messages ||
+            first_page.raw_evidence_last_terminal_written_run != 1U) {
+          std::fprintf(stderr, "hold refresh first page: failure=%u pages=%llu status_delta=%llu terminal=%llu\n",
+              static_cast<unsigned>(first_page.raw_evidence_failure),
+              static_cast<unsigned long long>(first_page.raw_evidence_pages_written),
+              static_cast<unsigned long long>(first_page.status_messages - before_page.status_messages),
+              static_cast<unsigned long long>(first_page.raw_evidence_last_terminal_written_run));
+          return 312;
+        }
+        auto next_status = valid;
+        next_status.send_state = false;
+        next_status.status.set_run_id(2U);
+        next_status.status.set_core_state(4U);
+        if (!send(next_status) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);
+              Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U;
+            }) || !publish_page(2U, 1U, 4U, 1U, 6U, next_group, &next_terminal) ||
+            !wait_for([&] {
+              return transport.statistics().raw_evidence_last_terminal_written_run == 2U;
+            })) return 313;
+        auto final_status = next_status;
+        final_status.status.set_final_state(6U);
+        std::uint8_t digest[32]{};
+        std::copy(next_terminal.begin(), next_terminal.end(), digest);
+        final_status.status.set_evidence_chain_sha256(digest);
+        if (!send(final_status) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);
+              Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(
+                  channel->observation.status.data(), channel->observation.status.size(),
+                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
+                  observed.final_state() == 6U;
+            })) return 314;
+        transport.stop();
+        return transport.statistics().raw_evidence_failure == 0U &&
+            transport.statistics().raw_evidence_pages_written == 4U ? 0 : 315;
+      }
       if (raw_order_case >= 20U && raw_order_case <= 33U) {
         const bool refresh = raw_order_case >= 24U;
         const auto motion_run = refresh ? 123U : 121U;
@@ -3061,7 +3331,24 @@ int main(int argc, char **argv) {
       argc == 3 && std::strcmp(argv[2], "raw_order_refresh_page_first_bad_mask") == 0 ? 30U :
       argc == 3 && std::strcmp(argv[2], "raw_order_refresh_page_first_zero_motion_epoch") == 0 ? 31U :
       argc == 3 && std::strcmp(argv[2], "raw_order_refresh_page_first_wrong_final_chain") == 0 ? 32U :
-      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_final_status_before_terminal") == 0 ? 33U : 0U;
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_final_status_before_terminal") == 0 ? 33U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_page_first") == 0 ? 34U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_bad_boot") == 0 ? 35U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_bad_session") == 0 ? 36U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_no_terminal") == 0 ? 37U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_bad_motion") == 0 ? 38U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_bad_run") == 0 ? 39U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_bad_mask") == 0 ? 40U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_no_motion_complete") == 0 ? 41U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_no_receipt") == 0 ? 42U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor") == 0 ? 43U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_stale_terminal") == 0 ? 44U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_bad_boot") == 0 ? 45U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_bad_session") == 0 ? 46U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_bad_run") == 0 ? 47U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_no_terminal") == 0 ? 48U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_late_wrong_chain") == 0 ? 49U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_late_correct_chain") == 0 ? 50U : 0U;
   const bool raw_capture_mode = raw_bad_release_mode || raw_incomplete_mode || raw_many_mode || raw_order_case != 0U ||
       (argc == 3 && std::strcmp(argv[2], "raw_release_receipt") == 0) ||
       (argc == 3 && std::strcmp(argv[2], "raw_direct_receipt") == 0) ||

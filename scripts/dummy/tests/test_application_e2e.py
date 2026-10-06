@@ -205,6 +205,16 @@ def test_active_hold_refresh_release_requires_matching_committed_receipt(evidenc
     application_e2e.validate_evidence(evidence)
 
 
+def test_active_release_accepts_long_hold_phase_before_disable(evidence):
+    active_release(evidence)
+    evidence["release"]["evidence_pages"] = pages(
+        evidence["identity"], run=5, session=3, final_state=2,
+        group_ids=list(range(8, 39)),
+        group_epochs=[2] * 30 + [3], terminal_epoch=2,
+        categories=[1] * 30 + [3])
+    application_e2e.validate_evidence(evidence)
+
+
 def test_active_release_rejects_disable_sent_without_new_epoch(evidence):
     active_release(evidence)
     evidence["release"]["evidence_pages"] = pages(evidence["identity"],
@@ -279,12 +289,12 @@ def test_active_release_rejects_fault_source_on_safety_deceleration(evidence):
         application_e2e.validate_evidence(evidence)
 
 
-def test_active_release_rejects_more_than_ledger_group_capacity(evidence):
+def test_active_release_rejects_hold_after_disable_in_long_stream(evidence):
     active_release(evidence)
     evidence["release"]["evidence_pages"] = pages(evidence["identity"],
         run=5, session=3, epoch=2, final_state=2,
-        group_ids=list(range(8, 17)), group_epochs=[2] + [3] * 8,
-        terminal_epoch=2, categories=[1] + [2] * 7 + [3])
+        group_ids=list(range(8, 18)), group_epochs=[2] * 8 + [3, 3],
+        terminal_epoch=2, categories=[1] * 8 + [3, 1])
     evidence["goals"][0]["timeline"][-1]["motion_epoch"] = 3
     evidence["management_records"][-1] = manage(5, 6700, request_id=2,
         run=5, session=0, operation_id=2, motion_epoch=3)

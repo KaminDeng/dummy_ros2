@@ -175,7 +175,24 @@ if(BUILD_TESTING)
     raw_order_refresh_page_first_bad_mask
     raw_order_refresh_page_first_zero_motion_epoch
     raw_order_refresh_page_first_wrong_final_chain
-    raw_order_refresh_final_status_before_terminal)
+    raw_order_refresh_final_status_before_terminal
+    raw_order_refresh_hold_page_first
+    raw_order_refresh_hold_bad_boot
+    raw_order_refresh_hold_bad_session
+    raw_order_refresh_hold_no_terminal
+    raw_order_refresh_hold_bad_motion
+    raw_order_refresh_hold_bad_run
+    raw_order_refresh_hold_bad_mask
+    raw_order_refresh_hold_no_motion_complete
+    raw_order_refresh_hold_no_receipt
+    raw_order_multi_successor
+    raw_order_multi_successor_stale_terminal
+    raw_order_multi_successor_bad_boot
+    raw_order_multi_successor_bad_session
+    raw_order_multi_successor_bad_run
+    raw_order_multi_successor_no_terminal
+    raw_order_multi_successor_late_wrong_chain
+    raw_order_multi_successor_late_correct_chain)
   foreach(_case IN LISTS _refresh_cases)
     add_test(NAME transport_${_case}_component_tests
       COMMAND transport_component_tests six_axis ${_case})
@@ -289,6 +306,13 @@ if(BUILD_TESTING)
     "${DPSDK_ROOT}/build_dummy/g6-host/platform_common_console_device/libdp_console_device.a"
     pthread)
   add_test(NAME request_handle_destructor_tests COMMAND request_handle_destructor_tests)
+
+  add_executable(management_admission_retry_tests test/management_admission_retry_tests.cpp)
+  target_compile_features(management_admission_retry_tests PRIVATE cxx_std_17)
+  target_include_directories(management_admission_retry_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${DPSDK_ROOT}/libraries/dp_comm/include")
+  add_test(NAME management_admission_retry_tests COMMAND management_admission_retry_tests)
 
   add_executable(command_channel_tests test/command_channel_tests.cpp)
   target_link_libraries(command_channel_tests dummy_command_channel)
