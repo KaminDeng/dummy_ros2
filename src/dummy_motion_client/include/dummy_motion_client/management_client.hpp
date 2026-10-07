@@ -56,6 +56,7 @@ class ManagementTransport {
   };
   virtual ~ManagementTransport() = default;
   virtual std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &)=0;
+  virtual std::uint32_t reserve_sequence(std::uint32_t proposed) noexcept { return proposed; }
 };
 class WireManagementClient final : public ManagementClient {
  public:
@@ -88,7 +89,9 @@ class WireManagementClient final : public ManagementClient {
   }
   std::uint32_t take_request_sequence() noexcept {
     if (next_seq_ == 0U) next_seq_ = 1U;
-    return next_seq_++;
+    const auto sequence = transport_.reserve_sequence(next_seq_);
+    next_seq_ = sequence + 1U;
+    return sequence;
   }
   bool send(const ManageRequest &);
   ManagementTransport &transport_;

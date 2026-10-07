@@ -191,6 +191,11 @@ bool DpManagementTransport::set_post_complete_hold_tolerance(const std::vector<d
   return true;
 }
 void DpManagementTransport::stop() { impl_->running=false; if(impl_->worker.joinable()) impl_->worker.join(); }
+std::uint32_t DpManagementTransport::reserve_sequence(std::uint32_t proposed) noexcept {
+  if (impl_->connection != Connection::kDeviceWorker) return proposed;
+  const auto channel = impl_->shared_channel();
+  return channel ? channel->reserve_request_sequence(proposed) : proposed;
+}
 bool DpManagementTransport::ready() const noexcept {
   if(impl_->connection==Connection::kDeviceWorker) {
     const auto channel=impl_->shared_channel(); return channel && channel->ready;

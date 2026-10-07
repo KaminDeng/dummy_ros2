@@ -297,7 +297,6 @@ struct DeviceTransport::Impl {
   std::uint64_t last_motion_request_id = 0U;
   std::uint64_t last_motion_operation_id = 0U;
   std::uint64_t next_stop_request_id = 0x8000000000000001ULL;
-  std::uint32_t next_stop_request_seq = 0x80000001U;
   bool has_sequence = false;
   LatestOnlyCommandStream command_stream;
   GroupSentAck group_sent_ack;
@@ -1473,7 +1472,7 @@ struct DeviceTransport::Impl {
     request.set_device_id(device);
     request.set_client_instance_id(client);
     request.set_request_id(next_stop_request_id++);
-    request.set_request_seq(next_stop_request_seq++);
+    request.set_request_seq(management->reserve_request_sequence());
     request.set_operation(kWireDisableAndRelease);
     request.set_expected_boot_epoch(status.boot_epoch());
     request.set_expected_session_id(status.session_id());
@@ -1518,7 +1517,7 @@ struct DeviceTransport::Impl {
       const Management::Request &original) noexcept {
     Management::Request query = original;
     query.set_request_id(next_stop_request_id++);
-    query.set_request_seq(next_stop_request_seq++);
+    query.set_request_seq(management->reserve_request_sequence());
     query.set_operation(kWireGetOperation);
     query.set_queried_operation_id(original.request_id());
     auto pending = std::make_shared<DeviceManagementRequest>();
@@ -1842,6 +1841,7 @@ struct DeviceTransport::Impl {
           active_management->failed=true;
         }
         else {
+          management->observe_request_sequence(decoded.request_seq());
           if (decoded.operation() == kWireDisableAndRelease) {
             gate_release = {decoded.request_id(), decoded.expected_boot_epoch(),
                 decoded.expected_session_id(), decoded.expected_reference_epoch(),

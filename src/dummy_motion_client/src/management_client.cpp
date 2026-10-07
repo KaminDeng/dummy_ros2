@@ -38,11 +38,11 @@ std::uint64_t WireManagementClient::submit_permit(
   std::array<std::uint8_t,16> owner{};
   std::copy(std::begin(request.client_instance_id()), std::end(request.client_instance_id()), owner.begin());
   std::array<std::uint8_t,32> digest{};
-  const auto permit_sequence = next_seq_ == 0U ? 1U : next_seq_;
+  const auto permit_sequence = take_request_sequence();
   if (!trusted_bench_permit_digest(binding, owner, request.expected_session_id(), permit_sequence, &digest))
     return 0U;
   original_=request; original_.set_schema_major(2); original_.set_schema_minor(4);
-  original_.set_request_id(take_request_id()); original_.set_request_seq(take_request_sequence());
+  original_.set_request_id(take_request_id()); original_.set_request_seq(permit_sequence);
   std::uint8_t wire_digest[32]{};
   std::copy(digest.begin(), digest.end(), wire_digest);
   original_.set_permit_sha256(wire_digest);

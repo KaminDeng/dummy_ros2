@@ -46,6 +46,20 @@ struct DeviceManagementChannel {
   explicit DeviceManagementChannel(TransportParameters value)
       : parameters(std::move(value)),
         raw_evidence_capture_enabled(!parameters.raw_evidence_path.empty()) {}
+  void observe_request_sequence(std::uint32_t sequence) noexcept {
+    if (sequence == 0U) return;
+    std::lock_guard<std::mutex> lock(request_sequence_mutex_);
+    if (last_request_sequence_ == 0U ||
+        (sequence != last_request_sequence_ &&
+         static_cast<std::uint32_t>(sequence - last_request_sequence_) < 0x80000000U))
+      last_request_sequence_ = sequence;
+  }
+  std::uint32_t reserve_request_sequence(std::uint32_t initial = 1U) noexcept {
+    std::lock_guard<std::mutex> lock(request_sequence_mutex_);
+    if (last_request_sequence_ == 0U) last_request_sequence_ = initial == 0U ? 1U : initial;
+    else if (++last_request_sequence_ == 0U) last_request_sequence_ = 1U;
+    return last_request_sequence_;
+  }
   RawEvidenceTerminalFlushed raw_evidence_terminal_flushed() const noexcept {
     std::lock_guard<std::mutex> lock(raw_evidence_terminal_mutex_);
     return raw_evidence_terminal_;
@@ -83,6 +97,8 @@ struct DeviceManagementChannel {
   DeviceManagementObservation observation;
   HoldDrainSnapshot hold_drain;
  private:
+  std::mutex request_sequence_mutex_;
+  std::uint32_t last_request_sequence_ = 0U;
   mutable std::mutex raw_evidence_first_page_mutex_;
   RawEvidenceFirstPageWritten raw_evidence_first_page_{};
   mutable std::mutex raw_evidence_terminal_mutex_;

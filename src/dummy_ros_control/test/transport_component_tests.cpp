@@ -218,6 +218,8 @@ struct Peer {
   unsigned stop_queries = 0U;
   bool never_complete_stop = false;
   bool revoke_owner_before_stop_receipt = false;
+  bool sequence_rebase_mode = false;
+  std::uint32_t sequence_floor = 0U;
   bool direct_gate_release = false;
   std::uint64_t gate_release_request_id = 0U;
 };
@@ -290,10 +292,12 @@ dp::comm::Result receive_management(const Management::Request &request,
     return dp::comm::Result::kInvalidArgument;
   const bool stop_query = request.operation() == 12U && peer.stop_request_id != 0U &&
       request.queried_operation_id() == peer.stop_request_id;
+  if (peer.sequence_rebase_mode && request.operation() == 1U)
+    peer.sequence_floor = request.request_seq();
   if (stop_query && ::write(peer.stops_fd, &request, sizeof(request)) != sizeof(request))
     return dp::comm::Result::kInvalidArgument;
   if (request.operation() != 6U && request.operation() != 8U && request.operation() != 0U &&
-      request.operation() != 12U && request.operation() != 10U)
+      request.operation() != 12U && request.operation() != 10U && request.operation() != 1U)
     return dp::comm::Result::kInvalidArgument;
   response->set_schema_major(2U);
   response->set_schema_minor(4U);
@@ -321,6 +325,12 @@ dp::comm::Result receive_management(const Management::Request &request,
     response->set_operation_id(47U);
   }
   if (request.operation() == 10U) {
+    if (peer.sequence_rebase_mode && request.request_seq() <= peer.sequence_floor) {
+      response->set_result_code(16U);
+      response->set_transaction_phase(4U);
+      response->set_operation_id(0U);
+      return dp::comm::Result::kOk;
+    }
     if (request.request_id() == 80U) {
       peer.gate_release_request_id = request.request_id();
       response->set_run_id(2U);
@@ -383,7 +393,7 @@ dp::comm::Result receive_management(const Management::Request &request,
 }
 int run_peer(const std::string &endpoint, int input, int output, int stops_output,
              bool never_complete_stop, bool revoke_owner_before_stop_receipt,
-             bool direct_gate_release) {
+             bool direct_gate_release, bool sequence_rebase_mode) {
   dp::comm::StaticStorage storage({1U, 3U, 1U, 0U, 8U,
       wire::DummyDeviceStatusV2Codec::kEncodedSize, 96U, 1U, 0U, 1U, 1U});
   const dp::comm::TransportConfig config{"peer", "", endpoint.c_str(), "component_peer"};
@@ -405,6 +415,7 @@ int run_peer(const std::string &endpoint, int input, int output, int stops_outpu
   peer.never_complete_stop = never_complete_stop;
   peer.revoke_owner_before_stop_receipt = revoke_owner_before_stop_receipt;
   peer.direct_gate_release = direct_gate_release;
+  peer.sequence_rebase_mode = sequence_rebase_mode;
   auto subscribed = node.create_subscription<Command>("command_v2", {}, receive_command, &peer);
   auto managed = node.create_service<Management>("manage_v2", receive_management, &peer);
   if (!states.has_value() || !statuses.has_value() || !evidences.has_value() ||
@@ -453,7 +464,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                bool raw_bad_release_mode, bool raw_incomplete_mode,
                bool raw_many_mode, unsigned raw_order_case, unsigned complete_order_mode,
                unsigned release_deactivate_mode, unsigned ticket_mode,
-               bool reject_during_ack_mode) {
+               bool reject_during_ack_mode, bool sequence_rebase_mode) {
   pollfd response{input, POLLIN, 0};
   char ready{};
   if (::poll(&response, 1, 3000) != 1 || ::read(input, &ready, 1) != 1 || ready != 'R') return 10;
@@ -3034,7 +3045,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if (!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                                   snapshot.envelope.state_seq == stable_sequence; })) return 108;
   authorization.set_request_id(46U);
-  authorization.set_request_seq(46U);
+  authorization.set_request_seq(sequence_rebase_mode ? 2100000000U : 46U);
   authorization.set_operation(6U);
   authorization.set_expected_motion_epoch(next_motion_epoch);
   authorization.set_expected_management_epoch(jump_reply.management_epoch());
@@ -3049,6 +3060,17 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   Management::Response stop_authority_reply;
   if (wire::DummyManageV2ResponseCodec::decode(stop_authority->response.data(),
       stop_authority->response.size(), &stop_authority_reply) != wire::CodecResult::kOk) return 132;
+  if (sequence_rebase_mode) {
+    auto select_mode = authorization;
+    select_mode.set_request_id(2183397839ULL);
+    select_mode.set_request_seq(2183397839U);
+    select_mode.set_operation(1U);
+    auto pending_select = std::make_shared<DeviceManagementRequest>();
+    if (wire::DummyManageV2RequestCodec::encode(select_mode, pending_select->request.data(),
+          pending_select->request.size()) != wire::CodecResult::kOk) return 264;
+    { std::lock_guard<std::mutex> lock(channel->mutex); channel->queued = pending_select; }
+    if (!wait_for_management(pending_select)) return 265;
+  }
   const auto accepted_produced_us = snapshot.envelope.produced_at_us;
   const auto before_timeout = transport.statistics().invalidations;
   if (!wait_for([&] { return transport.statistics().invalidations > before_timeout; })) return 100;
@@ -3064,6 +3086,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stop_request.expected_management_epoch(), stop_authority_reply.management_epoch());
     return 129;
   }
+  if (sequence_rebase_mode &&
+      (stop_request.request_seq() != 2183397840U ||
+       stop_request.request_id() == 2183397839ULL ||
+       !std::equal(parameters.client_instance_id.begin(), parameters.client_instance_id.end(),
+                   stop_request.client_instance_id()))) return 266;
   pollfd query_response{stops_input, POLLIN, 0};
   if (::poll(&query_response, 1, 3000) != 1) return 139;
   Management::Request first_stop_query;
@@ -3071,6 +3098,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       first_stop_query.operation() != 12U ||
       first_stop_query.configured_mask() != parameters.configured_mask ||
       first_stop_query.queried_operation_id() != stop_request.request_id()) return 140;
+  if (sequence_rebase_mode &&
+      (first_stop_query.request_seq() != stop_request.request_seq() + 1U ||
+       first_stop_query.request_id() == stop_request.request_id() ||
+       first_stop_query.expected_session_id() != stop_request.expected_session_id() ||
+       first_stop_query.expected_reference_epoch() != stop_request.expected_reference_epoch() ||
+       first_stop_query.expected_boot_epoch() != stop_request.expected_boot_epoch() ||
+       !std::equal(parameters.client_instance_id.begin(), parameters.client_instance_id.end(),
+                   first_stop_query.client_instance_id()))) return 267;
   if (transport.statistics().stop_requests_confirmed != 0U) return 141;
   if (never_complete_stop) {
     transport.stop();
@@ -3253,7 +3288,8 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
                        unsigned complete_order_mode = 0U,
                        unsigned release_deactivate_mode = 0U,
                        unsigned ticket_mode = 0U,
-                       bool reject_during_ack_mode = false) {
+                       bool reject_during_ack_mode = false,
+                       bool sequence_rebase_mode = false) {
   SerialBridge bridge;
   if (!bridge.open_pair()) return 30;
   int requests[2]{}, responses[2]{};
@@ -3266,7 +3302,7 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
     ::close(requests[1]); ::close(responses[0]); ::close(stops[0]);
     ::_exit(run_peer(bridge.endpoint(0), requests[0], responses[1], stops[1],
                      never_complete_stop, revoke_owner_before_stop_receipt,
-                     release_deactivate_mode == 7U));
+                     release_deactivate_mode == 7U, sequence_rebase_mode));
   }
   bridge.start();
   ::close(requests[0]); ::close(responses[1]); ::close(stops[1]);
@@ -3276,7 +3312,8 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
                                  cold_idle_gap_mode, cold_fault_gap_mode,
                                  raw_capture_mode, raw_bad_release_mode,
                                  raw_incomplete_mode, raw_many_mode, raw_order_case, complete_order_mode,
-                                 release_deactivate_mode, ticket_mode, reject_during_ack_mode);
+                                 release_deactivate_mode, ticket_mode, reject_during_ack_mode,
+                                 sequence_rebase_mode);
   if (result != 0) std::fprintf(stderr, "component_only assertion failed: %d\n", result);
   ::kill(child, SIGTERM);
   ::waitpid(child, nullptr, 0);
@@ -3397,15 +3434,18 @@ int main(int argc, char **argv) {
       argc == 3 && std::strcmp(argv[2], "ticket_authority") == 0 ? 3U : 0U;
   const bool reject_during_ack_mode = argc == 3 &&
       std::strcmp(argv[2], "reject_during_ack") == 0;
+  const bool sequence_rebase_mode = argc == 3 &&
+      std::strcmp(argv[2], "stop_sequence_rebase") == 0;
   const auto result = run_component_case(six_axis,
-      argc == 3 && ticket_mode == 0U && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
+      argc == 3 && ticket_mode == 0U && !sequence_rebase_mode && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
           !inactive_prime_mode && !cold_idle_gap_mode && !cold_fault_gap_mode && !raw_capture_mode &&
           release_deactivate_mode == 0U && !reject_during_ack_mode &&
           complete_order_mode==0U,
       default_ack_age_mode, never_complete_stop, heartbeat_budget_mode || complete_order_mode!=0U, revoked_stop,
       inactive_prime_mode, cold_idle_gap_mode, cold_fault_gap_mode,
       raw_capture_mode, raw_bad_release_mode, raw_incomplete_mode, raw_many_mode, raw_order_case,
-      complete_order_mode, release_deactivate_mode, ticket_mode, reject_during_ack_mode);
+      complete_order_mode, release_deactivate_mode, ticket_mode, reject_during_ack_mode,
+      sequence_rebase_mode);
   if (result != 0 || !six_axis || argc != 2) return result;
   return run_component_case(true, false, true);
 }

@@ -166,6 +166,7 @@ class DpManagementTransport final : public ManagementTransport {
   RawTerminalIdentity raw_terminal_flushed() const noexcept;
   RawFirstPageWritten raw_first_page_written() const noexcept;
   std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &) override;
+  std::uint32_t reserve_sequence(std::uint32_t proposed) noexcept override;
   std::optional<DeviceObservation> observe();
   bool allow_inactive_prime(bool allowed) noexcept;
   bool set_post_complete_hold_tolerance(const std::vector<double> &values) noexcept;

@@ -133,6 +133,24 @@ int main() {
     if(!busy_client.submit(query,200)) return 10;
   }
   if(busy_client.poll(1) || !channel->queued) return 11;
+  channel->queued.reset();
+  channel->observe_request_sequence(2100000000U);
+  channel->observe_request_sequence(2183397839U);
+  dummy_motion_client::WireManagementClient resumed_client(facade);
+  if (!resumed_client.submit(query, 201U) || !channel->queued) return 28;
+  dummy_motion_client::ManageRequest resumed_request;
+  if (dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::decode(
+          channel->queued->request.data(), channel->queued->request.size(),
+          &resumed_request) != dp::protocol::dummy_robot_v2::CodecResult::kOk ||
+      resumed_request.request_seq() != 2183397840U) return 29;
+  channel->observe_request_sequence(2183397839U);
+  if (channel->reserve_request_sequence() != 2183397841U) return 31;
+  channel->observe_request_sequence(UINT32_MAX);
+  if (channel->reserve_request_sequence() != 1U) return 30;
+  channel->observe_request_sequence(UINT32_MAX);
+  if (channel->reserve_request_sequence() != 2U) return 32;
+  channel->observe_request_sequence(0x80000002U);
+  if (channel->reserve_request_sequence() != 3U) return 33;
   channel->ready=false;
   provider.reset();
   channel.reset();
