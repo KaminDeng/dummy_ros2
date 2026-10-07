@@ -149,6 +149,8 @@ if(BUILD_TESTING)
   target_link_libraries(dp_management_transport_tests dummy_dp_management)
   ament_target_dependencies(dp_management_transport_tests hardware_interface)
   add_test(NAME dp_management_transport_tests COMMAND dp_management_transport_tests)
+  add_test(NAME observation_continuity_tests COMMAND dp_management_transport_tests continuity)
+  set_tests_properties(observation_continuity_tests PROPERTIES LABELS "component_only;offline")
   add_test(NAME dp_management_raw_first_page_tests
     COMMAND dp_management_transport_tests raw_first_page)
   set_tests_properties(dp_management_raw_first_page_tests PROPERTIES LABELS "component_only;offline")
@@ -165,7 +167,7 @@ if(BUILD_TESTING)
   ament_target_dependencies(shared_management_channel_tests hardware_interface)
   add_test(NAME shared_management_channel_tests COMMAND shared_management_channel_tests)
   set_tests_properties(dp_management_transport_tests dp_management_transport_tcp_untrusted_tests
-    dp_management_raw_first_page_tests release_transition_tests
+    dp_management_raw_first_page_tests release_transition_tests observation_continuity_tests
     shared_management_channel_tests PROPERTIES
     ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:dummy_ros_control::dummy_command_channel>:$<TARGET_FILE_DIR:dummy_ros_control::dummy_guarded_zenbedded_system>:$ENV{LD_LIBRARY_PATH}"
     TIMEOUT 25)

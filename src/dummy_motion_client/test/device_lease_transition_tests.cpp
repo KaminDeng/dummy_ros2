@@ -1,5 +1,6 @@
 #define DUMMY_ACTION_GATE_TEST
 #include "../src/device_action_gate.cpp"
+#include "action_test_support.hpp"
 
 #include <cassert>
 
@@ -195,6 +196,31 @@ void goal_rejection_receipt_is_typed_and_bounded() {
   assert(!receipt.message(start));
 }
 
+void authorization_loss_blocks_admission_without_replaying_a_goal() {
+  using namespace dummy_motion_client;
+  using action_test::require;
+  const Trajectory motion{{"Joint1"},{{{0.2},{0},{},1}},{},{},0};
+  action_test::Harness idle;
+  idle.enable();
+  require(idle.gate.ready());
+  require(idle.port.starts==0U);
+  idle.gate.invalidate_authorization(2053000U);
+  require(idle.gate.phase()==Phase::kFault && !idle.gate.ready());
+  require(!idle.gate.submit(motion,2053001U));
+  require(idle.port.starts==0U);
+
+  action_test::Harness active;
+  active.enable();
+  active.begin();
+  const auto starts=active.port.starts;
+  require(active.gate.phase()==Phase::kRunning && starts>0U);
+  active.gate.invalidate_authorization(2053000U);
+  require(active.gate.phase()==Phase::kFault && active.gate.terminal()==Terminal::kAborted);
+  active.gate.observe(active.response(true),2053001U);
+  require(!active.gate.ready() && !active.gate.submit(motion,2053002U));
+  require(active.port.starts==starts);
+}
+
 int main() {
   using namespace dummy_motion_client;
   DeviceProfile short_candidate{};
@@ -236,6 +262,7 @@ int main() {
     run_started,run_explicit_status,false);
   assert(goal_busy.load());
   goal_rejection_receipt_is_typed_and_bounded();
+  authorization_loss_blocks_admission_without_replaying_a_goal();
   release_after_completed_goal();
   unreferenced_idle_is_the_only_release_observation();
   released_idle_requires_coherent_bootstrap_authority();

@@ -148,6 +148,14 @@ int observation_continuity_tests() {
   DeviceObservation observation;
   observation.state_received_us = 1000000U;
   observation.status_received_us = 1000000U;
+  ObservationContinuity hold_gap(1000000U, 2000000U, 500000U);
+  if (hold_gap.evaluate(observation, 1000000U, true, true) != ObservationContinuity::Result::kReady ||
+      hold_gap.evaluate(observation, 2053000U, true, true) != ObservationContinuity::Result::kWait)
+    return 81;
+  observation.state_received_us = 2053001U;
+  if (hold_gap.evaluate(observation, 2053001U, true, true) != ObservationContinuity::Result::kReady)
+    return 82;
+  observation.state_received_us = 1000000U;
   ObservationContinuity continuity(250000U, 2000000U, 500000U);
   if (continuity.evaluate(observation, 1000000U, false, true) != ObservationContinuity::Result::kReady)
     return 41;
