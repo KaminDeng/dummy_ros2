@@ -1897,7 +1897,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             raw_order_case == 23U ? 119U : refresh ? 0U : 121U;
         if (!publish_page(release_run, 0U,
                           raw_order_case == 28U ? 2U : refresh ? 1U : 3U,
-                          raw_order_case == 29U ? 2U : 1U, 0U,
+                          raw_order_case == 29U ? 0U : 1U, 0U,
                           seed_for(release_run), &release_page,
                           refresh ? 1U : 3U, release_parent) ||
             !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 3U ||
