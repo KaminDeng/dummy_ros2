@@ -2191,7 +2191,8 @@ struct DeviceTransport::Impl {
           next_stop_query_us = saturating_state_deadline(transport_steady_now_us(),
               parameters.control_period_us);
         } else if (response.result_code() == 0U && response.transaction_phase() == 3U &&
-                   response.operation_id() != 0U) {
+                   response.operation_id() != 0U && response.release_committed() &&
+                   response.session_id() == 0U && response.reference_epoch() == 0U) {
           authorized_motion_epoch = response.motion_epoch();
           authorized_management_epoch = response.management_epoch();
           stop_idle_observed = false;

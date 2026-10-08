@@ -219,6 +219,7 @@ struct Peer {
   bool never_complete_stop = false;
   bool revoke_owner_before_stop_receipt = false;
   bool sequence_rebase_mode = false;
+  bool uncommitted_stop_mode = false;
   std::uint32_t sequence_floor = 0U;
   bool direct_gate_release = false;
   std::uint64_t gate_release_request_id = 0U;
@@ -380,6 +381,7 @@ dp::comm::Result receive_management(const Management::Request &request,
       response->set_reference_epoch(0U);
       response->set_motion_epoch(peer.stop_motion_epoch + 1U);
       response->set_management_epoch(peer.stop_management_epoch + 1U);
+      response->set_release_committed(!peer.uncommitted_stop_mode);
     }
   } else if (request.operation() == 12U &&
              request.queried_operation_id() == peer.gate_release_request_id) {
@@ -393,7 +395,8 @@ dp::comm::Result receive_management(const Management::Request &request,
 }
 int run_peer(const std::string &endpoint, int input, int output, int stops_output,
              bool never_complete_stop, bool revoke_owner_before_stop_receipt,
-             bool direct_gate_release, bool sequence_rebase_mode) {
+             bool direct_gate_release, bool sequence_rebase_mode,
+             bool uncommitted_stop_mode) {
   dp::comm::StaticStorage storage({1U, 3U, 1U, 0U, 8U,
       wire::DummyDeviceStatusV2Codec::kEncodedSize, 96U, 1U, 0U, 1U, 1U});
   const dp::comm::TransportConfig config{"peer", "", endpoint.c_str(), "component_peer"};
@@ -416,6 +419,7 @@ int run_peer(const std::string &endpoint, int input, int output, int stops_outpu
   peer.revoke_owner_before_stop_receipt = revoke_owner_before_stop_receipt;
   peer.direct_gate_release = direct_gate_release;
   peer.sequence_rebase_mode = sequence_rebase_mode;
+  peer.uncommitted_stop_mode = uncommitted_stop_mode;
   auto subscribed = node.create_subscription<Command>("command_v2", {}, receive_command, &peer);
   auto managed = node.create_service<Management>("manage_v2", receive_management, &peer);
   if (!states.has_value() || !statuses.has_value() || !evidences.has_value() ||
@@ -464,7 +468,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                bool raw_bad_release_mode, bool raw_incomplete_mode,
                bool raw_many_mode, unsigned raw_order_case, unsigned complete_order_mode,
                unsigned release_deactivate_mode, unsigned ticket_mode,
-               bool reject_during_ack_mode, bool sequence_rebase_mode) {
+               bool reject_during_ack_mode, bool sequence_rebase_mode,
+               bool uncommitted_stop_mode) {
   pollfd response{input, POLLIN, 0};
   char ready{};
   if (::poll(&response, 1, 3000) != 1 || ::read(input, &ready, 1) != 1 || ready != 'R') return 10;
@@ -3122,18 +3127,20 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       terminal_stop_query.request_id() == first_stop_query.request_id()) return 145;
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   if (transport.statistics().stop_requests_confirmed != 0U) return 146;
-  auto disabling = valid;
-  disabling.send_state = false;
-  disabling.status.set_motion_epoch(stop_request.expected_motion_epoch() + 1U);
-  disabling.status.set_management_epoch(stop_request.expected_management_epoch() + 1U);
-  disabling.status.set_core_state(8U);
-  if (!send(disabling) || !wait_for([&] {
-      std::lock_guard<std::mutex> lock(channel->mutex);
-      Status observed;
-      return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-          channel->observation.status.size(), &observed) == wire::CodecResult::kOk &&
-          observed.core_state() == 8U;
-    })) return 227;
+  if (!uncommitted_stop_mode) {
+    auto disabling = valid;
+    disabling.send_state = false;
+    disabling.status.set_motion_epoch(stop_request.expected_motion_epoch() + 1U);
+    disabling.status.set_management_epoch(stop_request.expected_management_epoch() + 1U);
+    disabling.status.set_core_state(8U);
+    if (!send(disabling) || !wait_for([&] {
+        std::lock_guard<std::mutex> lock(channel->mutex);
+        Status observed;
+        return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+            channel->observation.status.size(), &observed) == wire::CodecResult::kOk &&
+            observed.core_state() == 8U;
+      })) return 227;
+  }
   auto stop_idle = valid;
   stop_idle.status.set_session_id(0U);
   stop_idle.status.set_reference_epoch(0U);
@@ -3151,6 +3158,13 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   stop_idle.state.set_state_seq(stable_sequence + 1U);
   const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
   stop_idle.state.set_raw_motor_position_rev(idle_raw);
+  if (uncommitted_stop_mode) {
+    if (!send(stop_idle)) return 269;
+    transport.stop();
+    const auto stats = transport.statistics();
+    return stats.stop_requests_confirmed == 0U &&
+        stats.unconfirmed_stop_requests != 0U ? 0 : 268;
+  }
   auto uncommitted_idle = stop_idle;
   uncommitted_idle.send_state = false;
   uncommitted_idle.status.set_release_committed(false);
@@ -3289,7 +3303,8 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
                        unsigned release_deactivate_mode = 0U,
                        unsigned ticket_mode = 0U,
                        bool reject_during_ack_mode = false,
-                       bool sequence_rebase_mode = false) {
+                       bool sequence_rebase_mode = false,
+                       bool uncommitted_stop_mode = false) {
   SerialBridge bridge;
   if (!bridge.open_pair()) return 30;
   int requests[2]{}, responses[2]{};
@@ -3302,7 +3317,8 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
     ::close(requests[1]); ::close(responses[0]); ::close(stops[0]);
     ::_exit(run_peer(bridge.endpoint(0), requests[0], responses[1], stops[1],
                      never_complete_stop, revoke_owner_before_stop_receipt,
-                     release_deactivate_mode == 7U, sequence_rebase_mode));
+                     release_deactivate_mode == 7U, sequence_rebase_mode,
+                     uncommitted_stop_mode));
   }
   bridge.start();
   ::close(requests[0]); ::close(responses[1]); ::close(stops[1]);
@@ -3313,7 +3329,7 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
                                  raw_capture_mode, raw_bad_release_mode,
                                  raw_incomplete_mode, raw_many_mode, raw_order_case, complete_order_mode,
                                  release_deactivate_mode, ticket_mode, reject_during_ack_mode,
-                                 sequence_rebase_mode);
+                                 sequence_rebase_mode, uncommitted_stop_mode);
   if (result != 0) std::fprintf(stderr, "component_only assertion failed: %d\n", result);
   ::kill(child, SIGTERM);
   ::waitpid(child, nullptr, 0);
@@ -3436,8 +3452,10 @@ int main(int argc, char **argv) {
       std::strcmp(argv[2], "reject_during_ack") == 0;
   const bool sequence_rebase_mode = argc == 3 &&
       std::strcmp(argv[2], "stop_sequence_rebase") == 0;
+  const bool uncommitted_stop_mode = argc == 3 &&
+      std::strcmp(argv[2], "stop_uncommitted_terminal") == 0;
   const auto result = run_component_case(six_axis,
-      argc == 3 && ticket_mode == 0U && !sequence_rebase_mode && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
+      argc == 3 && ticket_mode == 0U && !sequence_rebase_mode && !uncommitted_stop_mode && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
           !inactive_prime_mode && !cold_idle_gap_mode && !cold_fault_gap_mode && !raw_capture_mode &&
           release_deactivate_mode == 0U && !reject_during_ack_mode &&
           complete_order_mode==0U,
@@ -3445,7 +3463,7 @@ int main(int argc, char **argv) {
       inactive_prime_mode, cold_idle_gap_mode, cold_fault_gap_mode,
       raw_capture_mode, raw_bad_release_mode, raw_incomplete_mode, raw_many_mode, raw_order_case,
       complete_order_mode, release_deactivate_mode, ticket_mode, reject_during_ack_mode,
-      sequence_rebase_mode);
+      sequence_rebase_mode, uncommitted_stop_mode);
   if (result != 0 || !six_axis || argc != 2) return result;
   return run_component_case(true, false, true);
 }
