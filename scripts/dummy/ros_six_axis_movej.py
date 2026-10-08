@@ -119,7 +119,7 @@ def validate_target(values, limits=LIMITS):
         raise ValueError("six finite joint targets required")
     if any(not lower <= value <= upper for value, (lower, upper) in zip(values, limits)):
         raise ValueError("joint target outside selected reference limits")
-    return tuple(values)
+    return tuple(float(value) for value in values)
 
 
 def load_targets_json(path, limits=LIMITS):

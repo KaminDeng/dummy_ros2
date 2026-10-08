@@ -26,6 +26,23 @@ def test_target_requires_six_distinct_bounded_axes():
         movej.validate_target([0, 0, 0, 0, 0, 13])
 
 
+def test_integer_targets_are_normalized_for_ros_float_fields():
+    target = movej.validate_target([0, 0, 0, 0, 0, 0], [(-0.6, 0.6)] * 6)
+    assert target == (0.0,) * 6
+    assert all(type(value) is float for value in target)
+
+
+def test_integer_json_target_serializes_as_ros_joint_constraint(tmp_path):
+    pytest.importorskip("moveit_msgs.msg")
+    from moveit_msgs.msg import JointConstraint
+    from rclpy.serialization import serialize_message
+
+    path = tmp_path / "targets.json"
+    path.write_text("[[0, 0, 0, 0, 0, 0]]")
+    target = movej.load_targets_json(path, [(-0.6, 0.6)] * 6)[0]
+    assert serialize_message(JointConstraint(joint_name="Joint1", position=target[0]))
+
+
 def test_targets_json_is_bounded_and_validated_before_ros(tmp_path):
     path = tmp_path / "targets.json"
     first = [0, 0, 1.59, 0, 0, 0]
