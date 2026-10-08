@@ -129,6 +129,10 @@ if(BUILD_TESTING)
   add_executable(transport_component_tests test/transport_component_tests.cpp)
   target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
+  add_test(NAME transport_peer_publish_backpressure_tests
+    COMMAND transport_component_tests peer_publish_backpressure)
+  add_test(NAME transport_peer_state_queue_full_once_tests
+    COMMAND transport_component_tests peer_state_queue_full_once)
   add_test(NAME transport_stop_sequence_rebase_tests
     COMMAND transport_component_tests six_axis stop_sequence_rebase)
   add_test(NAME transport_stop_identity_restart_tests

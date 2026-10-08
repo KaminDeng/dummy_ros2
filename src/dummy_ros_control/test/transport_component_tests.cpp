@@ -210,6 +210,42 @@ bool test_heartbeat_budget_parameter() {
 }
 struct Stimulus { Status status{}; State state{}; Evidence evidence{}; bool done = false; bool send_status = true; bool send_state = true; bool send_evidence = false; };
 std::uint64_t observed_stop_request_id = 0U;
+bool inject_peer_state_queue_full_once = false;
+template <typename Publish, typename Pump>
+dp::comm::Result publish_peer_with_retry(Publish publish, Pump pump) {
+  constexpr unsigned kMaxAttempts = 16U;
+  for (unsigned attempt = 0U; attempt < kMaxAttempts; ++attempt) {
+    const auto result = publish();
+    if (result != dp::comm::Result::kQueueFull || attempt + 1U == kMaxAttempts)
+      return result;
+    const auto pumped = pump();
+    if (pumped != dp::comm::Result::kOk && pumped != dp::comm::Result::kBusy)
+      return pumped;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return dp::comm::Result::kQueueFull;
+}
+int test_peer_publish_backpressure() {
+  unsigned attempts = 0U;
+  unsigned pumps = 0U;
+  const auto pump = [&] { ++pumps; return dp::comm::Result::kOk; };
+  const auto transient = [&] {
+    return ++attempts == 1U ? dp::comm::Result::kQueueFull : dp::comm::Result::kOk;
+  };
+  if (publish_peer_with_retry(transient, pump) != dp::comm::Result::kOk ||
+      attempts != 2U || pumps != 1U) return 351;
+  attempts = 0U;
+  pumps = 0U;
+  const auto congested = [&] { ++attempts; return dp::comm::Result::kQueueFull; };
+  if (publish_peer_with_retry(congested, pump) != dp::comm::Result::kQueueFull ||
+      attempts != 16U || pumps != 15U) return 352;
+  attempts = 0U;
+  pumps = 0U;
+  const auto invalid = [&] { ++attempts; return dp::comm::Result::kInvalidArgument; };
+  if (publish_peer_with_retry(invalid, pump) != dp::comm::Result::kInvalidArgument ||
+      attempts != 1U || pumps != 0U) return 353;
+  return 0;
+}
 struct Peer {
   int commands_fd;
   int stops_fd;
@@ -440,9 +476,24 @@ int run_peer(const std::string &endpoint, int input, int output, int stops_outpu
       Stimulus stimulus{};
       if (::read(input, &stimulus, sizeof(stimulus)) != sizeof(stimulus)) return 6;
       if (stimulus.done) return 0;
-      const auto status_result = stimulus.send_status ? status_publisher.publish(stimulus.status) : dp::comm::Result::kOk;
-      const auto state_result = stimulus.send_state ? state_publisher.publish(stimulus.state) : dp::comm::Result::kOk;
-      const auto evidence_result = stimulus.send_evidence ? evidence_publisher.publish(stimulus.evidence) : dp::comm::Result::kOk;
+      const auto pump = [&] { return executor.spin_some(); };
+      const auto status_result = stimulus.send_status
+          ? publish_peer_with_retry([&] { return status_publisher.publish(stimulus.status); }, pump)
+          : dp::comm::Result::kOk;
+      const auto publish_state = [&] {
+        if (inject_peer_state_queue_full_once) {
+          inject_peer_state_queue_full_once = false;
+          std::fprintf(stderr, "peer injected state queue full once\n");
+          return dp::comm::Result::kQueueFull;
+        }
+        return state_publisher.publish(stimulus.state);
+      };
+      const auto state_result = stimulus.send_state
+          ? publish_peer_with_retry(publish_state, pump)
+          : dp::comm::Result::kOk;
+      const auto evidence_result = stimulus.send_evidence
+          ? publish_peer_with_retry([&] { return evidence_publisher.publish(stimulus.evidence); }, pump)
+          : dp::comm::Result::kOk;
       if (status_result != dp::comm::Result::kOk || state_result != dp::comm::Result::kOk ||
           evidence_result != dp::comm::Result::kOk) {
         std::fprintf(stderr, "peer publish failed status=%u state=%u evidence=%u\n",
@@ -3374,6 +3425,12 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
   return result;
 }
 int main(int argc, char **argv) {
+  if (argc == 2 && std::strcmp(argv[1], "peer_publish_backpressure") == 0)
+    return test_peer_publish_backpressure();
+  if (argc == 2 && std::strcmp(argv[1], "peer_state_queue_full_once") == 0) {
+    inject_peer_state_queue_full_once = true;
+    return run_component_case(true, false, false);
+  }
   if (argc == 2 && std::strcmp(argv[1], "historical_idle_baseline") == 0)
     return test_released_idle_startup_baseline();
   if (argc == 3 && std::strcmp(argv[2], "stop_identity_restart") == 0) {
