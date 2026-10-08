@@ -101,6 +101,75 @@ def _motion_window(timeline_data, records, client, state_max_age):
     device_id = requests[0]["fields"]["device_id"]
     if device_id == "00" * 16:
         raise ValueError("motion window device identity missing")
+    cancel_bounds = {}
+    for goal_index, goal in enumerate(goals):
+        goal_rows = rows[rows.index(goal):rows.index(goals[goal_index + 1])
+                         if goal_index + 1 < len(goals) else len(rows)]
+        canceled = [row for row in goal_rows if row["event"] == "terminal_canceled"]
+        if not canceled:
+            continue
+        if len(canceled) != 1:
+            raise ValueError("ambiguous ROS canceled goal phase")
+        terminal = canceled[0]
+        old_epoch = int(goal["motion_epoch"])
+        stop_epoch = int(terminal["motion_epoch"])
+        request_id = int(terminal["cancel_request_id"])
+        operation_id = int(terminal["cancel_operation_id"])
+        terminal_time = int(terminal["steady_us"])
+        cancel_requests = [item for item in records if item["kind"] == 4 and
+                           item["fields"]["operation"] == 9 and
+                           item["fields"]["request_id"] == request_id and
+                           item["fields"]["client_instance_id"] == client and
+                           item["fields"]["device_id"] == device_id and
+                           item["fields"]["expected_motion_epoch"] == old_epoch and
+                           (item["boot"], item["session"]) == (boot, session) and
+                           goal_times[goal_index] <= item["when"] <= terminal_time]
+        stop_pages = [item for item in records if item["kind"] == 1 and
+                      (item["boot"], item["session"], item["run"]) ==
+                      (boot, session, int(goal["run_id"])) and
+                      (item["fields"]["attempt_id"], item["fields"]["attempt_kind"],
+                       item["fields"]["category"], item["fields"]["motion_epoch"]) ==
+                      (int(goal["run_id"]), 1, 2, stop_epoch) and
+                      cancel_requests and
+                      cancel_requests[0]["when"] <= item["when"] <= terminal_time]
+        query_binding = ("expected_boot_epoch", "expected_session_id",
+                         "expected_reference_epoch", "expected_motion_epoch",
+                         "expected_management_epoch", "expected_profile_id",
+                         "configured_mask")
+        cancel_queries = [item for item in records if item["kind"] == 4 and
+                          item["fields"]["operation"] == 12 and
+                          item["fields"]["queried_operation_id"] == request_id and
+                          item["fields"]["client_instance_id"] == client and
+                          item["fields"]["device_id"] == device_id and
+                          (item["boot"], item["session"]) == (boot, session) and
+                          cancel_requests and
+                          all(item["fields"][name] ==
+                              cancel_requests[0]["fields"][name]
+                              for name in query_binding) and
+                          cancel_requests[0]["when"] <= item["when"] <= terminal_time]
+        receipts = [item for item in records if item["kind"] == 5 and
+                    (item["fields"]["request_id"] == request_id or
+                     any(query["fields"]["request_id"] ==
+                         item["fields"]["request_id"] and
+                         query["when"] <= item["when"] for query in cancel_queries)) and
+                    item["fields"]["operation_id"] == operation_id and
+                    item["fields"]["client_instance_id"] == client and
+                    item["fields"]["device_id"] == device_id and
+                    item["fields"]["transaction_phase"] == 3 and
+                    item["fields"]["result_code"] == 0 and
+                    item["fields"]["receipt"] == 1 and
+                    item["fields"]["motion_complete"] == 0 and
+                    item["fields"]["release_committed"] == 0 and
+                    item["fields"]["motion_epoch"] == stop_epoch and
+                    (item["boot"], item["session"], item["run"]) ==
+                    (boot, session, int(goal["run_id"])) and
+                    goal_times[goal_index] <= item["when"] <= terminal_time]
+        if (stop_epoch != old_epoch + 1 or request_id <= 0 or operation_id <= 0 or
+                len(cancel_requests) != 1 or not stop_pages or len(receipts) != 1 or
+                not cancel_requests[0]["when"] <= receipts[0]["when"]):
+            raise ValueError("missing or unlinked raw cancel Stop CAN page")
+        cancel_bounds[goal_index] = (cancel_requests[0]["when"],
+                                     stop_pages[0]["when"], old_epoch, stop_epoch)
     idle_statuses = [item for item in records if item["kind"] == 3 and
                      (item["boot"], item["session"], item["fields"]["run_id"]) ==
                      (boot, 0, release_run) and
@@ -141,6 +210,23 @@ def _motion_window(timeline_data, records, client, state_max_age):
              item["when"] > terminals[0]["when"]))
            for item in window_states):
         raise ValueError("motion window State identity mismatch")
+    coverage_states = []
+    for item in window_states:
+        if item["session"] != session:
+            coverage_states.append(item)
+            continue
+        goal_index = bisect_right(goal_times, item["when"]) - 1
+        bound = cancel_bounds.get(goal_index)
+        if bound is None:
+            coverage_states.append(item)
+            continue
+        request_time, stop_time, old_epoch, stop_epoch = bound
+        epoch = item["fields"]["motion_epoch"]
+        if ((item["when"] < request_time and epoch != old_epoch) or
+                (item["when"] > stop_time and epoch != stop_epoch)):
+            raise ValueError("motion window State identity phase mismatch")
+        if not request_time <= item["when"] <= stop_time:
+            coverage_states.append(item)
     marker_index = 0
     phase_floor = phase_markers[0][1]
     previous_epoch = phase_floor
@@ -153,7 +239,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
         if epoch < phase_floor or epoch < previous_epoch:
             raise ValueError("motion window State identity phase regression")
         previous_epoch = epoch
-    observations = [start, *(item["when"] for item in window_states), end]
+    observations = [start, *(item["when"] for item in coverage_states), end]
     if any(later - earlier > state_max_age for earlier, later in
            zip(observations, observations[1:])):
         raise ValueError("insufficient motion window State coverage")

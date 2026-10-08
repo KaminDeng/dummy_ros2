@@ -284,6 +284,124 @@ def build_window(capture):
         gate_state_max_age_us=1000000, producer_lag_scope="motion_window_v2")
 
 
+def canceled_window_capture(tmp_path, *, early_stop_epoch=False, stop_page=True,
+                            ambiguous_stop_epoch=False, ambiguous_only=False,
+                            stale_after_page=False):
+    capture = window_capture(tmp_path)
+    timeline, raw, _, _ = capture
+    text = timeline.read_text()
+    text = text.replace("release_request_id,release_operation_id",
+                        "release_request_id,release_operation_id,cancel_request_id,cancel_operation_id")
+    rows = text.splitlines()
+    for index in range(1, len(rows) - 1):
+        if rows[index].startswith("terminal_success,"):
+            rows[index] = rows[index].replace("terminal_success,", "terminal_canceled,", 1)
+            columns = rows[index].split(",")
+            columns[7] = "2"
+            rows[index] = ",".join(columns) + ",7,7"
+        elif rows[index].startswith("pre_release_hold,"):
+            columns = rows[index].split(",")
+            columns[7] = "2"
+            rows[index] = ",".join(columns) + ",0,0"
+        elif rows[index].startswith("post_release_status,"):
+            columns = rows[index].split(",")
+            columns[7] = "3"
+            rows[index] = ",".join(columns) + ",0,0"
+        else:
+            rows[index] += ",0,0"
+    timeline.write_text("\n".join(rows) + "\n")
+    records = joiner._raw_records(raw.read_bytes())
+    rewritten = []
+    for item in records:
+        payload = item["raw"]
+        if item["kind"] == 2:
+            fields = item["fields"]
+            stop_epoch = item["when"] >= 2100000 or (
+                early_stop_epoch and item["when"] == 1800000)
+            if item["session"] == 3 and stop_epoch:
+                payload = wire("DummyJointStateV2", **{
+                    **fields, "motion_epoch": 2})
+            elif item["session"] == 0:
+                payload = wire("DummyJointStateV2", **{
+                    **fields, "motion_epoch": 3})
+        elif item["kind"] == 3:
+            payload = wire("DummyDeviceStatusV2", **{
+                **item["fields"], "motion_epoch": 3})
+        rewritten.append(record(item["kind"], item["when"], item["boot"],
+                                item["session"], item["run"], item["seq"], payload))
+    cancel = wire("DummyManageV2Request", client_instance_id="11" * 16,
+                  device_id="22" * 16, expected_boot_epoch=2,
+                  expected_session_id=3, expected_motion_epoch=1,
+                  request_seq=7, request_id=7, operation=9)
+    rewritten.append(record(4, 2000000, 2, 3, 0, 7, cancel))
+    receipt = wire("DummyManageV2Response", client_instance_id="11" * 16,
+                   device_id="22" * 16, request_id=7, operation_id=7,
+                   boot_epoch=2, session_id=3, run_id=7, motion_epoch=2,
+                   receipt=1, transaction_phase=3, result_code=0)
+    rewritten.append(record(5, 2200000, 2, 3, 7, 0, receipt))
+    if stop_page:
+        stop = wire("DummyAttemptEvidenceV2", run_id=7, attempt_id=7,
+                    attempt_kind=1, category=2, motion_epoch=2,
+                    evidence_seq=1)
+        rewritten.append(record(1, 2100000, 2, 3, 7, 1, stop))
+    if ambiguous_stop_epoch or ambiguous_only:
+        state = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
+                     device_id="22" * 16, reference_epoch=1,
+                     motion_epoch=2, core_state=4, produced_at_us=2149900)
+        rewritten.append(record(2, 2050000, 2, 3, 0, 0, state))
+    if stale_after_page:
+        state = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
+                     device_id="22" * 16, reference_epoch=1,
+                     motion_epoch=1, core_state=4, produced_at_us=2449900)
+        rewritten.append(record(2, 2350000, 2, 3, 0, 0, state))
+    if ambiguous_only:
+        rewritten = [item for item in rewritten if not (
+            joiner.RECORD_HEADER.unpack_from(item)[0] == 2 and
+            joiner.RECORD_HEADER.unpack_from(item)[2] == 1800000)]
+    raw.write_bytes(b"DPRAW01\0" + b"".join(sorted(
+        rewritten, key=lambda raw_record: joiner.RECORD_HEADER.unpack_from(raw_record)[2])))
+    return capture
+
+
+def test_canceled_window_accepts_stop_epoch_after_bound_stop_page(tmp_path):
+    context = build_window(canceled_window_capture(tmp_path))
+    assert context["producer_lag_us"] == 400
+
+
+def test_canceled_window_allows_stop_state_between_request_and_page(tmp_path):
+    context = build_window(canceled_window_capture(
+        tmp_path, ambiguous_stop_epoch=True))
+    assert context["producer_lag_gate_version"] == 2
+
+
+def test_canceled_window_rejects_stop_epoch_before_bound_stop_page(tmp_path):
+    capture = canceled_window_capture(tmp_path, early_stop_epoch=True)
+    with pytest.raises(ValueError, match="State identity"):
+        build_window(capture)
+    assert not capture[3].exists()
+
+
+def test_canceled_window_cannot_fill_coverage_with_ambiguous_state(tmp_path):
+    capture = canceled_window_capture(tmp_path, ambiguous_only=True)
+    with pytest.raises(ValueError, match="State coverage"):
+        build_window(capture)
+    assert not capture[3].exists()
+
+
+def test_canceled_window_rejects_old_epoch_after_stop_page(tmp_path):
+    capture = canceled_window_capture(tmp_path, stale_after_page=True)
+    with pytest.raises(ValueError, match="State identity"):
+        build_window(capture)
+    assert not capture[3].exists()
+
+
+def test_canceled_window_requires_bound_stop_page(tmp_path):
+    capture = canceled_window_capture(tmp_path, stop_page=False)
+    with pytest.raises(ValueError, match="Stop CAN page"):
+        build_window(capture)
+    assert not capture[3].exists()
+
+
 def test_window_gate_excludes_pre_goal_and_post_release_peaks(tmp_path):
     context = build_window(window_capture(tmp_path))
     assert context["producer_lag_us"] == 400

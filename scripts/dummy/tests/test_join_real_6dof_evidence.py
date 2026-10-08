@@ -2101,6 +2101,23 @@ def test_window_context_joins_valid_raw_capture(inputs, session_text):
     assert joined["environment"]["producer_lag_us"] == metadata["producer_lag_us"]
 
 
+@pytest.mark.parametrize("queried", [False, True])
+def test_canceled_window_context_joins_valid_raw_capture(inputs, queried):
+    timeline, raw, action, context, _ = (
+        canceled_query_inputs(inputs) if queried else canceled_inputs(inputs))
+    output = context.with_name("canceled-window-context.json")
+    metadata = builder.build_context(
+        timeline, raw, action, output,
+        path_tolerance_rad=[0.01] * 6, goal_tolerance_rad=[0.003] * 6,
+        producer_lag_budget_us=250000, feedback_age_budget_us=10000,
+        ros_feedback_lag_budget_us=2000, gate_state_max_age_us=250000,
+        producer_lag_scope="motion_window_v2")
+    joined = joiner.join_evidence(timeline, raw, action, output)
+    application_e2e.validate_evidence(joined)
+    assert joined["goals"][0]["action_status"] == "CANCELED"
+    assert joined["environment"]["producer_lag_us"] == metadata["producer_lag_us"]
+
+
 def test_window_context_rejects_nonnumeric_session(inputs):
     timeline, raw, action, context, _ = inputs
     rows = list(csv.reader(timeline.open(newline="")))
