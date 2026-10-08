@@ -95,8 +95,8 @@ def _motion_window(timeline_data, records, client, state_max_age):
                  (item["boot"], item["session"], item["run"]) ==
                  (boot, 0, release_run)]
     if (len(requests) != 1 or len(terminals) != 1 or len(responses) != 1 or
-            not start < requests[0]["when"] <= terminals[0]["when"] <=
-            responses[0]["when"] <= end):
+            not start < requests[0]["when"] <= terminals[0]["when"] <= end or
+            not requests[0]["when"] <= responses[0]["when"] <= end):
         raise ValueError("missing or unlinked raw Release proof")
     device_id = requests[0]["fields"]["device_id"]
     if device_id == "00" * 16:

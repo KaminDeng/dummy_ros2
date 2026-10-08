@@ -286,7 +286,7 @@ def main(argv=None):
                    f"startup_mode:={args.startup_mode}", *capture_args]
         if args.diagnostic_host_state_age_us:
             command.append(f"host_state_max_age_us:={host_state_age_us}")
-        shutdown_options = {"grace_s": 12, "interrupt_group": True} if capture_args else {}
+        shutdown_options = {"grace_s": 12} if capture_args else {}
         return run_session(command, deployment_tty(args.deployment_paths), args.lock_file,
                            **shutdown_options)
     except (SessionError, OSError, KeyboardInterrupt) as error:

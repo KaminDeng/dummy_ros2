@@ -414,6 +414,34 @@ def test_window_gate_accepts_query_linked_release_receipt(tmp_path):
     assert build_window(window_capture(tmp_path, queried_reply=True))["producer_lag_us"] == 400
 
 
+@pytest.mark.parametrize("queried_reply", [False, True])
+def test_window_gate_accepts_release_receipt_before_terminal_page(tmp_path, queried_reply):
+    capture = window_capture(tmp_path, queried_reply=queried_reply)
+    records = joiner._raw_records(capture[1].read_bytes())
+    reordered = [record(
+        item["kind"], 3550000 if item["kind"] == 1 else
+        3500000 if item["kind"] == 5 and item["fields"].get("release_committed") else
+        item["when"], item["boot"], item["session"], item["run"], item["seq"], item["raw"])
+        for item in records]
+    capture[1].write_bytes(b"DPRAW01\0" + b"".join(sorted(
+        reordered, key=lambda raw_record: joiner.RECORD_HEADER.unpack_from(raw_record)[2])))
+    assert build_window(capture)["producer_lag_us"] == 400
+
+
+def test_window_gate_rejects_release_receipt_before_request(tmp_path):
+    capture = window_capture(tmp_path)
+    records = joiner._raw_records(capture[1].read_bytes())
+    reordered = [record(
+        item["kind"], 2800000 if item["kind"] == 5 and
+        item["fields"].get("release_committed") else item["when"],
+        item["boot"], item["session"], item["run"], item["seq"], item["raw"])
+        for item in records]
+    capture[1].write_bytes(b"DPRAW01\0" + b"".join(sorted(
+        reordered, key=lambda raw_record: joiner.RECORD_HEADER.unpack_from(raw_record)[2])))
+    with pytest.raises(ValueError, match="Release proof"):
+        build_window(capture)
+
+
 def test_window_gate_rejects_uncommitted_release_terminal(tmp_path):
     capture = window_capture(tmp_path)
     records = joiner._raw_records(capture[1].read_bytes())

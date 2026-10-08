@@ -228,7 +228,7 @@ def test_cli_passes_complete_capture_set_to_same_session(tmp_path, monkeypatch):
     assert calls[0][1] == Path("/dev/fake")
 
 
-def test_cli_capture_uses_bounded_group_interrupt_grace(tmp_path, monkeypatch):
+def test_cli_capture_interrupts_launch_leader_once_with_bounded_grace(tmp_path, monkeypatch):
     report_root = tmp_path / "report"
     report_root.mkdir()
     calls = []
@@ -241,7 +241,7 @@ def test_cli_capture_uses_bounded_group_interrupt_grace(tmp_path, monkeypatch):
                         "--raw-evidence-path", str(report_root / "raw.bin"),
                         "--raw-evidence-report-root", str(report_root),
                         "--goal-timeline-path", str(report_root / "timeline.csv")]) == 0
-    assert calls == [{"grace_s": 12, "interrupt_group": True}]
+    assert calls == [{"grace_s": 12}]
 
 
 def test_cli_explicit_diagnostic_state_age_reaches_launch(tmp_path, monkeypatch, capsys):
