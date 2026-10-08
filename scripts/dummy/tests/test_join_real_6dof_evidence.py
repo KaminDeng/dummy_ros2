@@ -2078,6 +2078,20 @@ def test_joiner_rejects_sha_pinned_over_budget_window(inputs):
         joiner._verify_window_context(metadata, timeline.read_bytes(), records)
 
 
+def test_window_context_joins_valid_raw_capture(inputs):
+    timeline, raw, action, context, _ = inputs
+    output = context.with_name("window-context.json")
+    metadata = builder.build_context(
+        timeline, raw, action, output,
+        path_tolerance_rad=[0.01] * 6, goal_tolerance_rad=[0.003] * 6,
+        producer_lag_budget_us=250000, feedback_age_budget_us=10000,
+        ros_feedback_lag_budget_us=2000, gate_state_max_age_us=250000,
+        producer_lag_scope="motion_window_v2")
+    joined = joiner.join_evidence(timeline, raw, action, output)
+    assert joined["environment"]["producer_lag_gate_version"] == 2
+    assert joined["environment"]["producer_lag_us"] == metadata["producer_lag_us"]
+
+
 def test_accepts_real_hold_wire_state_four(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
