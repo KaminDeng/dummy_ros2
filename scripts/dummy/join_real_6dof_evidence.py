@@ -522,6 +522,37 @@ def _context(path):
     return value, digest
 
 
+def _verify_window_context(context, timeline_data, records):
+    if "producer_lag_gate_version" not in context:
+        return
+    try:
+        from scripts.dummy import build_real_6dof_context as builder
+    except ImportError:
+        import build_real_6dof_context as builder
+    if (context["producer_lag_gate_version"] != 2 or
+            context.get("producer_lag_method") != builder.WINDOW_LAG_METHOD or
+            context["producer_lag_budget_us"] != 250000):
+        raise ValueError("invalid window producer lag version")
+    start, end, window_states, release_run = builder._motion_window(
+        timeline_data, records, context["client_id"], context["gate_state_max_age_us"])
+    states = [item for item in records if item["kind"] == 2]
+    produced = [item["fields"]["produced_at_us"] for item in states]
+    if (any(stamp <= 0 for stamp in produced) or
+            any(right < left for left, right in zip(produced, produced[1:]))):
+        raise ValueError("nonmonotonic window producer lag State time")
+    environment_offsets = [item["when"] - item["fields"]["produced_at_us"]
+                           for item in states]
+    offsets = [item["when"] - item["fields"]["produced_at_us"]
+               for item in window_states]
+    expected_window = {"start_steady_us": start, "end_steady_us": end,
+                       "state_samples": len(window_states), "release_run_id": release_run}
+    if (context.get("producer_lag_window") != expected_window or
+            context.get("producer_lag_environment_us") !=
+            max(environment_offsets) - min(environment_offsets) or
+            context["producer_lag_us"] != max(offsets) - min(offsets)):
+        raise ValueError("unverified window producer lag context")
+
+
 def _unconfirmed_cancel_observation(action):
     release = action.get("release_observation")
     return (action.get("status") == "UNCONFIRMED_STOP" and
@@ -1205,6 +1236,7 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
         raise ValueError("invalid ROS action report")
     timelines = _timeline(csv_bytes)
     records = _raw_records(raw_bytes)
+    _verify_window_context(context, csv_bytes, records)
     if len(timelines) == 1 and action.get("scope") in (
             "ROS_ACTION_ONLY", "ROS_PREEMPT_PROBE"):
         actions = [action]
@@ -1284,7 +1316,11 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
                                                      "device_id": goals[0]["device_id"],
                                                      **hashes},
               "environment": {"producer_lag_us": context["producer_lag_us"],
-                              "producer_lag_budget_us": context["producer_lag_budget_us"]},
+                              "producer_lag_budget_us": context["producer_lag_budget_us"],
+                              **({key: context[key] for key in
+                                  ("producer_lag_gate_version", "producer_lag_method",
+                                   "producer_lag_environment_us", "producer_lag_window")}
+                                 if "producer_lag_gate_version" in context else {})},
               "provenance": {"timeline_sha256": csv_hash, "raw_sha256": raw_hash,
                              "action_sha256": action_hash, "context_sha256": context_hash,
                              "feedback_binding": "bounded_temporal_and_position_envelope"},

@@ -184,3 +184,133 @@ def test_cli_writes_explicit_budgets(capture, capsys):
     assert cli_result["producer_lag_us"] == 10
     assert cli_result["producer_lag_method"] == "state_receive_minus_produced_offset_span"
     assert json.loads(output.read_text())["gate_state_max_age_us"] == 500000
+
+
+def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
+                   *, release=True, idle=True, other_boot=False, goal=True,
+                   queried_reply=False):
+    """Small raw/timeline pair with State samples before, during, and after motion."""
+    timeline = tmp_path / "timeline.csv"
+    header = ("event,goal_uuid,trajectory_sha256,steady_us,boot,session,"
+              "reference_epoch,motion_epoch,run_id,axis_mask,status_core_state,"
+              "state_core_state,release_request_id,release_operation_id")
+    def row(event, when, session=3, run=7, request=0, operation=0):
+        return f"{event},{'a' * 32},{'b' * 64},{when},2,{session},1,1,{run},63,4,4,{request},{operation}"
+    rows = [row("accepted", 1000000), row("before_begin", 1000000),
+            row("after_begin", 1100000), row("feedback", 1200000),
+            row("terminal_success", 2500000), row("pre_release_hold", 2600000),
+            row("post_release_status", 4000000, 0, 8, 9, 10)] if goal else []
+    timeline.write_text("\n".join([header, *rows, "COMPLETE,1", ""]))
+    action = tmp_path / "action.json"
+    action.write_text('{"scope":"ROS_ACTION_ONLY"}\n')
+    client = "11" * 16
+    request = wire("DummyManageV2Request", client_instance_id=client,
+                   expected_boot_epoch=2, expected_session_id=3,
+                   request_seq=1)
+    release_request = wire("DummyManageV2Request", client_instance_id=client,
+                           expected_boot_epoch=2, expected_session_id=3,
+                           request_seq=2, request_id=9, operation=10)
+    response = wire("DummyManageV2Response", client_instance_id=client,
+                    boot_epoch=2, session_id=0,
+                    request_id=11 if queried_reply else 9, operation_id=10,
+                    run_id=8, transaction_phase=3, result_code=0,
+                    release_committed=1)
+    query_request = wire("DummyManageV2Request", client_instance_id=client,
+                         expected_boot_epoch=2, expected_session_id=3,
+                         request_seq=3, request_id=11, operation=12,
+                         queried_operation_id=9)
+    terminal = wire("DummyAttemptEvidenceV2", run_id=8, attempt_id=8,
+                    category=4, final=1, final_state=8, release_committed=1)
+    status = wire("DummyDeviceStatusV2", boot_epoch=2, session_id=0,
+                  run_id=8, core_state=1, release_committed=1,
+                  final_state=8, attempt_kind=3)
+    events = [(4, 500000, 2, 3, 0, 1, request)]
+    for index, (when, offset) in enumerate(zip((700000, 1300000, 1800000,
+                                                 2700000, 3300000, 3900000,
+                                                 4500000), offsets)):
+        session = 0 if when >= 3800000 else 3
+        state = wire("DummyJointStateV2", boot_epoch=3 if other_boot and index == 3 else 2,
+                     session_id=session, produced_at_us=when + 100000 - offset,
+                     core_state=1 if session == 0 else 4)
+        events.append((2, when, 3 if other_boot and index == 3 else 2,
+                       session, 0, 0, state))
+    if release:
+        events.extend([(4, 2900000, 2, 3, 0, 2, release_request),
+                       (1, 3400000, 2, 3, 8, 0, terminal),
+                       (5, 3500000, 2, 0, 8, 0, response)])
+        if queried_reply:
+            events.append((4, 3450000, 2, 3, 0, 3, query_request))
+    if idle:
+        events.append((3, 3800000, 2, 0, 8, 0, status))
+    raw = tmp_path / "raw.bin"
+    raw.write_bytes(b"DPRAW01\0" + b"".join(
+        record(*event) for event in sorted(events, key=lambda event: event[1])))
+    return timeline, raw, action, tmp_path / "context.json"
+
+
+def build_window(capture):
+    return builder.build_context(
+        *capture, path_tolerance_rad=[0.01] * 6,
+        goal_tolerance_rad=[0.003] * 6, producer_lag_budget_us=250000,
+        feedback_age_budget_us=10000, ros_feedback_lag_budget_us=2000,
+        gate_state_max_age_us=1000000, producer_lag_scope="motion_window_v2")
+
+
+def test_window_gate_excludes_pre_goal_and_post_release_peaks(tmp_path):
+    context = build_window(window_capture(tmp_path))
+    assert context["producer_lag_us"] == 400
+    assert context["producer_lag_environment_us"] == 400000
+    assert context["producer_lag_gate_version"] == 2
+    assert context["producer_lag_method"] == "state_receive_minus_produced_offset_span_motion_window"
+
+
+def test_window_gate_accepts_query_linked_release_receipt(tmp_path):
+    assert build_window(window_capture(tmp_path, queried_reply=True))["producer_lag_us"] == 400
+
+
+def test_window_gate_rejects_uncommitted_release_terminal(tmp_path):
+    capture = window_capture(tmp_path)
+    records = joiner._raw_records(capture[1].read_bytes())
+    capture[1].write_bytes(b"DPRAW01\0" + b"".join(record(
+        item["kind"], item["when"], item["boot"], item["session"],
+        item["run"], item["seq"],
+        wire("DummyAttemptEvidenceV2", run_id=8, attempt_id=8,
+             category=4, final=1, final_state=8, release_committed=0)
+        if item["kind"] == 1 else item["raw"]) for item in records))
+    with pytest.raises(ValueError, match="Release proof"):
+        build_window(capture)
+
+
+def test_window_gate_rejects_sparse_state_coverage(tmp_path):
+    capture = window_capture(tmp_path)
+    records = joiner._raw_records(capture[1].read_bytes())
+    capture[1].write_bytes(b"DPRAW01\0" + b"".join(record(
+        item["kind"], item["when"], item["boot"], item["session"],
+        item["run"], item["seq"], item["raw"]) for item in records
+        if item["kind"] != 2 or item["when"] in (700000, 1300000,
+                                                   3900000, 4500000)))
+    with pytest.raises(ValueError, match="State coverage"):
+        build_window(capture)
+
+
+@pytest.mark.parametrize("offsets", [
+    (0, 0, 300000, 100, 200, 300, 0),
+    (0, 0, 100, 300000, 200, 300, 0),
+    (0, 0, 100, 200, 300000, 400, 0),
+])
+def test_window_gate_rejects_peak_during_motion_hold_or_stop(tmp_path, offsets):
+    with pytest.raises(ValueError, match="producer lag budget"):
+        build_window(window_capture(tmp_path, offsets))
+
+
+@pytest.mark.parametrize("options,match", [
+    ({"release": False}, "Release"),
+    ({"idle": False}, "Idle"),
+    ({"other_boot": True}, "identity"),
+    ({"goal": False}, "accepted"),
+])
+def test_window_gate_requires_raw_proof_and_identity(tmp_path, options, match):
+    capture = window_capture(tmp_path, **options)
+    with pytest.raises(ValueError, match=match):
+        build_window(capture)
+    assert not capture[3].exists()

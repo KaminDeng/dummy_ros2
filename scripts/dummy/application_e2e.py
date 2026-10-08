@@ -377,6 +377,22 @@ def validate_evidence(evidence):
     budget = environment.get("producer_lag_budget_us")
     if type(lag) is not int or type(budget) is not int or lag < 0 or budget <= 0:
         raise ValueError("invalid producer lag evidence")
+    version = environment.get("producer_lag_gate_version")
+    if version is not None:
+        window = environment.get("producer_lag_window")
+        if (version != 2 or
+                environment.get("producer_lag_method") !=
+                "state_receive_minus_produced_offset_span_motion_window" or
+                budget != 250000 or
+                type(environment.get("producer_lag_environment_us")) is not int or
+                environment["producer_lag_environment_us"] < lag or
+                not isinstance(window, dict) or
+                any(type(window.get(key)) is not int or window[key] <= 0 for key in
+                    ("start_steady_us", "end_steady_us", "release_run_id")) or
+                type(window.get("state_samples")) is not int or
+                window["state_samples"] < 2 or
+                window["start_steady_us"] >= window["end_steady_us"]):
+            raise ValueError("invalid window producer lag evidence")
     goals = _required(evidence, "goals")
     if not isinstance(goals, list):
         raise ValueError("invalid goals")
@@ -515,6 +531,13 @@ def validate_evidence(evidence):
             hold.get("motion_epoch") != release_epoch):
         raise ValueError("missing pre-release HOLD confirmation")
     release = _required(evidence, "release")
+    if version == 2:
+        window = environment["producer_lag_window"]
+        if (not isinstance(release, dict) or
+                window["start_steady_us"] != goals[0]["timeline"][0]["steady_us"] or
+                window["end_steady_us"] != last["timeline"][-1]["steady_us"] or
+                window["release_run_id"] != release.get("run_id")):
+            raise ValueError("window producer lag identity mismatch")
     if (not isinstance(release, dict) or release.get("confirmed") is not True or
             release.get("terminal") not in ("RELEASED", "CANCELED_AND_RELEASED") or
             release.get("parent_run_id") != last["run_id"] or

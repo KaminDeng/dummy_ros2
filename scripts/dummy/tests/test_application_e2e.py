@@ -850,6 +850,22 @@ def test_same_cycle_feedback_receive_time_can_precede_after_begin(evidence):
     application_e2e.validate_evidence(evidence)
 
 
+def test_window_lag_version_requires_explicit_method_and_budget(evidence):
+    environment = evidence["environment"]
+    environment.update(producer_lag_gate_version=2,
+                       producer_lag_method="state_receive_minus_produced_offset_span_motion_window",
+                       producer_lag_environment_us=300000,
+                       producer_lag_window={"start_steady_us": 1000,
+                                            "end_steady_us": 7000,
+                                            "state_samples": 3,
+                                            "release_run_id": evidence["release"]["run_id"]},
+                       producer_lag_budget_us=250000)
+    application_e2e.validate_evidence(evidence)
+    environment["producer_lag_budget_us"] = 500000
+    with pytest.raises(ValueError, match="window producer lag"):
+        application_e2e.validate_evidence(evidence)
+
+
 def test_causal_rows_may_share_microsecond_timestamp(evidence):
     rows = evidence["goals"][0]["timeline"]
     rows[1]["steady_us"] = rows[0]["steady_us"]

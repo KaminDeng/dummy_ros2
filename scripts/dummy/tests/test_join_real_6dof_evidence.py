@@ -2030,6 +2030,22 @@ def test_joins_real_wire_pages_and_validates(inputs):
     assert result["provenance"]["raw_sha256"] == json.loads(context.read_text())["raw_sha256"]
 
 
+def test_joiner_rejects_unverified_window_version(inputs):
+    timeline, raw, action, context, _ = inputs
+    metadata = json.loads(context.read_text())
+    metadata.update(producer_lag_gate_version=2,
+                    producer_lag_method="state_receive_minus_produced_offset_span_motion_window",
+                    producer_lag_budget_us=250000,
+                    producer_lag_environment_us=300000,
+                    producer_lag_window={"start_steady_us": 1000,
+                                         "end_steady_us": 7000,
+                                         "state_samples": 3,
+                                         "release_run_id": 5})
+    context.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="unverified window producer lag"):
+        joiner.join_evidence(timeline, raw, action, context)
+
+
 def test_accepts_real_hold_wire_state_four(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
