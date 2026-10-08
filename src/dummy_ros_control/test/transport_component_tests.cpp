@@ -209,6 +209,7 @@ bool test_heartbeat_budget_parameter() {
   return !parse_transport_parameters(values, 6U, &parsed);
 }
 struct Stimulus { Status status{}; State state{}; Evidence evidence{}; bool done = false; bool send_status = true; bool send_state = true; bool send_evidence = false; };
+std::uint64_t observed_stop_request_id = 0U;
 struct Peer {
   int commands_fd;
   int stops_fd;
@@ -3091,6 +3092,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stop_request.expected_management_epoch(), stop_authority_reply.management_epoch());
     return 129;
   }
+  observed_stop_request_id = stop_request.request_id();
   if (sequence_rebase_mode &&
       (stop_request.request_seq() != 2183397840U ||
        stop_request.request_id() == 2183397839ULL ||
@@ -3374,6 +3376,12 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
 int main(int argc, char **argv) {
   if (argc == 2 && std::strcmp(argv[1], "historical_idle_baseline") == 0)
     return test_released_idle_startup_baseline();
+  if (argc == 3 && std::strcmp(argv[2], "stop_identity_restart") == 0) {
+    if (run_component_case(true, false, false) != 0) return 270;
+    const auto first = observed_stop_request_id;
+    if (run_component_case(true, false, false) != 0) return 271;
+    return first != 0U && observed_stop_request_id != first ? 0 : 272;
+  }
   if (!test_group_sent_ack()) return 124;
   if (!test_hardware_state_age_heartbeat()) return 147;
   if (!test_heartbeat_budget_parameter()) return 153;

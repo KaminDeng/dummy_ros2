@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <thread>
 
@@ -34,6 +35,23 @@ constexpr std::uint16_t kWireGetOperation = 12U;
 constexpr std::uint16_t kWirePendingResult = 23U;
 std::mutex channel_registry_mutex;
 std::weak_ptr<DeviceManagementChannel> channel_registry;
+
+std::atomic<std::uint64_t> &stop_request_ids() {
+  static std::atomic<std::uint64_t> ids([] {
+    std::random_device random;
+    const auto seed = (static_cast<std::uint64_t>(random()) << 32U) | random();
+    return seed == 0U ? 1U : seed;
+  }());
+  return ids;
+}
+
+std::uint64_t take_stop_request_id() noexcept {
+  auto &ids = stop_request_ids();
+  auto current = ids.load(std::memory_order_relaxed);
+  while (current != 0U && !ids.compare_exchange_weak(
+      current, current + 1U, std::memory_order_relaxed)) {}
+  return current;
+}
 
 bool parse_id(const std::string &text, std::array<std::uint8_t, 16> *id) {
   if (text.size() != 32U) return false;
@@ -296,7 +314,6 @@ struct DeviceTransport::Impl {
   std::uint64_t last_ticket_received_us = 0U;
   std::uint64_t last_motion_request_id = 0U;
   std::uint64_t last_motion_operation_id = 0U;
-  std::uint64_t next_stop_request_id = 0x8000000000000001ULL;
   bool has_sequence = false;
   LatestOnlyCommandStream command_stream;
   GroupSentAck group_sent_ack;
@@ -337,6 +354,7 @@ struct DeviceTransport::Impl {
         management(std::make_shared<DeviceManagementChannel>(parameters)),
         raw_evidence(raw_evidence_identity(parameters), management.get()),
         heartbeat(parameters.state_publish_period_us) {
+    (void)stop_request_ids();
     std::lock_guard<std::mutex> lock(channel_registry_mutex);
     if(channel_registry.expired()) channel_registry=management;
   }
@@ -1471,7 +1489,9 @@ struct DeviceTransport::Impl {
     std::copy(parameters.client_instance_id.begin(), parameters.client_instance_id.end(), client);
     request.set_device_id(device);
     request.set_client_instance_id(client);
-    request.set_request_id(next_stop_request_id++);
+    const auto request_id = take_stop_request_id();
+    if (request_id == 0U) return {};
+    request.set_request_id(request_id);
     request.set_request_seq(management->reserve_request_sequence());
     request.set_operation(kWireDisableAndRelease);
     request.set_expected_boot_epoch(status.boot_epoch());
@@ -1516,7 +1536,9 @@ struct DeviceTransport::Impl {
   std::shared_ptr<DeviceManagementRequest> make_stop_query(
       const Management::Request &original) noexcept {
     Management::Request query = original;
-    query.set_request_id(next_stop_request_id++);
+    const auto request_id = take_stop_request_id();
+    if (request_id == 0U) return {};
+    query.set_request_id(request_id);
     query.set_request_seq(management->reserve_request_sequence());
     query.set_operation(kWireGetOperation);
     query.set_queried_operation_id(original.request_id());
