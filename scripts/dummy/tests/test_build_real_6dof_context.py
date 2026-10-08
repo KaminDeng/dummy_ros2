@@ -188,20 +188,35 @@ def test_cli_writes_explicit_budgets(capture, capsys):
 
 def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
                    *, release=True, idle=True, other_boot=False, goal=True,
-                   queried_reply=False, other_device=False, other_epoch=False):
+                   queried_reply=False, other_device=False, other_epoch=False,
+                   second_goal=False, early_second_epoch=False):
     """Small raw/timeline pair with State samples before, during, and after motion."""
     timeline = tmp_path / "timeline.csv"
     header = ("event,goal_uuid,trajectory_sha256,steady_us,boot,session,"
               "reference_epoch,motion_epoch,run_id,axis_mask,status_core_state,"
               "state_core_state,release_request_id,release_operation_id")
-    def row(event, when, session=3, run=7, request=0, operation=0):
+    def row(event, when, session=3, run=7, request=0, operation=0, motion=1):
         reference = 0 if session == 0 else 1
-        return f"{event},{'a' * 32},{'b' * 64},{when},2,{session},{reference},1,{run},63,4,4,{request},{operation}"
-    rows = [row("accepted", 1000000), row("before_begin", 1000000),
-            row("after_begin", 1100000), row("feedback", 1200000),
-            row("terminal_success", 2500000), row("pre_release_hold", 2600000),
-            row("post_release_status", 4000000, 0, 8, 9, 10)] if goal else []
-    timeline.write_text("\n".join([header, *rows, "COMPLETE,1", ""]))
+        return f"{event},{'a' * 32},{'b' * 64},{when},2,{session},{reference},{motion},{run},63,4,4,{request},{operation}"
+    first_run = 6 if second_goal else 7
+    rows = [row("accepted", 1000000, run=first_run),
+            row("before_begin", 1000000, run=first_run),
+            row("after_begin", 1100000, run=first_run),
+            row("feedback", 1200000, run=first_run),
+            row("terminal_success", 2500000, run=first_run),
+            row("pre_release_hold", 2600000, run=first_run)] if goal else []
+    if second_goal and goal:
+        rows.extend((row("accepted", 2600000, motion=2),
+                     row("before_begin", 2600000, motion=2),
+                     row("after_begin", 2650000, motion=2),
+                     row("feedback", 2700000, motion=2),
+                     row("terminal_success", 3000000, motion=2),
+                     row("pre_release_hold", 3100000, motion=2)))
+    if goal:
+        rows.append(row("post_release_status", 4000000, 0, 8, 9, 10,
+                        motion=3 if second_goal else 1))
+    timeline.write_text("\n".join([header, *rows,
+                                   f"COMPLETE,{2 if second_goal else 1}", ""]))
     action = tmp_path / "action.json"
     action.write_text('{"scope":"ROS_ACTION_ONLY"}\n')
     client = "11" * 16
@@ -226,7 +241,8 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
     terminal = wire("DummyAttemptEvidenceV2", run_id=8, attempt_id=8,
                     category=4, final=1, final_state=8, release_committed=1)
     status = wire("DummyDeviceStatusV2", boot_epoch=2, session_id=0,
-                  device_id="22" * 16, reference_epoch=0, motion_epoch=1,
+                  device_id="22" * 16, reference_epoch=0,
+                  motion_epoch=3 if second_goal else 1,
                   run_id=8, core_state=1, release_committed=1,
                   final_state=8, attempt_kind=3)
     events = [(4, 500000, 2, 3, 0, 1, request)]
@@ -238,12 +254,16 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
                      session_id=session, produced_at_us=when + 100000 - offset,
                      device_id=("33" if other_device and index == 3 else "22") * 16,
                      reference_epoch=0 if session == 0 else 1,
-                     motion_epoch=99 if other_epoch and index == 3 else 1,
+                     motion_epoch=(99 if other_epoch and index == 3 else
+                                   3 if second_goal and session == 0 else
+                                   2 if early_second_epoch and index in (2, 3) else
+                                   2 if second_goal and index == 4 else 1),
                      core_state=1 if session == 0 else 4)
         events.append((2, when, 3 if other_boot and index == 3 else 2,
                        session, 0, 0, state))
     if release:
-        events.extend([(4, 2900000, 2, 3, 0, 2, release_request),
+        events.extend([(4, 3150000 if second_goal else 2900000,
+                        2, 3, 0, 2, release_request),
                        (1, 3400000, 2, 3, 8, 0, terminal),
                        (5, 3500000, 2, 0, 8, 0, response)])
         if queried_reply:
@@ -304,6 +324,18 @@ def test_window_gate_rejects_sparse_state_coverage(tmp_path):
 @pytest.mark.parametrize("options", [{"other_device": True}, {"other_epoch": True}])
 def test_window_gate_rejects_cross_identity_coverage_sample(tmp_path, options):
     capture = window_capture(tmp_path, **options)
+    with pytest.raises(ValueError, match="State identity"):
+        build_window(capture)
+
+
+def test_window_gate_rejects_prior_goal_phase_after_next_goal_acceptance(tmp_path):
+    capture = window_capture(tmp_path, second_goal=True)
+    with pytest.raises(ValueError, match="State identity"):
+        build_window(capture)
+
+
+def test_window_gate_rejects_next_goal_phase_before_acceptance(tmp_path):
+    capture = window_capture(tmp_path, second_goal=True, early_second_epoch=True)
     with pytest.raises(ValueError, match="State identity"):
         build_window(capture)
 

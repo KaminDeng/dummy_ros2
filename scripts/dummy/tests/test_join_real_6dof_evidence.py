@@ -2078,8 +2078,16 @@ def test_joiner_rejects_sha_pinned_over_budget_window(inputs):
         joiner._verify_window_context(metadata, timeline.read_bytes(), records)
 
 
-def test_window_context_joins_valid_raw_capture(inputs):
+@pytest.mark.parametrize("session_text", ["3", "03"])
+def test_window_context_joins_valid_raw_capture(inputs, session_text):
     timeline, raw, action, context, _ = inputs
+    if session_text != "3":
+        rows = list(csv.reader(timeline.open(newline="")))
+        for row in rows[1:-1]:
+            if row[5] == "3":
+                row[5] = session_text
+        with timeline.open("w", newline="") as output_stream:
+            csv.writer(output_stream).writerows(rows)
     output = context.with_name("window-context.json")
     metadata = builder.build_context(
         timeline, raw, action, output,
@@ -2088,8 +2096,26 @@ def test_window_context_joins_valid_raw_capture(inputs):
         ros_feedback_lag_budget_us=2000, gate_state_max_age_us=250000,
         producer_lag_scope="motion_window_v2")
     joined = joiner.join_evidence(timeline, raw, action, output)
+    application_e2e.validate_evidence(joined)
     assert joined["environment"]["producer_lag_gate_version"] == 2
     assert joined["environment"]["producer_lag_us"] == metadata["producer_lag_us"]
+
+
+def test_window_context_rejects_nonnumeric_session(inputs):
+    timeline, raw, action, context, _ = inputs
+    rows = list(csv.reader(timeline.open(newline="")))
+    rows[1][5] = "not-a-session"
+    with timeline.open("w", newline="") as output_stream:
+        csv.writer(output_stream).writerows(rows)
+    output = context.with_name("invalid-window-context.json")
+    with pytest.raises(ValueError, match="invalid ROS motion window timeline"):
+        builder.build_context(
+            timeline, raw, action, output,
+            path_tolerance_rad=[0.01] * 6, goal_tolerance_rad=[0.003] * 6,
+            producer_lag_budget_us=250000, feedback_age_budget_us=10000,
+            ros_feedback_lag_budget_us=2000, gate_state_max_age_us=250000,
+            producer_lag_scope="motion_window_v2")
+    assert not output.exists()
 
 
 def test_accepts_real_hold_wire_state_four(inputs):

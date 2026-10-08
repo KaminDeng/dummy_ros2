@@ -2,6 +2,7 @@
 """从同一次 ROS 原始采集生成 join_real_6dof_evidence 所需的上下文。"""
 
 import argparse
+from bisect import bisect_right
 import csv
 import io
 import json
@@ -37,8 +38,19 @@ def _motion_window(timeline_data, records, client, state_max_age):
         release_run = int(final["run_id"])
         request_id = int(final["release_request_id"])
         operation_id = int(final["release_operation_id"])
-        active_phases = {(int(row["reference_epoch"]), int(row["motion_epoch"]))
-                         for row in rows if row["session"] == str(session)}
+        goal_times = [int(row["steady_us"]) for row in goals]
+        goal_phases = []
+        for row in rows:
+            if row["event"] == "accepted":
+                goal_phases.append(set())
+            if int(row["session"]) == session:
+                goal_phases[-1].add((int(row["reference_epoch"]),
+                                     int(row["motion_epoch"])))
+        phase_markers = [(int(row["steady_us"]), int(row["motion_epoch"]))
+                         for row in rows if row["event"] in
+                         ("accepted", "after_begin", "terminal_success",
+                          "terminal_canceled", "pre_release_hold",
+                          "post_release_status")]
         release_phase = (int(final["reference_epoch"]), int(final["motion_epoch"]))
         releasing_phase = (int(goals[-1]["reference_epoch"]), release_phase[1])
     except (UnicodeDecodeError, TypeError, KeyError, IndexError, ValueError) as error:
@@ -51,6 +63,9 @@ def _motion_window(timeline_data, records, client, state_max_age):
             any(int(row["boot"]) != boot or int(row["session"]) != session or
                 int(row["run_id"]) <= 0 for row in goals)):
         raise ValueError("ROS motion window identity or ordering mismatch")
+    if any(later[0] < earlier[0] or later[1] < earlier[1] for earlier, later in
+           zip(phase_markers, phase_markers[1:])):
+        raise ValueError("ROS motion window timeline phase regression")
     requests = [item for item in records if item["kind"] == 4 and
                 item["fields"]["operation"] == 10 and
                 item["fields"]["request_id"] == request_id and
@@ -117,13 +132,27 @@ def _motion_window(timeline_data, records, client, state_max_age):
              item["fields"]["core_state"] != 1)) or
            (item["session"] == session and
             ((item["fields"]["reference_epoch"],
-              item["fields"]["motion_epoch"]) not in active_phases and
+              item["fields"]["motion_epoch"]) not in
+             goal_phases[bisect_right(goal_times, item["when"]) - 1] and
              not (item["when"] >= requests[0]["when"] and
+                  bisect_right(goal_times, item["when"]) == len(goals) and
                   (item["fields"]["reference_epoch"],
                    item["fields"]["motion_epoch"]) == releasing_phase) or
              item["when"] > terminals[0]["when"]))
            for item in window_states):
         raise ValueError("motion window State identity mismatch")
+    marker_index = 0
+    phase_floor = phase_markers[0][1]
+    previous_epoch = phase_floor
+    for item in window_states:
+        while (marker_index + 1 < len(phase_markers) and
+               phase_markers[marker_index + 1][0] <= item["when"]):
+            marker_index += 1
+            phase_floor = phase_markers[marker_index][1]
+        epoch = item["fields"]["motion_epoch"]
+        if epoch < phase_floor or epoch < previous_epoch:
+            raise ValueError("motion window State identity phase regression")
+        previous_epoch = epoch
     observations = [start, *(item["when"] for item in window_states), end]
     if any(later - earlier > state_max_age for earlier, later in
            zip(observations, observations[1:])):
