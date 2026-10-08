@@ -469,7 +469,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                bool raw_many_mode, unsigned raw_order_case, unsigned complete_order_mode,
                unsigned release_deactivate_mode, unsigned ticket_mode,
                bool reject_during_ack_mode, bool sequence_rebase_mode,
-               bool uncommitted_stop_mode) {
+               bool uncommitted_stop_mode, bool uncommitted_idle_status_mode) {
   pollfd response{input, POLLIN, 0};
   char ready{};
   if (::poll(&response, 1, 3000) != 1 || ::read(input, &ready, 1) != 1 || ready != 'R') return 10;
@@ -3148,6 +3148,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   stop_idle.status.set_management_epoch(stop_request.expected_management_epoch() + 1U);
   stop_idle.status.set_core_state(1U);
   stop_idle.status.set_release_committed(true);
+  stop_idle.status.set_operation_id(900U);
+  stop_idle.status.set_transaction_phase(3U);
   stop_idle.state.set_motion_epoch(stop_idle.status.motion_epoch());
   stop_idle.state.set_session_id(0U);
   stop_idle.state.set_reference_epoch(0U);
@@ -3158,8 +3160,39 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   stop_idle.state.set_state_seq(stable_sequence + 1U);
   const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
   stop_idle.state.set_raw_motor_position_rev(idle_raw);
+  if (uncommitted_idle_status_mode) {
+    stop_idle.status.set_release_committed(false);
+    stop_idle.status.set_management_epoch(stop_idle.status.management_epoch() + 1U);
+    stop_idle.state.set_management_epoch(stop_idle.status.management_epoch());
+    const auto before = transport.statistics();
+    if (!send(stop_idle) || !wait_for([&] {
+          const auto after = transport.statistics();
+          if (after.status_messages <= before.status_messages ||
+              after.state_messages <= before.state_messages) return false;
+          std::lock_guard<std::mutex> lock(channel->mutex);
+          Status observed_status;
+          State observed_state;
+          return wire::DummyDeviceStatusV2Codec::decode(
+                     channel->observation.status.data(), channel->observation.status.size(),
+                     &observed_status) == wire::CodecResult::kOk &&
+              wire::DummyJointStateV2Codec::decode(
+                     channel->observation.state.data(), channel->observation.state.size(),
+                     &observed_state) == wire::CodecResult::kOk &&
+              observed_status.core_state() == 1U &&
+              !observed_status.release_committed() &&
+              observed_status.management_epoch() == stop_idle.status.management_epoch() &&
+              observed_state.core_state() == 1U &&
+              observed_state.state_seq() == stop_idle.state.state_seq();
+        })) return 273;
+    transport.stop();
+    const auto stats = transport.statistics();
+    return stats.stop_requests_confirmed == 0U &&
+        stats.unconfirmed_stop_requests != 0U ? 0 : 274;
+  }
   if (uncommitted_stop_mode) {
     if (!send(stop_idle)) return 269;
+    if (!wait_for([&] { return transport.statistics().unconfirmed_stop_requests != 0U; }))
+      return 275;
     transport.stop();
     const auto stats = transport.statistics();
     return stats.stop_requests_confirmed == 0U &&
@@ -3304,7 +3337,8 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
                        unsigned ticket_mode = 0U,
                        bool reject_during_ack_mode = false,
                        bool sequence_rebase_mode = false,
-                       bool uncommitted_stop_mode = false) {
+                       bool uncommitted_stop_mode = false,
+                       bool uncommitted_idle_status_mode = false) {
   SerialBridge bridge;
   if (!bridge.open_pair()) return 30;
   int requests[2]{}, responses[2]{};
@@ -3329,7 +3363,8 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
                                  raw_capture_mode, raw_bad_release_mode,
                                  raw_incomplete_mode, raw_many_mode, raw_order_case, complete_order_mode,
                                  release_deactivate_mode, ticket_mode, reject_during_ack_mode,
-                                 sequence_rebase_mode, uncommitted_stop_mode);
+                                 sequence_rebase_mode, uncommitted_stop_mode,
+                                 uncommitted_idle_status_mode);
   if (result != 0) std::fprintf(stderr, "component_only assertion failed: %d\n", result);
   ::kill(child, SIGTERM);
   ::waitpid(child, nullptr, 0);
@@ -3454,8 +3489,10 @@ int main(int argc, char **argv) {
       std::strcmp(argv[2], "stop_sequence_rebase") == 0;
   const bool uncommitted_stop_mode = argc == 3 &&
       std::strcmp(argv[2], "stop_uncommitted_terminal") == 0;
+  const bool uncommitted_idle_status_mode = argc == 3 &&
+      std::strcmp(argv[2], "stop_uncommitted_idle_status") == 0;
   const auto result = run_component_case(six_axis,
-      argc == 3 && ticket_mode == 0U && !sequence_rebase_mode && !uncommitted_stop_mode && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
+      argc == 3 && ticket_mode == 0U && !sequence_rebase_mode && !uncommitted_stop_mode && !uncommitted_idle_status_mode && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
           !inactive_prime_mode && !cold_idle_gap_mode && !cold_fault_gap_mode && !raw_capture_mode &&
           release_deactivate_mode == 0U && !reject_during_ack_mode &&
           complete_order_mode==0U,
@@ -3463,7 +3500,7 @@ int main(int argc, char **argv) {
       inactive_prime_mode, cold_idle_gap_mode, cold_fault_gap_mode,
       raw_capture_mode, raw_bad_release_mode, raw_incomplete_mode, raw_many_mode, raw_order_case,
       complete_order_mode, release_deactivate_mode, ticket_mode, reject_during_ack_mode,
-      sequence_rebase_mode, uncommitted_stop_mode);
+      sequence_rebase_mode, uncommitted_stop_mode, uncommitted_idle_status_mode);
   if (result != 0 || !six_axis || argc != 2) return result;
   return run_component_case(true, false, true);
 }

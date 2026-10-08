@@ -131,6 +131,10 @@ if(BUILD_TESTING)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
   add_test(NAME transport_stop_sequence_rebase_tests
     COMMAND transport_component_tests six_axis stop_sequence_rebase)
+  add_test(NAME transport_stop_uncommitted_terminal_tests
+    COMMAND transport_component_tests six_axis stop_uncommitted_terminal)
+  add_test(NAME transport_stop_uncommitted_idle_status_tests
+    COMMAND transport_component_tests six_axis stop_uncommitted_idle_status)
   add_test(NAME transport_historical_idle_baseline_tests
     COMMAND transport_component_tests historical_idle_baseline)
   set_tests_properties(transport_historical_idle_baseline_tests PROPERTIES LABELS "component_only;offline")

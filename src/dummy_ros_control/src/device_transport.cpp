@@ -1785,6 +1785,7 @@ struct DeviceTransport::Impl {
     bool stop_terminal = false;
     bool stop_receipt_diagnostic_emitted = false;
     std::uint64_t stop_deadline_us = 0U, next_stop_query_us = 0U;
+    std::uint64_t stop_terminal_at_us = 0U, stop_operation_id = 0U;
     std::optional<dp::comm::RequestHandle<Management>> management_handle;
     auto capture_sent_request = [&](const DeviceManagementRequest &pending) {
       if (!parameters.raw_evidence_path.empty() &&
@@ -2009,6 +2010,8 @@ struct DeviceTransport::Impl {
         stop_idle_observed = false;
         stop_received = false;
         stop_terminal = false;
+        stop_terminal_at_us = 0U;
+        stop_operation_id = 0U;
         stop_receipt_diagnostic_emitted = false;
         const auto stop_timeout_us = parameters.stop_confirmation_timeout_us != 0U
             ? parameters.stop_confirmation_timeout_us : parameters.max_state_age_us;
@@ -2197,13 +2200,35 @@ struct DeviceTransport::Impl {
           authorized_management_epoch = response.management_epoch();
           stop_idle_observed = false;
           stop_terminal = true;
+          stop_terminal_at_us = transport_steady_now_us();
+          stop_operation_id = response.operation_id();
           stop_query.reset();
           management_handle.reset();
         } else fail_stop("Stop QueryResult failed or malformed");
       }
       const auto stop_now = transport_steady_now_us();
+      const bool fresh_released_idle = stop_terminal && stop_idle_observed &&
+          stop_terminal_at_us != 0U && stop_operation_id != 0U &&
+          status.boot_epoch() == stop_original.expected_boot_epoch() &&
+          status.core_state() == 1U && status.session_id() == 0U &&
+          status.reference_epoch() == 0U && status.release_committed() &&
+          !status.real_motion_permitted() && status.permit_remaining_us() == 0U &&
+          status.motion_epoch() == authorized_motion_epoch &&
+          status.management_epoch() == authorized_management_epoch &&
+          status.operation_id() == stop_operation_id &&
+          status.transaction_phase() == 3U &&
+          last_state_boot == status.boot_epoch() && last_state_session == 0U &&
+          last_state_reference == 0U && last_state_motion == status.motion_epoch() &&
+          last_state_management_epoch == status.management_epoch() &&
+          last_observation_raw_idle &&
+          last_received_us >= stop_terminal_at_us &&
+          last_status_received_us >= stop_terminal_at_us &&
+          stop_now >= last_received_us &&
+          stop_now - last_received_us <= parameters.max_state_age_us &&
+          stop_now >= last_status_received_us &&
+          stop_now - last_status_received_us <= parameters.max_state_age_us;
       if (stop_confirmation_pending.load(std::memory_order_acquire) &&
-          stop_terminal && stop_idle_observed) {
+          fresh_released_idle) {
         ++stop_requests_confirmed;
         stop_confirmation_pending = false;
         pending_stop.reset();
