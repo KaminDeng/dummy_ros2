@@ -11,6 +11,7 @@ import sys
 import time
 
 import pytest
+from scripts.dummy import build_real_6dof_context as builder
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2044,6 +2045,37 @@ def test_joiner_rejects_unverified_window_version(inputs):
     context.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="unverified window producer lag"):
         joiner.join_evidence(timeline, raw, action, context)
+
+
+def test_joiner_rejects_sha_pinned_over_budget_window(inputs):
+    timeline, raw, action, context, _ = inputs
+    records = joiner._raw_records(raw.read_bytes())
+    raw.write_bytes(b"DPRAW01\0" + b"".join(record(
+        item["kind"], item["when"], item["boot"], item["session"],
+        item["run"], item["seq"],
+        wire("DummyJointStateV2", **{**item["fields"],
+            "produced_at_us": item["when"] +
+            (300000 if item["when"] >= 6000 else 0)})
+        if item["kind"] == 2 else item["raw"]) for item in records))
+    repin(timeline, raw, action, context, preserve_state_sequence=True)
+    records = joiner._raw_records(raw.read_bytes())
+    metadata = json.loads(context.read_text())
+    start, end, states, release_run = builder._motion_window(
+        timeline.read_bytes(), records, metadata["client_id"],
+        metadata["gate_state_max_age_us"])
+    offsets = [item["when"] - item["fields"]["produced_at_us"] for item in states]
+    metadata.update(producer_lag_gate_version=2,
+                    producer_lag_method=builder.WINDOW_LAG_METHOD,
+                    producer_lag_us=max(offsets) - min(offsets),
+                    producer_lag_budget_us=250000,
+                    producer_lag_environment_us=300000,
+                    producer_lag_window={"start_steady_us": start,
+                                         "end_steady_us": end,
+                                         "state_samples": len(states),
+                                         "release_run_id": release_run})
+    context.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="producer lag budget"):
+        joiner._verify_window_context(metadata, timeline.read_bytes(), records)
 
 
 def test_accepts_real_hold_wire_state_four(inputs):

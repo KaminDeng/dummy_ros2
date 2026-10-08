@@ -393,6 +393,8 @@ def validate_evidence(evidence):
                 window["state_samples"] < 2 or
                 window["start_steady_us"] >= window["end_steady_us"]):
             raise ValueError("invalid window producer lag evidence")
+        if lag > budget:
+            raise ValueError("window producer lag budget exceeded")
     goals = _required(evidence, "goals")
     if not isinstance(goals, list):
         raise ValueError("invalid goals")

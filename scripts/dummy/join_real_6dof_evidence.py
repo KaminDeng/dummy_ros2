@@ -551,6 +551,8 @@ def _verify_window_context(context, timeline_data, records):
             max(environment_offsets) - min(environment_offsets) or
             context["producer_lag_us"] != max(offsets) - min(offsets)):
         raise ValueError("unverified window producer lag context")
+    if context["producer_lag_us"] > context["producer_lag_budget_us"]:
+        raise ValueError("window producer lag budget exceeded")
 
 
 def _unconfirmed_cancel_observation(action):

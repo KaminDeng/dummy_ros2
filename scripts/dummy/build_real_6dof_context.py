@@ -37,6 +37,10 @@ def _motion_window(timeline_data, records, client, state_max_age):
         release_run = int(final["run_id"])
         request_id = int(final["release_request_id"])
         operation_id = int(final["release_operation_id"])
+        active_phases = {(int(row["reference_epoch"]), int(row["motion_epoch"]))
+                         for row in rows if row["session"] == str(session)}
+        release_phase = (int(final["reference_epoch"]), int(final["motion_epoch"]))
+        releasing_phase = (int(goals[-1]["reference_epoch"]), release_phase[1])
     except (UnicodeDecodeError, TypeError, KeyError, IndexError, ValueError) as error:
         if isinstance(error, ValueError) and ("accepted" in str(error) or
                                               "Release" in str(error)):
@@ -79,15 +83,22 @@ def _motion_window(timeline_data, records, client, state_max_age):
             not start < requests[0]["when"] <= terminals[0]["when"] <=
             responses[0]["when"] <= end):
         raise ValueError("missing or unlinked raw Release proof")
+    device_id = requests[0]["fields"]["device_id"]
+    if device_id == "00" * 16:
+        raise ValueError("motion window device identity missing")
     idle_statuses = [item for item in records if item["kind"] == 3 and
                      (item["boot"], item["session"], item["fields"]["run_id"]) ==
                      (boot, 0, release_run) and
+                     item["fields"]["device_id"] == device_id and
                      item["fields"]["core_state"] == 1 and
                      item["fields"]["release_committed"] == 1 and
                      terminals[0]["when"] <= item["when"] <= end and
                      end - item["when"] <= state_max_age]
     idle_states = [item for item in records if item["kind"] == 2 and
                    (item["boot"], item["session"]) == (boot, 0) and
+                   item["fields"]["device_id"] == device_id and
+                   (item["fields"]["reference_epoch"],
+                    item["fields"]["motion_epoch"]) == release_phase and
                    item["fields"]["core_state"] == 1 and
                    terminals[0]["when"] <= item["when"] <= end and
                    end - item["when"] <= state_max_age]
@@ -97,17 +108,26 @@ def _motion_window(timeline_data, records, client, state_max_age):
                      start <= item["when"] <= end]
     if len(window_states) < 2:
         raise ValueError("insufficient motion window State samples")
+    if any(item["boot"] != boot or item["session"] not in (session, 0) or
+           item["fields"]["device_id"] != device_id or
+           (item["session"] == 0 and
+            ((item["fields"]["reference_epoch"],
+              item["fields"]["motion_epoch"]) != release_phase or
+             item["when"] < requests[0]["when"] or
+             item["fields"]["core_state"] != 1)) or
+           (item["session"] == session and
+            ((item["fields"]["reference_epoch"],
+              item["fields"]["motion_epoch"]) not in active_phases and
+             not (item["when"] >= requests[0]["when"] and
+                  (item["fields"]["reference_epoch"],
+                   item["fields"]["motion_epoch"]) == releasing_phase) or
+             item["when"] > terminals[0]["when"]))
+           for item in window_states):
+        raise ValueError("motion window State identity mismatch")
     observations = [start, *(item["when"] for item in window_states), end]
     if any(later - earlier > state_max_age for earlier, later in
            zip(observations, observations[1:])):
         raise ValueError("insufficient motion window State coverage")
-    if any(item["boot"] != boot or item["session"] not in (session, 0) or
-           (item["session"] == 0 and
-            (item["when"] < requests[0]["when"] or
-             item["fields"]["core_state"] != 1)) or
-           (item["session"] == session and item["when"] > terminals[0]["when"])
-           for item in window_states):
-        raise ValueError("motion window State identity mismatch")
     return start, end, window_states, release_run
 
 

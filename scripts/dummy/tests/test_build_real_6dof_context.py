@@ -188,14 +188,15 @@ def test_cli_writes_explicit_budgets(capture, capsys):
 
 def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
                    *, release=True, idle=True, other_boot=False, goal=True,
-                   queried_reply=False):
+                   queried_reply=False, other_device=False, other_epoch=False):
     """Small raw/timeline pair with State samples before, during, and after motion."""
     timeline = tmp_path / "timeline.csv"
     header = ("event,goal_uuid,trajectory_sha256,steady_us,boot,session,"
               "reference_epoch,motion_epoch,run_id,axis_mask,status_core_state,"
               "state_core_state,release_request_id,release_operation_id")
     def row(event, when, session=3, run=7, request=0, operation=0):
-        return f"{event},{'a' * 32},{'b' * 64},{when},2,{session},1,1,{run},63,4,4,{request},{operation}"
+        reference = 0 if session == 0 else 1
+        return f"{event},{'a' * 32},{'b' * 64},{when},2,{session},{reference},1,{run},63,4,4,{request},{operation}"
     rows = [row("accepted", 1000000), row("before_begin", 1000000),
             row("after_begin", 1100000), row("feedback", 1200000),
             row("terminal_success", 2500000), row("pre_release_hold", 2600000),
@@ -205,12 +206,15 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
     action.write_text('{"scope":"ROS_ACTION_ONLY"}\n')
     client = "11" * 16
     request = wire("DummyManageV2Request", client_instance_id=client,
+                   device_id="22" * 16,
                    expected_boot_epoch=2, expected_session_id=3,
                    request_seq=1)
     release_request = wire("DummyManageV2Request", client_instance_id=client,
+                           device_id="22" * 16,
                            expected_boot_epoch=2, expected_session_id=3,
                            request_seq=2, request_id=9, operation=10)
     response = wire("DummyManageV2Response", client_instance_id=client,
+                    device_id="22" * 16,
                     boot_epoch=2, session_id=0,
                     request_id=11 if queried_reply else 9, operation_id=10,
                     run_id=8, transaction_phase=3, result_code=0,
@@ -222,6 +226,7 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
     terminal = wire("DummyAttemptEvidenceV2", run_id=8, attempt_id=8,
                     category=4, final=1, final_state=8, release_committed=1)
     status = wire("DummyDeviceStatusV2", boot_epoch=2, session_id=0,
+                  device_id="22" * 16, reference_epoch=0, motion_epoch=1,
                   run_id=8, core_state=1, release_committed=1,
                   final_state=8, attempt_kind=3)
     events = [(4, 500000, 2, 3, 0, 1, request)]
@@ -231,6 +236,9 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
         session = 0 if when >= 3800000 else 3
         state = wire("DummyJointStateV2", boot_epoch=3 if other_boot and index == 3 else 2,
                      session_id=session, produced_at_us=when + 100000 - offset,
+                     device_id=("33" if other_device and index == 3 else "22") * 16,
+                     reference_epoch=0 if session == 0 else 1,
+                     motion_epoch=99 if other_epoch and index == 3 else 1,
                      core_state=1 if session == 0 else 4)
         events.append((2, when, 3 if other_boot and index == 3 else 2,
                        session, 0, 0, state))
@@ -290,6 +298,13 @@ def test_window_gate_rejects_sparse_state_coverage(tmp_path):
         if item["kind"] != 2 or item["when"] in (700000, 1300000,
                                                    3900000, 4500000)))
     with pytest.raises(ValueError, match="State coverage"):
+        build_window(capture)
+
+
+@pytest.mark.parametrize("options", [{"other_device": True}, {"other_epoch": True}])
+def test_window_gate_rejects_cross_identity_coverage_sample(tmp_path, options):
+    capture = window_capture(tmp_path, **options)
+    with pytest.raises(ValueError, match="State identity"):
         build_window(capture)
 
 

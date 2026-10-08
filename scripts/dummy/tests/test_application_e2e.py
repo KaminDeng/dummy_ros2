@@ -1084,6 +1084,21 @@ def test_canceled_chain_requires_new_epoch_stop_and_explicit_release(evidence):
     application_e2e.validate_evidence(canceled_chain(evidence))
 
 
+def test_canceled_window_gate_rejects_over_budget_lag(evidence):
+    canceled_chain(evidence)
+    evidence["environment"].update(
+        producer_lag_us=300000, producer_lag_budget_us=250000,
+        producer_lag_gate_version=2,
+        producer_lag_method="state_receive_minus_produced_offset_span_motion_window",
+        producer_lag_environment_us=300000,
+        producer_lag_window={"start_steady_us": 1000,
+                             "end_steady_us": 7000,
+                             "state_samples": 4,
+                             "release_run_id": evidence["release"]["run_id"]})
+    with pytest.raises(ValueError, match="producer lag budget"):
+        application_e2e.validate_evidence(evidence)
+
+
 def test_canceled_chain_rejects_commit_after_gate_terminal(evidence):
     canceled_chain(evidence)
     evidence["goals"][0]["timeline"][4]["steady_us"] = 4900
