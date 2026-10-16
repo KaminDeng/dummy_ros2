@@ -137,6 +137,16 @@ if(BUILD_TESTING)
   target_link_libraries(raw_evidence_collector_ndebug_tests
     dummy_guarded_zenbedded_system OpenSSL::Crypto)
   add_test(NAME raw_evidence_collector_ndebug_tests COMMAND raw_evidence_collector_ndebug_tests)
+  # 真实System入口/真实command channel/原SPSC队列；link wrap仅控制线程交错。
+  add_executable(transfer_owner_tests test/transfer_owner_tests.cpp)
+  target_compile_features(transfer_owner_tests PRIVATE cxx_std_17)
+  target_include_directories(transfer_owner_tests PRIVATE "${DUMMY_WIRE_INCLUDE}")
+  target_link_libraries(transfer_owner_tests PRIVATE dummy_guarded_zenbedded_system)
+  target_link_options(transfer_owner_tests PRIVATE
+    "-Wl,--wrap=_ZN17dummy_ros_control22consume_control_updateEm")
+  add_test(NAME transfer_owner_overlap_and_queue_contracts COMMAND transfer_owner_tests)
+  set_tests_properties(transfer_owner_overlap_and_queue_contracts PROPERTIES
+    TIMEOUT 10 LABELS "component_only;offline;thread_owner")
   add_executable(state_contention_tests test/state_contention_tests.cpp)
   target_link_libraries(state_contention_tests dummy_guarded_zenbedded_system)
   add_test(NAME state_contention_tests COMMAND state_contention_tests)

@@ -108,6 +108,14 @@ hardware_interface::return_type GuardedZenbeddedSystem::write(
 }
 
 bool GuardedZenbeddedSystem::transfer_control_update() noexcept {
+  // worker与ControllerManager共用一个有界producer区间；Busy留待原下轮重试。
+  bool expected = false;
+  if (!transfer_busy_.compare_exchange_strong(expected, true,
+          std::memory_order_acquire, std::memory_order_relaxed)) return false;
+  struct ReleaseTransfer {
+    std::atomic<bool> &busy;
+    ~ReleaseTransfer() { busy.store(false, std::memory_order_release); }
+  } release_transfer{transfer_busy_};
   const auto record = consume_control_update(consumed_generation_);
   if (!record.has_value()) return false;
   if (!publish_queue_.try_push(record.value())) return false;

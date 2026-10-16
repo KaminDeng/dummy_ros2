@@ -76,6 +76,8 @@ class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface 
   std::atomic<std::uint64_t> state_deadline_us_{0U};
   std::atomic<StopRequestKind> stop_requested_{StopRequestKind::kNone};
   std::size_t active_joint_count_ = 0;
+  static_assert(std::atomic<bool>::is_always_lock_free, "transfer owner gate必须无等待");
+  std::atomic<bool> transfer_busy_{false};
   std::uint64_t consumed_generation_ = 0;
   BoundedPublishQueue<4> publish_queue_;
   std::unique_ptr<DeviceTransport> transport_;
