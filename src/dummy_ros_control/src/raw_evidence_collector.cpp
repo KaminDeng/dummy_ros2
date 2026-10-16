@@ -189,13 +189,14 @@ bool RawEvidenceCollector::enqueue(const Record &record) noexcept {
 
 bool RawEvidenceCollector::offer_observation(Kind kind, const std::uint8_t *raw,
     std::size_t size, std::uint64_t received_at_us, std::uint64_t boot_epoch,
-    std::uint64_t session_id) noexcept {
+    std::uint64_t session_id,bool cleanup_producer_valid) noexcept {
   if ((kind != Kind::kState && kind != Kind::kStatus) || !raw || size == 0U ||
       size > kMaxRawSize) { fail(Failure::kInvalid); return false; }
   Record record{};
   std::copy_n(raw, size, record.raw.begin());
   record.size = static_cast<std::uint16_t>(size);
-  record.kind = kind;
+  record.kind = kind;record.cleanup_producer_valid=cleanup_producer_valid;
+  record.cleanup_generation=channel_?channel_->raw_cleanup_generation():0U;
   record.received_at_us = received_at_us;
   record.boot_epoch = boot_epoch;
   record.session_id = session_id;
@@ -285,6 +286,8 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     safety_hold_valid_ = false;
     safety_hold_regressed_ = false;
     terminal_seen_ = false;
+    fault_groups_valid_=true;fault_group_phase_=0U;fault_motion_epoch_=0U;
+    fault_stop_epoch_=0U;fault_disable_count_=0U;fault_last_group_id_=0U;fault_group_source_=0U;
   }
   if (page.boot_epoch != boot_epoch_ || page.session_id != session_id_ ||
       page.parent_run_id != parent_run_id_ || page.attempt_kind != attempt_kind_ || terminal_seen_) {
@@ -353,6 +356,33 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     safety_hold_motion_epoch_ = decoded.motion_epoch();
     safety_hold_valid_ = true;
   }
+  // 完整fault证明另lane：不改变旧collector接纳/取消Hold语义，只导出已验证原页的证明。
+  if(page.category!=4U) {
+    bool valid=decoded.group_id()>fault_last_group_id_ && decoded.expected_mask()==63U &&
+      decoded.submitted_mask()==63U && decoded.sent_mask()==63U && decoded.failed_mask()==0U &&
+      !decoded.motion_complete() && !decoded.release_committed() && decoded.final_state()==0U;
+    for(std::size_t axis=0;axis<6;++axis) {
+      const auto q=decoded.queued_at_us()[axis],take=decoded.taken_at_us()[axis],sub=decoded.submitted_at_us()[axis],sent=decoded.sent_at_us()[axis];
+      valid=valid && q!=0U && q<=take && take<=sub && sub<=sent && sent-q<=100000U && decoded.abort_at_us()[axis]==0U;
+    }
+    if(decoded.category()==1U) {
+      valid=valid && fault_group_phase_==0U && decoded.first_failure_source()==0U && decoded.first_failure_axis_mask()==0U &&
+        decoded.motion_epoch()>=first_motion_epoch_ && decoded.motion_epoch()-first_motion_epoch_<=1U &&
+        decoded.motion_epoch()>=fault_motion_epoch_;
+      fault_motion_epoch_=decoded.motion_epoch();
+    } else if(decoded.category()==2U) {
+      valid=valid && fault_group_phase_<=1U && fault_motion_epoch_!=0U && fault_motion_epoch_!=UINT32_MAX &&
+        decoded.motion_epoch()==fault_motion_epoch_+1U && decoded.first_failure_source()!=0U && decoded.first_failure_axis_mask()==63U;
+      fault_group_phase_=1U;fault_stop_epoch_=decoded.motion_epoch();
+      if(fault_group_source_!=0U && fault_group_source_!=decoded.first_failure_source())valid=false;
+      fault_group_source_=decoded.first_failure_source();
+    } else if(decoded.category()==3U) {
+      valid=valid && fault_group_phase_==1U && decoded.motion_epoch()==fault_stop_epoch_ &&
+        decoded.first_failure_source()==fault_group_source_ && decoded.first_failure_axis_mask()==63U;
+      fault_group_phase_=2U;++fault_disable_count_;
+    } else valid=false;
+    fault_groups_valid_=fault_groups_valid_ && valid;fault_last_group_id_=decoded.group_id();
+  }
   Record record{};
   std::copy(page.raw.begin(), page.raw.end(), record.raw.begin());
   record.size = static_cast<std::uint16_t>(page.raw.size());
@@ -372,6 +402,20 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     record.evidence_lost = page.evidence_lost;
     record.motion_complete = decoded.motion_complete();
     record.release_committed = decoded.release_committed();
+    record.identity_hashes={identity_.contract_hash,identity_.model_hash,identity_.profile_hash,identity_.firmware_hash};record.terminal_group_count=decoded.group_count();
+    record.attempt_motion_epoch=first_motion_epoch_;record.fault_stop_motion_epoch=fault_stop_epoch_;
+    record.terminal_received_us=received_at_us;record.terminal_chain=page.chain_sha256;
+    const bool zero_terminal_times=std::all_of(std::begin(decoded.queued_at_us()),std::end(decoded.queued_at_us()),[](auto x){return x==0U;}) &&
+      std::all_of(std::begin(decoded.taken_at_us()),std::end(decoded.taken_at_us()),[](auto x){return x==0U;}) &&
+      std::all_of(std::begin(decoded.submitted_at_us()),std::end(decoded.submitted_at_us()),[](auto x){return x==0U;}) &&
+      std::all_of(std::begin(decoded.sent_at_us()),std::end(decoded.sent_at_us()),[](auto x){return x==0U;}) &&
+      std::all_of(std::begin(decoded.abort_at_us()),std::end(decoded.abort_at_us()),[](auto x){return x==0U;});
+    record.full_fault_groups_valid=fault_groups_valid_ && fault_group_phase_==2U && fault_disable_count_==1U &&
+      page.attempt_kind==1U && page.parent_run_id==0U && decoded.motion_epoch()==first_motion_epoch_ &&
+      decoded.group_id()==0U && decoded.group_count()==can_page_count_ && decoded.expected_mask()==0U &&
+      decoded.submitted_mask()==0U && decoded.sent_mask()==0U && decoded.failed_mask()==0U && zero_terminal_times &&
+      decoded.final_state()==4U && decoded.release_committed() && !decoded.motion_complete() && !decoded.evidence_lost() &&
+      decoded.first_failure_source()!=0U && decoded.first_failure_source()==fault_group_source_ && decoded.first_failure_axis_mask()==63U;
     record.safety_hold_motion_epoch = safety_hold_motion_epoch_;
     record.safety_hold_valid = safety_hold_valid_ &&
         decoded.motion_epoch() == first_motion_epoch_;
@@ -446,6 +490,8 @@ void RawEvidenceCollector::write_loop() noexcept {
       return;
     }
     consumed_.store(consumed + 1U, std::memory_order_release);
+    if(channel_ && (record.kind==Kind::kState || record.kind==Kind::kStatus) && failure()==Failure::kNone)
+      channel_->publish_raw_cleanup_observation(record.kind==Kind::kState,record.raw.data(),record.size,record.received_at_us,record.cleanup_producer_valid,record.cleanup_generation);
     if (record.kind == Kind::kPage) ++pages_written_;
     if (record.first_page.run_id != 0U && channel_ && failure() == Failure::kNone)
       channel_->publish_raw_evidence_first_page_written(record.first_page);
@@ -456,7 +502,8 @@ void RawEvidenceCollector::write_loop() noexcept {
            record.first_failure_source, record.first_failure_axis_mask,
            record.evidence_lost, record.motion_complete,
            record.release_committed, true, record.safety_hold_motion_epoch,
-           record.safety_hold_valid});
+           record.safety_hold_valid,record.attempt_motion_epoch,record.fault_stop_motion_epoch,
+           record.terminal_received_us,record.terminal_chain,record.full_fault_groups_valid,record.identity_hashes,record.terminal_group_count});
       terminal_written_run_id_.store(record.run_id, std::memory_order_release);
     }
     ++written_;

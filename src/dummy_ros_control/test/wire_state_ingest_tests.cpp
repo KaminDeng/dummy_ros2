@@ -9,7 +9,7 @@ int main() {
   namespace wire = dp::protocol::dummy_robot_v2;
   wire::DummyJointStateV2 state;
   state.set_schema_major(2U);
-  state.set_schema_minor(4U);
+  state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   state.set_boot_epoch(9U);
   state.set_profile_id(7U);
   state.set_state_seq(101U);

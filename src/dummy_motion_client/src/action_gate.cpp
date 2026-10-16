@@ -127,6 +127,14 @@ bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t
   request_=client_.submit(request,now);
   management_evidence_={}; state_evidence_={};
   cancel_request_id_=(operation==ManageOperation::kCancel && cancel_terminal_) ? request_ : 0U;
+  if (!request_ && operation==ManageOperation::kComplete) {
+    completing_after_renewal_=client_.matching_inflight_renewal(request);
+    if(completing_after_renewal_!=0U) { deferred_complete_request_=request; return true; }
+  }
+  if (!request_ && operation==ManageOperation::kCancel && cancel_terminal_ && error_.empty()) {
+    canceling_after_renewal_=client_.matching_inflight_renewal(request);
+    if(canceling_after_renewal_!=0U) { deferred_cancel_request_=request; return true; }
+  }
   if (!request_) { fail(operation==ManageOperation::kCancel ? "STOP_FAILED" : "TRANSPORT_UNAVAILABLE"); return false; }
   return true;
 }
@@ -374,7 +382,139 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
     phase_=Phase::kHold; request_=0; deadline_=0;
   }
 }
+bool ActionGate::deferred_complete_matches_authority() const noexcept {
+  const auto &r=deferred_complete_request_; const auto &a=authorization_.identity;
+  return authorization_.session && authorization_.reference &&
+      r.expected_boot_epoch()==a.expected_boot_epoch() &&
+      r.expected_session_id()==a.expected_session_id() &&
+      r.expected_reference_epoch()==a.expected_reference_epoch() &&
+      r.expected_motion_epoch()==epoch_ && r.expected_management_epoch()==a.expected_management_epoch() &&
+      r.expected_profile_id()==a.expected_profile_id() && r.configured_mask()==a.configured_mask() &&
+      std::equal(std::begin(r.device_id()),std::end(r.device_id()),std::begin(a.device_id())) &&
+      std::equal(std::begin(r.client_instance_id()),std::end(r.client_instance_id()),std::begin(a.client_instance_id()));
+}
+bool ActionGate::bounded_completion_intent(const ManageRequest &live, std::uint32_t committed_seq,
+                                          std::uint64_t now) const noexcept {
+  // 只证明本goal已冻结且设备确认的完成意图，不授权新采样或续租。
+  const auto &identity=authorization_.identity;
+  if(phase_!=Phase::kCompleting || terminal_!=Terminal::kNone || !frozen_ ||
+     !frozen_seq_ || frozen_seq_!=last_seq_ || !committed_seq ||
+     !sequence_at_or_after(committed_seq,frozen_seq_) || !deadline_ || now>=deadline_ ||
+     !authorization_.session || !authorization_.reference || trajectory_.points.empty() ||
+     (operation_!=ManageOperation::kBegin && operation_!=ManageOperation::kComplete) ||
+     (operation_==ManageOperation::kBegin && !request_) ||
+     (operation_==ManageOperation::kComplete && !request_ && !completing_after_renewal_) ||
+     !live.expected_boot_epoch() || !live.expected_session_id() ||
+     !live.expected_reference_epoch() || !live.expected_profile_id() || !live.configured_mask() ||
+     live.expected_boot_epoch()!=identity.expected_boot_epoch() ||
+     live.expected_session_id()!=identity.expected_session_id() ||
+     live.expected_reference_epoch()!=identity.expected_reference_epoch() ||
+     live.expected_motion_epoch()!=epoch_ ||
+     live.expected_management_epoch()!=identity.expected_management_epoch() ||
+     live.expected_profile_id()!=identity.expected_profile_id() ||
+     live.configured_mask()!=identity.configured_mask() ||
+     !std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(identity.device_id())) ||
+     !std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(identity.client_instance_id())))
+    return false;
+  const auto &target=trajectory_.points.back().positions;
+  if(target.size()!=profile_.joints.size() || trajectory_.goal_tolerance.size()!=target.size()) return false;
+  for(std::size_t axis=0;axis<target.size();++axis) {
+    if(!std::isfinite(frozen_q_[axis]) || !std::isfinite(last_q_[axis]) ||
+       !std::isfinite(target[axis]) || !std::isfinite(trajectory_.goal_tolerance[axis]) ||
+       trajectory_.goal_tolerance[axis]<0.0 || frozen_q_[axis]!=last_q_[axis] ||
+       std::abs(frozen_q_[axis]-target[axis])>trajectory_.goal_tolerance[axis]) return false;
+  }
+  return true;
+}
+bool ActionGate::bounded_cancel_intent(const ManageRequest &live, std::uint64_t now) const noexcept {
+  // 只识别当前已提交、仍在原期限内的取消事务，供撤回尚未发送的
+  // RUN续租预约；不授权新的续租或延长停止期限。
+  const auto &identity=authorization_.identity;
+  return phase_==Phase::kStopping && terminal_==Terminal::kNone && frozen_ &&
+      cancel_terminal_ && error_.empty() && operation_==ManageOperation::kCancel &&
+      request_!=0U && cancel_request_id_==request_ && deadline_!=0U && now<deadline_ &&
+      authorization_.session && authorization_.reference &&
+      live.operation()==wire_value(ManageOperation::kCancel) &&
+      live.expected_boot_epoch()!=0U && live.expected_session_id()!=0U &&
+      live.expected_reference_epoch()!=0U && live.expected_profile_id()!=0U &&
+      live.configured_mask()!=0U &&
+      live.expected_boot_epoch()==identity.expected_boot_epoch() &&
+      live.expected_session_id()==identity.expected_session_id() &&
+      live.expected_reference_epoch()==identity.expected_reference_epoch() &&
+      live.expected_motion_epoch()==epoch_ &&
+      live.expected_management_epoch()==identity.expected_management_epoch() &&
+      live.expected_profile_id()==identity.expected_profile_id() &&
+      live.configured_mask()==identity.configured_mask() &&
+      std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(identity.device_id())) &&
+      std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(identity.client_instance_id()));
+}
+bool ActionGate::completion_waiting_for_renewal(std::uint64_t now) const noexcept {
+  return phase_==Phase::kCompleting && terminal_==Terminal::kNone &&
+      operation_==ManageOperation::kComplete && request_==0U && frozen_ && frozen_seq_!=0U &&
+      completing_after_renewal_!=0U && deadline_!=0U && now<deadline_ &&
+      deferred_complete_matches_authority() &&
+      client_.matching_inflight_renewal(deferred_complete_request_)==completing_after_renewal_;
+}
+bool ActionGate::deferred_cancel_matches_authority() const noexcept {
+  const auto &r=deferred_cancel_request_; const auto &a=authorization_.identity;
+  return r.operation()==wire_value(ManageOperation::kCancel) && authorization_.session && authorization_.reference &&
+      r.expected_boot_epoch()==a.expected_boot_epoch() &&
+      r.expected_session_id()==a.expected_session_id() &&
+      r.expected_reference_epoch()==a.expected_reference_epoch() &&
+      r.expected_motion_epoch()==epoch_ && r.expected_management_epoch()==a.expected_management_epoch() &&
+      r.expected_profile_id()==a.expected_profile_id() && r.configured_mask()==a.configured_mask() &&
+      std::equal(std::begin(r.device_id()),std::end(r.device_id()),std::begin(a.device_id())) &&
+      std::equal(std::begin(r.client_instance_id()),std::end(r.client_instance_id()),std::begin(a.client_instance_id()));
+}
+bool ActionGate::cancel_waiting_for_renewal(const ManageRequest &live, std::uint64_t now) const noexcept {
+  return phase_==Phase::kStopping && terminal_==Terminal::kNone && frozen_ &&
+      cancel_terminal_ && error_.empty() && operation_==ManageOperation::kCancel &&
+      request_==0U && cancel_request_id_==0U && canceling_after_renewal_!=0U &&
+      deadline_!=0U && now<deadline_ && authorization_.session && authorization_.reference &&
+      deferred_cancel_matches_authority() &&
+      live.operation()==wire_value(ManageOperation::kCancel) &&
+      live.expected_boot_epoch()==deferred_cancel_request_.expected_boot_epoch() &&
+      live.expected_session_id()==deferred_cancel_request_.expected_session_id() &&
+      live.expected_reference_epoch()==deferred_cancel_request_.expected_reference_epoch() &&
+      live.expected_motion_epoch()==deferred_cancel_request_.expected_motion_epoch() &&
+      live.expected_management_epoch()==deferred_cancel_request_.expected_management_epoch() &&
+      live.expected_profile_id()==deferred_cancel_request_.expected_profile_id() &&
+      live.configured_mask()==deferred_cancel_request_.configured_mask() &&
+      std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(deferred_cancel_request_.device_id())) &&
+      std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(deferred_cancel_request_.client_instance_id())) &&
+      client_.matching_inflight_renewal(deferred_cancel_request_)==canceling_after_renewal_;
+}
 void ActionGate::tick(std::uint64_t now) {
+  if(canceling_after_renewal_!=0U) {
+    if(phase_!=Phase::kStopping || terminal_!=Terminal::kNone || !frozen_ || !cancel_terminal_ ||
+       !error_.empty() || operation_!=ManageOperation::kCancel || request_!=0U || cancel_request_id_!=0U ||
+       deadline_==0U || !deferred_cancel_matches_authority()) {
+      canceling_after_renewal_=0U; fail("STOP_FAILED"); return;
+    }
+
+    if(deadline_ && now>=deadline_) { canceling_after_renewal_=0U; fail("STOP_FAILED"); return; }
+    const auto renewal=client_.renewal_completion(canceling_after_renewal_);
+    if(renewal==RenewalCompletion::kPending) return;
+    canceling_after_renewal_=0U;
+    if(renewal!=RenewalCompletion::kCommitted || !deferred_cancel_matches_authority()) { fail("STOP_FAILED"); return; }
+    deferred_cancel_request_.set_freshness_ticket(authorization_.identity.freshness_ticket());
+    request_=client_.submit(deferred_cancel_request_,now);cancel_request_id_=request_;
+    if(!request_) { fail("STOP_FAILED"); return; }
+  }
+  if(completing_after_renewal_!=0U) {
+    if(deadline_ && now>=deadline_) {
+      completing_after_renewal_=0U; stop(false,"RESULT_UNCONFIRMED",now); return;
+    }
+    const auto renewal=client_.renewal_completion(completing_after_renewal_);
+    if(renewal==RenewalCompletion::kPending) return;
+    completing_after_renewal_=0U;
+    if(renewal!=RenewalCompletion::kCommitted || !deferred_complete_matches_authority()) {
+      stop(false,"RESULT_UNCONFIRMED",now); return;
+    }
+    deferred_complete_request_.set_freshness_ticket(authorization_.identity.freshness_ticket());
+    request_=client_.submit(deferred_complete_request_,now);
+    if(!request_) { fail("TRANSPORT_UNAVAILABLE"); return; }
+  }
   try_completion_hold(now);
   if (hold_drain_pending_ && deadline_ && now>=deadline_) {
     std::fprintf(stderr,
@@ -434,6 +574,8 @@ void ActionGate::inner_result(std::uint64_t generation,Terminal result,const std
   phase_=Phase::kCompleting; deadline_=saturating_deadline(now,timeout_);
 }
 void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) {
+  canceling_after_renewal_=0U; deferred_cancel_request_={};
+  completing_after_renewal_=0U;
   if (phase_==Phase::kFault || phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold ||
       (ready() && terminal_!=Terminal::kNone)) return;
   std::fprintf(stderr,"GATE_STOP_DIAG phase=%u operation=%u reason=%s request=%llu now=%llu\n",
@@ -443,17 +585,21 @@ void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) 
   error_=error; phase_=Phase::kStopping; frozen_=true; hold_drain_pending_=false;
   issue(ManageOperation::kCancel,now);
 }
-void ActionGate::cancel(std::uint64_t now) { if (request_ || hold_drain_pending_) stop(true,"",now); }
+void ActionGate::cancel(std::uint64_t now) { if (request_ || hold_drain_pending_ || completing_after_renewal_!=0U) stop(true,"",now); }
 void ActionGate::abort(const std::string &error,std::uint64_t now) {
-  if (request_ || hold_drain_pending_) stop(false,error,now);
+  if(canceling_after_renewal_!=0U && request_==0U && cancel_request_id_==0U && phase_==Phase::kStopping) { fail(error.empty()?"RESULT_UNCONFIRMED":error); return; }
+  if (request_ || hold_drain_pending_ || completing_after_renewal_!=0U) stop(false,error,now);
 }
 void ActionGate::invalidate_authorization(std::uint64_t now) {
+  canceling_after_renewal_=0U; deferred_cancel_request_={};
   if (phase_==Phase::kFault && !authorization_.session) return;
-  if (request_ || hold_drain_pending_) stop(false,"SESSION_CHANGED",now);
+  if (request_ || hold_drain_pending_ || completing_after_renewal_!=0U) stop(false,"SESSION_CHANGED",now);
   authorization_.session=false; port_.disable(); ++generation_;
   fail("SESSION_CHANGED");
 }
 void ActionGate::fail(const std::string &error) {
+  canceling_after_renewal_=0U; deferred_cancel_request_={};
+  completing_after_renewal_=0U;
   if(phase_!=Phase::kFault || error_!=error)
     std::fprintf(stderr,"GATE_FAIL_DIAG phase=%u operation=%u reason=%s request=%llu\n",
                  static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),

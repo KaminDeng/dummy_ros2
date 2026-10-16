@@ -78,6 +78,11 @@ class PtyBridge {
       while (running_) {
         pollfd fds[]{{left_master_, POLLIN, 0}, {right_master_, POLLIN, 0}};
         if (poll(fds, 2, 20) <= 0) continue;
+        if (!(fds[0].revents & POLLIN) && !(fds[1].revents & POLLIN) &&
+            ((fds[0].revents | fds[1].revents) & (POLLHUP | POLLERR))) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          continue;
+        }
         if (fds[0].revents & POLLIN) forward(left_master_, right_master_);
         if (fds[1].revents & POLLIN) forward(right_master_, left_master_);
       }
@@ -129,7 +134,7 @@ struct StopBridgeBeforeTransport {
 
 std::vector<std::uint8_t> request_bytes(std::uint64_t request_id = 0x20000000000001ULL) {
   ManageRequest request;
-  request.set_schema_major(2); request.set_schema_minor(4U);
+  request.set_schema_major(2); request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   request.set_request_id(request_id);
   std::vector<std::uint8_t> bytes(wire::DummyManageV2RequestCodec::kEncodedSize);
   if (wire::DummyManageV2RequestCodec::encode(request, bytes.data(), bytes.size()) != wire::CodecResult::kOk)
@@ -352,7 +357,7 @@ dp::comm::Result reply(const Service::Request &request, Service::Response *outpu
            const dp::comm::RequestInfo &, void *context) {
   reply_calls.fetch_add(1, std::memory_order_relaxed);
   Service::Response response;
-  response.set_schema_major(2); response.set_schema_minor(4U); response.set_request_id(request.request_id());
+  response.set_schema_major(2); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor); response.set_request_id(request.request_id());
   response.set_device_id(request.device_id()); response.set_client_instance_id(request.client_instance_id());
   response.set_boot_epoch(request.expected_boot_epoch());
   response.set_session_id(request.expected_session_id());
@@ -436,7 +441,10 @@ int serial_roundtrip() {
   SignalReader signal_reader{signals[0]};
   PeerProcess peer_guard(child);
   bridge.start();
-  if (!read_peer_signal(signal_reader.fd, 'R', 3000)) return 33;
+  if (!read_peer_signal(signal_reader.fd, 'R', 3000)) {
+    std::cerr << "组件失败 phase=peer_ready code=33 timeout_ms=3000\n";
+    return 33;
+  }
   DpManagementParameters config{bridge.right_endpoint(),{1},{2},1,1};
   DpManagementTransport transport(config);
   StopBridgeBeforeTransport stop_bridge{bridge};
@@ -446,7 +454,10 @@ int serial_roundtrip() {
   if (prime_bytes.empty()) return 37;
   auto prime = transport.send(prime_bytes);
   if (!prime) return 38;
-  if (!read_peer_signal(signal_reader.fd, 'P', 5000)) return 39;
+  if (!read_peer_signal(signal_reader.fd, 'P', 5000)) {
+    std::cerr << "组件失败 phase=prime_receipt code=39 timeout_ms=5000\n";
+    return 39;
+  }
   prime.reset();
   const auto bytes = request_bytes();
   if (bytes.empty()) return 34;
@@ -455,10 +466,19 @@ int serial_roundtrip() {
   const auto deadline = Clock::now() + std::chrono::seconds(4);
   while (!response && Clock::now() < deadline) {
     const auto before=std::chrono::steady_clock::now(); response=handle->poll();
-    if(std::chrono::steady_clock::now()-before>std::chrono::milliseconds(20)) return 4;
+    const auto poll_elapsed = std::chrono::steady_clock::now() - before;
+    if(poll_elapsed>std::chrono::milliseconds(20)) {
+      std::cerr << "组件失败 phase=nonblocking_poll code=4 elapsed_ns="
+                << std::chrono::duration_cast<std::chrono::nanoseconds>(poll_elapsed).count()
+                << " limit_ms=20\n";
+      return 4;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
-  if(!response) return 5;
+  if(!response) {
+    std::cerr << "组件失败 phase=response_wait code=5 timeout_ms=4000\n";
+    return 5;
+  }
   Service::Response decoded;
   if(wire::DummyManageV2ResponseCodec::decode(response->data(),response->size(),&decoded)!=wire::CodecResult::kOk ||
      decoded.request_id()!=0x20000000000001ULL || decoded.operation_id()!=88) return 6;
@@ -487,6 +507,9 @@ int main(int argc, char **argv) {
   }
   if (argc != 1) return 40;
   const int serial_result = serial_roundtrip();
-  if (serial_result != 0) return serial_result;
+  if (serial_result != 0) {
+    std::cerr << "组件失败 phase=serial_roundtrip code=" << serial_result << '\n';
+    return serial_result;
+  }
   std::cout << "{\"evidence_scope\":\"component_only\",\"cross_process_manage_v2\":true,\"poll_nonblocking\":true}\n";
 }

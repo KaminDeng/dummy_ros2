@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <algorithm>
 #include <string>
 #include "dummy_motion_client/action_gate.hpp"
 #include "dummy_motion_client/management_client.hpp"
@@ -16,16 +17,24 @@ struct DeviceObservation {
   std::uint64_t rejected_ack_boot_epoch=0, rejected_ack_session_id=0, rejected_ack_received_us=0;
   std::uint32_t rejected_ack_reference_epoch=0, rejected_ack_motion_epoch=0,
                 rejected_ack_sequence=0;
+  bool raw_cleanup_producer_valid=false;
 };
 struct RawTerminalIdentity {
   std::uint64_t boot_epoch=0, session_id=0, run_id=0;
   std::uint64_t parent_run_id=0;
   std::uint8_t attempt_kind=0, final_state=0;
-  std::uint8_t first_failure_source=0, first_failure_axis_mask=0;
+  std::uint16_t first_failure_source=0;
+  std::uint8_t first_failure_axis_mask=0;
   bool evidence_lost=false, motion_complete=false, release_committed=false;
   bool chain_valid=false;
   std::uint32_t safety_hold_motion_epoch=0;
   bool safety_hold_valid=false;
+  std::uint32_t attempt_motion_epoch=0U, fault_stop_motion_epoch=0U;
+  std::uint64_t terminal_received_us=0U;
+  std::array<std::uint8_t,32> terminal_chain{};
+  bool full_fault_groups_valid=false;
+  std::array<std::array<std::uint8_t,32>,4> identity_hashes{};
+  std::uint32_t terminal_group_count=0U;
 };
 struct RawFirstPageWritten {
   std::uint64_t boot_epoch=0U, session_id=0U, run_id=0U;
@@ -48,6 +57,52 @@ inline bool raw_terminal_matches(const RawTerminalIdentity &terminal,
   return run!=0U && terminal.boot_epoch==boot &&
     terminal.session_id==session && terminal.run_id==run;
 }
+inline bool raw_fault_cleanup_matches(const RawTerminalIdentity &terminal,const RawFirstPageWritten &first,const DeviceObservation &observation,
+    std::uint64_t boot,std::uint64_t session,std::uint64_t run,std::uint32_t active_epoch,
+    std::uint32_t profile,std::uint8_t mask,const std::array<std::uint8_t,16> &device,std::uint64_t now,
+    std::uint64_t state_max_age_us=250000U) noexcept {
+  namespace wire=dp::protocol::dummy_robot_v2;
+  if(!raw_first_page_matches(first,boot,session,run,terminal.attempt_motion_epoch) || !first.chain_valid ||
+     !first.full_six || !first.strict_refresh_successor || first.evidence_lost || first.attempt_kind!=1U || first.category!=1U ||
+     first.evidence_seq!=0U || !first.final || first.expected_mask!=63U || first.submitted_mask!=63U || first.sent_mask!=63U || first.failed_mask!=0U)return false;
+  if(!raw_terminal_matches(terminal,boot,session,run) || !session || mask!=63U || !profile ||
+     terminal.attempt_kind!=1U || terminal.parent_run_id!=0U || terminal.final_state!=4U ||
+     !terminal.full_fault_groups_valid || !terminal.chain_valid || terminal.evidence_lost ||
+     terminal.motion_complete || !terminal.release_committed || terminal.first_failure_source==0U ||
+     terminal.first_failure_axis_mask!=63U || (terminal.first_failure_source!=0x1003U && terminal.first_failure_source!=0x100aU) || terminal.attempt_motion_epoch==0U ||
+     active_epoch==UINT32_MAX || active_epoch<terminal.attempt_motion_epoch ||
+     active_epoch-terminal.attempt_motion_epoch>1U || terminal.fault_stop_motion_epoch!=active_epoch+1U ||
+     terminal.terminal_group_count==0U || !terminal.terminal_received_us ||
+     !std::any_of(terminal.terminal_chain.begin(),terminal.terminal_chain.end(),[](auto x){return x!=0U;}))return false;
+  if(!observation.raw_cleanup_producer_valid || !observation.state_received_us || !observation.status_received_us ||
+     observation.state_received_us<terminal.terminal_received_us || observation.status_received_us<terminal.terminal_received_us ||
+     observation.state_received_us>now || observation.status_received_us>now ||
+     now-observation.state_received_us>state_max_age_us || now-observation.status_received_us>1000000U)return false;
+  wire::DummyJointStateV2 state{};wire::DummyDeviceStatusV2 status{};
+  if(wire::DummyJointStateV2Codec::decode(observation.state.data(),observation.state.size(),&state)!=wire::CodecResult::kOk ||
+     wire::DummyDeviceStatusV2Codec::decode(observation.status.data(),observation.status.size(),&status)!=wire::CodecResult::kOk)return false;
+  if(state.schema_major()!=2U || state.schema_minor()!=wire::kSchemaMinor || status.schema_major()!=2U || status.schema_minor()!=wire::kSchemaMinor ||
+     state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=0U || status.session_id()!=0U ||
+     state.reference_epoch()!=0U || status.reference_epoch()!=0U || state.core_state()!=9U || status.core_state()!=9U ||
+     state.motion_epoch()!=terminal.fault_stop_motion_epoch || status.motion_epoch()!=terminal.fault_stop_motion_epoch ||
+     state.management_epoch()!=status.management_epoch() || state.profile_id()!=profile || status.profile_id()!=profile ||
+     state.configured_mask()!=mask || status.configured_mask()!=mask ||
+     !std::equal(device.begin(),device.end(),state.device_id()) || !std::equal(device.begin(),device.end(),status.device_id()) ||
+     status.run_id()!=run || status.attempt_id()!=run || status.attempt_kind()!=1U || status.parent_run_id()!=0U ||
+     status.final_state()!=4U || status.evidence_lost() || status.motion_complete() || !status.release_committed() ||
+     status.real_motion_permitted() || status.permit_remaining_us()!=0U ||
+     status.failure_source()!=terminal.first_failure_source || status.failure_axis_mask()!=mask ||
+     status.group_count()!=terminal.terminal_group_count)return false;
+  const bool status_has_chain=std::any_of(std::begin(status.evidence_chain_sha256()),std::end(status.evidence_chain_sha256()),[](auto b){return b!=0U;});
+  // 当前MCU session清零后的Motion fault状态不导出chain；权威始终是上方完整验证+真实flush的原terminal。
+  // 非零Status chain绝不允许不匹配；零只在上述完整fault4/root/epoch/clearAuthority同shape下成立。
+  if(status_has_chain && !std::equal(terminal.terminal_chain.begin(),terminal.terminal_chain.end(),status.evidence_chain_sha256()))return false;
+  return std::equal(terminal.identity_hashes[0].begin(),terminal.identity_hashes[0].end(),status.contract_sha256()) &&
+    std::equal(terminal.identity_hashes[1].begin(),terminal.identity_hashes[1].end(),status.model_sha256()) &&
+    std::equal(terminal.identity_hashes[2].begin(),terminal.identity_hashes[2].end(),status.profile_sha256()) &&
+    std::equal(terminal.identity_hashes[3].begin(),terminal.identity_hashes[3].end(),status.firmware_sha256());
+}
+
 inline bool observation_is_fresh(const DeviceObservation &observation,std::uint64_t now,
                                  std::uint64_t state_max_age_us=250000U) noexcept {
   if(!observation.state_received_us || !observation.status_received_us) return false;
@@ -164,6 +219,7 @@ class DpManagementTransport final : public ManagementTransport {
   bool post_complete_begin_ready() const noexcept;
   std::optional<HoldDrainEvidence> hold_drain_snapshot() const noexcept;
   RawTerminalIdentity raw_terminal_flushed() const noexcept;
+  DeviceObservation raw_cleanup_observation() const noexcept;
   RawFirstPageWritten raw_first_page_written() const noexcept;
   std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &) override;
   std::uint32_t reserve_sequence(std::uint32_t proposed) noexcept override;

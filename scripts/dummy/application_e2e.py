@@ -554,7 +554,7 @@ def validate_evidence(evidence):
         raise ValueError("release timeline request key is unlinked")
     active = release["terminal"] == "CANCELED_AND_RELEASED"
     if last["action_status"] == "CANCELED" and (
-            active or release["run_id"] != last["run_id"] + 1 or
+            release["run_id"] != last["run_id"] + 1 or
             not any(bytes.fromhex(page["raw_hex"])[32] == 3 for page in
                               release["evidence_pages"][:-1])):
         raise ValueError("cancel release lacks next-run six-axis Disable SENT")

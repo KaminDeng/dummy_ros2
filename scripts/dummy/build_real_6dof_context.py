@@ -5,9 +5,11 @@ import argparse
 from bisect import bisect_right
 import csv
 import io
+import hashlib
 import json
 import math
 import os
+import struct
 from pathlib import Path
 import tempfile
 
@@ -19,6 +21,57 @@ except ImportError:
 
 PRODUCER_LAG_METHOD = "state_receive_minus_produced_offset_span"
 WINDOW_LAG_METHOD = PRODUCER_LAG_METHOD + "_motion_window"
+
+
+def _cancel_coverage_chain(records, goal, request, receipt, stop_page, client):
+    """完整取消链只授权观测覆盖，State旧事务号不作为Stop确认。"""
+    boot, session, run = int(goal["boot"]), int(goal["session"]), int(goal["run_id"])
+    wanted, result = request["fields"], receipt["fields"]
+    if (wanted["configured_mask"] != 63 or wanted["expected_profile_id"] <= 0 or
+            wanted["expected_reference_epoch"] != int(goal["reference_epoch"]) or
+            result["reference_epoch"] != wanted["expected_reference_epoch"] or
+            result["profile_id"] != wanted["expected_profile_id"] or
+            result["management_epoch"] != wanted["expected_management_epoch"] + 1 or
+            result["first_failure_reason"] != 0):
+        raise ValueError("unlinked cancel coverage receipt")
+    digest_fields = ("contract_sha256", "model_sha256", "profile_sha256", "firmware_sha256")
+    identities = {tuple(item["fields"][name] for name in digest_fields)
+                  for item in records if item["kind"] == 3 and item["boot"] == boot and
+                  item["fields"]["device_id"] == wanted["device_id"] and
+                  item["fields"]["profile_id"] == wanted["expected_profile_id"] and
+                  item["fields"]["configured_mask"] == wanted["configured_mask"]}
+    if len(identities) != 1:
+        raise ValueError("ambiguous cancel coverage static identity")
+    hashes = tuple(bytes.fromhex(value) for value in next(iter(identities)))
+    if any(len(value) != 32 or not any(value) for value in hashes):
+        raise ValueError("invalid cancel coverage static identity")
+    seed = struct.pack("<QQ", run, boot) + bytes.fromhex(client) + b"".join(hashes)
+    previous = hashlib.sha256(seed.ljust(192, b"\0")).digest()
+    pages = joiner._pages(records, run, boot, session, 1, 0)
+    previous_count = 0
+    for index, page in enumerate(pages):
+        raw, fields = page["raw"], page["fields"]
+        terminal = index == len(pages) - 1
+        if (len(raw) != 372 or raw[371] != 0 or raw[307:339] != previous or
+                raw[339:371] != hashlib.sha256(previous + raw[:307] + raw[371:372]).digest() or
+                fields["evidence_seq"] != index or fields["group_count"] < previous_count or
+                fields["group_count"] > len(pages) - 1 or fields["final"] != 1 or
+                fields["first_failure_source"] != 0 or fields["first_failure_axis_mask"] != 0):
+            raise ValueError("unverified cancel coverage chain")
+        if not terminal and (fields["category"] not in (1, 2) or fields["group_id"] == 0 or
+                fields["group_count"] < index + 1 or
+                (fields["expected_mask"], fields["submitted_mask"], fields["sent_mask"],
+                 fields["failed_mask"]) != (63, 63, 63, 0)):
+            raise ValueError("unverified cancel coverage CAN SENT")
+        previous, previous_count = raw[339:371], fields["group_count"]
+    terminal = pages[-1]["fields"]
+    if (stop_page not in pages or terminal["final_state"] != 7 or terminal["terminal_reason"] != 0 or
+            terminal["motion_epoch"] != int(goal["motion_epoch"]) or
+            terminal["motion_complete"] or terminal["release_committed"] or
+            terminal["group_id"] != 0 or terminal["group_count"] != len(pages) - 1 or
+            any(terminal[name] != 0 for name in
+                ("expected_mask", "submitted_mask", "sent_mask", "failed_mask"))):
+        raise ValueError("unlinked cancel coverage terminal")
 
 
 def _motion_window(timeline_data, records, client, state_max_age):
@@ -102,6 +155,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
     if device_id == "00" * 16:
         raise ValueError("motion window device identity missing")
     cancel_bounds = {}
+    cancel_proofs = {}
     for goal_index, goal in enumerate(goals):
         goal_rows = rows[rows.index(goal):rows.index(goals[goal_index + 1])
                          if goal_index + 1 < len(goals) else len(rows)]
@@ -111,7 +165,18 @@ def _motion_window(timeline_data, records, client, state_max_age):
         if len(canceled) != 1:
             raise ValueError("ambiguous ROS canceled goal phase")
         terminal = canceled[0]
-        old_epoch = int(goal["motion_epoch"])
+        begins = [row for row in goal_rows if row["event"] == "after_begin"]
+        identity_fields = ("goal_uuid", "trajectory_sha256", "boot", "session",
+                           "reference_epoch", "run_id", "axis_mask")
+        if (len(begins) != 1 or
+                any(begins[0][field] != goal[field] for field in identity_fields) or
+                not int(goal["steady_us"]) <= int(begins[0]["steady_us"]) <
+                    int(terminal["steady_us"])):
+            raise ValueError("missing or unlinked canceled goal after_begin")
+        begin_time = int(begins[0]["steady_us"])
+        old_epoch = int(begins[0]["motion_epoch"])
+        if old_epoch < int(goal["motion_epoch"]):
+            raise ValueError("canceled goal after_begin epoch regression")
         stop_epoch = int(terminal["motion_epoch"])
         request_id = int(terminal["cancel_request_id"])
         operation_id = int(terminal["cancel_operation_id"])
@@ -123,7 +188,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
                            item["fields"]["device_id"] == device_id and
                            item["fields"]["expected_motion_epoch"] == old_epoch and
                            (item["boot"], item["session"]) == (boot, session) and
-                           goal_times[goal_index] <= item["when"] <= terminal_time]
+                           begin_time <= item["when"] <= terminal_time]
         stop_pages = [item for item in records if item["kind"] == 1 and
                       (item["boot"], item["session"], item["run"]) ==
                       (boot, session, int(goal["run_id"])) and
@@ -169,14 +234,20 @@ def _motion_window(timeline_data, records, client, state_max_age):
                 not cancel_requests[0]["when"] <= receipts[0]["when"]):
             raise ValueError("missing or unlinked raw cancel Stop CAN page")
         cancel_bounds[goal_index] = (cancel_requests[0]["when"],
-                                     stop_pages[0]["when"], old_epoch, stop_epoch)
+                                     stop_pages[0]["when"], old_epoch, stop_epoch,
+                                     begin_time, int(goal["motion_epoch"]))
+        cancel_proofs[goal_index] = (goal, cancel_requests[0], receipts[0], stop_pages[0])
     idle_statuses = [item for item in records if item["kind"] == 3 and
                      (item["boot"], item["session"], item["fields"]["run_id"]) ==
                      (boot, 0, release_run) and
                      item["fields"]["device_id"] == device_id and
                      item["fields"]["core_state"] == 1 and
                      item["fields"]["release_committed"] == 1 and
-                     terminals[0]["when"] <= item["when"] <= end and
+                     item["fields"]["operation_id"] == responses[0]["fields"]["operation_id"] and
+                     item["fields"]["final_state"] == terminals[0]["fields"]["final_state"] and
+                     item["fields"]["permit_remaining_us"] == 0 and
+                     (item["fields"]["reference_epoch"], item["fields"]["motion_epoch"]) == release_phase and
+                     requests[0]["when"] <= item["when"] <= end and
                      end - item["when"] <= state_max_age]
     idle_states = [item for item in records if item["kind"] == 2 and
                    (item["boot"], item["session"]) == (boot, 0) and
@@ -184,7 +255,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
                    (item["fields"]["reference_epoch"],
                     item["fields"]["motion_epoch"]) == release_phase and
                    item["fields"]["core_state"] == 1 and
-                   terminals[0]["when"] <= item["when"] <= end and
+                   requests[0]["when"] <= item["when"] <= end and
                    end - item["when"] <= state_max_age]
     if not idle_statuses or not idle_states:
         raise ValueError("missing fresh raw Release Idle observation")
@@ -211,6 +282,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
            for item in window_states):
         raise ValueError("motion window State identity mismatch")
     coverage_states = []
+    verified_cancel_coverage = set()
     for item in window_states:
         if item["session"] != session:
             coverage_states.append(item)
@@ -220,13 +292,42 @@ def _motion_window(timeline_data, records, client, state_max_age):
         if bound is None:
             coverage_states.append(item)
             continue
-        request_time, stop_time, old_epoch, stop_epoch = bound
+        request_time, stop_time, old_epoch, stop_epoch, begin_time, accepted_epoch = bound
         epoch = item["fields"]["motion_epoch"]
-        if ((item["when"] < request_time and epoch != old_epoch) or
+        # 上游已核对唯一 Disable 的请求、回执、终链及 Idle。取消完成后
+        # 同 session 的 Disabling 属于该释放事务，不再属于停止 epoch。
+        if (goal_index == len(goals) - 1 and item["when"] >= requests[0]["when"] and
+                item["fields"]["core_state"] in (7, 8) and
+                item["fields"]["management_epoch"] == responses[0]["fields"]["management_epoch"] and
+                item["fields"]["configured_mask"] == 63 and
+                item["fields"]["profile_id"] == requests[0]["fields"]["expected_profile_id"] and
+                (item["fields"]["reference_epoch"], epoch) == releasing_phase):
+            coverage_states.append(item)
+            continue
+        if ((item["when"] < begin_time and epoch not in (accepted_epoch, old_epoch)) or
+                (begin_time <= item["when"] < request_time and epoch != old_epoch) or
                 (item["when"] > stop_time and epoch != stop_epoch)):
             raise ValueError("motion window State identity phase mismatch")
         if not request_time <= item["when"] <= stop_time:
             coverage_states.append(item)
+        else:
+            goal, request, receipt, stop_page = cancel_proofs[goal_index]
+            fields = item["fields"]
+            # State无run字段且事务号可旧；本run完整链和精确回执提供关联。
+            eligible = (epoch == stop_epoch and
+                        fields["reference_epoch"] == request["fields"]["expected_reference_epoch"] and
+                        fields["profile_id"] == receipt["fields"]["profile_id"] and
+                        fields["configured_mask"] == 63 and
+                        fields["management_epoch"] == receipt["fields"]["management_epoch"] and
+                        fields["core_state"] in (7, 4) and
+                        (fields["core_state"] != 4 or fields["hold_ready"] == 1) and
+                        all(fields[name] == 63 for name in
+                            ("position_valid_mask", "velocity_valid_mask", "raw_position_valid_mask")))
+            if eligible:
+                if goal_index not in verified_cancel_coverage:
+                    _cancel_coverage_chain(records, goal, request, receipt, stop_page, client)
+                    verified_cancel_coverage.add(goal_index)
+                coverage_states.append(item)
     marker_index = 0
     phase_floor = phase_markers[0][1]
     previous_epoch = phase_floor

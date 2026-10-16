@@ -1,0 +1,51 @@
+# gear_ratio is a deprecated uniform alias; current mapping uses model + gear_ratios.
+profile_name: f405_6dof_bench
+artifact_kind: application_hold_no_load_candidate
+source_policy: policy/application_hold_no_load.json
+uses_dpsdk_device: true
+test_only: false
+motion_supported: true
+motion_permitted_on_real_hardware: false
+physical_calibration_verified: false
+active_axes:
+- Joint1
+- Joint2
+- Joint3
+- Joint4
+- Joint5
+- Joint6
+configured_mask: 63
+can_nodes:
+- 1
+- 2
+- 3
+- 4
+- 5
+- 6
+gear_ratio: 50
+reference_kind: BENCH_SESSION
+deployment_stop_policy: APPLICATION_HOLD
+no_load_bench: true
+gravity_loaded: false
+safe_terminal_action: DisableAndReleaseNoLoadBench
+timing:
+  control_period_us: 20000
+  state_publish_period_us: 20000
+  command_timeout_us: 5000000
+  max_can_tx_residence_us: 100000
+  session_lease_us: 30000000
+  max_goal_duration_us: 10000000
+  local_hold_budget_us: 5000000
+simulation:
+  velocity_limit_rad_s: 0.15079644737231007
+  acceleration_limit_rad_s2: 1.0
+  max_tracking_error_rad: 0.05
+  hold_position_tolerance_rad: 0.003
+profile_id: 201
+gear_ratios:
+- 50
+- 50
+- 50
+- 50
+- 50
+- 50

@@ -17,6 +17,7 @@ from types import MappingProxyType
 
 ROOT = Path(__file__).resolve().parents[2]
 LAYOUT = json.loads((ROOT / "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
+LEGACY_LAYOUT = json.loads((ROOT / "contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json").read_text())
 TYPES = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
          "float64": "d", "bool": "B"}
 RECORD_HEADER = struct.Struct("<B H Q Q Q Q I")
@@ -45,7 +46,16 @@ def _snapshot(path, expected=None):
 
 
 def _decode(name, raw):
-    layout = LAYOUT["payloads"][name]
+    if len(raw) < 4:
+        raise ValueError(f"invalid {name} wire size")
+    schema = struct.unpack_from("<HH", raw)
+    if schema == (2, 4):
+        selected_layout = LEGACY_LAYOUT
+    elif schema == (2, 5):
+        selected_layout = LAYOUT
+    else:
+        raise ValueError(f"invalid {name} schema")
+    layout = selected_layout["payloads"][name]
     if len(raw) != layout["encoded_size"]:
         raise ValueError(f"invalid {name} wire size")
     result = {}
@@ -55,7 +65,7 @@ def _decode(name, raw):
                                     raw, field["offset"])
         result[field["name"]] = (bytes(values).hex() if count > 1 and
             field["type"] == "uint8" else list(values) if count > 1 else values[0])
-    if (result["schema_major"], result["schema_minor"]) != (2, 4):
+    if (result["schema_major"], result["schema_minor"]) != schema:
         raise ValueError(f"invalid {name} schema")
     return result
 
@@ -572,7 +582,7 @@ def _unconfirmed_cancel_observation(action):
             release.get("bootstrap_reply") == "RELEASED_IDLE")
 
 
-def _preempt_probe(action, rows, records, goal, release, client):
+def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
     reported = action.get("preempt_goals")
     mirrored = action.get("goals")
     cancel = action.get("cancel")
@@ -643,11 +653,30 @@ def _preempt_probe(action, rows, records, goal, release, client):
     release_requests = [item for item in records if item["kind"] == 4 and
                         item["fields"]["operation"] == 10 and
                         item["fields"]["request_id"] == release["request_id"]]
-    if (len(release_requests) != 1 or
-            any(item["fields"]["run_id"] not in (0, goal["run_id"])
-                for item in records if item["kind"] == 3 and
-                request["when"] <= item["when"] < release_requests[0]["when"])):
+    if len(release_requests) != 1:
         raise ValueError("second motion status before A release")
+    terminal_when = _pages(records, goal["run_id"], goal["boot_epoch"],
+                           goal["session_id"], 1, 0)[-1]["when"]
+    hold_identity = (goal["boot_epoch"], goal["session_id"],
+                     before["reference_epoch"], goal["motion_epoch"] + 1)
+    for item in records:
+        if (item["kind"] != 3 or not
+                request["when"] <= item["when"] < release_requests[0]["when"] or
+                item["fields"]["run_id"] in (0, goal["run_id"])):
+            continue
+        status = item["fields"]
+        if ((item["boot"], item["session"], status["reference_epoch"],
+             status["motion_epoch"]) != hold_identity or
+                (status["boot_epoch"], status["session_id"]) != hold_identity[:2] or
+                status["device_id"] != fields["device_id"] or
+                status["run_id"] != release["run_id"] or
+                (status["core_state"], status["attempt_kind"], status["parent_run_id"],
+                 status["final_state"], status["motion_complete"], status["evidence_lost"]) !=
+                (4, 1, 0, 0, 0, 0)):
+            raise ValueError("second motion status before A release")
+        # 取消后的active Hold刷新也可能先于用户Disable发布；仍需原完整链/新鲜度证明。
+        _hold_observations(records, item["when"], hold_identity, goal["run_id"],
+                           state_max_age, terminal_when, client, 7)
     return {"request_id": fields["request_id"],
             "operation_id": receipts[0]["fields"]["operation_id"],
             "run_id": goal["run_id"], "goal_id": goal["goal_id"]}
@@ -1049,7 +1078,9 @@ def _joined_goal(rows, records, action, context):
             "run_id": run, "session_id": session,
             "boot_epoch": boot, "motion_epoch": motion,
             "target_rad": target,
-            "feedback_rad": actual, "path_error_max_rad": path_error,
+            "feedback_rad": actual if canceled else _six(
+                hold_state["fields"]["position_rad"], "verified terminal Hold position"),
+            "path_error_max_rad": path_error,
             "path_tolerance_rad": path_tolerance,
             "goal_tolerance_rad": goal_tolerance,
             "feedback_age_us": feedback_row["feedback_age_us"],
@@ -1205,7 +1236,9 @@ def _release(records, goal, hold_row, terminal, state_max_age, hashes):
         raise ValueError("unconfirmed RELEASE Idle")
     status_chain = idle_status["fields"]["evidence_chain_sha256"]
     terminal_chain = release_pages[-1]["fields"]["chain_sha256"]
-    if (idle_status["when"] < release_pages[-1]["when"] or
+    if (idle_status["when"] < request["when"] or
+            (idle_status["when"] < release_pages[-1]["when"] and
+             idle_status["fields"]["operation_id"] != operation_id) or
             idle_status["fields"]["attempt_kind"] != (1 if active else 3) or
             idle_status["fields"]["final_state"] != (2 if active else 8) or
             idle_status["fields"]["evidence_lost"] or
@@ -1290,7 +1323,7 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
     preempt = None
     if action.get("scope") == "ROS_PREEMPT_PROBE":
         preempt = _preempt_probe(action, timelines[0], records, goals[0], release,
-                                 context["client_id"])
+                                 context["client_id"], state_max_age)
     elif action.get("scope") == "ROS_PREEMPT_RECOVERY":
         preempt = _preempt_recovery(action, timelines, records, goals, release,
                                     context["client_id"])

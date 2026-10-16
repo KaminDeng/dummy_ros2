@@ -60,6 +60,14 @@ class BootstrapCoordinator {
   void observe(const BootstrapSnapshot &snapshot, std::uint64_t now_us) noexcept;
   void invalidate(const char *reason) noexcept;
   void tick(std::uint64_t now_us);
+  bool release_request_inflight() const noexcept {
+    return phase_==BootstrapPhase::kReleasePending && request_id_!=0U &&
+        last_operation_==ManageOperation::kDisableAndRelease;
+  }
+  bool renewal_request_inflight() const noexcept {
+    return phase_==BootstrapPhase::kRenewLease && request_id_!=0U &&
+        last_operation_==ManageOperation::kRenewLease;
+  }
   BootstrapPhase phase() const noexcept { return phase_; }
   bool ready() const noexcept { return phase_ == BootstrapPhase::kReady; }
   bool operation_complete() const noexcept { return phase_ == BootstrapPhase::kOperationComplete; }

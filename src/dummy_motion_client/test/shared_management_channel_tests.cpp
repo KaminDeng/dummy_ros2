@@ -2,6 +2,9 @@
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 #include <cstdio>
+#include <chrono>
+#include <future>
+#include <thread>
 #include <memory>
 #include <string>
 #include <unistd.h>
@@ -32,7 +35,7 @@ int main() {
   std::vector<std::uint8_t> bytes(dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize);
   dummy_motion_client::ManageRequest request;
   request.set_schema_major(2U);
-  request.set_schema_minor(4U);
+  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   request.set_request_id(42U);
   if (dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::encode(
           request, bytes.data(), bytes.size()) != dp::protocol::dummy_robot_v2::CodecResult::kOk)
@@ -128,11 +131,45 @@ int main() {
   first.reset();
   channel->queued.reset();
   dummy_motion_client::WireManagementClient busy_client(facade);
-  {
-    std::lock_guard<std::mutex> lock(channel->mutex);
-    if(!busy_client.submit(query,200)) return 10;
+  std::promise<void> lock_owned, release_lock;
+  auto released=release_lock.get_future();
+  std::thread holder([&] {
+    std::unique_lock<std::mutex> lock(channel->mutex);
+    lock_owned.set_value();
+    released.wait();
+  });
+  lock_owned.get_future().wait();
+  const auto admission_started=dummy_motion_client::management_now_us();
+  const auto busy_id=busy_client.submit(query,admission_started);
+  const auto poll_started=dummy_motion_client::management_now_us();
+  const auto first_poll=busy_id ? busy_client.poll(busy_id) :
+      std::optional<dummy_motion_client::ManageReply>{};
+  const auto first_poll_us=dummy_motion_client::management_now_us()-poll_started;
+  release_lock.set_value();
+  holder.join();
+  if(!busy_id || first_poll || channel->queued || first_poll_us>20000U) return 10;
+  const auto admission_deadline=admission_started+100000U;
+  while(!channel->queued && dummy_motion_client::management_now_us()<admission_deadline) {
+    if(busy_client.poll(busy_id)) return 11;
+    if(!channel->queued) std::this_thread::sleep_for(std::chrono::microseconds(2000));
   }
-  if(busy_client.poll(1) || !channel->queued) return 11;
+  if(!channel->queued) return 11;
+  const auto admitted_pending=channel->queued;
+  const auto original_bytes=admitted_pending->request;
+  dummy_motion_client::ManageRequest admitted_request;
+  if(dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::decode(
+      original_bytes.data(),original_bytes.size(),&admitted_request)!=
+      dp::protocol::dummy_robot_v2::CodecResult::kOk ||
+      admitted_request.request_id()!=busy_id || admitted_request.request_seq()==0U ||
+      admitted_request.operation()!=dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::kQuery)) return 11;
+  auto expected_request=query; expected_request.set_schema_major(2U); expected_request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  expected_request.set_request_id(busy_id);expected_request.set_request_seq(admitted_request.request_seq());
+  std::array<std::uint8_t,dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize> expected_bytes{};
+  if(dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::encode(
+      expected_request,expected_bytes.data(),expected_bytes.size())!=
+      dp::protocol::dummy_robot_v2::CodecResult::kOk || expected_bytes!=original_bytes ||
+      busy_client.poll(busy_id) || channel->queued!=admitted_pending ||
+      admitted_pending->request!=original_bytes) return 11;
   channel->queued.reset();
   channel->observe_request_sequence(2100000000U);
   channel->observe_request_sequence(2183397839U);

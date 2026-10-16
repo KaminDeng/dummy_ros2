@@ -878,9 +878,115 @@ def has_matching_renewal_receipt(adapter, rejected_goal_id, deadline):
             message.removeprefix("RENEWAL_PENDING:") == goal_uuid.hex())
 
 
+class HardwareDeactivationAttemptError(RuntimeError):
+    """保留服务/Action首错与原触发上下文，不发恢复请求。"""
+    def __init__(self, message, trigger, result=None):
+        super().__init__(message)
+        self.trigger = trigger
+        self.result = result
+
+
+def validate_hardware_deactivation_witness(witness, goal_id, now_us):
+    """仅可信采集 wrapper 可提供原 v9 byte/source-bound live witness。
+
+    when/after_begin_us 为 Host monotonic 微秒；produced_at_us 属 Device Port 域。
+    此函数不从位移猜 RUN，不读取设备，也不签 stop/资格。
+    """
+    def require(ok, reason):
+        if not ok:
+            raise RuntimeError('STOP trigger witness: ' + reason)
+    require(type(now_us) is int and now_us > 0 and isinstance(witness, dict), 'missing current witness')
+    require(witness.get('goal_id') == goal_id, 'goal identity mismatch')
+    marker = witness.get('after_begin_us')
+    require(type(marker) is int and 0 < marker <= now_us, 'afterBegin missing/future')
+    root = witness.get('root')
+    keys = ('boot_epoch', 'session_id', 'reference_epoch', 'motion_epoch',
+            'management_epoch', 'profile_id', 'configured_mask', 'run_id')
+    require(isinstance(root, dict) and all(type(root.get(k)) is int and root[k] > 0 for k in keys), 'root unknown')
+    require(root['profile_id'] == 201 and root['configured_mask'] == 63, 'profile/mask mismatch')
+    states = witness.get('states')
+    require(isinstance(states, list) and len(states) == 2, 'two current State rows required')
+    for row, budget in [(states[0], 250000), (states[1], 250000), (witness.get('status'), 1000000)]:
+        require(isinstance(row, dict) and type(row.get('when')) is int
+                and marker <= row['when'] <= now_us and now_us-row['when'] <= budget, 'stale/future/preBegin row')
+        fields = row.get('fields')
+        require(isinstance(fields, dict) and all(type(fields.get(k)) is int and fields[k] == root[k] for k in keys if k != 'run_id'), 'current full root mismatch')
+        require(type(fields.get('core_state')) is int and fields['core_state'] == 5
+                and type(fields.get('first_failure_reason')) is int and fields['first_failure_reason'] == 0, 'not active RUN')
+    first, last = (row['fields'].get('produced_at_us') for row in states)
+    require(type(first) is int and type(last) is int and 0 < first < last
+            and states[0]['when'] < states[1]['when'], 'State source clock did not advance')
+    status = witness['status']['fields']
+    require(type(status.get('run_id')) is int and status['run_id'] == root['run_id']
+            and status.get('attempt_id') == root['run_id']
+            and status.get('attempt_kind') == 1 and status.get('parent_run_id') == 0
+            and status.get('final_state') == 0 and status.get('evidence_lost') == 0, 'not current active Motion run')
+    require(type(status.get('real_motion_permitted')) is int and status['real_motion_permitted'] == 1
+            and type(status.get('permit_remaining_us')) is int and status['permit_remaining_us'] > 0, 'permit snapshot absent')
+    return dict(root)
+
+
+def await_mid_motion_hardware_deactivation(node, handle, feedback, deadline,
+                                          accepted_feedback_index, adapter):
+    """测试采集：两原生命周期服务，共享原5s；不发 Cancel/新授权。
+
+    hook 必须来自固定可信 wrapper，返回上方原 typed witness 或 None（尚未就绪）。
+    缺 hook/错身份/失鲜为硬拒；None 仅在原45s及5s预留内等待。
+    """
+    hook = getattr(adapter, 'hardware_deactivation_witness', None)
+    if not callable(hook):
+        raise RuntimeError('STOP capture requires trusted live typed witness hook')
+    goal_id = bytes(handle.goal_id.uuid).hex()
+    result_future = handle.get_result_async()
+    while True:
+        if result_future.done():
+            raise RuntimeError('action finished before hardware deactivation trigger')
+        remaining_time(deadline - STOP_CONFIRM_TIMEOUT)
+        selected = []
+        for index, sample in enumerate(feedback[accepted_feedback_index:], accepted_feedback_index):
+            if sample.get('goal_id') != goal_id:
+                raise RuntimeError('STOP feedback goal identity mismatch')
+            actual = sample.get('actual_rad')
+            if not isinstance(actual, list) or len(actual) != 6 or any(
+                    type(v) not in (int, float) or not math.isfinite(v) for v in actual):
+                raise RuntimeError('STOP feedback missing finite six axes')
+            selected.append((index, actual))
+        if len(selected) >= 2 and max(abs(a-b) for a, b in zip(selected[0][1], selected[-1][1])) >= MID_MOTION_DELTA_RAD:
+            witness = hook(goal_id)
+            if witness is not None:
+                now_ns = time.monotonic_ns()
+                root = validate_hardware_deactivation_witness(witness, goal_id, now_ns//1000)
+                if result_future.done():
+                    raise RuntimeError('action finished before hardware deactivation service')
+                # 同一Host采锚导出原5s整数微秒截止，不能由第二次采时扩窗。
+                stop_deadline_us = min(int(deadline * 1000000), now_ns//1000 + int(STOP_CONFIRM_TIMEOUT * 1000000))
+                stop_deadline = stop_deadline_us / 1000000
+                trigger = dict(goal_id=goal_id, requested_steady_us=now_ns//1000,
+                               outer_deadline_steady_us=stop_deadline_us,
+                               root=root, live_witness=witness,
+                               motion_delta_threshold_rad=MID_MOTION_DELTA_RAD,
+                               motion_feedback_start_index=selected[0][0],
+                               motion_feedback_trigger_index=selected[-1][0],
+                               device_stop_confirmation='REQUIRED_SEPARATELY')
+                # 不调用普通 complete_success/recovery，也不把 ROS service ok 当 Device 确认。
+                result = None
+                try:
+                    adapter.switch_controller('arm_controller', False, stop_deadline)
+                    adapter.set_hardware_state(HARDWARE_NAME, 'inactive', stop_deadline)
+                    result = wait(node, result_future, remaining_time(stop_deadline))
+                    if result is None or result.status != 6:
+                        raise RuntimeError('hardware deactivation did not retain ABORTED6 action')
+                except BaseException as error:
+                    raise HardwareDeactivationAttemptError(
+                        str(error) or type(error).__name__, trigger, result) from error
+                return result, trigger
+        import rclpy
+        rclpy.spin_once(node, timeout_sec=min(0.05, remaining_time(deadline - STOP_CONFIRM_TIMEOUT)))
+
+
 def execute_goal(node, planner, client, target, limits, deadline, admission_adapter=None,
                  cancel_mid_motion=False, preempt_probe=False, preempt_goal_ids=None,
-                 goal_uuid_hex=None, submission_deadline=None):
+                 goal_uuid_hex=None, submission_deadline=None, hardware_deactivate_mid_motion=False):
     from action_msgs.msg import GoalStatus
     from control_msgs.action import FollowJointTrajectory
     from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest
@@ -929,7 +1035,7 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
             if not feedback_errors:
                 feedback_errors.append("ROS feedback exceeds bounded sample count")
             return
-        if (cancel_mid_motion or preempt_probe) and any(
+        if (cancel_mid_motion or preempt_probe or hardware_deactivate_mid_motion) and any(
                 type(value) not in (int, float) or not math.isfinite(value)
                 for value in (*sample.actual.positions, *sample.desired.positions)):
             if not feedback_errors:
@@ -946,11 +1052,12 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
                          "actual_rad": list(sample.actual.positions),
                          "desired_rad": list(sample.desired.positions),
                          **({"goal_id": feedback_goal_id}
-                            if cancel_mid_motion or preempt_probe else {})})
+                            if cancel_mid_motion or preempt_probe or hardware_deactivate_mid_motion else {})})
 
     goal_id = None
     result = None
     cancel_report = None
+    deactivation_report = None
     accepted_feedback_index = None
     handle = None
     probe_ids = preempt_goal_ids or {name: uuid.uuid4().hex for name in "ABC"} \
@@ -990,7 +1097,10 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
                         admission_adapter, handle.goal_id, admission_deadline) or
                     not wait_for_admission_ready(admission_adapter, admission_deadline)):
                 raise RejectedPlanError(rejection_diagnostic(trajectory, serialized))
-        if cancel_mid_motion or preempt_probe:
+        if hardware_deactivate_mid_motion:
+            result, deactivation_report = await_mid_motion_hardware_deactivation(
+                node, handle, feedback, deadline, accepted_feedback_index, admission_adapter)
+        elif cancel_mid_motion or preempt_probe:
             overlap_probe = (lambda: probe_overlap_goal(
                 node, client, goal,
                 min(deadline - STOP_CONFIRM_TIMEOUT,
@@ -1005,16 +1115,19 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
             result = await_accepted_goal(node, handle, remaining_time(deadline))
         if feedback_errors or not feedback:
             raise RuntimeError(feedback_errors[0] if feedback_errors else "no six-axis ROS feedback")
-        if not (cancel_mid_motion or preempt_probe) and (result.status != GoalStatus.STATUS_SUCCEEDED or
+        if not (cancel_mid_motion or preempt_probe or hardware_deactivate_mid_motion) and (result.status != GoalStatus.STATUS_SUCCEEDED or
                                       result.result.error_code != 0):
             raise RuntimeError(f"guarded action failed: status={result.status} "
                                f"code={result.result.error_code}")
     except BaseException as error:
+        if isinstance(error, HardwareDeactivationAttemptError):
+            result = error.result
+            deactivation_report = error.trigger
         if isinstance(error, CancelAttemptError):
             result = error.result
             cancel_report = error.cancel
         interrupted = None
-        if goal_id is not None:
+        if goal_id is not None and not hardware_deactivate_mid_motion:
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 interrupted = cancel_accepted_on_interrupt(node, handle)
             elif goal_uuid_hex is not None and result is None:
@@ -1028,6 +1141,9 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
                   "device_qualification": "NOT_CLAIMED"}
         if goal_id is not None:
             failed["goal_id"] = goal_id
+        if hardware_deactivate_mid_motion:
+            failed.update(hardware_deactivation=deactivation_report,
+                          raw_stop_release_join="REQUIRED_SEPARATELY")
         if result is not None:
             failed.update(action_status=result.status,
                           result_error_code=result.result.error_code,
@@ -1048,7 +1164,10 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
             "planned_points": len(trajectory.points), "result_error_code": result.result.error_code,
             "result_error_string": result.result.error_string,
             "action_status": result.status,
-            "status": "CANCELED" if cancel_mid_motion or preempt_probe else "SUCCEEDED",
+            "status": "UNCONFIRMED_STOP" if hardware_deactivate_mid_motion else
+                      "CANCELED" if cancel_mid_motion or preempt_probe else "SUCCEEDED",
+            **({"hardware_deactivation": deactivation_report}
+               if hardware_deactivate_mid_motion else {}),
             "feedback": feedback,
             "device_can_evidence": "REQUIRED_SEPARATELY",
             "device_qualification": "NOT_CLAIMED",
@@ -1061,7 +1180,10 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
 def capture(target, timeout, limits, activate_controller=False, activation_sha256=None,
             device_id=None, candidate_manifest=None, guarded_session=False,
             cancel_mid_motion=False, preempt_probe=False, preempt_goal_ids=None,
-            preempt_then_goal=False, post_cancel_target=None):
+            preempt_then_goal=False, post_cancel_target=None, hardware_deactivate_mid_motion=False):
+    if hardware_deactivate_mid_motion and (not guarded_session or cancel_mid_motion or
+            preempt_probe or preempt_then_goal or not 0 < timeout <= 45.0):
+        raise ValueError("hardware deactivation capture requires one guarded goal and timeout <= 45s")
     preempt_mode = preempt_probe or preempt_then_goal
     cancel_mode = cancel_mid_motion or preempt_mode
     if cancel_mode and not guarded_session:
@@ -1097,6 +1219,9 @@ def capture(target, timeout, limits, activate_controller=False, activation_sha25
     try:
         if guarded_session or activate_controller:
             adapter = RosControlAdapter(node, deadline)
+            if hardware_deactivate_mid_motion and not callable(
+                    getattr(adapter, "hardware_deactivation_witness", None)):
+                raise RuntimeError("STOP capture requires trusted live typed witness hook before services")
             verify_live_gate(adapter, activation_sha256, device_id, candidate_manifest)
             bound = True
             if activate_controller:
@@ -1110,7 +1235,9 @@ def capture(target, timeout, limits, activate_controller=False, activation_sha25
         if not client.wait_for_server(timeout_sec=remaining_time(deadline)):
             raise RuntimeError("public guarded action unavailable")
         report = execute_goal(node, planner, client, target, limits, deadline, adapter,
-                              **({"preempt_probe": True,
+                              **({"hardware_deactivate_mid_motion": True}
+                                 if hardware_deactivate_mid_motion else
+                                 {"preempt_probe": True,
                                   "preempt_goal_ids": preempt_goal_ids}
                                  if preempt_mode else
                                  {"cancel_mid_motion": True} if cancel_mid_motion else {}))
@@ -1156,6 +1283,9 @@ def capture(target, timeout, limits, activate_controller=False, activation_sha25
                       "preempt_goals": {**observed, "C": {**second, "status": "SUCCEEDED"}},
                       "second_begin_raw_join": "REQUIRED_SEPARATELY",
                       "qualification": "NOT_QUALIFIED"}
+        if hardware_deactivate_mid_motion:
+            return {**report, "scope": "ROS_HARDWARE_DEACTIVATION_CAPTURE",
+                    "qualification": "NOT_QUALIFIED", "raw_stop_release_join": "REQUIRED_SEPARATELY"}
         if adapter is not None and bound:
             try:
                 release_attempted = True
@@ -1183,6 +1313,11 @@ def capture(target, timeout, limits, activate_controller=False, activation_sha25
             return completed
         return {**report, "stop_confirmation": "NOT_REQUESTED"}
     except BaseException as error:
+        if hardware_deactivate_mid_motion:
+            # 采集首失败不可用后续恢复洗成 STOP 成功；安全恢复由 Root 独立记录。
+            raise UnconfirmedStopError(
+                str(error) or type(error).__name__,
+                failed_goal_report=getattr(error, "goal_report", None) or report) from error
         if adapter is not None and bound and not release_attempted:
             original_report = getattr(error, "goal_report", None) or report
             try:
@@ -1318,6 +1453,8 @@ def main():
     parser.add_argument("--device-id")
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=45.0)
+    parser.add_argument("--hardware-deactivate-mid-motion", action="store_true",
+                        help="测试采集模式；必须由可信 wrapper 安装 live typed witness hook")
     parser.add_argument("--cancel-mid-motion", action="store_true")
     parser.add_argument("--preempt-probe", action="store_true")
     parser.add_argument("--preempt-then-goal", action="store_true")
@@ -1325,6 +1462,10 @@ def main():
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("timeout must be positive")
+    if args.hardware_deactivate_mid_motion and (args.reference_frame != "BENCH_SESSION" or
+            args.targets_json is not None or args.cancel_mid_motion or args.preempt_probe or
+            args.preempt_then_goal or args.timeout > 45.0):
+        parser.error("hardware deactivation capture requires one BENCH_SESSION goal, timeout <= 45s, exclusive mode")
     bench = args.reference_frame == "BENCH_SESSION"
     multi = args.targets_json is not None
     if multi and (not bench or args.timeout > MAX_MULTI_GOAL_TIMEOUT_S):
@@ -1375,7 +1516,9 @@ def main():
                               activation_sha256=args.activation_sha256,
                               device_id=args.device_id,
                               candidate_manifest=args.candidate_manifest,
-                              **({"preempt_then_goal": True,
+                              **({"hardware_deactivate_mid_motion": True}
+                                 if args.hardware_deactivate_mid_motion else
+                                 {"preempt_then_goal": True,
                                   "post_cancel_target": post_cancel_target,
                                   "preempt_goal_ids": preempt_goal_ids}
                                  if args.preempt_then_goal else

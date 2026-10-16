@@ -4,6 +4,8 @@ import importlib.util
 import ctypes
 import io
 import json
+import hashlib
+import shutil
 import os
 from pathlib import Path
 import select
@@ -417,9 +419,43 @@ def test_real_peer_capability_comes_from_verified_bundle():
         assert params[key] == str(capability[key])
 
 
-def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture():
-    bundle = TEST_DIR.parents[3] / "dpsdk/contracts/dummy_robot_v2"
+def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture(tmp_path):
+    # 两仓当前bundle相同；构造内容hash有效但不在精确信任锁内的独立负例。
+    source = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    bundle = tmp_path / "foreign_bundle"
+    shutil.copytree(source, bundle)
+    payload = bundle / "profiles/sil_j1.yaml"
+    payload.write_bytes(payload.read_bytes() + b"\n# foreign hash-valid fixture\n")
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    for entry in manifest["payloads"]:
+        entry["sha256"] = hashlib.sha256((bundle / entry["path"]).read_bytes()).hexdigest()
+    listing = [f"{entry['path']}:{entry['sha256']}" for entry in manifest["payloads"]]
+    assert listing == sorted(listing)
+    manifest["payload_sorted_sha256"] = hashlib.sha256("\n".join(listing).encode()).hexdigest()
+    assert manifest["payload_sorted_sha256"] != probe.OFFLINE_SIL_CONTRACT_SHA256
+    manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="untrusted SIL fixture"):
+        probe.real_peer_capability(bundle)
+
+
+def test_current_sil_fixture_rejects_forged_aggregate_hash(tmp_path):
+    bundle = tmp_path / "forged_bundle"
+    shutil.copytree(TEST_DIR.parents[2] / "contracts/dummy_robot_v2", bundle)
+    path = bundle / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["payload_sorted_sha256"] = "f" * 64
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="aggregate hash mismatch"):
+        probe.real_peer_capability(bundle)
+
+
+def test_current_sil_fixture_rejects_tampered_payload(tmp_path):
+    bundle = tmp_path / "tampered_bundle"
+    shutil.copytree(TEST_DIR.parents[2] / "contracts/dummy_robot_v2", bundle)
+    path = bundle / "profiles/sil_j1.yaml"
+    path.write_bytes(path.read_bytes() + b"\n# unlisted tamper\n")
+    with pytest.raises(ValueError, match="payload hash mismatch"):
         probe.real_peer_capability(bundle)
 
 

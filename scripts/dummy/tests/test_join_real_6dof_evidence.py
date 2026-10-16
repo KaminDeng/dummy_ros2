@@ -241,12 +241,15 @@ def repin(timeline, raw, action, context, *, preserve_state_sequence=False):
             offset = end
         if not any(item[0] in (4, 5) for item in chunks):
             additions = []
+            release_operation_ids = {}
             request_id = 0
             for kind, when, boot, session, run, seq, payload in chunks:
                 if kind != 1 or payload[32] != 4 or payload[304] not in (6, 8):
                     continue
                 request_id += 1
                 operation = 8 if payload[304] == 6 else 10
+                if operation == 10:
+                    release_operation_ids[run] = request_id
                 request_time = min(when - 1, terminal_times.get(run, when) - 1) \
                     if operation == 8 else min(item[1] for item in chunks if
                                                item[0] == 1 and item[4] == run) - 1
@@ -277,6 +280,11 @@ def repin(timeline, raw, action, context, *, preserve_state_sequence=False):
                     while addition is not None and addition[0] <= item[1]:
                         combined.append(addition[1])
                         addition = next(pending, None)
+                    if item[0] == 3:
+                        fields = joiner._decode("DummyDeviceStatusV2", item[6])
+                        if fields["core_state"] == 1 and fields["run_id"] in release_operation_ids:
+                            item = (*item[:6], wire("DummyDeviceStatusV2", **{
+                                **fields, "operation_id": release_operation_ids[fields["run_id"]]}))
                     combined.append(record(*item))
                 while addition is not None:
                     combined.append(addition[1])
@@ -348,6 +356,7 @@ def canceled_inputs(inputs):
                         release=True, epoch=3)
     idle = joiner._decode("DummyDeviceStatusV2", original[9][39:])
     idle["motion_epoch"] = 4
+    idle["operation_id"] = 2
     idle["evidence_chain_sha256"] = release_last[339:371].hex()
     idle_state = joiner._decode("DummyJointStateV2", original[10][39:])
     idle_state["motion_epoch"] = 4
@@ -1364,7 +1373,7 @@ def active_release_inputs(inputs):
     terminal = page(identity, 5, 2, 2, disable[339:371], active_release=True,
                     group_count=2)
     idle = joiner._decode("DummyDeviceStatusV2", records[9][39:])
-    idle.update(attempt_kind=1, final_state=2, motion_epoch=3,
+    idle.update(attempt_kind=1, final_state=2, motion_epoch=3, operation_id=2,
                 evidence_chain_sha256=terminal[339:371].hex())
     idle_state = joiner._decode("DummyJointStateV2", records[10][39:])
     idle_state["motion_epoch"] = 3
@@ -2611,7 +2620,7 @@ def test_ros_feedback_and_raw_state_need_only_bounded_agreement(inputs):
     action.write_text(json.dumps(report))
     repin(timeline, raw, action, context)
     result = joiner.join_evidence(timeline, raw, action, context)
-    assert result["goals"][0]["feedback_rad"] == [0.0101] * 6
+    assert result["goals"][0]["feedback_rad"] == [0.01] * 6  # 终态字段取已确认 Hold；ROS 回调仍按原界限核验。
 
 
 def test_same_cycle_feedback_receive_time_can_precede_after_begin(inputs):
@@ -3088,3 +3097,115 @@ def test_future_only_raw_status_cannot_confirm_begin(inputs):
     repin(timeline, raw, action, context)
     with pytest.raises(ValueError, match="prior.*status"):
         joiner.join_evidence(timeline, raw, action, context)
+
+
+def test_active_release_idle_status_before_terminal_page_is_bound_to_request(inputs):
+    timeline, raw, action, context, records = zero_active_idle_chain(inputs)
+    fields = joiner._decode("DummyDeviceStatusV2", records[14][39:])
+    records[14] = record(3, 6450, 2, 0, 0, 0, wire("DummyDeviceStatusV2", **fields))
+    records.sort(key=lambda value: joiner.RECORD_HEADER.unpack_from(value)[2])
+    raw.write_bytes(b"DPRAW01\0" + b"".join(records))
+    repin(timeline, raw, action, context)
+    assert joiner.join_evidence(timeline, raw, action, context)["release"]["run_id"] == 5
+
+
+@pytest.mark.parametrize("mutation", ["before_request", "wrong_operation", "wrong_chain"])
+def test_early_release_idle_never_substitutes_old_or_unlinked_status(inputs, mutation):
+    timeline, raw, action, context, records = zero_active_idle_chain(inputs)
+    fields = joiner._decode("DummyDeviceStatusV2", records[14][39:])
+    when = 6100 if mutation == "before_request" else 6450
+    if mutation == "wrong_operation": fields["operation_id"] = 99
+    if mutation == "wrong_chain": fields["evidence_chain_sha256"] = "22" * 32
+    records[14] = record(3, when, 2, 0, 0, 0, wire("DummyDeviceStatusV2", **fields))
+    records.sort(key=lambda value: joiner.RECORD_HEADER.unpack_from(value)[2])
+    raw.write_bytes(b"DPRAW01\0" + b"".join(records))
+    repin(timeline, raw, action, context)
+    with pytest.raises(ValueError, match="RELEASE terminal chain"):
+        joiner.join_evidence(timeline, raw, action, context)
+
+
+def preempt_verified_active_refresh(inputs):
+    timeline, raw, action, context, packed = preempt_inputs(inputs)
+    original=joiner.join_evidence(timeline,raw,action,context)
+    records=joiner._raw_records(b"DPRAW01\0"+b"".join(packed))
+    identity={"client_id":"11"*16,**{k:"11"*32 for k in
+      ("contract_hash","model_hash","profile_hash","firmware_hash")}}
+    hold=page(identity,5,2,0,b"",active_release=True,epoch=3,group_count=2,group_id=9)
+    disable=page(identity,5,2,1,hold[339:371],active_release=True,epoch=4,group_count=2,group_id=10,category=3)
+    last=page(identity,5,2,2,disable[339:371],active_release=True,epoch=3,group_count=2)
+    def evidence(payload,when,seq):
+        return {"kind":1,"when":when,"boot":2,"session":3,"run":5,"seq":seq,
+                "raw":payload,"fields":joiner._decode("DummyAttemptEvidenceV2",payload)}
+    status=next(r for r in records if r["kind"]==3 and r["when"]==5900)
+    state=next(r for r in records if r["kind"]==2 and r["when"]==6000)
+    refreshed={**status,"when":6100,"fields":{**status["fields"],"run_id":5,"attempt_id":5,
+      "parent_run_id":0,"final_state":0,"motion_complete":0}}
+    freshstate={**state,"when":6090,"fields":{**state["fields"],"produced_at_us":6080}}
+    records=[r for r in records if not(r["kind"]==1 and r["run"]==5)]
+    records.extend([evidence(hold,6050,0),freshstate,refreshed,evidence(disable,6400,1),evidence(last,6500,2)])
+    records.sort(key=lambda r:r["when"])
+    return (json.loads(action.read_text()),original["goals"][0]["timeline"],records,
+            original["goals"][0],original["release"],context)
+
+
+def test_preempt_probe_accepts_verified_active_hold_refresh_before_disable(inputs):
+    action,rows,records,goal,release,context=preempt_verified_active_refresh(inputs)
+    actual=joiner._preempt_probe(action,rows,records,goal,release,"11"*16,
+                                  json.loads(context.read_text())["gate_state_max_age_us"])
+    assert actual["run_id"]==4 and actual["goal_id"]==goal["goal_id"]
+
+
+@pytest.mark.parametrize("change", ["boot", "session", "reference", "epoch", "not_hold",
+    "bad_chain", "missing_successor", "wrong_client", "second_begin", "stale_state"])
+def test_preempt_active_hold_refresh_still_rejects_unverified_context(inputs, change):
+    action,rows,records,goal,release,context=preempt_verified_active_refresh(inputs)
+    status=next(r for r in records if r["kind"]==3 and r["when"]==6100)
+    client="11"*16
+    if change in ("boot","session"):
+        status[change]+=1
+        status["fields"]["boot_epoch" if change=="boot" else "session_id"]+=1
+    elif change in ("reference","epoch"):
+        status["fields"]["reference_epoch" if change=="reference" else "motion_epoch"]+=1
+    elif change=="not_hold": status["fields"]["core_state"]=5
+    elif change=="bad_chain":
+        hold=next(r for r in records if r["kind"]==1 and r["when"]==6050)
+        raw=bytearray(hold["raw"]);raw[339]^=1;hold["raw"]=bytes(raw)
+    elif change=="missing_successor": records=[r for r in records if r["when"]!=6050]
+    elif change=="wrong_client": client="33"*16
+    elif change=="second_begin":
+        begin=next(r for r in records if r["kind"]==4 and r["fields"]["operation"]==7)
+        records.append({**begin,"when":begin["when"]+1})
+    else:
+        # 已解析记录的元数据不可变；另建时间已失鲜的测试记录。
+        records=[{**r,"when":300000} if r is status else
+                 {**r,"when":310000} if r["kind"]==4 and
+                 r["fields"]["operation"]==10 else r for r in records]
+        records.sort(key=lambda r:r["when"])
+    with pytest.raises(ValueError):
+        joiner._preempt_probe(action,rows,records,goal,release,client,
+                             json.loads(context.read_text())["gate_state_max_age_us"])
+
+
+def test_success_uses_verified_terminal_hold_not_earlier_ros_path_sample(inputs):
+    timeline, raw, action, context, records = inputs
+    for index in (1,3):
+        fields=joiner._decode("DummyJointStateV2", records[index][39:])
+        fields["position_rad"]=[0.006]*6
+        records[index]=record(2,3000 if index==1 else 4000,2,3,0,0,
+                              wire("DummyJointStateV2",**fields))
+    # 末 ROS 回调仍在运动中；独立后续 Gate 反馈与 Hold 已到达目标。
+    fields=joiner._decode("DummyJointStateV2",records[3][39:])
+    fields["position_rad"]=[0.01]*6
+    records.insert(5,record(2,5000,2,3,0,0,wire("DummyJointStateV2",**fields)))
+    rows=list(csv.reader(timeline.open(newline="")))
+    rows[4][3]="5000"
+    with timeline.open("w",newline="") as output:csv.writer(output).writerows(rows)
+    raw.write_bytes(b"DPRAW01\0"+b"".join(records))
+    report=json.loads(action.read_text())
+    report["feedback"][-1]["actual_rad"]=[0.006]*6
+    report["feedback"][-1]["desired_rad"]=[0.006]*6
+    action.write_text(json.dumps(report))
+    repin(timeline,raw,action,context)
+    joined=joiner.join_evidence(timeline,raw,action,context)
+    assert joined["goals"][0]["feedback_rad"]==[0.01]*6
+    assert joined["goals"][0]["path_error_max_rad"]==pytest.approx([0.004]*6)

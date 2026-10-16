@@ -52,7 +52,7 @@
     </joint>
     <joint name="${prefix}Joint5" type="revolute">
       <parent link="${prefix}reference_link4"/><child link="${prefix}reference_joint5"/>
-      <axis xyz="0 0 1"/><limit lower="-2.0943951023931953" upper="2.0943951023931953" effort="1" velocity="0.25"/>
+      <axis xyz="0 0 1"/><limit lower="-1.7453292519943295" upper="1.7453292519943295" effort="1" velocity="0.25"/>
     </joint>
     <joint name="${prefix}Joint5_dh" type="fixed">
       <parent link="${prefix}reference_joint5"/><child link="${prefix}reference_link5"/>

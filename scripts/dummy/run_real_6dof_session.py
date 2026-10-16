@@ -268,6 +268,7 @@ def main(argv=None):
     parser.add_argument("--raw-evidence-report-root", default="")
     parser.add_argument("--goal-timeline-path", default="")
     parser.add_argument("--diagnostic-host-state-age-us", type=int, choices=(500000,))
+    parser.add_argument("--stop-confirmation-timeout-us", type=int, choices=(0, 300000), default=0)
     parser.add_argument("--lock-file", type=Path,
                         default=Path(f"/run/user/{os.getuid()}/dummy-real-6dof-session.lock"))
     args = parser.parse_args(argv)
@@ -286,6 +287,8 @@ def main(argv=None):
                    f"startup_mode:={args.startup_mode}", *capture_args]
         if args.diagnostic_host_state_age_us:
             command.append(f"host_state_max_age_us:={host_state_age_us}")
+        if args.stop_confirmation_timeout_us:
+            command.append(f"stop_confirmation_timeout_us:={args.stop_confirmation_timeout_us}")
         shutdown_options = {"grace_s": 12} if capture_args else {}
         return run_session(command, deployment_tty(args.deployment_paths), args.lock_file,
                            **shutdown_options)

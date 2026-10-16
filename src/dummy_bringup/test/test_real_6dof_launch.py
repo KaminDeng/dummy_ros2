@@ -338,3 +338,26 @@ def test_host_state_age_diagnostic_is_explicit_and_bounded():
     for invalid in ("0", "500001", "0500000", "250001", "abc"):
         with pytest.raises(ValueError):
             launch_module.validate_host_state_max_age_us(invalid)
+
+
+def test_independent_stop_confirmation_keeps_state_and_heartbeat_250ms():
+    joints = [dict(device_position_min_rad=-1, device_position_max_rad=1,
+                   device_velocity_max_rad_s=.5, device_acceleration_max_rad_s2=1)] * 6
+    activation = dict(source_contract_sha256="a"*64, model_sha256="b"*64,
+                      live_profile_sha256="c"*64, firmware_sha256="d"*64,
+                      compiled_policy_sha256="e"*64)
+    mappings = launch_module.hardware_mappings(joints, activation,
+        "serial//dev/serial/by-id/test#baudrate=115200", "01"*16, "02"*16, 20000, 20000,
+        stop_confirmation_timeout_us=300000)
+    assert mappings["stop_confirmation_timeout_us"] == "300000"
+    assert mappings["max_state_age_us"] == mappings["heartbeat_stop_budget_us"] == "250000"
+    fallback = launch_module.hardware_mappings(joints, activation,
+        "serial//dev/serial/by-id/test#baudrate=115200", "01"*16, "02"*16, 20000, 20000)
+    assert fallback["stop_confirmation_timeout_us"] == "0"
+    assert fallback["max_state_age_us"] == "250000"
+
+
+@pytest.mark.parametrize("value", [-1, 250000, 300001, 1000000, "300000.0", True])
+def test_launch_stop_confirmation_requires_approved_independent_value(value):
+    with pytest.raises(ValueError):
+        launch_module.validate_stop_confirmation_timeout_us(value)

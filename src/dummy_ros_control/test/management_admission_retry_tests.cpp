@@ -80,9 +80,35 @@ bool retry_is_bounded_and_stop_has_priority() {
   return non_retryable.on_result(Result::kInvalidArgument, start_us, false) ==
          Decision::kFail;
 }
+bool busy_requires_unsent_zero_correlation_opt_in() {
+  constexpr std::uint64_t start = 1000000U;
+  ManagementAdmissionRetry correlated_or_dispatched(start);
+  if (correlated_or_dispatched.on_result(Result::kBusy,start,false)!=Decision::kFail)
+    return false;
+  ManagementAdmissionRetry unsent(start,true);
+  const Request frozen{47U,47U};
+  unsigned sent=0U, captures=0U;
+  if (unsent.on_result(Result::kBusy,start,false)!=Decision::kRetry ||
+      unsent.ready(start+1999U) || !unsent.ready(start+2000U)) return false;
+  if (unsent.on_result(Result::kOk,start+2000U,false)==Decision::kAccepted) {
+    ++sent; ++captures;
+  }
+  ManagementAdmissionRetry expired(start,true), stopped(start,true);
+  if (expired.on_result(Result::kBusy,start,false)!=Decision::kRetry ||
+      expired.on_result(Result::kOk,start+100001U,false)!=Decision::kFail ||
+      stopped.on_result(Result::kBusy,start,false)!=Decision::kRetry ||
+      stopped.on_result(Result::kOk,start+2000U,true)!=Decision::kFail) return false;
+  ManagementAdmissionRetry exhausted(start,true);
+  for(unsigned attempt=0U;attempt<50U;++attempt)
+    if(exhausted.on_result(Result::kBusy,start+attempt*2000U,false)!=Decision::kRetry)
+      return false;
+  return exhausted.on_result(Result::kBusy,start+100000U,false)==Decision::kFail &&
+      sent==1U && captures==1U && frozen.id==47U && frozen.seq==47U;
+}
 }  // namespace
 
 int main() {
+  if (!busy_requires_unsent_zero_correlation_opt_in()) return 3;
   if (!retry_preserves_request_and_captures_once()) {
     std::fprintf(stderr, "management retry lost identity, timing, or single capture\n");
     return 1;

@@ -37,6 +37,7 @@ struct ManageReply {
   std::uint32_t reference_epoch=0, management_epoch=0;
   Position position{}, hold_position{};
 };
+enum class RenewalCompletion { kPending, kCommitted, kFailed };
 class ManagementClient {
  public:
   virtual ~ManagementClient() = default;
@@ -44,6 +45,8 @@ class ManagementClient {
   virtual std::uint64_t submit_permit(const ManageRequest &, const PermitBinding &,
                                       std::uint64_t sent_at_us) { return 0U; }
   virtual std::optional<ManageReply> poll(std::uint64_t request_id)=0;
+  virtual std::uint64_t matching_inflight_renewal(const ManageRequest &) const { return 0U; }
+  virtual RenewalCompletion renewal_completion(std::uint64_t) const { return RenewalCompletion::kFailed; }
 };
 // Bind this port to the selected device's manage_v2 endpoint. A handle owns the
 // native request until its reply or explicit destruction. Poll never blocks.
@@ -75,6 +78,8 @@ class WireManagementClient final : public ManagementClient {
   std::uint64_t submit_permit(const ManageRequest &, const PermitBinding &,
                               std::uint64_t sent_at_us) override;
   std::optional<ManageReply> poll(std::uint64_t request_id) override;
+  std::uint64_t matching_inflight_renewal(const ManageRequest &) const override;
+  RenewalCompletion renewal_completion(std::uint64_t) const override;
   std::uint64_t original_sent_at_us() const { return sent_at_us_; }
  private:
   static constexpr std::uint64_t session_request_namespace(std::uint64_t session_id) noexcept {
@@ -94,6 +99,8 @@ class WireManagementClient final : public ManagementClient {
     return sequence;
   }
   bool send(const ManageRequest &);
+  std::uint64_t completed_renewal_id_=0U;
+  RenewalCompletion completed_renewal_result_=RenewalCompletion::kFailed;
   ManagementTransport &transport_;
   std::unique_ptr<ManagementTransport::RequestHandle> handle_;
   ManageRequest original_{};

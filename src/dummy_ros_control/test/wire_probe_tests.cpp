@@ -12,7 +12,7 @@ dp::comm::Result monitor_snapshot(
   std::uint8_t caller[16]{};
   std::memcpy(caller, info.source_device.bytes, sizeof(caller));
   response->set_schema_major(2U);
-  response->set_schema_minor(4U);
+  response->set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   response->set_client_instance_id(caller);
   response->set_receipt(1U);
   response->set_result_code(0U);
@@ -26,7 +26,7 @@ dp::comm::Result monitor_snapshot(
 int main() {
   namespace wire = dp::protocol::dummy_robot_v2;
   static_assert(wire::DummyJointCommandV2Codec::kEncodedSize == 133U);
-  static_assert(wire::DummyJointStateV2Codec::kEncodedSize == 301U);
+  static_assert(wire::DummyJointStateV2Codec::kEncodedSize == 350U);
   static_assert(wire::DummyDeviceStatusV2Codec::kEncodedSize == 651U);
   static_assert(wire::DummyAttemptEvidenceV2Codec::kEncodedSize == 372U);
   static_assert(wire::DummyManageV2RequestCodec::kEncodedSize == 233U);
@@ -36,7 +36,7 @@ int main() {
 
   wire::DummyJointCommandV2 command;
   command.set_schema_major(2U);
-  command.set_schema_minor(4U);
+  command.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   command.set_boot_epoch(9007199254740993ULL);
   command.set_session_id(9007199254740995ULL);
   command.set_freshness_ticket(9007199254740997ULL);
@@ -58,7 +58,7 @@ int main() {
 
   wire::DummyDeviceStatusV2 status;
   status.set_schema_major(2U);
-  status.set_schema_minor(4U);
+  status.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   status.set_configured_mask(0x3FU);
   status.set_capabilities(1ULL << 2U);
   status.set_control_period_us(10000U);
@@ -78,14 +78,14 @@ int main() {
   wire::DummyDeviceStatusV2 decoded_status;
   if (wire::DummyDeviceStatusV2Codec::encode(status, status_bytes, sizeof(status_bytes)) != wire::CodecResult::kOk ||
       wire::DummyDeviceStatusV2Codec::decode(status_bytes, sizeof(status_bytes), &decoded_status) != wire::CodecResult::kOk ||
-      decoded_status.schema_minor() != 4U || decoded_status.compiled_policy_sha256()[0] != 1U ||
+      decoded_status.schema_minor() != dp::protocol::dummy_robot_v2::kSchemaMinor || decoded_status.compiled_policy_sha256()[0] != 1U ||
       decoded_status.position_min_rad()[0] != -1.0 || decoded_status.position_max_rad()[5] != 1.0 ||
       decoded_status.velocity_max_rad_s()[2] != 1.0 || decoded_status.acceleration_max_rad_s()[4] != 2.0 ||
       decoded_status.control_period_us() != 10000U || decoded_status.state_publish_period_us() != 10000U) return 13;
 
   wire::DummyManageV2Response queued;
   queued.set_schema_major(2U);
-  queued.set_schema_minor(4U);
+  queued.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   queued.set_request_id(9007199254740999ULL);
   queued.set_receipt(1U);
   queued.set_result_code(8U);
@@ -99,7 +99,7 @@ int main() {
 
   wire::DummyAttemptEvidenceV2 evidence;
   evidence.set_schema_major(2U);
-  evidence.set_schema_minor(4U);
+  evidence.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   evidence.set_category(1U);
   evidence.set_run_id(9007199254740993ULL);
   evidence.set_evidence_seq(17U);
@@ -114,7 +114,7 @@ int main() {
 
   wire::DummyManageV2Request monitor;
   monitor.set_schema_major(2U);
-  monitor.set_schema_minor(4U);
+  monitor.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   monitor.set_operation(0U);
   std::uint8_t monitor_request[wire::DummyManageV2RequestCodec::kEncodedSize]{};
   if (wire::DummyManageV2RequestCodec::encode(monitor, monitor_request, sizeof(monitor_request)) != wire::CodecResult::kOk) return 8;

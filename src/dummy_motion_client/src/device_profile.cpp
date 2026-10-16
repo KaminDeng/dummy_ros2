@@ -1,4 +1,5 @@
 #include "dummy_motion_client/device_profile.hpp"
+#include "dp_dummy_robot_v2.hpp"
 
 #include <algorithm>
 #include <array>
@@ -151,8 +152,11 @@ VerifiedBundle verify_bundle(const std::string &bundle_root) {
     const fs::path manifest_path = root / "manifest.json";
     const std::string manifest_bytes = read_file(manifest_path);
     const YAML::Node manifest = YAML::Load(manifest_bytes);
+    const std::string expected_release = "dummy-wire-v" +
+        std::to_string(dp::protocol::dummy_robot_v2::kSchemaMajor) + "." +
+        std::to_string(dp::protocol::dummy_robot_v2::kSchemaMinor);
     if (require(manifest, "format").as<std::string>() != "dummy_wire_release_v2" ||
-        require(manifest, "release_id").as<std::string>() != "dummy-wire-v2.4") invalid("unsupported bundle release");
+        require(manifest, "release_id").as<std::string>() != expected_release) invalid("unsupported bundle release");
     const YAML::Node payloads = require(manifest, "payloads");
     if (!payloads.IsSequence() || payloads.size() == 0U) invalid("invalid bundle payload list");
     std::unordered_map<std::string, std::string> verified;
@@ -277,21 +281,21 @@ fs::path bounded_evidence_file(const fs::path &root, const std::string &relative
   return root / path;
 }
 
-void verify_hil_pages(const YAML::Node &hil, const YAML::Node &raw_index,
-                      const NoLoadDevActivationRequest &request) {
+void verify_hil_pages_count(const YAML::Node &hil, const YAML::Node &raw_index,
+                      const NoLoadDevActivationRequest &request, std::size_t expected_cycles) {
   const YAML::Node cycles = require(raw_index, "cycles");
   const YAML::Node hil_cycles = require(hil, "cycles");
   const YAML::Node boots = require(hil, "boot_epochs");
   if (require(raw_index, "schema").as<std::string>() != "dummy_no_load_dev_functional_raw_index_v1" ||
-      !cycles.IsSequence() || cycles.size() != 50U || !hil_cycles.IsSequence() ||
-      hil_cycles.size() != 50U || !boots.IsSequence() || boots.size() != 1U)
+      !cycles.IsSequence() || cycles.size() != expected_cycles || !hil_cycles.IsSequence() ||
+      hil_cycles.size() != expected_cycles || !boots.IsSequence() || boots.size() != 1U)
     invalid("HIL raw index shape invalid");
   const std::string boot = boots[0].as<std::string>();
   if (!std::regex_match(boot, std::regex("[0-9a-f]{16}"))) invalid("HIL boot identity invalid");
   const fs::path root = fs::weakly_canonical(request.hil_evidence_root);
   if (!fs::is_directory(root)) invalid("HIL evidence root unavailable");
   std::unordered_set<std::string> seen_pages;
-  for (std::size_t slot = 0; slot < 50U; ++slot) {
+  for (std::size_t slot = 0; slot < expected_cycles; ++slot) {
     const YAML::Node cycle = cycles[slot], summary = hil_cycles[slot];
     const auto number = static_cast<unsigned>(slot + 1U);
     std::ostringstream name;
@@ -344,6 +348,11 @@ void verify_hil_pages(const YAML::Node &hil, const YAML::Node &raw_index,
           seen_pages.find(relative) == seen_pages.end()) invalid("HIL unindexed page present");
     }
   }
+}
+
+void verify_hil_pages(const YAML::Node &hil, const YAML::Node &raw_index,
+                      const NoLoadDevActivationRequest &request) {
+  verify_hil_pages_count(hil, raw_index, request, 50U);
 }
 
 void verify_functional_basis(const YAML::Node &activation, const DeviceBundleIdentity &identity,
@@ -402,8 +411,77 @@ void verify_functional_basis(const YAML::Node &activation, const DeviceBundleIde
       request.hil_raw_index_path, require(activation, "hil_raw_index_sha256").as<std::string>(), {}), request);
 }
 
+void verify_limited_functional_basis(const YAML::Node &activation, const DeviceBundleIdentity &identity,
+                             const NoLoadDevActivationRequest &request, const YAML::Node &prebuild) {
+  const auto limit_text = require(activation, "goal_limit").as<std::string>();
+  const auto operator_text = require(activation, "operator_powered_fixed_no_load").as<std::string>();
+  const fs::path timeline(require(activation, "goal_timeline_path").as<std::string>());
+  if (require(activation, "goal_limit").Tag() != "?" ||
+      require(activation, "operator_powered_fixed_no_load").Tag() != "?" ||
+      (limit_text != "1" && limit_text != "2") || operator_text != "true" ||
+      !timeline.is_absolute() || timeline.filename().empty() || fs::exists(timeline) ||
+      fs::is_symlink(timeline)) invalid("limited functional budget or invocation invalid");
+  const auto bound_file = [&activation](const char *field, const fs::path &path) {
+    return fs::is_regular_file(path) && !fs::is_symlink(path) &&
+           parse_sha256(require(activation, field).as<std::string>()) == parse_sha256(sha256_file(path));
+  };
+  if (!bound_file("d_regression_report_sha256", request.d_regression_report_path) ||
+      !bound_file("d_regression_provenance_sha256", request.d_regression_provenance_path) ||
+      !bound_file("hil_report_sha256", request.hil_report_path) ||
+      !bound_file("hil_raw_index_sha256", request.hil_raw_index_path) ||
+      !bound_file("elf_sha256", request.elf_path) ||
+      activation["qualification_report_sha256"])
+    invalid("functional development evidence binding missing");
+  const YAML::Node resource = detail::load_pinned_yaml(
+      request.resource_report_path, require(activation, "resource_report_sha256").as<std::string>(), {});
+  fs::path reported_elf(require(resource, "elf").as<std::string>());
+  if (!reported_elf.is_absolute()) {
+    if (request.resource_base_root.empty()) invalid("resource ELF base root missing");
+    reported_elf = fs::path(request.resource_base_root) / reported_elf;
+  }
+  if (require(resource, "result").as<std::string>() != "FAIL" ||
+      require(resource, "measurement_provenance").as<std::string>() != "NOT_ASSESSED" ||
+      require(resource, "measurement_source").as<std::string>() != "static_link_only" ||
+      require(resource, "release_qualified").as<bool>() ||
+      fs::weakly_canonical(reported_elf) != fs::weakly_canonical(request.elf_path))
+    invalid("functional resource report is not static-only");
+  const auto [timestamp, test_count] = verify_d_regression_junit(
+      request.d_regression_report_path,
+      require(activation, "d_regression_report_sha256").as<std::string>());
+  const YAML::Node provenance = detail::load_pinned_yaml(
+      request.d_regression_provenance_path,
+      require(activation, "d_regression_provenance_sha256").as<std::string>(), {});
+  verify_d_regression_provenance(
+      provenance, activation, prebuild, identity, request, timestamp, test_count);
+  const YAML::Node hil = detail::load_pinned_yaml(
+      request.hil_report_path, require(activation, "hil_report_sha256").as<std::string>(), {});
+  for (const char *field : {"requested_cycles", "executed_cycles", "passed_cycles"}) {
+    if (require(hil, field).Tag() != "?" || require(hil, field).as<std::string>() != "1")
+      invalid("limited Native APP count must be integer one");
+  }
+  if (require(hil, "format").as<std::string>() != "dummy_v2_hil_v2" ||
+      require(hil, "qualification_scope").as<std::string>() != "APPLICATION_HOLD" ||
+      !require(hil, "application_hold").as<bool>() ||
+      require(hil, "result").as<std::string>() != "PASS" ||
+      require(hil, "requested_cycles").as<unsigned>() != 1U ||
+      require(hil, "executed_cycles").as<unsigned>() != 1U ||
+      require(hil, "passed_cycles").as<unsigned>() != 1U ||
+      parse_sha256(require(hil, "firmware_sha256").as<std::string>()) != identity.firmware_hash ||
+      parse_sha256(require(hil, "cli_sha256").as<std::string>()) !=
+          parse_sha256(require(activation, "host_sha256").as<std::string>()) ||
+      parse_sha256(require(hil, "contract_sha256").as<std::string>()) != identity.contract_hash ||
+      parse_sha256(require(hil, "model_sha256").as<std::string>()) != identity.model_hash ||
+      parse_sha256(require(hil, "profile_sha256").as<std::string>()) != identity.policy_hash ||
+      require(hil, "profile_id").as<unsigned>() != 201U ||
+      require(hil, "configured_mask").as<unsigned>() != 63U)
+    invalid("functional HIL report mismatch");
+  verify_hil_pages_count(hil, detail::load_pinned_yaml(
+      request.hil_raw_index_path, require(activation, "hil_raw_index_sha256").as<std::string>(), {}), request, 1U);
+}
+
 struct NoLoadActivationIdentity {
   bool functional_basis;
+  NoLoadBasis basis;
   std::array<std::uint8_t, 32U> live_profile_hash;
 };
 
@@ -420,7 +498,8 @@ NoLoadActivationIdentity verify_no_load_activation(const VerifiedBundle &candida
       require(activation, "qualification").as<std::string>() != "UNQUALIFIED")
     invalid("invalid no-load development scope");
   const YAML::Node basis = activation["basis"];
-  const bool functional_basis = basis && basis.as<std::string>() == "NO_LOAD_DEV_FUNCTIONAL";
+  const bool limited_basis = basis && basis.as<std::string>() == "NO_LOAD_DEV_FUNCTIONAL_LIMITED";
+  const bool functional_basis = limited_basis || (basis && basis.as<std::string>() == "NO_LOAD_DEV_FUNCTIONAL");
   if (basis && !functional_basis && basis.as<std::string>() != "SOFTWARE_ONLY")
     invalid("unverified no-load development basis");
   const auto equal_hash = [&activation](const char *field, const std::array<std::uint8_t, 32U> &expected) {
@@ -480,7 +559,8 @@ NoLoadActivationIdentity verify_no_load_activation(const VerifiedBundle &candida
     if (!equal_hash("live_profile_sha256", identity.policy_hash))
       invalid("functional live profile identity mismatch");
     if (compiled["post_build_bindings"]) invalid("functional basis cannot claim formal post-build bindings");
-    verify_functional_basis(activation, identity, request, prebuild);
+    if (limited_basis) verify_limited_functional_basis(activation, identity, request, prebuild);
+    else verify_functional_basis(activation, identity, request, prebuild);
   } else {
     const YAML::Node post_build = require(compiled, "post_build_bindings");
     if (!equal_file_hash("qualification_report_sha256", request.qualification_report_path) ||
@@ -515,7 +595,8 @@ NoLoadActivationIdentity verify_no_load_activation(const VerifiedBundle &candida
                           request.usb_serial + "-if00#baudrate=115200" ||
       require(activation, "endpoint").as<std::string>() != request.endpoint)
     invalid("no-load development device identity mismatch");
-  return {functional_basis,
+  return {functional_basis, limited_basis ? NoLoadBasis::kFunctionalLimited :
+          (functional_basis ? NoLoadBasis::kFunctional50 : NoLoadBasis::kSoftwareOnly),
           functional_basis ? parse_sha256(require(activation, "live_profile_sha256").as<std::string>()) :
                              identity.profile_hash};
 }
@@ -581,7 +662,7 @@ DeviceProfile load_device_profile_impl(const std::string &bundle_root, const std
       invalid("invalid requested device profile");
     const auto bundle = verify_bundle(bundle_root);
     if ((profile_name == "sil_j1" || profile_name == "sil_6dof") &&
-        bundle.aggregate != "940bb20807d06e1c32a37fa8d29b0e1bdf24b87876e7409cbce61ea88b350a8b")
+        bundle.aggregate != "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89d445ed96eda497b")
       invalid("untrusted SIL fixture bundle");
     const auto identity = bundle_identity(bundle, profile_name);
     DeviceProfile output;
@@ -615,6 +696,20 @@ DeviceProfile load_device_profile_impl(const std::string &bundle_root, const std
           activation == nullptr) invalid("no-load development activation required");
       const auto activated = verify_no_load_activation(bundle, identity, *activation);
       output.functional_development_basis = activated.functional_basis;
+      output.no_load_basis = activated.basis;
+      if (activated.basis == NoLoadBasis::kFunctionalLimited) {
+        const auto limited = detail::load_pinned_yaml(
+            activation->activation_path, activation->expected_activation_sha256, {});
+        output.goal_limit = require(limited, "goal_limit").as<unsigned>();
+        output.limited_goal_timeline_path = require(limited, "goal_timeline_path").as<std::string>();
+        const auto hil = detail::load_pinned_yaml(activation->hil_report_path,
+            require(limited, "hil_report_sha256").as<std::string>(), {});
+        const auto boot_text = require(hil, "boot_epochs")[0].as<std::string>();
+        const auto parsed = std::from_chars(boot_text.data(), boot_text.data()+boot_text.size(),
+                                            output.limited_boot_epoch, 16);
+        if(parsed.ec!=std::errc{} || parsed.ptr!=boot_text.data()+boot_text.size() ||
+           output.limited_boot_epoch==0U) invalid("limited functional boot invalid");
+      }
       output.profile_hash = activated.live_profile_hash;
       output.bench_only = true;
       output.software_only_development = !output.functional_development_basis;

@@ -67,12 +67,19 @@ class ActionGate {
     return phase_==Phase::kHold && request_==0 && authorization_.session &&
         authorization_.reference && !authorization_.permit;
   }
+  bool cancel_waiting_for_renewal(const ManageRequest &live, std::uint64_t now) const noexcept;
+  bool completion_waiting_for_renewal(std::uint64_t now) const noexcept;
+  bool bounded_completion_intent(const ManageRequest &live, std::uint32_t committed_seq,
+                                 std::uint64_t now) const noexcept;
+  bool bounded_cancel_intent(const ManageRequest &live, std::uint64_t now) const noexcept;
   Terminal terminal() const { return terminal_; }
   std::optional<CancelReceipt> confirmed_cancel_receipt() const noexcept;
   Phase phase() const { return phase_; }
   std::uint64_t generation() const { return generation_; }
   const std::string &error() const { return error_; }
  private:
+  bool deferred_cancel_matches_authority() const noexcept;
+  bool deferred_complete_matches_authority() const noexcept;
   bool issue(ManageOperation, std::uint64_t now, std::uint64_t existing_deadline=0);
   bool prime(const ManageReply &, Phase, std::uint64_t now);
   void stop(bool canceled, const std::string &, std::uint64_t now);
@@ -86,6 +93,10 @@ class ActionGate {
   Phase phase_=Phase::kIdle; Terminal terminal_=Terminal::kNone;
   ManageOperation operation_=ManageOperation::kEnable;
   std::uint64_t request_=0, deadline_=0, generation_=0;
+  std::uint64_t completing_after_renewal_=0U;
+  ManageRequest deferred_complete_request_{};
+  std::uint64_t canceling_after_renewal_=0U;
+  ManageRequest deferred_cancel_request_{};
   std::uint64_t cancel_request_id_=0;
   std::uint64_t last_producer_generation_=0, frozen_generation_=0, drained_generation_=0;
   std::uint64_t prime_producer_generation_=0, hold_state_observed_us_=0;

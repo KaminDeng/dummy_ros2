@@ -1,0 +1,55 @@
+{
+  "format": "dummy_wire_release_v2",
+  "release_id": "dummy-wire-v2.4",
+  "schema_major": 2,
+  "schema_minor": 4,
+  "artifact_kind": "application_hold_no_load_candidate",
+  "runtime_enabled": false,
+  "motion_permitted_on_real_hardware": false,
+  "profile_id": 201,
+  "configured_mask": 63,
+  "capability": {
+    "profile_id": 201,
+    "configured_mask": 63,
+    "motion_permitted_on_real_hardware": false,
+    "active_axes": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "reference_kind": "BENCH_SESSION",
+    "control_period_us": 20000,
+    "state_publish_period_us": 20000
+  },
+  "compiled_policy_sha256": "d4e439c5e1854cee53e07992a20af5a2115d77834cf12a3d87f2a93f6ab51c1c",
+  "firmware_image_sha256": null,
+  "source_contract_sha256": "a38eebf431ff6c1f1e0412dd11387875960ca3de6f2edacdee6741fbc4daaba8",
+  "model_sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713",
+  "source_policy": "f405_6dof_application_hold_no_load_candidate.json",
+  "source_firmware_image": null,
+  "qualification_gap": [
+    "new_matching_J6_firmware_and_Host",
+    "new_post_build_and_functional_binding",
+    "new_Runtimefreeze_and_loaded_maps",
+    "formal_application_qualification_report"
+  ],
+  "payloads": [
+    {
+      "path": "model/model.yaml",
+      "sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713"
+    },
+    {
+      "path": "policy/application_hold_no_load.json",
+      "sha256": "adba10b17088c6db6e8d96b44f8d390fd5a6dc0f5f7cb65c4cdb9e946fd36575"
+    },
+    {
+      "path": "profiles/f405_6dof_bench.yaml",
+      "sha256": "90e5a970cd213a2c40cc92242b512d4b608657912a19f02189c524e74a67b0a4"
+    }
+  ],
+  "payload_sorted_sha256": "0d95d2604c780406b40b6ed4112c34203cc9de99f14e1575869a722bd629c867",
+  "draft_status": "SOURCE_PAYLOAD_ONLY_PENDING_NEW_FW_HOST_ACTIVATION"
+}

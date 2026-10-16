@@ -24,7 +24,7 @@ from controller_manager_msgs.srv import ConfigureController, LoadController, Set
 from std_srvs.srv import Trigger
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-OFFLINE_SIL_CONTRACT_SHA256 = "940bb20807d06e1c32a37fa8d29b0e1bdf24b87876e7409cbce61ea88b350a8b"
+OFFLINE_SIL_CONTRACT_SHA256 = "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89d445ed96eda497b"
 SIX_AXIS_TARGET = (0.007, -0.010, 0.013, -0.016, 0.019, -0.022)
 
 
@@ -42,8 +42,8 @@ def call(node, service_type, name, request):
 
 def real_peer_capability(bundle, profile_name="sil_j1"):
     manifest = json.loads((bundle / "manifest.json").read_text())
-    if manifest.get("release_id") != "dummy-wire-v2.4":
-        raise ValueError("D08 fixture requires a v2.4 bundle")
+    if (manifest.get("release_id"), manifest.get("schema_major"), manifest.get("schema_minor")) != ("dummy-wire-v2.5", 2, 5):
+        raise ValueError("D08 fixture requires the current v2.5 bundle")
     payloads = {}
     listing = []
     for entry in manifest["payloads"]:
@@ -323,7 +323,8 @@ def run_probe(gate, peer, bundle, unsupported, real_peer, capability, endpoint, 
     mask = 63 if six_axis else 1
     joint_names = [f"Joint{axis}" for axis in range(1, 7 if six_axis else 2)]
     workspace = pathlib.Path(__file__).resolve().parents[3]
-    control_prefix = workspace / "install_dummy/dummy_ros_control"
+    from ament_index_python.packages import get_package_prefix
+    control_prefix = pathlib.Path(get_package_prefix("dummy_ros_control"))
     env = dict(os.environ, ROS_DOMAIN_ID=selected_ros_domain_id(), ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST")
     env["AMENT_PREFIX_PATH"] = str(control_prefix) + os.pathsep + env.get("AMENT_PREFIX_PATH", "")
     env["LD_LIBRARY_PATH"] = str(control_prefix / "lib") + os.pathsep + env.get("LD_LIBRARY_PATH", "")

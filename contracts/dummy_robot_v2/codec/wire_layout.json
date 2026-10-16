@@ -755,7 +755,7 @@
       "interface_id": 4138
     },
     "DummyJointStateV2": {
-      "encoded_size": 301,
+      "encoded_size": 350,
       "fields": [
         {
           "count": 1,
@@ -980,6 +980,20 @@
           "offset": 300,
           "size": 1,
           "type": "bool"
+        },
+        {
+          "count": 6,
+          "name": "hold_position_rad",
+          "offset": 301,
+          "size": 48,
+          "type": "float64"
+        },
+        {
+          "count": 1,
+          "name": "hold_valid_mask",
+          "offset": 349,
+          "size": 1,
+          "type": "uint8"
         }
       ],
       "interface_id": 4139

@@ -30,3 +30,6 @@ float64[6] estimated_velocity_rad_s
 float64[6] raw_motor_position_rev
 uint16 core_state
 bool hold_ready
+# 全轴真实 SENT 的固定保持目标；仅 Hold 且 hold_valid_mask 全轴有效时可用。
+float64[6] hold_position_rad
+uint8 hold_valid_mask

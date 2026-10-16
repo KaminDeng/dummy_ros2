@@ -1,3 +1,4 @@
+#include "dummy_motion_client/bootstrap_tick_policy.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -18,6 +19,7 @@
 #include "controller_manager/controller_manager.hpp"
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dummy_motion_client/device_profile.hpp"
+#include "dummy_motion_client/limited_goal_budget.hpp"
 #include "dummy_motion_client/goal_timeline.hpp"
 #include "dummy_motion_client/bootstrap_coordinator.hpp"
 #include "dummy_motion_client/native_goal_validation.hpp"
@@ -226,6 +228,12 @@ bool run_lease_eligible(const RunLeaseEligibility &state) noexcept {
     state.producer_active && state.producer_recent && state.transport_ready;
 }
 
+RunLeaseEligibility run_lease_continuation_inputs(RunLeaseEligibility inputs,
+    bool renewal_running,bool bounded_completion) noexcept {
+  if(renewal_running && bounded_completion) inputs.producer_active=true;
+  return inputs;
+}
+
 const char *run_lease_first_failed(const RunLeaseEligibility &state) noexcept {
   if(!state.status_running) return "status_running";
   if(!state.state_running) return "state_running";
@@ -263,6 +271,26 @@ bool queue_lease_renewal(std::atomic<int> &request, std::atomic<bool> &busy,
   if(!running) busy=false;
   reserved=false;
   return false;
+}
+
+// 调用方持有同一control admission锁；只退尚未提交的RUN预约，不动goal busy。
+bool withdraw_queued_running_renewal(std::atomic<int> &request,
+    std::atomic<bool> &reserved, std::atomic<bool> &running,
+    std::atomic<bool> &started, bool owns_busy, bool renewal_inflight,
+    bool bounded_intent, std::atomic<int> &explicit_status) noexcept {
+  if(!reserved.load() || !running.load() || started.load() || owns_busy ||
+     renewal_inflight || !bounded_intent) return false;
+  int renewal=static_cast<int>(wire_value(ManageOperation::kRenewLease));
+  if(!request.compare_exchange_strong(renewal,0)) return false;
+  reserved=false; running=false; started=false;
+  int pending=1;
+  explicit_status.compare_exchange_strong(pending,-1);
+  return true;
+}
+
+bool take_withdrawn_lease_renewal(std::atomic<int> &status) noexcept {
+  int withdrawn=-1;
+  return status.compare_exchange_strong(withdrawn,0);
 }
 
 bool take_confirmed_lease_renewal(std::atomic<int> &explicit_status,
@@ -667,10 +695,21 @@ class DeviceActionGate final : public rclcpp::Node {
     if(!validated_requested_motion_permit(permit_us,device_profile_))
       throw std::invalid_argument("permit duration exceeds verified profile limit");
     profile_=device_profile_.joints;
+    if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
+       !limited_goal_budget_.configure(device_profile_.goal_limit,
+         device_profile_.limited_boot_epoch,static_cast<std::uint64_t>(session)))
+      throw std::invalid_argument("invalid limited functional goal budget");
     const auto timeline_path=declare_parameter<std::string>("goal_timeline_path","");
+    if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
+       timeline_path!=device_profile_.limited_goal_timeline_path)
+      throw std::invalid_argument("limited functional invocation timeline mismatch");
     if(!timeline_path.empty()) {
       timeline_=std::make_unique<GoalTimeline>(timeline_path);
-      if(timeline_->failed()) evidence_incomplete_=true;
+      if(timeline_->failed()) {
+        if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited)
+          throw std::invalid_argument("limited functional invocation already used or failed");
+        evidence_incomplete_=true;
+      }
     }
     evidence_failure_timer_=create_wall_timer(std::chrono::seconds(1),[this] {
       if(evidence_incomplete_.load() && !evidence_failure_logged_.exchange(true))
@@ -707,6 +746,11 @@ class DeviceActionGate final : public rclcpp::Node {
       });
     bootstrap_status_service_=create_service<std_srvs::srv::Trigger>("~/bootstrap_status",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        auto admission=cancel_admission_.try_control();
+        if(!admission) { response->success=false; response->message="BOOTSTRAP_STATUS_UNAVAILABLE"; return; }
+        if(fault_cleanup_confirmed_.load() && !evidence_incomplete_.load() && transport_->raw_evidence_failure()==0U) {
+          response->success=true;response->message="FAULT_CLEANUP_CONFIRMED";return;
+        }
         const int release=release_stage_.load();
         if(evidence_incomplete_.load()) {
           response->success=false;
@@ -725,6 +769,10 @@ class DeviceActionGate final : public rclcpp::Node {
         }
         const bool operation_complete=management_request_.load()==0 && bootstrap_ && bootstrap_->operation_complete();
         const bool renewal_pending=renewal_reserved_.load();
+        if(bootstrap_->phase()!=BootstrapPhase::kFault &&
+           take_withdrawn_lease_renewal(explicit_renewal_status_)) {
+          response->success=false; response->message="LEASE_RENEWAL_WITHDRAWN_NOT_SENT"; return;
+        }
         const bool renewal_complete=take_confirmed_lease_renewal(
           explicit_renewal_status_,observation_ready_.load() && !renewal_pending &&
           bootstrap_->phase()!=BootstrapPhase::kFault,
@@ -774,7 +822,8 @@ class DeviceActionGate final : public rclcpp::Node {
     management_services_.push_back(create_service<std_srvs::srv::Trigger>("~/renew_session_lease",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-        response->success=release_stage_.load()==0 && renew_available_.load() &&
+        auto admission=cancel_admission_.try_control();
+        response->success=admission && release_stage_.load()==0 && renew_available_.load() &&
           reserve_lease_renewal(true);
         response->message=response->success ? "Lease renewal queued; poll bootstrap_status" :
           "Lease renewal unavailable or another operation is active";
@@ -823,6 +872,11 @@ class DeviceActionGate final : public rclcpp::Node {
             renewal_reserved_.load(),false,release_stage_.load(),evidence_incomplete_.load(),
             bootstrap_fault_snapshot_.load(),GoalRejectionReceipt::Clock::now());
           std::fprintf(stderr,"GATE_GOAL_REJECTED_DIAG reason=busy\n");
+          return rclcpp_action::GoalResponse::REJECT;
+        }
+        // 取得唯一busy后复核ready，阻止读旧ready的callback跨最后预算消费。
+        if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited && !ready_.load()) {
+          busy_=false;
           return rclcpp_action::GoalResponse::REJECT;
         }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -893,7 +947,9 @@ class DeviceActionGate final : public rclcpp::Node {
         }
       }
       gate_->tick(now);
-      if(observation_ready_ || observation_lost_ || release_transition_pending_)
+      if(bootstrap_ && bootstrap_tick_required(observation_ready_,observation_lost_,
+          release_transition_pending_,release_stage_.load(),bootstrap_->phase(),bootstrap_->last_operation(),
+          bootstrap_->release_request_inflight()))
         bootstrap_tick(now);
       const bool fault=bootstrap_->phase()==BootstrapPhase::kFault;
       bootstrap_fault_snapshot_=fault;
@@ -908,12 +964,14 @@ class DeviceActionGate final : public rclcpp::Node {
   }
  private:
   bool reserve_lease_renewal(bool explicit_request=false) noexcept {
+    if(explicit_request && explicit_renewal_status_.load()<0) return false;
     const bool running=run_renew_available_.load();
     if(!queue_lease_renewal(management_request_,busy_,renewal_reserved_,running)) return false;
     renewal_owns_busy_=!running;
     renewal_running_=running;
     renewal_started_=false;
-    explicit_renewal_status_=explicit_request ? 1 : 0;
+    if(explicit_request) explicit_renewal_status_=1;
+    else if(explicit_renewal_status_.load()>=0) explicit_renewal_status_=0;
     ready_=false;
     return true;
   }
@@ -961,6 +1019,8 @@ class DeviceActionGate final : public rclcpp::Node {
     if(!std::equal(parameters_.device.begin(),parameters_.device.end(),status.device_id()) ||
        status.profile_id()!=parameters_.profile || status.configured_mask()!=parameters_.mask ||
        !status_matches_bundle_identity(device_profile_,status_identity)) return reject("HASH");
+    if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
+       status.boot_epoch()!=device_profile_.limited_boot_epoch) return reject("LIMITED_BOOT");
     if(status.boot_epoch()==0 || !status.motion_supported() ||
        status.core_state()==wire_value(WireCoreState::kFault)) return reject("MOTION");
     if ((status.session_id()!=0U && status.control_mode()==0U) ||
@@ -1323,8 +1383,45 @@ class DeviceActionGate final : public rclcpp::Node {
         now-last_control_update_us_<=state_max_age_us_,
       transport_ready && status.real_motion_permitted() &&
         state_fresh && release_status_fresh};
-    const bool run_lease_active=run_lease_eligible(run_lease_inputs);
-    run_renew_available_=run_lease_active;
+    // 完成冻结可与同轮RUN续租预约相遇；不为Completing授予新续租权限。
+    ManageRequest completion_live;
+    completion_live.set_operation(wire_value(ManageOperation::kComplete));
+    completion_live.set_expected_boot_epoch(status.boot_epoch());
+    completion_live.set_expected_session_id(status.session_id());
+    completion_live.set_expected_reference_epoch(status.reference_epoch());
+    completion_live.set_expected_motion_epoch(state.motion_epoch());
+    completion_live.set_expected_management_epoch(state.management_epoch());
+    completion_live.set_expected_profile_id(status.profile_id());
+    completion_live.set_configured_mask(status.configured_mask());
+    completion_live.set_device_id(status.device_id());
+    std::uint8_t completion_client[16]{};
+    std::copy(parameters_.client.begin(),parameters_.client.end(),completion_client);
+    completion_live.set_client_instance_id(completion_client);
+    const bool completion_ack=run_lease_inputs.status_running && run_lease_inputs.state_running &&
+      run_lease_inputs.status_state_coherent && run_lease_inputs.same_goal_run &&
+      run_lease_inputs.producer_recent && run_lease_inputs.transport_ready &&
+      status.can_submitted_mask()==parameters_.mask && status.can_sent_mask()==parameters_.mask &&
+      status.can_failed_mask()==0U && state.can_submitted_mask()==parameters_.mask &&
+      state.can_sent_mask()==parameters_.mask && state.can_failed_mask()==0U &&
+      state.position_valid_mask()==parameters_.mask && state.velocity_valid_mask()==parameters_.mask &&
+      state.raw_position_valid_mask()==parameters_.mask &&
+      gate_->bounded_completion_intent(completion_live,state.committed_producer_seq(),now);
+    auto cancel_live=completion_live;
+    cancel_live.set_operation(wire_value(ManageOperation::kCancel));
+    const bool cancel_intent=run_lease_inputs.status_running && run_lease_inputs.state_running &&
+      run_lease_inputs.status_state_coherent && run_lease_inputs.same_goal_run &&
+      run_lease_inputs.producer_recent && run_lease_inputs.transport_ready &&
+      gate_->bounded_cancel_intent(cancel_live,now);
+    (void)withdraw_queued_running_renewal(management_request_,renewal_reserved_,renewal_running_,
+      renewal_started_,renewal_owns_busy_.load(),bootstrap_->renewal_request_inflight(),
+      completion_ack || cancel_intent,explicit_renewal_status_);
+    // 已接纳续租期间，冻结末样本可有界替代producer_active，其他新鲜度/身份条件不变。
+    const auto renewal_continuation_inputs=run_lease_continuation_inputs(run_lease_inputs,
+        renewal_running_.load(),gate_->completion_waiting_for_renewal(now) ||
+          gate_->cancel_waiting_for_renewal(cancel_live,now));
+    const bool run_lease_active=run_lease_eligible(renewal_continuation_inputs);
+    // 新续租仍仅允许原始Running生产条件，不由completion defer开启。
+    run_renew_available_=run_lease_eligible(run_lease_inputs);
     if(renewal_running_.load() && !run_lease_active) {
       if(!run_lease_diag_reported_) {
         run_lease_diag_reported_=true;
@@ -1434,7 +1531,7 @@ class DeviceActionGate final : public rclcpp::Node {
       ((lease_hold && release_status_fresh &&
         transport_->post_complete_begin_ready() &&
         (gate_->ready() || gate_->permit_refresh_allowed()) && !busy_.load()) ||
-       run_lease_active) && management_request_.load()==0 &&
+       run_lease_eligible(run_lease_inputs)) && management_request_.load()==0 &&
       bootstrap_ && bootstrap_->renewal_due(now,requested_lease_us_) && transport_->ready();
     if(renew_available_.load() && reserve_lease_renewal()) renew_available_=false;
     release_available_=release_operation_available({
@@ -1579,6 +1676,7 @@ class DeviceActionGate final : public rclcpp::Node {
     if((timeline_ && timeline_->failed()) || transport_->raw_evidence_failure()!=0U)
       evidence_incomplete_=true;
     if(evidence_incomplete_.load()) {
+      if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited) { limited_goal_budget_.fail(); ready_=false; }
       admission_prerequisites_=false;
       ready_=false;
       if(active_ && gate_->terminal()==Terminal::kNone)
@@ -1597,6 +1695,18 @@ class DeviceActionGate final : public rclcpp::Node {
     { std::unique_lock<std::mutex> lock(goal_mutex_,std::try_to_lock);
       if(lock && pending_) {
         active_=std::move(pending_); port_.uuid=active_->get_goal_id();
+        if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
+           (!transport_->raw_evidence_capture_enabled() ||
+            !limited_goal_budget_.consume(port_.identity.boot,port_.identity.session))) {
+          limited_goal_budget_.fail();
+          auto rejected=std::make_shared<Follow::Result>();
+          rejected->error_code=Follow::Result::INVALID_GOAL;
+          rejected->error_string="LIMITED_FUNCTIONAL_BUDGET_EXHAUSTED_OR_IDENTITY";
+          active_->abort(rejected); active_.reset(); busy_=false; ready_=false;
+          return;
+        }
+        if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
+           !limited_goal_budget_.available()) ready_=false;
         goal_accepted_us_=now;
         goal_before_identity_=timeline_identity_;
         goal_boot_=timeline_identity_.boot;
@@ -1607,6 +1717,7 @@ class DeviceActionGate final : public rclcpp::Node {
           timeline_uuid_=port_.uuid;
           timeline_digest_=dummy_ros_control::trajectory_digest(active_->get_goal()->trajectory);
           timeline_goal_open_=true; timeline_after_=timeline_terminal_=timeline_hold_=false;
+          fault_cleanup_confirmed_=false;timeline_fault_cleanup_=false;
           timeline_goal_hold_confirmed_=false;
           cancel_refresh_diagnostic_logged_=false;
           timeline_refresh_wait_started_us_=0U;
@@ -1617,6 +1728,7 @@ class DeviceActionGate final : public rclcpp::Node {
         if(evidence_incomplete_.load() || !trajectory || !gate_->submit(*trajectory,now)) {
           auto result=std::make_shared<Follow::Result>(); result->error_code=Follow::Result::INVALID_GOAL;
           result->error_string=evidence_incomplete_.load() ? "EVIDENCE_INCOMPLETE" : "DEVICE_NOT_READY";
+          if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited) { limited_goal_budget_.fail(); ready_=false; }
           active_->abort(result); active_.reset(); busy_=false;
         } else {
           admission.open(active_);
@@ -1642,11 +1754,47 @@ class DeviceActionGate final : public rclcpp::Node {
           timeline_hold_=true; timeline_goal_open_=false;
         }
       }
+      // 自治fault清理只读专属原raw快照；不把Fault授权清零当可运行/可续租状态。
+      if(gate_->terminal()==Terminal::kAborted && !fault_cleanup_confirmed_.load() && timeline_after_) {
+        const auto receipt=transport_->raw_terminal_flushed();
+        const auto cleanup=transport_->raw_cleanup_observation();
+        const auto sampled_after_read=management_now_us();
+        wire::DummyDeviceStatusV2 cleanup_status{};
+        const bool status_decoded=wire::DummyDeviceStatusV2Codec::decode(cleanup.status.data(),cleanup.status.size(),&cleanup_status)==wire::CodecResult::kOk;
+        DeviceStatusIdentity cleanup_identity{};
+        if(status_decoded) {
+          std::copy(std::begin(cleanup_status.contract_sha256()),std::end(cleanup_status.contract_sha256()),cleanup_identity.contract_hash.begin());
+          std::copy(std::begin(cleanup_status.model_sha256()),std::end(cleanup_status.model_sha256()),cleanup_identity.model_hash.begin());
+          std::copy(std::begin(cleanup_status.profile_sha256()),std::end(cleanup_status.profile_sha256()),cleanup_identity.profile_hash.begin());
+          std::copy(std::begin(cleanup_status.compiled_policy_sha256()),std::end(cleanup_status.compiled_policy_sha256()),cleanup_identity.policy_hash.begin());
+          std::copy(std::begin(cleanup_status.firmware_sha256()),std::end(cleanup_status.firmware_sha256()),cleanup_identity.firmware_hash.begin());
+        }
+        if(transport_->raw_evidence_capture_enabled() && transport_->raw_evidence_failure()==0U && status_decoded &&
+           status_matches_bundle_identity(device_profile_,cleanup_identity) &&
+           raw_fault_cleanup_matches(receipt,transport_->raw_first_page_written(),cleanup,goal_boot_,goal_session_,goal_run_id_,timeline_run_motion_epoch_,
+             parameters_.profile,parameters_.mask,parameters_.device,sampled_after_read,state_max_age_us_)) {
+          auto event=timeline_event(TimelineEvent::Kind::kFaultCleanup,sampled_after_read);
+          event.identity={goal_boot_,goal_session_,port_.identity.reference_epoch,timeline_run_motion_epoch_,goal_run_id_};
+          event.status_core_state=9U;event.state_core_state=9U;
+          event.fault_cleanup={receipt.boot_epoch,receipt.session_id,receipt.run_id,receipt.attempt_motion_epoch,
+            timeline_run_motion_epoch_,receipt.fault_stop_motion_epoch,receipt.first_failure_source,
+            receipt.first_failure_axis_mask,receipt.final_state,receipt.terminal_chain,
+            receipt.full_fault_groups_valid,receipt.chain_valid,receipt.release_committed,
+            receipt.evidence_lost,receipt.motion_complete,true};
+          if(!timeline_ || timeline_->record(event)) {
+            fault_cleanup_confirmed_=true;timeline_fault_cleanup_=true;timeline_goal_open_=false;
+            admission_prerequisites_=false;ready_=false;enable_available_=false;renew_available_=false;
+          } else evidence_incomplete_=true;
+        }
+      }
       const bool raw_capture=transport_->raw_evidence_capture_enabled();
       const auto raw_terminal=transport_->raw_terminal_flushed();
       const bool raw_terminal_ready=raw_terminal_matches(
         raw_terminal,goal_boot_,goal_session_,goal_run_id_);
-      const auto decision=raw_capture ? timeline_terminal_decision(
+      const auto decision=fault_cleanup_confirmed_.load() && timeline_fault_cleanup_ && gate_->terminal()==Terminal::kAborted && (!timeline_ || timeline_->drained())
+        ? timeline_success_decision(false,evidence_incomplete_.load() || (timeline_ && timeline_->failed()),
+            false,!timeline_ || timeline_->drained(),true,transport_->raw_evidence_failure()!=0U,raw_terminal_ready)
+        : raw_capture ? timeline_terminal_decision(
         gate_->terminal(),timeline_!=nullptr,
         evidence_incomplete_.load() || (timeline_ && timeline_->failed()),
         timeline_hold_,!timeline_ || timeline_->drained(),
@@ -1672,6 +1820,19 @@ class DeviceActionGate final : public rclcpp::Node {
         result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED;
         result->error_string=evidence_incomplete_result_error(result->error_string);
         active_->abort(result);
+      } else if(fault_cleanup_confirmed_.load() && gate_->terminal()==Terminal::kAborted) {
+        const auto final_cleanup=transport_->raw_cleanup_observation();
+        if(transport_->raw_evidence_failure()!=0U || !raw_fault_cleanup_matches(
+            transport_->raw_terminal_flushed(),transport_->raw_first_page_written(),final_cleanup,
+            goal_boot_,goal_session_,goal_run_id_,timeline_run_motion_epoch_,parameters_.profile,
+            parameters_.mask,parameters_.device,management_now_us(),state_max_age_us_)) {
+          fault_cleanup_confirmed_=false;evidence_incomplete_=true;result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED;
+          result->error_string=evidence_incomplete_result_error(result->error_string);active_->abort(result);
+          active_.reset();busy_=false;return;
+        }
+        result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED;
+        result->error_string=result->error_string.empty()?"FAULT_CLEANUP_CONFIRMED":result->error_string+";FAULT_CLEANUP_CONFIRMED";
+        active_->abort(result);
       } else if(gate_->terminal()==Terminal::kSucceeded) {
         // Recheck the asynchronous writer immediately at the ROS result boundary.
         const auto final_raw_terminal=transport_->raw_terminal_flushed();
@@ -1693,9 +1854,12 @@ class DeviceActionGate final : public rclcpp::Node {
         active_->abort(result);
       } else if(gate_->terminal()==Terminal::kCanceled && active_->is_canceling()) active_->canceled(result);
       else { result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED; active_->abort(result); }
+      if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
+         (gate_->terminal()!=Terminal::kSucceeded || evidence_incomplete_.load()))
+        { limited_goal_budget_.fail(); ready_=false; }
       active_.reset(); busy_=false;
     }
-    request_evidence_release(now);
+    if(!fault_cleanup_confirmed_.load()) request_evidence_release(now);
     const AdmissionPrerequisites prerequisites{
       enabled_,observation_ready_.load(),gate_->ready(),port_.control_ready(),
       hold_tolerance_bound_,transport_->post_complete_begin_ready()};
@@ -1703,7 +1867,8 @@ class DeviceActionGate final : public rclcpp::Node {
     bootstrap_fault_snapshot_=fault;
     admission_prerequisites_=prerequisites.ready() && !fault;
     ready_=admission_prerequisites_.load() && !renewal_reserved_.load() &&
-      release_stage_.load()==0 && !evidence_incomplete_.load();
+      release_stage_.load()==0 && !evidence_incomplete_.load() &&
+      (device_profile_.no_load_basis!=NoLoadBasis::kFunctionalLimited || (limited_goal_budget_.available() && transport_->raw_evidence_capture_enabled()));
   }
   void request_evidence_release(std::uint64_t now) noexcept {
     if(!evidence_incomplete_.load() || !device_profile_.functional_development_basis || active_ ||
@@ -1792,6 +1957,7 @@ class DeviceActionGate final : public rclcpp::Node {
   std::uint64_t last_update_=0;
   std::uint64_t last_control_update_us_=0;
   std::uint64_t last_typed_reject_seen_us_=0;
+  LimitedGoalBudget limited_goal_budget_;
   std::uint64_t goal_accepted_us_=0;
   bool enabled_=false;
   bool hold_tolerance_bound_=false;
@@ -1816,6 +1982,8 @@ class DeviceActionGate final : public rclcpp::Node {
   bool timeline_goal_open_=false, timeline_after_=false, timeline_terminal_=false;
   bool timeline_goal_hold_confirmed_=false;
   bool cancel_refresh_diagnostic_logged_=false;
+  std::atomic<bool> fault_cleanup_confirmed_{false};
+  bool timeline_fault_cleanup_=false;
   bool timeline_hold_=false, timeline_hold_observed_=false, timeline_release_recorded_=false;
 };
 }  // namespace dummy_motion_client

@@ -39,7 +39,7 @@
       },
       {
         "acceleration_max_rad_s2": 1.0,
-        "direction": 1,
+        "direction": -1,
         "effective_velocity_max_rad_s": 0.15079644737231007,
         "gear_ratio": 50.0,
         "jerk_max_rad_s3": null,
@@ -91,8 +91,8 @@
         "motor_velocity_cap_motor_rev_s": 1.2,
         "name": "Joint5",
         "node": 5,
-        "position_max_rad": 2.0943951023931953,
-        "position_min_rad": -2.0943951023931953,
+        "position_max_rad": 1.7453292519943295,
+        "position_min_rad": -1.7453292519943295,
         "trial_max_rad": null,
         "trial_min_rad": null,
         "velocity_max_rad_s": 0.5
@@ -113,7 +113,7 @@
         "velocity_max_rad_s": 0.5
       }
     ],
-    "policy_sha256": "d6932959d8327ae747fe0c1d0cc05547b2dc46b76ffc5db8c0155d7b03bc0e34",
+    "policy_sha256": "f490647b28f6de19d0487014bb2cb89bf049930575caeed3dcff554117378fd4",
     "producer_period_us": null,
     "profile_id": 201,
     "profile_stage": "SEED",
@@ -122,11 +122,11 @@
     "timing_status": "MEASUREMENT_REQUIRED"
   },
   "format": "dummy_wire_release_v2",
-  "payload_sorted_sha256": "940bb20807d06e1c32a37fa8d29b0e1bdf24b87876e7409cbce61ea88b350a8b",
+  "payload_sorted_sha256": "2ae31387d711e982bdc45743be1a4fca1355ad10a1075a4d6d3381830ff8b9e3",
   "payloads": [
     {
       "path": "codec/dp_dummy_robot_v2.hpp",
-      "sha256": "466da9fe8e856938908aff06f9e7a6b930c9143987567b4d494e16124bdbe5c2"
+      "sha256": "649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143"
     },
     {
       "path": "codec/dp_dummy_robot_v2_dp_comm.hpp",
@@ -138,11 +138,11 @@
     },
     {
       "path": "codec/wire_layout.json",
-      "sha256": "df7eb59f512b9e246bf00e52264fd916e55f6633b355ebcca9e594ef99712ff7"
+      "sha256": "0dbc0611cfacfd28da35d3431470be071dea0823350c4bffd96a091da83ccbb2"
     },
     {
       "path": "enums/dummy_enum_values_v2.json",
-      "sha256": "2e7237e8793f26508830b3fa960c1beadd413920d21b816429d1b45db279eafb"
+      "sha256": "6a09d91e591d2615b2e9e59aeb9a316ffa8b6f43043799cf88908e66fe1db694"
     },
     {
       "path": "idl/DummyAttemptEvidenceV2.msg",
@@ -158,7 +158,7 @@
     },
     {
       "path": "idl/DummyJointStateV2.msg",
-      "sha256": "4c68ebf3664488169e31b13e5ad2d240a62cadde93c3bb3ace916a1b28263b1f"
+      "sha256": "daea24db35c5f4bbb0f1210d989d77b073d74b34b104d50f913190e8a1daf8a2"
     },
     {
       "path": "idl/DummyManageV2.srv",
@@ -166,15 +166,15 @@
     },
     {
       "path": "metadata/dummy_robot_v2.yaml",
-      "sha256": "309d77ef1e58942235627ef6a40ac2a7d639770ded31b19d69d97fce6bd7d1a0"
+      "sha256": "da6285d054ec6b8e71d68d0e4cbbd361445898148fbbc02a818369bc8bfcc6d8"
     },
     {
       "path": "model/model.yaml",
-      "sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713"
+      "sha256": "bbbfbf070281a2e63a09061830d6dc79a9e1d7206e1e4754c53a0fc8545bdfb0"
     },
     {
       "path": "profiles/f405_6dof_bench.yaml",
-      "sha256": "f8d3bb886c1aaffb2ecd3c64859e851a0031fdbf02076e86254e87f911cb0511"
+      "sha256": "4079ab9a8ef2bcecfc0bd06d9de7a6f6cd503cb6a00458b7b129e3ff2a0ecb51"
     },
     {
       "path": "profiles/f405_j1_bench.yaml",
@@ -182,15 +182,15 @@
     },
     {
       "path": "profiles/sil_6dof.yaml",
-      "sha256": "08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb"
+      "sha256": "59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2"
     },
     {
       "path": "profiles/sil_j1.yaml",
       "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c"
     }
   ],
-  "release_id": "dummy-wire-v2.4",
+  "release_id": "dummy-wire-v2.5",
   "runtime_enabled": false,
   "schema_major": 2,
-  "schema_minor": 4
+  "schema_minor": 5
 }

@@ -57,7 +57,32 @@ ament_target_dependencies(device_action_gate controller_manager control_msgs rcl
 install(TARGETS device_action_gate DESTINATION lib/${PROJECT_NAME})
 install(TARGETS native_action_gate DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
+  add_executable(limited_goal_budget_tests test/limited_goal_budget_tests.cpp)
+  target_include_directories(limited_goal_budget_tests PRIVATE include)
+  target_compile_options(limited_goal_budget_tests PRIVATE -UNDEBUG)
+  add_test(NAME limited_goal_budget_tests COMMAND limited_goal_budget_tests)
+  set_tests_properties(limited_goal_budget_tests PROPERTIES LABELS "component_only;offline")
   find_package(Threads REQUIRED)
+  # 历史ROS05真机原件保持wire2.4字节，独立target只用对应legacy codec；
+  # 不把旧payload改写成新协议，也不将此target混入生产wire2.5链接。
+  # 私有软件故障证据夹具复用原codec/完整collector，不是目标硬件资格。
+  add_executable(fault_cleanup_receipt_tests test/fault_cleanup_receipt_tests.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/src/raw_evidence_collector.cpp")
+  target_include_directories(fault_cleanup_receipt_tests PRIVATE include
+    "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_legacy_2_4/codec")
+  target_compile_options(fault_cleanup_receipt_tests PRIVATE -UNDEBUG)
+  target_compile_features(fault_cleanup_receipt_tests PRIVATE cxx_std_17)
+  target_link_libraries(fault_cleanup_receipt_tests PRIVATE OpenSSL::Crypto Threads::Threads)
+  add_test(NAME fault_cleanup_verified_receipt_and_current_observation COMMAND fault_cleanup_receipt_tests)
+  set_tests_properties(fault_cleanup_verified_receipt_and_current_observation PROPERTIES LABELS "component_only;offline" TIMEOUT 15)
+  add_executable(fault_cleanup_timeline_tests test/fault_cleanup_timeline_tests.cpp)
+  target_include_directories(fault_cleanup_timeline_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/include" "${DUMMY_WIRE_INCLUDE}")
+  target_compile_options(fault_cleanup_timeline_tests PRIVATE -UNDEBUG)
+  target_link_libraries(fault_cleanup_timeline_tests PRIVATE dummy_goal_timeline Threads::Threads)
+  add_test(NAME fault_cleanup_clock_and_timeline_boundaries COMMAND fault_cleanup_timeline_tests)
+  set_tests_properties(fault_cleanup_clock_and_timeline_boundaries PROPERTIES LABELS "component_only;offline" TIMEOUT 15)
   add_executable(goal_timeline_tests test/goal_timeline_tests.cpp)
   target_link_libraries(goal_timeline_tests PRIVATE dummy_goal_timeline Threads::Threads)
   add_test(NAME goal_timeline_tests COMMAND goal_timeline_tests)
@@ -71,15 +96,18 @@ if(BUILD_TESTING)
   target_link_libraries(c05_action_peer dummy_dp_management dummy_device_profile)
   add_executable(device_profile_tests test/device_profile_tests.cpp)
   target_link_libraries(device_profile_tests dummy_device_profile)
-  add_test(NAME device_profile_tests COMMAND device_profile_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2"
-    "${DPSDK_ROOT}/contracts/dummy_robot_v2")
-  add_executable(application_hold_candidate_profile_tests test/application_hold_candidate_profile_tests.cpp)
-  target_link_libraries(application_hold_candidate_profile_tests dummy_device_profile)
-  add_test(NAME application_hold_candidate_profile_tests COMMAND application_hold_candidate_profile_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../dpsdk/build_dummy/reports/no-load-dev-candidate-7d89-20261001"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../dpsdk/contracts/dummy_robot_v2")
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME device_profile_tests COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/run_device_profile_fixture.py"
+    "$<TARGET_FILE:device_profile_tests>"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2")
+  add_executable(application_hold_candidate_profile_tests test/application_hold_candidate_profile_tests.cpp)
+  target_compile_options(application_hold_candidate_profile_tests PRIVATE -UNDEBUG)
+  target_link_libraries(application_hold_candidate_profile_tests dummy_device_profile)
+  add_test(NAME application_hold_candidate_profile_tests COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/run_application_hold_candidate_profile.py"
+    "$<TARGET_FILE:application_hold_candidate_profile_tests>" "${DPSDK_ROOT}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_application_hold_no_load_candidate")
   add_test(NAME device_action_e2e_fixture
     COMMAND ${Python3_EXECUTABLE} -m pytest -q
       ${CMAKE_CURRENT_SOURCE_DIR}/test/test_device_action_e2e_fixture.py)
@@ -99,17 +127,28 @@ if(BUILD_TESTING)
     set(DUMMY_D08_PEER_EXECUTABLE
       "${DPSDK_ROOT}/build_dummy/v2-tests/applications/dummy_ref_control/dummy_ref_d08_device_peer")
   endif()
+  # 两种 SIL 测试时钟角色必须由调用方显式绑定；旧参数仅兼容 fallback。
+  set(DUMMY_D08_J1_PEER_EXECUTABLE "$ENV{DUMMY_D08_J1_PEER_EXECUTABLE}" CACHE FILEPATH
+    "DPSDK D08 10/10ms synthetic peer for device_action_e2e_probe")
+  set(DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE "$ENV{DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE}" CACHE FILEPATH
+    "DPSDK D08 10/20ms synthetic peer for smoke probes")
+  if(NOT DUMMY_D08_J1_PEER_EXECUTABLE)
+    set(DUMMY_D08_J1_PEER_EXECUTABLE "${DUMMY_D08_PEER_EXECUTABLE}")
+  endif()
+  if(NOT DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE)
+    set(DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE "${DUMMY_D08_PEER_EXECUTABLE}")
+  endif()
   add_test(NAME device_action_e2e_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    "${DUMMY_D08_PEER_EXECUTABLE}"
+    "${DUMMY_D08_J1_PEER_EXECUTABLE}"
     ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real)
   add_test(NAME device_action_smoke_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    "${DUMMY_D08_PEER_EXECUTABLE}"
+    "${DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE}"
     ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real_smoke)
   add_test(NAME device_action_six_axis_smoke_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    "${DUMMY_D08_PEER_EXECUTABLE}"
+    "${DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE}"
     ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real_six_axis_smoke)
   add_test(NAME device_motion_unsupported_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
@@ -162,6 +201,14 @@ if(BUILD_TESTING)
   add_test(NAME management_request_minor_tests COMMAND management_request_minor_tests)
   set_tests_properties(dp_management_transport_tests dp_management_transport_tcp_untrusted_tests PROPERTIES
     TIMEOUT 25 LABELS "component_only;synthetic_peer")
+  add_executable(shared_admission_retry_tests test/shared_admission_retry_tests.cpp)
+  target_link_libraries(shared_admission_retry_tests dummy_dp_management)
+  target_compile_options(shared_admission_retry_tests PRIVATE -UNDEBUG)
+  foreach(mode IN ITEMS select grant capture queued_other wrong_size invalid_codec not_ready cancel destroy stop stop_restart unready expired poll_queued_other)
+    add_test(NAME shared_admission_retry_${mode} COMMAND shared_admission_retry_tests ${mode})
+    set_tests_properties(shared_admission_retry_${mode} PROPERTIES LABELS "component_only;offline" TIMEOUT 5)
+  endforeach()
+
   add_executable(shared_management_channel_tests test/shared_management_channel_tests.cpp)
   target_link_libraries(shared_management_channel_tests dummy_dp_management)
   ament_target_dependencies(shared_management_channel_tests hardware_interface)
@@ -186,6 +233,8 @@ if(BUILD_TESTING)
     target_link_libraries(${test_name} dummy_device_action)
     add_test(NAME ${test_name} COMMAND ${test_name})
   endforeach()
+  # 该测试用assert执行必要的状态推进；Release配置也必须执行这些断言。
+  target_compile_options(bootstrap_coordinator_tests PRIVATE -UNDEBUG)
   target_link_libraries(native_action_gate_tests dummy_native_goal_validation)
   add_executable(native_wait_policy_tests test/native_wait_policy_tests.cpp)
   target_link_libraries(native_wait_policy_tests dummy_device_action)
@@ -220,8 +269,54 @@ if(BUILD_TESTING)
   ament_target_dependencies(device_lease_transition_tests controller_manager control_msgs rclcpp rclcpp_action
     controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
   add_test(NAME device_lease_transition_tests COMMAND device_lease_transition_tests)
+  add_executable(queued_renew_completion_tests test/queued_renew_completion_tests.cpp)
+  target_link_libraries(queued_renew_completion_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+    dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
+  ament_target_dependencies(queued_renew_completion_tests controller_manager control_msgs rclcpp rclcpp_action
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+  target_compile_options(queued_renew_completion_tests PRIVATE -UNDEBUG)
+  foreach(mode IN ITEMS positive sent_complete not_frozen wrong_boot wrong_session wrong_reference wrong_motion wrong_management wrong_profile wrong_mask wrong_device wrong_client missing_ack old_ack expired withdraw_positive withdraw_explicit withdraw_started withdraw_owns_busy withdraw_nonrenew withdraw_not_reserved withdraw_not_running withdraw_actual_inflight withdraw_stale_state withdraw_wrong_run withdraw_status_lag)
+    add_test(NAME queued_renew_completion_${mode} COMMAND queued_renew_completion_tests ${mode})
+  endforeach()
+
+  add_executable(queued_renew_cancel_tests test/queued_renew_cancel_tests.cpp)
+  target_link_libraries(queued_renew_cancel_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+    dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
+  ament_target_dependencies(queued_renew_cancel_tests controller_manager control_msgs rclcpp rclcpp_action
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+  target_compile_options(queued_renew_cancel_tests PRIVATE -UNDEBUG)
+  foreach(mode IN ITEMS positive wrong_boot wrong_session wrong_ref wrong_motion wrong_mgmt wrong_profile wrong_mask wrong_device wrong_client not_cancel abort request_missing no_cancel lost_authorization expired started actual_inflight owns_busy nonrenew not_reserved not_running)
+    add_test(NAME queued_renew_cancel_${mode} COMMAND queued_renew_cancel_tests ${mode})
+    set_tests_properties(queued_renew_cancel_${mode} PROPERTIES LABELS "component_only;offline")
+  endforeach()
+
+  add_executable(inflight_renew_cancel_tests test/inflight_renew_cancel_tests.cpp)
+  target_link_libraries(inflight_renew_cancel_tests dummy_device_action dummy_dp_management dummy_native_goal_validation dummy_device_profile
+    dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
+  ament_target_dependencies(inflight_renew_cancel_tests controller_manager control_msgs rclcpp rclcpp_action
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+  target_compile_options(inflight_renew_cancel_tests PRIVATE -UNDEBUG)
+  foreach(mode IN ITEMS positive wrong_boot wrong_session wrong_ref wrong_motion wrong_management wrong_profile wrong_mask wrong_device wrong_client expired failed_renew invalidate no_cancel abort guard_boot guard_session guard_ref guard_motion guard_management guard_profile guard_mask guard_operation waiting_abort)
+    add_test(NAME inflight_renew_cancel_${mode} COMMAND inflight_renew_cancel_tests ${mode})
+    set_tests_properties(inflight_renew_cancel_${mode} PROPERTIES TIMEOUT 15 LABELS "component_only;offline")
+  endforeach()
+
   add_executable(review_boundary_tests test/review_boundary_tests.cpp)
   target_link_libraries(review_boundary_tests dummy_device_action)
+  add_executable(cancel_query_cadence_tests test/cancel_query_cadence_tests.cpp)
+  target_link_libraries(cancel_query_cadence_tests dummy_device_action)
+  foreach(_cadence_mode cancel actual_late renew begin no_terminal wrong_identity)
+    add_test(NAME wire_cancel_query_cadence_${_cadence_mode} COMMAND cancel_query_cadence_tests ${_cadence_mode})
+    set_tests_properties(wire_cancel_query_cadence_${_cadence_mode} PROPERTIES LABELS "component_only;offline;source_model")
+  endforeach()
+  add_test(NAME wire_release_query_supervision_budget COMMAND wire_management_tests release_query_supervision_budget)
+  add_test(NAME wire_release_query_backoff_guards COMMAND wire_management_tests release_query_backoff_guards)
+  add_test(NAME wire_release_committed_status_gap_counterexample COMMAND wire_management_tests release_committed_status_gap)
+  add_test(NAME wire_release_pending_observation_grace COMMAND wire_management_tests release_pending_observation_grace)
+  add_test(NAME wire_release_pending_observation_grace_guards COMMAND wire_management_tests release_pending_observation_grace_guards)
+  add_test(NAME wire_running_renewal_complete COMMAND wire_management_tests running_renewal_complete)
+  add_test(NAME wire_running_renewal_complete_boundaries COMMAND wire_management_tests running_renewal_complete_boundaries)
+  add_test(NAME wire_running_renewal_strict_identity COMMAND wire_management_tests running_renewal_strict_identity)
   foreach(scenario IN ITEMS enum deadline tolerance unused_nan hold_mask)
     add_test(NAME review_${scenario} COMMAND review_boundary_tests ${scenario})
   endforeach()

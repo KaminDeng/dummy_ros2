@@ -4,6 +4,26 @@
 #include <stdexcept>
 namespace dummy_motion_client {
 namespace wire = dp::protocol::dummy_robot_v2;
+std::uint64_t WireManagementClient::matching_inflight_renewal(const ManageRequest &r) const {
+  if (!(handle_ || pending_send_) || original_.operation()!=wire_value(ManageOperation::kRenewLease) ||
+      (r.operation()!=wire_value(ManageOperation::kComplete) && r.operation()!=wire_value(ManageOperation::kCancel))) return 0U;
+  const auto &o=original_;
+  if(o.expected_boot_epoch()!=r.expected_boot_epoch() || o.expected_session_id()!=r.expected_session_id() ||
+     o.expected_reference_epoch()!=r.expected_reference_epoch() || o.expected_motion_epoch()!=r.expected_motion_epoch() ||
+     o.expected_profile_id()!=r.expected_profile_id() || o.configured_mask()!=r.configured_mask() ||
+     o.expected_management_epoch()!=r.expected_management_epoch() ||
+     !std::equal(std::begin(o.device_id()),std::end(o.device_id()),std::begin(r.device_id())) ||
+     !std::equal(std::begin(o.client_instance_id()),std::end(o.client_instance_id()),std::begin(r.client_instance_id()))) return 0U;
+  return o.request_id();
+}
+RenewalCompletion WireManagementClient::renewal_completion(std::uint64_t id) const {
+  if(id!=0U && id==completed_renewal_id_ && original_.request_id()==id &&
+     original_.operation()==wire_value(ManageOperation::kRenewLease) && !handle_ && !pending_send_)
+    return completed_renewal_result_;
+  if(id!=0U && original_.request_id()==id && original_.operation()==wire_value(ManageOperation::kRenewLease) &&
+     (handle_ || pending_send_)) return RenewalCompletion::kPending;
+  return RenewalCompletion::kFailed;
+}
 bool WireManagementClient::send(const ManageRequest &request) {
   std::vector<std::uint8_t> bytes(wire::DummyManageV2RequestCodec::kEncodedSize);
   if (wire::DummyManageV2RequestCodec::encode(request,bytes.data(),bytes.size()) != wire::CodecResult::kOk)
@@ -18,7 +38,7 @@ bool WireManagementClient::send(const ManageRequest &request) {
 std::uint64_t WireManagementClient::submit(const ManageRequest &request, std::uint64_t sent_at_us) {
   if (handle_ || pending_send_ ||
       request.operation()==wire_value(ManageOperation::kSetPermit)) return 0U;
-  original_=request; original_.set_schema_major(2); original_.set_schema_minor(4);
+  original_=request; original_.set_schema_major(2); original_.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   original_.set_request_id(take_request_id());
   original_.set_request_seq(take_request_sequence());
   sent_at_us_=sent_at_us; operation_id_=0; accepted_=false;
@@ -41,7 +61,7 @@ std::uint64_t WireManagementClient::submit_permit(
   const auto permit_sequence = take_request_sequence();
   if (!trusted_bench_permit_digest(binding, owner, request.expected_session_id(), permit_sequence, &digest))
     return 0U;
-  original_=request; original_.set_schema_major(2); original_.set_schema_minor(4);
+  original_=request; original_.set_schema_major(2); original_.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   original_.set_request_id(take_request_id()); original_.set_request_seq(permit_sequence);
   std::uint8_t wire_digest[32]{};
   std::copy(digest.begin(), digest.end(), wire_digest);
@@ -142,6 +162,14 @@ std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) 
   result.management_epoch=response.management_epoch();
   result.accepted_seq=response.committed_producer_seq();
   if (result.result_valid) {
+    if(original_.operation()==wire_value(ManageOperation::kRenewLease)) {
+      completed_renewal_id_=original_.request_id();
+      const bool same_binding=result.reference_epoch==original_.expected_reference_epoch() &&
+          result.motion_epoch==original_.expected_motion_epoch() &&
+          result.management_epoch==original_.expected_management_epoch();
+      completed_renewal_result_=result.succeeded && same_binding
+          ? RenewalCompletion::kCommitted : RenewalCompletion::kFailed;
+    }
     handle_.reset();
     pending_send_=false;
     return result;
@@ -156,7 +184,11 @@ std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) 
     if (!send(query)) throw std::runtime_error("manage_v2 query transport unavailable");
   } else {
     handle_.reset(); current_=query; wire_id_=query.request_id(); pending_send_=true;
-    query_retries_=0U; query_delay_polls_=9U;
+    query_retries_=0U;
+    // Release的原owner State可能已清除；20ms Node周期下9次poll会耗尽250ms监督。
+    // Cancel/Release停止事务下一tick继续Query，其它mutation保留既有节流。
+    query_delay_polls_=(original_.operation()==wire_value(ManageOperation::kDisableAndRelease) ||
+                        original_.operation()==wire_value(ManageOperation::kCancel)) ? 0U : 9U;
   }
   return result;
 }

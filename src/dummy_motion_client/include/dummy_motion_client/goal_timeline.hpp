@@ -27,10 +27,20 @@ inline bool trusted_begin_observation(const TimelineIdentity &before,
     after.run_id>=before.run_id;
 }
 
+struct FaultCleanupTimelineProof {
+  std::uint64_t boot=0,session=0,run=0;
+  std::uint32_t attempt_epoch=0,active_epoch=0,stop_epoch=0;
+  std::uint16_t failure_source=0;
+  std::uint8_t axis_mask=0,final_state=0;
+  std::array<std::uint8_t,32> terminal_chain{};
+  bool full_groups_valid=false,chain_valid=false,release_committed=false;
+  bool lost=false,motion_complete=false,current_fault_clear_verified=false;
+};
 struct TimelineEvent {
   enum class Kind { kAccepted, kBeforeBegin, kAfterBegin, kFeedback,
-                    kTerminalSuccess, kTerminalCanceled, kTerminalAborted, kHold, kRelease };
+                    kTerminalSuccess, kTerminalCanceled, kTerminalAborted, kHold, kRelease, kFaultCleanup };
   Kind kind=Kind::kAccepted;
+  FaultCleanupTimelineProof fault_cleanup{};
   std::array<std::uint8_t,16> uuid{};
   std::array<std::uint8_t,32> trajectory_sha256{};
   TimelineIdentity identity{};
@@ -81,7 +91,7 @@ class GoalTimeline final {
   std::atomic<bool> failed_{false}, complete_{false};
   std::atomic<bool> closing_{false};
   bool active_=false, before_=false, after_=false, feedback_=false;
-  bool terminal_=false, release_recorded_=false;
+  bool terminal_=false, release_recorded_=false, fault_cleanup_recorded_=false, terminal_aborted_=false;
   std::size_t goals_=0;
   TimelineEvent current_{};
   TimelineIdentity before_identity_{}, run_identity_{};

@@ -10,6 +10,10 @@ if(BUILD_TESTING)
   ament_add_pytest_test(real_6dof_description test/test_real_6dof_description.py)
   ament_add_pytest_test(real_six_axis_preflight ../../scripts/dummy/tests/test_real_six_axis_preflight.py)
   ament_add_pytest_test(real_6dof_launch test/test_real_6dof_launch.py)
+  ament_add_pytest_test(manual_moveit_planner test/test_manual_moveit_planner.py)
+  ament_add_pytest_test(manual_moveit_execution test/test_manual_moveit_execution.py)
+  ament_add_pytest_test(manual_moveit_tab test/test_manual_moveit_tab.py)
+  ament_add_pytest_test(manual_moveit_target test/test_manual_moveit_target.py)
   ament_add_pytest_test(ros_six_axis_movej ../../scripts/dummy/tests/test_ros_six_axis_movej.py)
   ament_add_pytest_test(application_e2e ../../scripts/dummy/tests/test_application_e2e.py)
   ament_add_pytest_test(activate_real_no_load_stack ../../scripts/dummy/tests/test_activate_real_no_load_stack.py)
@@ -27,6 +31,11 @@ install(FILES
 install(FILES ../../contracts/dummy_robot_v2/model/model.yaml
   DESTINATION share/${PROJECT_NAME}/contracts/dummy_robot_v2/model)
 install(PROGRAMS
+  scripts/manual_joint_panel.py
+  scripts/manual_moveit_planner.py
+  scripts/manual_moveit_execution.py
+  scripts/manual_moveit_tab.py
+  scripts/manual_moveit_target.py
   scripts/action_gate_probe.py
   scripts/gazebo_runtime_probe.py
   scripts/planning_probe.py

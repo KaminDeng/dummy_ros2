@@ -27,12 +27,18 @@ struct DeviceStatusIdentity {
   std::array<std::uint8_t, 32U> firmware_hash{};
 };
 
+enum class NoLoadBasis : std::uint8_t { kSoftwareOnly, kFunctional50, kFunctionalLimited };
+
 struct DeviceProfile : DeviceBundleIdentity {
   JointProfile joints;
   std::uint64_t motion_permit_max_us = 60000000U;
   bool bench_only = false;
   bool software_only_development = false;
   bool functional_development_basis = false;
+  NoLoadBasis no_load_basis = NoLoadBasis::kSoftwareOnly;
+  unsigned goal_limit = 0U;
+  std::uint64_t limited_boot_epoch = 0U;
+  std::string limited_goal_timeline_path;
 };
 
 std::uint64_t validated_motion_permit_limit(std::uint64_t goal_us,

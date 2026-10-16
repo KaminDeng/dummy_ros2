@@ -54,7 +54,7 @@ int main() {
       worker.publish_one() != dp::comm::Result::kNotReady) return 6;
   State feedback;
   feedback.set_schema_major(2U);
-  feedback.set_schema_minor(4U);
+  feedback.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   feedback.set_boot_epoch(9U);
   feedback.set_profile_id(7U);
   feedback.set_state_seq(101U);

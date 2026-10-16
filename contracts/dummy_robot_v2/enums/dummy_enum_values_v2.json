@@ -1,7 +1,7 @@
 {
   "format": "dummy_enum_values_v2",
   "schema_major": 2,
-  "schema_minor": 4,
+  "schema_minor": 5,
   "evidence_category": {
     "NONE": 0,
     "MOTION": 1,

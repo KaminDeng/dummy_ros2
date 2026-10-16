@@ -1,0 +1,383 @@
+"""真实 Qt 控件与假异步服务；不创建 ROS 节点或硬件连接。"""
+import os
+import sys
+import unittest
+import tempfile
+from concurrent.futures import Future
+from pathlib import Path
+from types import SimpleNamespace as NS
+from unittest.mock import patch
+
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+from PyQt5 import QtWidgets
+import manual_moveit_tab as module
+
+
+class Client:
+    ready = True
+    def service_is_ready(self):
+        return self.ready
+
+
+class Planner:
+    def __init__(self, node, names, limits):
+        self.names = names
+        self.fk, self.ik, self.plan, self.validity = Client(), Client(), Client(), Client()
+        self.calls = []
+
+    def request(self, phase, *args):
+        future = Future()
+        self.calls.append((phase, args, future))
+        return future
+
+    def request_fk(self, *args):
+        return self.request('fk', *args)
+
+    def request_ik(self, *args):
+        return self.request('ik', *args)
+
+    def request_plan(self, *args):
+        return self.request('plan', *args)
+
+    def request_validity(self, *args):
+        return self.request('validity', *args)
+
+
+class Panel(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.node = None
+        self.cfg = {'joints': [{'name': f'Joint{i}'} for i in range(1, 7)],
+                    'home_deg': [0, 0, 90, 0, 0, 0], 'rest_deg': [0, -60, 164, 0, 0, 0]}
+        self.limits = [(-180, 180)] * 6
+        self.actual_q = [0, 0, 1.5707963267948966, 0, 0, 0]
+        self.last_state = {'boot_epoch': 7, 'reference_epoch': 2, 'session_id': 9,
+                           'velocity_valid_mask': 63, 'estimated_velocity_rad_s': [0]*6,
+                           'motion_epoch': 10, 'state_seq': 100}
+        self.authorized, self.calibration, self.busy = True, {'valid': True}, False
+        self.commands, self.releases = [], []
+        self.report_dir = tempfile.TemporaryDirectory()
+        self.report = Path(self.report_dir.name)
+        self.speed_input, self.acceleration_input = QtWidgets.QDoubleSpinBox(), QtWidgets.QDoubleSpinBox()
+        self.speed_input.setValue(17.2)
+        self.acceleration_input.setValue(.4)
+        self.is_fresh = True
+        self.previews = []
+
+    def control_state_allowed(self, states):
+        return 4 in states
+
+    def resume_position_issue(self):
+        return None
+
+    def command(self, value):
+        self.commands.append(value)
+        return True
+
+    def release(self, value):
+        self.releases.append(value)
+
+    def fresh(self):
+        return self.is_fresh
+
+    def set_preview_pose(self, values):
+        self.previews.append(values)
+
+
+class MoveItTabTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def setUp(self):
+        self.patch = patch.object(module, 'MoveItPlanner', Planner)
+        self.patch.start()
+        self.panel = Panel()
+        self.tab = module.MoveItTab(self.panel)
+        self.tab.timer.stop()
+
+    def tearDown(self):
+        self.panel.close()
+        self.panel.deleteLater()
+        self.panel.report_dir.cleanup()
+        self.patch.stop()
+
+    def test_buttons_follow_freshness_and_service_readiness(self):
+        self.tab.tick()
+        self.assertTrue(self.tab.capture.isEnabled())
+        self.assertFalse(hasattr(self.tab, 'plan_button'))
+        self.assertFalse(self.tab.play.isEnabled())
+        self.tab.planner.ik.ready = False
+        self.tab.tick()
+        self.assertFalse(hasattr(self.tab, 'plan_button'))
+        self.assertTrue(self.tab.capture.isEnabled())
+        self.panel.is_fresh = False
+        self.tab.tick()
+        self.assertFalse(self.tab.capture.isEnabled())
+
+    def test_target_edit_cancels_pending_request(self):
+        self.tab.start_plan()
+        future = self.tab.pending[1]
+        self.tab.inputs[0].setValue(5)
+        self.tab.tick()
+        self.assertTrue(future.cancelled())
+        self.assertIsNone(self.tab.pending)
+        self.assertIsNone(self.tab.path)
+
+    def test_reference_change_cancels_pending_request(self):
+        self.tab.capture_actual()
+        future = self.tab.pending[1]
+        self.panel.last_state['reference_epoch'] += 1
+        self.tab.tick()
+        self.assertTrue(future.cancelled())
+
+    def test_timeout_cancels_request(self):
+        self.tab.capture_actual()
+        future = self.tab.pending[1]
+        with patch.object(module.time, 'monotonic', return_value=self.tab.pending[2] + 1):
+            self.tab.tick()
+        self.assertTrue(future.cancelled())
+        self.assertIn('超时', self.tab.status.text())
+
+    def test_ik_failure_does_not_submit_plan(self):
+        self.tab.start_plan()
+        self.tab.pending[1].set_result(NS(error_code=NS(val=-31)))
+        self.tab.tick()
+        self.assertEqual([call[0] for call in self.tab.planner.calls], ['ik'])
+        self.assertIsNone(self.tab.path)
+        self.assertIn('-31', self.tab.status.text())
+
+    def test_fk_populates_inputs_without_motion(self):
+        self.tab.capture_actual()
+        pose = NS(position=NS(x=.1, y=-.2, z=.3), orientation=NS(x=0, y=0, z=0, w=1))
+        self.tab.pending[1].set_result(NS(error_code=NS(val=1), pose_stamped=[NS(pose=pose)]))
+        self.tab.tick()
+        self.assertEqual([box.value() for box in self.tab.inputs], [100, -200, 300, 0, 0, 0])
+        self.assertEqual(self.panel.previews, [])
+
+    def test_pose_inputs_preserve_precision_for_near_singular_ik(self):
+        for box in self.tab.inputs:
+            box.setValue(1.2345)
+            self.assertAlmostEqual(box.value(), 1.2345, places=4)
+
+    def test_adopting_actual_pose_invalidates_old_plan_even_when_inputs_do_not_change(self):
+        self.tab.path = (tuple(self.panel.actual_q), tuple(self.panel.actual_q))
+        self.tab.capture_actual()
+        self.assertIsNone(self.tab.path)
+        self.assertEqual(self.tab.pending[0], 'fk')
+
+    def complete_plan(self):
+        self.tab.start_plan()
+        start = list(self.panel.actual_q)
+        self.tab.pending[1].set_result(NS(error_code=NS(val=1), solution=NS(joint_state=NS(
+            name=self.tab.planner.names, position=start))))
+        self.tab.tick()
+        self.assertEqual(self.tab.pending[0], 'plan')
+        points = [NS(positions=start, time_from_start=NS(sec=i, nanosec=0)) for i in range(2)]
+        trajectory = NS(joint_names=self.tab.planner.names, points=points)
+        self.tab.pending[1].set_result(NS(motion_plan_response=NS(error_code=NS(val=1),
+            trajectory=NS(joint_trajectory=trajectory))))
+        self.tab.tick()
+        self.assertEqual(len(self.tab.path), 2)
+
+    def validate_plan(self):
+        while self.tab.checks or self.tab.samples:
+            for future in self.tab.checks:
+                if not future.done():
+                    future.set_result(NS(valid=True))
+            self.tab.tick()
+
+    def preview_plan(self):
+        self.validate_plan()
+        self.tab.toggle_preview()
+        with patch.object(module.time, 'monotonic', return_value=self.tab.preview_started + 2):
+            self.tab.tick()
+        self.assertTrue(self.tab.previewed)
+
+    def prepare_execution(self):
+        self.complete_plan()
+        start = tuple(self.panel.actual_q)
+        middle = (start[0]+.01,) + start[1:]
+        end = (start[0]+.02,) + start[1:]
+        self.tab.path = (start, middle, end)
+        self.tab.times = (0., 1., 2.)
+        for future in self.tab.checks:
+            future.cancel()
+        self.tab.checks = []
+        self.tab.samples = list(module.collision_samples(self.tab.path))
+        self.preview_plan()
+
+    def confirm_execution(self):
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            self.tab.start_execution()
+        self.assertEqual(len(self.panel.commands), 1)
+
+    def test_ik_then_plan_and_preview_only(self):
+        self.complete_plan()
+        self.validate_plan()
+        self.tab.tick()
+        self.assertTrue(self.tab.play.isEnabled())
+        self.tab.toggle_preview()
+        self.tab.tick()
+        self.assertEqual(len(self.panel.previews), 3)
+        self.assertEqual([call[0] for call in self.tab.planner.calls if call[0] != 'validity'], ['ik', 'plan'])
+
+    def test_completed_path_invalidated_by_actual_start_drift(self):
+        self.complete_plan()
+        self.panel.actual_q[0] += .004
+        self.tab.tick()
+        self.assertIsNone(self.tab.path)
+        self.assertIn('起点', self.tab.status.text())
+
+    def test_completed_path_invalidated_by_stale_feedback(self):
+        self.complete_plan()
+        self.panel.is_fresh = False
+        self.tab.tick()
+        self.assertIsNone(self.tab.path)
+        self.assertEqual(len(self.panel.previews), 2)
+
+    def test_unvalidated_path_never_submits_but_preview_is_optional(self):
+        self.complete_plan()
+        self.tab.previewed = True
+        with patch.object(QtWidgets.QMessageBox, 'question') as question:
+            self.tab.start_execution()
+            question.assert_not_called()
+        self.assertEqual(self.panel.commands, [])
+        self.validate_plan()
+        self.tab.previewed = False
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes) as question:
+            self.tab.start_execution()
+            question.assert_called_once()
+        self.assertEqual(len(self.panel.commands), 1)
+
+    def test_ordinary_busy_blocks_before_confirmation(self):
+        self.prepare_execution()
+        self.panel.busy = True
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes) as question:
+            self.tab.start_execution()
+            question.assert_not_called()
+        self.assertEqual(self.panel.commands, [])
+        self.assertFalse(self.tab.executing)
+
+    def test_busy_during_confirmation_blocks_submission(self):
+        self.prepare_execution()
+        def answer(*args):
+            self.panel.busy = True
+            return QtWidgets.QMessageBox.Yes
+        with patch.object(QtWidgets.QMessageBox, 'question', side_effect=answer) as question:
+            self.tab.start_execution()
+            question.assert_called_once()
+        self.assertEqual(self.panel.commands, [])
+        self.assertFalse(self.tab.executing)
+
+    def test_confirmation_no_never_submits(self):
+        self.prepare_execution()
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
+            self.tab.start_execution()
+        self.assertEqual(self.panel.commands, [])
+        self.assertFalse(self.tab.executing)
+
+    def test_wrong_session_completion_aborts_without_next_segment(self):
+        self.prepare_execution()
+        self.confirm_execution()
+        self.tab.native_event('MOVE_COMPLETED', dict(boot='7', reference='2', session='10', motion='11', state_seq='101'))
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(len(self.panel.commands), 1)
+        self.assertEqual(self.panel.releases, ['STOP'])
+
+    def test_stop_discards_queue_and_late_completion(self):
+        self.prepare_execution()
+        self.confirm_execution()
+        self.tab.cancel_execution('用户停止', stop=True)
+        self.tab.native_event('MOVE_COMPLETED', dict(boot='7', reference='2', session='9', motion='11', state_seq='101'))
+        self.tab.advance_execution()
+        self.tab.tick()
+        self.assertEqual(len(self.panel.commands), 1)
+        self.assertEqual(self.panel.releases, ['STOP'])
+        self.assertFalse(self.tab.executing)
+
+    def test_collision_rejection_invalidates_path_and_never_submits(self):
+        self.complete_plan()
+        self.tab.checks[0].set_result(NS(valid=False))
+        self.tab.tick()
+        self.tab.start_execution()
+        self.assertIsNone(self.tab.path)
+        self.assertEqual(self.panel.commands, [])
+
+    def test_joint_preset_skips_ik(self):
+        self.tab.preset_buttons[0].click()
+        self.assertEqual([call[0] for call in self.tab.planner.calls], ['fk', 'plan'])
+        phase, args, _ = self.tab.planner.calls[1]
+        self.assertEqual(phase, 'plan')
+        self.assertAlmostEqual(args[1][2], 1.5707963267948966)
+
+    def test_preview_never_opens_execution_confirmation(self):
+        self.complete_plan()
+        self.validate_plan()
+        self.tab.tick()
+        with patch.object(QtWidgets.QMessageBox, 'question') as question:
+            self.tab.play.click()
+            with patch.object(module.time, 'monotonic', return_value=self.tab.preview_started + 2):
+                self.tab.tick()
+            self.app.processEvents()
+            self.assertTrue(self.tab.previewed)
+            question.assert_not_called()
+            self.assertEqual(self.panel.commands, [])
+
+    def test_configurable_preview_speed(self):
+        self.complete_plan()
+        self.validate_plan()
+        self.tab.play_speed.setValue(2.)
+        self.tab.toggle_preview()
+        with patch.object(module.time, 'monotonic', return_value=self.tab.preview_started + .6):
+            self.tab.tick()
+        self.assertTrue(self.tab.previewed)
+        self.assertEqual(self.panel.commands, [])
+
+    def test_increment_slider_release_keeps_position(self):
+        self.tab.inputs[0].setValue(100.)
+        slider = self.tab.jog_sliders[0]
+        slider.setSliderDown(True)
+        slider.setValue(50)
+        self.tab.advance_jog()
+        self.tab.advance_jog()
+        self.assertAlmostEqual(self.tab.inputs[0].value(), 100.+.01*self.tab.step.value())
+        slider.setSliderDown(False)
+        self.assertEqual(slider.value(), 0)
+        self.assertAlmostEqual(self.tab.inputs[0].value(), 100.+.01*self.tab.step.value())
+        self.assertFalse(self.tab.jog_timer.isActive())
+        self.assertEqual(self.panel.commands, [])
+
+    def test_planning_failure_marks_preview_red(self):
+        flags = []
+        self.panel.set_preview_failed = flags.append
+        self.tab.start_plan()
+        self.tab.pending[1].set_result(NS(error_code=NS(val=-31)))
+        self.tab.tick()
+        self.assertTrue(self.tab.target_failed)
+        self.assertTrue(flags[-1])
+        self.assertEqual(self.panel.commands, [])
+
+    def test_input_debounce_ik_updates_ghost_without_hardware_command(self):
+        self.tab.inputs[0].setValue(123)
+        self.assertTrue(self.tab.preview_timer.isActive())
+        self.assertEqual(self.tab.planner.calls, [])
+        self.tab.preview_timer.stop()
+        self.tab.preview_timer.timeout.emit()
+        self.assertEqual(self.tab.pending[0], 'ik')
+        self.assertEqual(self.tab.preview_timer.interval(), 100)
+        phase, args, future = self.tab.planner.calls[-1]
+        self.assertEqual(phase, 'ik')
+        self.assertEqual(args[1][0], 123)
+        future.set_result(NS(error_code=NS(val=1), solution=NS(joint_state=NS(
+            name=self.tab.planner.names, position=list(self.panel.actual_q)))))
+        self.tab.tick()
+        self.assertEqual(len(self.panel.previews), 1)
+        self.assertIsNone(self.tab.path)
+        self.assertEqual(self.panel.commands, [])
+        self.assertEqual([call[0] for call in self.tab.planner.calls], ['ik', 'plan'])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -7,7 +7,7 @@ set(sdk_locked_paths
   build_dummy/g6-host/platform_common_console_device/libdp_console_device.a
   build_dummy/g6-host/lib/libzenohpico.a)
 set(sdk_locked_hashes
-  466da9fe8e856938908aff06f9e7a6b930c9143987567b4d494e16124bdbe5c2
+  649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143
   78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40
   d399b0d7ae4477247977bc80796e03a9c968c57cfe5ac24ca47dfe2ce4c0f84b
   b1b1aed93e6c79eb38a8fee66894583f64bd8c55ad1b2797b956e6fca125fc78

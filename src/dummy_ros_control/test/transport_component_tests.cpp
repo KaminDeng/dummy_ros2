@@ -1,3 +1,10 @@
+static bool cancel_status_terminal7_variant=false;
+
+static unsigned cancel_status_bad_flags=0U;
+static bool cancel_state_stopping_notready=false;
+static bool cancel_hold_status_variant=false;
+static unsigned cancel_hold_case=0;
+#include "wire_operation.hpp"
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -22,6 +29,8 @@
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 namespace {
+static bool source_cancel_coordination=false;
+static const char* source_cancel_fault=nullptr;
 namespace wire = dp::protocol::dummy_robot_v2;
 using State = wire::DummyJointStateV2;
 using Status = wire::DummyDeviceStatusV2;
@@ -208,9 +217,26 @@ bool test_heartbeat_budget_parameter() {
   values["heartbeat_stop_budget_us"] = "39999";
   return !parse_transport_parameters(values, 6U, &parsed);
 }
+std::uint16_t ref_disabling_wire_state() {
+  dummy_ref::JointSnapshot snapshot{};
+  snapshot.lifecycle=dummy_ref::LifecycleState::kDisabling;
+  return dummy_ref::comm::lifecycle_to_wire(snapshot);
+}
 struct Stimulus { Status status{}; State state{}; Evidence evidence{}; bool done = false; bool send_status = true; bool send_state = true; bool send_evidence = false; };
 std::uint64_t observed_stop_request_id = 0U;
 bool inject_peer_state_queue_full_once = false;
+unsigned release_receipt_fault=0U;
+// 同一 peer 跨 exec 回归专用；普通组件场景不启用。
+bool persistent_stop_cache_test = false;
+bool replayed_stop_host = false;
+std::uint64_t exec_expected_stop_operation = 900U;
+struct PersistentStopCache {
+  unsigned round = 0U;
+  Management::Request stop{};
+  Management::Response terminal{};
+  std::uint64_t request_ids[3]{};
+};
+PersistentStopCache *persistent_stop_cache = nullptr;
 template <typename Publish, typename Pump>
 dp::comm::Result publish_peer_with_retry(Publish publish, Pump pump) {
   constexpr unsigned kMaxAttempts = 16U;
@@ -253,6 +279,8 @@ struct Peer {
   std::uint32_t stop_motion_epoch = 0U;
   std::uint32_t stop_management_epoch = 0U;
   unsigned stop_queries = 0U;
+  bool overlap_cancel_observed = false;
+  bool overlap_disable_old_tuple = false;
   bool never_complete_stop = false;
   bool revoke_owner_before_stop_receipt = false;
   bool sequence_rebase_mode = false;
@@ -322,6 +350,10 @@ dp::comm::Result receive_management(const Management::Request &request,
                                     Management::Response *response,
                                     const dp::comm::RequestInfo &, void *context) {
   auto &peer = *static_cast<Peer *>(context);
+  if (request.operation() == 9U) {
+    peer.overlap_cancel_observed=true;
+    if (::write(peer.stops_fd,&request,sizeof(request))!=sizeof(request)) return dp::comm::Result::kInvalidArgument;
+  }
   if (request.operation() == 10U &&
       ::write(peer.stops_fd, &request, sizeof(request)) != sizeof(request))
     return dp::comm::Result::kInvalidArgument;
@@ -335,10 +367,10 @@ dp::comm::Result receive_management(const Management::Request &request,
   if (stop_query && ::write(peer.stops_fd, &request, sizeof(request)) != sizeof(request))
     return dp::comm::Result::kInvalidArgument;
   if (request.operation() != 6U && request.operation() != 8U && request.operation() != 0U &&
-      request.operation() != 12U && request.operation() != 10U && request.operation() != 1U)
+      request.operation() != 12U && request.operation() != 10U && request.operation() != 1U && request.operation() != 9U)
     return dp::comm::Result::kInvalidArgument;
   response->set_schema_major(2U);
-  response->set_schema_minor(4U);
+  response->set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   response->set_device_id(request.device_id());
   response->set_client_instance_id(request.client_instance_id());
   response->set_request_id(request.request_id());
@@ -353,6 +385,44 @@ dp::comm::Result receive_management(const Management::Request &request,
       (request.request_id() == 43U ? 2U : 1U));
   response->set_management_epoch(request.expected_management_epoch() + 1U);
   response->set_profile_id(request.expected_profile_id());
+  // SOURCE模型只复现once已见TX旧tuple和设备Rejected，不宣未观测CancelCOMMITTED。
+  if (request.operation()==9U) {
+    response->set_result_code(23U);response->set_transaction_phase(1U);response->set_operation_id(0U);
+    response->set_motion_epoch(request.expected_motion_epoch());
+    response->set_management_epoch(request.expected_management_epoch());
+    return dp::comm::Result::kOk;
+  }
+  if(peer.overlap_cancel_observed && request.operation()==12U && request.queried_operation_id()==4693763926145815138ULL) {
+    response->set_result_code(0U);response->set_transaction_phase(3U);response->set_operation_id(9009U);
+    response->set_run_id(9U);response->set_attempt_id(9U);response->set_attempt_kind(1U);
+    response->set_motion_epoch(11U);response->set_management_epoch(2U);
+    if(source_cancel_fault) {
+      if(!std::strcmp(source_cancel_fault,"boot"))response->set_boot_epoch(8U);
+      if(!std::strcmp(source_cancel_fault,"session"))response->set_session_id(9U);
+      if(!std::strcmp(source_cancel_fault,"ref"))response->set_reference_epoch(10U);
+      if(!std::strcmp(source_cancel_fault,"run"))response->set_run_id(10U);
+      if(!std::strcmp(source_cancel_fault,"owner")){std::uint8_t other[16]{3U};response->set_client_instance_id(other);}
+      if(!std::strcmp(source_cancel_fault,"failed")){response->set_result_code(10U);response->set_transaction_phase(4U);response->set_operation_id(0U);}
+      if(!std::strcmp(source_cancel_fault,"pending")){response->set_result_code(23U);response->set_transaction_phase(2U);response->set_operation_id(0U);}
+    }
+    return dp::comm::Result::kOk;
+  }
+  if (peer.overlap_cancel_observed && request.operation()==10U &&
+      (request.expected_motion_epoch()!=11U ||request.expected_management_epoch()!=2U)) {
+    peer.overlap_disable_old_tuple=true;peer.stop_request_id=request.request_id();
+    peer.stop_motion_epoch=request.expected_motion_epoch()+1U;
+    peer.stop_management_epoch=request.expected_management_epoch()+1U;
+    response->set_result_code(23U);response->set_transaction_phase(1U);response->set_operation_id(0U);
+    response->set_motion_epoch(request.expected_motion_epoch());
+    response->set_management_epoch(request.expected_management_epoch());
+    return dp::comm::Result::kOk;
+  }
+  if (peer.overlap_disable_old_tuple && stop_query) {
+    response->set_result_code(10U);response->set_transaction_phase(4U);response->set_operation_id(0U);
+    response->set_motion_epoch(peer.stop_motion_epoch);response->set_management_epoch(peer.stop_management_epoch);
+    response->set_run_id(0U);response->set_release_committed(false);response->set_motion_complete(false);
+    return dp::comm::Result::kOk;
+  }
   if (request.operation() == 8U && request.request_id() == 47U) {
     response->set_operation_id(0U);
     response->set_transaction_phase(1U);
@@ -387,6 +457,15 @@ dp::comm::Result receive_management(const Management::Request &request,
       response->set_management_epoch(request.expected_management_epoch());
       return dp::comm::Result::kOk;
     }
+    if (persistent_stop_cache_test) {
+      ++persistent_stop_cache->round;
+      if (persistent_stop_cache->round > 3U) return dp::comm::Result::kInvalidArgument;
+      for (unsigned index = 0U; index + 1U < persistent_stop_cache->round; ++index)
+        if (persistent_stop_cache->request_ids[index] == request.request_id())
+          return dp::comm::Result::kInvalidArgument;
+      persistent_stop_cache->request_ids[persistent_stop_cache->round - 1U] = request.request_id();
+    }
+    if (persistent_stop_cache_test && persistent_stop_cache->round == 1U) persistent_stop_cache->stop = request;
     peer.stop_request_id = request.request_id();
     peer.stop_motion_epoch = request.expected_motion_epoch();
     peer.stop_management_epoch = request.expected_management_epoch();
@@ -402,6 +481,20 @@ dp::comm::Result receive_management(const Management::Request &request,
     }
   } else if (stop_query) {
     ++peer.stop_queries;
+    if (persistent_stop_cache_test && persistent_stop_cache->round == 2U) {
+      // 保留第一进程的完整 QueryResult，不改写 request/operation identity。
+      if (persistent_stop_cache->terminal.request_id() == request.request_id() ||
+          persistent_stop_cache->terminal.operation_id() != 900U ||
+          persistent_stop_cache->terminal.boot_epoch() != request.expected_boot_epoch())
+        return dp::comm::Result::kInvalidArgument;
+      *response = persistent_stop_cache->terminal;
+      std::fprintf(stderr, "跨exec peer重放旧回执 old_stop=%llu new_stop=%llu old_reply=%llu op=%llu\n",
+          (unsigned long long)persistent_stop_cache->stop.request_id(),
+          (unsigned long long)peer.stop_request_id,
+          (unsigned long long)response->request_id(),
+          (unsigned long long)response->operation_id());
+      return dp::comm::Result::kOk;
+    }
     if (peer.stop_queries == 1U || peer.never_complete_stop) {
       response->set_operation_id(0U);
       response->set_transaction_phase(2U);
@@ -413,12 +506,15 @@ dp::comm::Result receive_management(const Management::Request &request,
         response->set_reference_epoch(0U);
       }
     } else {
-      response->set_operation_id(900U);
+      response->set_operation_id(persistent_stop_cache_test
+          ? 899U + persistent_stop_cache->round : 900U);
       response->set_session_id(0U);
       response->set_reference_epoch(0U);
       response->set_motion_epoch(peer.stop_motion_epoch + 1U);
       response->set_management_epoch(peer.stop_management_epoch + 1U);
       response->set_release_committed(!peer.uncommitted_stop_mode);
+      if (persistent_stop_cache_test && persistent_stop_cache->round == 1U)
+        persistent_stop_cache->terminal = *response;
     }
   } else if (request.operation() == 12U &&
              request.queried_operation_id() == peer.gate_release_request_id) {
@@ -427,6 +523,11 @@ dp::comm::Result receive_management(const Management::Request &request,
     response->set_session_id(0U);
     response->set_reference_epoch(0U);
     response->set_release_committed(true);
+    if(release_receipt_fault==1U) response->set_operation_id(43U);
+    if(release_receipt_fault==2U) response->set_motion_epoch(12U);
+    if(release_receipt_fault==3U) response->set_management_epoch(3U);
+    if(release_receipt_fault==4U) { response->set_transaction_phase(2U); response->set_result_code(23U); }
+    if(release_receipt_fault==5U) response->set_release_committed(false);
   }
   return dp::comm::Result::kOk;
 }
@@ -469,13 +570,17 @@ int run_peer(const std::string &endpoint, int input, int output, int stops_outpu
   dp::comm::StaticExecutor executor;
   if (executor.add_node(node) != dp::comm::Result::kOk || node.activate() != dp::comm::Result::kOk) return 4;
   const char ready = 'R';
-  if (::write(output, &ready, 1) != 1) return 5;
+  if (!persistent_stop_cache_test && ::write(output, &ready, 1) != 1) return 5;
   for (;;) {
     pollfd request{input, POLLIN, 0};
     if (::poll(&request, 1, 1) > 0) {
       Stimulus stimulus{};
       if (::read(input, &stimulus, sizeof(stimulus)) != sizeof(stimulus)) return 6;
-      if (stimulus.done) return 0;
+      if (stimulus.done) {
+        // pico serial Context析构会等待reader；worker退出，设备缓存由supervisor保留。
+        if (persistent_stop_cache_test) ::_exit(0);
+        return 0;
+      }
       const auto pump = [&] { return executor.spin_some(); };
       const auto status_result = stimulus.send_status
           ? publish_peer_with_retry([&] { return status_publisher.publish(stimulus.status); }, pump)
@@ -533,19 +638,22 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   parameters.configured_mask = six_axis ? 63U : 1U;
   const bool cold_gap_mode = cold_idle_gap_mode || cold_fault_gap_mode;
   parameters.max_state_age_us = (heartbeat_budget_mode || cold_gap_mode ||
-      release_deactivate_mode >= 8U) ? 250000U :
+      release_deactivate_mode >= 8U || raw_order_case >= 51U) ? 250000U :
       (default_ack_age_mode ? 200000U : 1000000U);
-  if (heartbeat_budget_mode || cold_gap_mode || release_deactivate_mode >= 8U)
+  if (heartbeat_budget_mode || cold_gap_mode || release_deactivate_mode >= 8U ||
+      raw_order_case >= 59U)
     parameters.heartbeat_stop_budget_us = 250000U;
+  if (raw_order_case == 56U) parameters.heartbeat_stop_budget_us = 500000U;
   if (ack_timeout_mode) parameters.group_sent_ack_timeout_us = 30000U;
   if (reject_during_ack_mode) parameters.group_sent_ack_timeout_us = 250000U;
   if ((complete_order_mode>=6U && complete_order_mode<=8U) || complete_order_mode==10U ||
       complete_order_mode==27U)
     parameters.group_sent_ack_timeout_us = 30000U;
+  if (release_deactivate_mode==4U && source_cancel_coordination) parameters.stop_confirmation_timeout_us=250000U;
   parameters.control_period_us = 10000U;
   if (release_deactivate_mode == 6U) parameters.heartbeat_stop_budget_us = 500000U;
   parameters.state_publish_period_us = (heartbeat_budget_mode || cold_gap_mode ||
-      release_deactivate_mode >= 8U) ? 20000U :
+      release_deactivate_mode >= 8U || raw_order_case >= 51U) ? 20000U :
       (six_axis ? 50000U : 1000000U);
   parameters.contract_hash[0] = 1U;
   parameters.model_hash[0] = 2U;
@@ -561,7 +669,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     const std::string &path;
     ~CaptureCleanup() { if (!path.empty()) ::unlink(path.c_str()); }
   } capture_cleanup{capture_path};
-  if (raw_capture_mode) {
+  if (raw_capture_mode || replayed_stop_host) {
     char path[] = "/tmp/dummy-transport-raw-XXXXXX";
     const int fd = ::mkstemp(path);
     if (fd < 0) return 137;
@@ -575,8 +683,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if (!transport.start() || !wait_for([&] { return transport.statistics().ready; })) return 11;
   Stimulus valid{};
   valid.status.set_schema_major(2U);
-  valid.status.set_schema_minor(4U);
-  valid.state.set_schema_minor(4U);
+  valid.status.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  valid.state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   valid.state.set_schema_major(2U);
   std::uint8_t device[16]{1U};
   valid.status.set_device_id(device);
@@ -590,8 +698,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     valid.status.set_attempt_kind(1U);
   }
   if (raw_capture_mode) {
-    valid.status.set_run_id(raw_order_case >= 34U && raw_order_case <= 50U ? 1U :
-        raw_order_case >= 24U && raw_order_case <= 33U ? 123U :
+    valid.status.set_run_id(raw_order_case >= 34U && raw_order_case <= 58U ? 1U :
+        ((raw_order_case >= 24U && raw_order_case <= 33U) || raw_order_case >= 59U) ? 123U :
         raw_order_case >= 20U && raw_order_case <= 23U ? 121U :
         raw_order_case != 0U ? 1U : 3U);
     valid.status.set_attempt_kind(1U);
@@ -681,18 +789,20 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if (!channel) return 55;
   std::shared_ptr<DeviceManagementRequest> captured_release;
   std::shared_ptr<DeviceManagementRequest> captured_query;
+  std::uint64_t early_idle_received_upper=0U, early_idle_received_lower=0U, early_idle_callback_count=0U;
   for(auto &value:channel->post_complete_hold_tolerance_rad)
     value.store(0.003,std::memory_order_release);
   auto unbound = valid;
   unbound.send_status = false;
   if (!wait_for([&] { send(unbound); return transport.statistics().rejected_states != 0U; }) ||
       system.copy_state(&snapshot)) return 48;
+  if (release_deactivate_mode==4U && source_cancel_coordination) { valid.status.set_run_id(9U); valid.status.set_attempt_id(9U); valid.status.set_attempt_kind(1U); }
   if (release_deactivate_mode != 0U) {
     if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 230;
     if (release_deactivate_mode != 4U) {
       Management::Request release;
       release.set_schema_major(2U);
-      release.set_schema_minor(4U);
+      release.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
       release.set_device_id(device);
       std::uint8_t client[16]{2U};
       release.set_client_instance_id(client);
@@ -721,10 +831,83 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             explicit_release->response.size(), &release_receipt) != wire::CodecResult::kOk ||
             release_receipt.transaction_phase() != (release_deactivate_mode == 7U ? 3U : 1U))
           return 233;
+        if (release_deactivate_mode >= 11U && release_deactivate_mode <= 18U) {
+          auto stopping=valid; stopping.send_state=false;
+          dummy_ref::JointSnapshot stopping_snapshot{};
+          stopping_snapshot.lifecycle=dummy_ref::LifecycleState::kStopping;
+          stopping.status.set_core_state(dummy_ref::comm::lifecycle_to_wire(stopping_snapshot));
+          stopping.status.set_motion_epoch(11U); stopping.status.set_management_epoch(2U);
+          stopping.status.set_operation_id(42U); stopping.status.set_transaction_phase(2U);
+          stopping.status.set_run_id(2U);
+          if(!send(stopping) || !wait_for([&] {
+                std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
+                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
+                    observed.core_state()==7U && observed.operation_id()==42U;
+              })) return 375;
+          if(release_deactivate_mode==17U) {
+            // 新Status epoch会清时钟水位；先接纳真实当前epoch的old-owner State重新校准。
+            auto anchor=valid; anchor.send_status=false;
+            anchor.state.set_core_state(7U); anchor.state.set_motion_epoch(11U);
+            anchor.state.set_management_epoch(2U); anchor.state.set_operation_id(42U);
+            anchor.state.set_transaction_phase(2U); anchor.state.set_state_seq(2U);
+            if(!send(anchor) || !wait_for([&] {
+                  std::lock_guard<std::mutex> lock(channel->mutex); State observed;
+                  return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+                      channel->observation.state.size(),&observed)==wire::CodecResult::kOk &&
+                      observed.state_seq()==2U && observed.session_id()==8U && observed.motion_epoch()==11U;
+                })) return 384;
+            // 旧payload仍晚于首校准anchor；持续fresh State避免heartbeat先Stop掩盖年龄守卫。
+            for(std::uint32_t seq=3U;seq<=13U;++seq) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(20));
+              anchor.state.set_state_seq(seq); anchor.state.set_produced_at_us(device_now_us());
+              if(!send(anchor) || !wait_for([&] {
+                    std::lock_guard<std::mutex> lock(channel->mutex); State observed;
+                    return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+                        channel->observation.state.size(),&observed)==wire::CodecResult::kOk &&
+                        observed.state_seq()==seq;
+                  })) return 385;
+            }
+            const auto before_refresh=transport.statistics().status_messages;
+            if(!send(stopping) || !wait_for([&] {
+                  return transport.statistics().status_messages>before_refresh;
+                })) return 386;
+          }
+          auto early=valid; early.send_status=false;
+          early.state.set_core_state(1U); early.state.set_session_id(0U);
+          early.state.set_reference_epoch(0U); early.state.set_motion_epoch(11U);
+          early.state.set_management_epoch(2U); early.state.set_operation_id(42U);
+          early.state.set_transaction_phase(3U); early.state.set_state_seq(2U);
+          early.state.set_position_valid_mask(0U); early.state.set_raw_position_valid_mask(parameters.configured_mask);
+          const double raw[6]{.1,.2,.3,.4,.5,.6}; early.state.set_raw_motor_position_rev(raw);
+          for(unsigned fault=0;fault<6;++fault) {
+            auto wrong=early;
+            if(fault==0) wrong.state.set_transaction_phase(2U);
+            if(fault==1) wrong.state.set_operation_id(0U);
+            if(fault==2) wrong.state.set_operation_id(43U);
+            if(fault==3) wrong.state.set_boot_epoch(8U);
+            if(fault==4) wrong.state.set_motion_epoch(12U);
+            if(fault==5) wrong.state.set_management_epoch(3U);
+            if(!send_rejected_state(wrong)) return 376;
+          }
+          if(release_deactivate_mode==17U) {
+            early.state.set_state_seq(20U);
+            early.state.set_produced_at_us(device_now_us()-200000U);
+          }
+          const auto before_early=transport.statistics();
+          early_idle_received_lower=transport_steady_now_us();
+          if(!send(early) || !wait_for([&] {
+                return transport.statistics().rejected_states>before_early.rejected_states;
+              })) return 377;
+          early_idle_received_upper=transport_steady_now_us();
+          early_idle_callback_count=transport.statistics().state_callbacks;
+          if(release_deactivate_mode==17U) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          // 未有COMMITTED时不更新已接纳State。下一真实Query解锁同op缓存。
+        }
         if (release_deactivate_mode == 9U) {
           auto disabling = valid;
           disabling.send_state = false;
-          disabling.status.set_core_state(7U);
+          disabling.status.set_core_state(ref_disabling_wire_state());
           disabling.status.set_motion_epoch(11U);
           disabling.status.set_management_epoch(2U);
           const auto statuses_before = transport.statistics().status_messages;
@@ -742,6 +925,38 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           early_idle.state.set_raw_position_valid_mask(parameters.configured_mask);
           const double raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
           early_idle.state.set_raw_motor_position_rev(raw);
+          // 正式Stopping7不能冒充Disabling8，其他tuple相同仍拒临时Idle。
+          auto stopping = disabling;
+          dummy_ref::JointSnapshot stopping_snapshot{};
+          stopping_snapshot.lifecycle=dummy_ref::LifecycleState::kStopping;
+          stopping.status.set_core_state(dummy_ref::comm::lifecycle_to_wire(stopping_snapshot));
+          if(!send(stopping) || !wait_for([&] {
+                std::lock_guard<std::mutex> lock(channel->mutex);
+                Status observed;
+                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
+                    observed.core_state()==dummy_ref::comm::lifecycle_to_wire(stopping_snapshot);
+              }) || !send_rejected_state(early_idle)) return 371;
+          auto permitted = disabling;
+          permitted.status.set_real_motion_permitted(true);
+          permitted.status.set_permit_remaining_us(1000U);
+          if(!send(permitted) || !wait_for([&] {
+                std::lock_guard<std::mutex> lock(channel->mutex);
+                Status observed;
+                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
+                    observed.permit_remaining_us()==1000U;
+              }) || !send_rejected_state(early_idle)) return 372;
+          if(!send(disabling) || !wait_for([&] {
+                std::lock_guard<std::mutex> lock(channel->mutex);
+                Status observed;
+                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
+                    observed.core_state()==ref_disabling_wire_state() && observed.permit_remaining_us()==0U;
+              })) return 373;
+          auto wrong_management = early_idle;
+          wrong_management.state.set_management_epoch(3U);
+          if(!send_rejected_state(wrong_management)) return 374;
           auto wrong_boot = early_idle;
           wrong_boot.state.set_boot_epoch(8U);
           if (!send_rejected_state(wrong_boot)) return 250;
@@ -775,11 +990,78 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }
           if (!wait_for([&] { return query->complete.load(); })) return 238;
           captured_query = query;
+          if(release_deactivate_mode>=12U && release_deactivate_mode<=17U) {
+            // callback置complete先于worker应用reply；覆盖随后处理窗口，避免即时false假PASS。
+            const auto check_until=transport_steady_now_us()+50000U;
+            bool adopted=false;
+            do {
+              {
+                std::lock_guard<std::mutex> lock(channel->mutex); State observed;
+                adopted=wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+                    channel->observation.state.size(),&observed)==wire::CodecResult::kOk && observed.session_id()==0U;
+              }
+              if(adopted) break;
+              std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            } while(transport_steady_now_us()<check_until);
+            if(adopted) return 379;
+            if(release_deactivate_mode==12U) {
+              // 强receipt本身有效；旧缓存op42失配不能否决op43的后续合法Idle。
+              auto final_idle=valid;
+              final_idle.status.set_core_state(1U); final_idle.status.set_session_id(0U);
+              final_idle.status.set_reference_epoch(0U); final_idle.status.set_motion_epoch(11U);
+              final_idle.status.set_management_epoch(2U); final_idle.status.set_run_id(2U);
+              final_idle.status.set_operation_id(43U); final_idle.status.set_transaction_phase(3U);
+              final_idle.status.set_release_committed(true); final_idle.status.set_permit_remaining_us(0U);
+              final_idle.state.set_core_state(1U); final_idle.state.set_session_id(0U);
+              final_idle.state.set_reference_epoch(0U); final_idle.state.set_motion_epoch(11U);
+              final_idle.state.set_management_epoch(2U); final_idle.state.set_operation_id(43U);
+              final_idle.state.set_transaction_phase(3U); final_idle.state.set_state_seq(3U);
+              final_idle.state.set_position_valid_mask(0U); final_idle.state.set_raw_position_valid_mask(parameters.configured_mask);
+              const double raw[6]{.1,.2,.3,.4,.5,.6}; final_idle.state.set_raw_motor_position_rev(raw);
+              if(!send(final_idle) || !wait_for([&] {
+                    std::lock_guard<std::mutex> lock(channel->mutex); State state; Status status;
+                    return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&state)==wire::CodecResult::kOk &&
+                        wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&status)==wire::CodecResult::kOk &&
+                        state.state_seq()==3U && state.session_id()==0U && status.session_id()==0U && status.operation_id()==43U;
+                  })) return 382;
+              if(transport.statistics().stop_requests_sent!=0U) return 383;
+            }
+            return 0;
+          }
           Management::Response release_reply;
           if (wire::DummyManageV2ResponseCodec::decode(query->response.data(),
               query->response.size(), &release_reply) != wire::CodecResult::kOk ||
               !release_reply.release_committed() || release_reply.transaction_phase() != 3U)
             return 239;
+          if((release_deactivate_mode==11U || release_deactivate_mode==18U) && !wait_for([&] {
+                std::lock_guard<std::mutex> lock(channel->mutex); State observed;
+                return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+                    channel->observation.state.size(),&observed)==wire::CodecResult::kOk &&
+                    observed.state_seq()==2U && observed.session_id()==0U && observed.operation_id()==42U &&
+                    channel->observation.state_received_us>=early_idle_received_lower &&
+                    channel->observation.state_received_us<=early_idle_received_upper;
+              })) return 378;
+          if((release_deactivate_mode==11U || release_deactivate_mode==18U) && transport.statistics().state_callbacks!=early_idle_callback_count)
+            return 380;
+          if(release_deactivate_mode==18U) {
+            // 真COMMITTED已锁定；继续20ms新鲜Idle State，旧Stopping Status故意保持500ms。
+            auto idle=valid; idle.send_status=false;
+            idle.state.set_core_state(1U); idle.state.set_session_id(0U); idle.state.set_reference_epoch(0U);
+            idle.state.set_motion_epoch(11U); idle.state.set_management_epoch(2U);
+            idle.state.set_operation_id(42U); idle.state.set_transaction_phase(3U);
+            idle.state.set_position_valid_mask(0U); idle.state.set_raw_position_valid_mask(parameters.configured_mask);
+            const double raw[6]{.1,.2,.3,.4,.5,.6}; idle.state.set_raw_motor_position_rev(raw);
+            for(std::uint32_t seq=3U;seq<=28U;++seq) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(20));
+              idle.state.set_state_seq(seq); idle.state.set_produced_at_us(device_now_us());
+              if(!send(idle) || !wait_for([&] {
+                    std::lock_guard<std::mutex> lock(channel->mutex); State observed;
+                    return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+                        channel->observation.state.size(),&observed)==wire::CodecResult::kOk && observed.state_seq()==seq;
+                  })) return 387;
+              if(transport.statistics().heartbeat_stops!=0U || transport.statistics().stop_requests_sent!=0U) return 388;
+            }
+          }
         }
       }
       if (release_deactivate_mode == 10U) {
@@ -807,11 +1089,17 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
       released.state.set_raw_motor_position_rev(idle_raw);
       released.state.set_state_seq(2U);
+      if(release_deactivate_mode==11U || release_deactivate_mode==18U) {
+        released.state.set_state_seq(release_deactivate_mode==18U ? 29U : 3U); released.state.set_operation_id(42U);
+        released.state.set_transaction_phase(3U);
+        released.status.set_run_id(2U); released.status.set_operation_id(42U);
+        released.status.set_transaction_phase(3U);
+      }
       if (release_deactivate_mode == 9U) released.state.set_state_seq(17U);
       if (release_deactivate_mode == 6U) {
         auto old_owner_status = valid;
         old_owner_status.send_state = false;
-        old_owner_status.status.set_core_state(7U);
+        old_owner_status.status.set_core_state(ref_disabling_wire_state());
         old_owner_status.status.set_motion_epoch(11U);
         old_owner_status.status.set_management_epoch(2U);
         const auto before_status = transport.statistics().status_messages;
@@ -854,6 +1142,13 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                     channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
                 observed.state_seq() == released.state.state_seq();
           })) return 234;
+      if((release_deactivate_mode==11U || release_deactivate_mode==18U) && !wait_for([&] {
+            std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
+            return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+                channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
+                observed.core_state()==1U && observed.session_id()==0U && observed.run_id()==2U &&
+                observed.operation_id()==42U && observed.release_committed();
+          })) return 381;
       if (release_deactivate_mode == 8U || release_deactivate_mode == 9U) {
         std::this_thread::sleep_for(std::chrono::milliseconds(310));
         const auto stats = transport.statistics();
@@ -861,10 +1156,92 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             stats.unconfirmed_stop_requests != 0U) return 248;
       }
     }
+    if (release_deactivate_mode==4U && source_cancel_coordination) {
+      Management::Request cancel;
+      cancel.set_schema_major(2U);cancel.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+      cancel.set_device_id(device);std::uint8_t cancel_client[16]{2U};cancel.set_client_instance_id(cancel_client);
+      cancel.set_request_id(4693763926145815138ULL);cancel.set_request_seq(91U);cancel.set_operation(9U);
+      cancel.set_expected_boot_epoch(7U);cancel.set_expected_session_id(8U);cancel.set_expected_reference_epoch(9U);
+      cancel.set_expected_motion_epoch(10U);cancel.set_expected_management_epoch(1U);cancel.set_expected_profile_id(1U);
+      cancel.set_configured_mask(63U);
+      auto pending_cancel=std::make_shared<DeviceManagementRequest>();
+      if(wire::DummyManageV2RequestCodec::encode(cancel,pending_cancel->request.data(),pending_cancel->request.size())!=wire::CodecResult::kOk)return 801;
+      {std::lock_guard<std::mutex>lock(channel->mutex);channel->queued=pending_cancel;}
+      pollfd overlap_event{stops_input,POLLIN,0};Management::Request actual_cancel;
+      if(::poll(&overlap_event,1,3000)!=1 || ::read(stops_input,&actual_cancel,sizeof(actual_cancel))!=sizeof(actual_cancel)
+          ||actual_cancel.operation()!=9U ||actual_cancel.request_id()!=cancel.request_id())return 802;
+      // 真正System生命周期callback，Worker自身取StopKind、组实际Disable/Query并处理peer回调。
+      system.on_deactivate(rclcpp_lifecycle::State());
+      Management::Request query=cancel;query.set_request_id(4693763926145815139ULL);query.set_request_seq(92U);
+      query.set_operation(12U);query.set_queried_operation_id(cancel.request_id());
+      if(source_cancel_fault && !std::strcmp(source_cancel_fault,"foreign_query"))query.set_queried_operation_id(cancel.request_id()+100U);
+      auto pending_query=std::make_shared<DeviceManagementRequest>();
+      if(wire::DummyManageV2RequestCodec::encode(query,pending_query->request.data(),pending_query->request.size())!=wire::CodecResult::kOk)return 807;
+      bool query_enqueued=false;
+      if(!wait_for([&]{if(query_enqueued)return true;std::lock_guard<std::mutex>lock(channel->mutex);if(channel->queued)return false;channel->queued=pending_query;query_enqueued=true;return true;}))return 808;
+      auto held=valid;held.status.set_core_state(4U);held.status.set_motion_epoch(11U);held.status.set_management_epoch(2U);
+      held.status.set_operation_id(9009U);held.status.set_transaction_phase(3U);held.status.set_final_state(7U);
+      held.status.set_attempt_kind(1U);held.status.set_run_id(9U);held.status.set_attempt_id(9U);
+      held.state.set_core_state(4U);held.state.set_hold_ready(true);
+      if(source_cancel_fault && (!std::strcmp(source_cancel_fault,"nonhold") || !std::strcmp(source_cancel_fault,"second_stop"))){held.state.set_core_state(5U);held.state.set_hold_ready(false);}held.state.set_motion_epoch(11U);held.state.set_management_epoch(2U);
+      held.state.set_state_seq(2U);held.state.set_produced_at_us(device_now_us());
+      // 原borrowed Status/State真实callback，而非手写authority成员。
+      if(!send(held))return 809;
+      Management::Request actual_disable;
+      const auto cancel_wait_started=std::chrono::steady_clock::now();
+      const auto cancel_wait_until=cancel_wait_started+std::chrono::milliseconds(source_cancel_fault?300:200);
+      bool second_stop_requested=false;
+
+      while(::poll(&overlap_event,1,0)!=1 && std::chrono::steady_clock::now()<cancel_wait_until) {
+        held.state.set_state_seq(held.state.state_seq()+1U);held.state.set_produced_at_us(device_now_us());
+        if(!send(held))return 809;
+        if(source_cancel_fault && !std::strcmp(source_cancel_fault,"second_stop")) {
+          const auto elapsed=std::chrono::steady_clock::now()-cancel_wait_started;
+          if(!second_stop_requested && elapsed>=std::chrono::milliseconds(40)) {system.request_transport_stop();second_stop_requested=true;}
+          if(transport.statistics().unconfirmed_stop_requests==1U) {
+            if(!second_stop_requested || elapsed>std::chrono::milliseconds(100))return 814;
+            break;
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+      if(source_cancel_fault) {
+        const auto stats=transport.statistics();transport.stop();
+        if(::poll(&overlap_event,1,0)==1 ||stats.stop_requests_sent!=0U ||stats.stop_requests_confirmed!=0U ||stats.unconfirmed_stop_requests!=1U)return 813;
+        std::fprintf(stderr,"GREEN_NEGATIVE_SOURCE noBlindDisable reason=%s unconfirmed=1 original250k\n",source_cancel_fault);return 0;
+      }
+      if(::poll(&overlap_event,1,0)!=1 ||::read(stops_input,&actual_disable,sizeof(actual_disable))!=sizeof(actual_disable)
+         ||actual_disable.operation()!=10U)return 803;
+      std::fprintf(stderr,"OVERLAP_ACTUAL_TX cancel_motion=%u cancel_mgmt=%u disable_motion=%u disable_mgmt=%u\n",
+          actual_cancel.expected_motion_epoch(),actual_cancel.expected_management_epoch(),
+          actual_disable.expected_motion_epoch(),actual_disable.expected_management_epoch());
+      if(actual_disable.expected_motion_epoch()!=11U ||actual_disable.expected_management_epoch()!=2U)return 805;
+      Management::Request actual_query;
+      if(::poll(&overlap_event,1,3000)!=1 ||::read(stops_input,&actual_query,sizeof(actual_query))!=sizeof(actual_query)||actual_query.operation()!=12U)return 810;
+      auto idle=held;idle.status.set_session_id(0U);idle.status.set_reference_epoch(0U);idle.status.set_motion_epoch(12U);idle.status.set_management_epoch(3U);
+      idle.status.set_core_state(1U);idle.status.set_release_committed(true);idle.status.set_operation_id(900U);idle.status.set_transaction_phase(3U);
+      idle.state.set_session_id(0U);idle.state.set_reference_epoch(0U);idle.state.set_motion_epoch(12U);idle.state.set_management_epoch(3U);idle.state.set_core_state(1U);
+      idle.state.set_position_valid_mask(0U);idle.state.set_raw_position_valid_mask(63U);double raw_position[6]{.1,.2,.3,.4,.5,.6};idle.state.set_raw_motor_position_rev(raw_position);
+      idle.state.set_state_seq(3U);idle.state.set_produced_at_us(device_now_us());
+      if(!wait_for([&]{send(idle);return transport.statistics().stop_requests_confirmed==1U;}))return 811;
+      const auto stats=transport.statistics();transport.stop();
+      if(stats.stop_requests_sent!=1U ||stats.unconfirmed_stop_requests!=0U)return 812;
+      std::fprintf(stderr,"GREEN_SOURCE_CALLBACK exactCancelCOMMITTED/freshHold/singleNewDisable/freshIdle confirmed=1\n");
+      return 0;
+      // RED：当前Worker已知道有未完成Cancel却继续用同旧tuple发Disable，无法合法Stop确认。
+      if(actual_disable.expected_motion_epoch()==actual_cancel.expected_motion_epoch() &&
+         actual_disable.expected_management_epoch()==actual_cancel.expected_management_epoch()) {
+        std::fprintf(stderr,"RED_ORIGINAL_STOP_OVERLAP old_tuple_disable_and_QueryRejected_rc10 confirmed=%llu\n",
+             static_cast<unsigned long long>(transport.statistics().stop_requests_confirmed));
+        return 805;
+      }
+      // 此RED fixture不能把仅换epoch或盲重试当GREEN；合法候选需另完整确认场景。
+      return 806;
+    }
     const auto before = transport.statistics().stop_requests_sent;
     if (release_deactivate_mode == 3U) system.on_error(rclcpp_lifecycle::State());
     else system.on_deactivate(rclcpp_lifecycle::State());
-    const bool expect_stop = release_deactivate_mode != 1U && release_deactivate_mode != 6U &&
+    const bool expect_stop = release_deactivate_mode != 1U && release_deactivate_mode != 6U && release_deactivate_mode != 11U && release_deactivate_mode != 18U &&
         release_deactivate_mode != 7U &&
         release_deactivate_mode != 8U && release_deactivate_mode != 9U;
     if (expect_stop && !wait_for([&] {
@@ -1081,7 +1458,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     stale_page.send_status = false;
     stale_page.send_evidence = true;
     stale_page.evidence.set_schema_major(2U);
-    stale_page.evidence.set_schema_minor(4U);
+    stale_page.evidence.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
     stale_page.evidence.set_run_id(2U);
     stale_page.evidence.set_attempt_id(2U);
     stale_page.evidence.set_evidence_seq(0U);
@@ -1154,7 +1531,95 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     valid.state.set_state_seq(2U);
   }
-  if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 12;
+  if(raw_order_case>=87U && raw_order_case<=96U) {valid.status.set_core_state(3U);valid.state.set_core_state(4U);valid.state.set_can_sent_mask(63U);valid.status.set_can_sent_mask(63U);}
+  if((raw_order_case>=83U && raw_order_case<=86U)) {valid.status.set_core_state(raw_order_case==84U?4U:5U);valid.state.set_core_state(raw_order_case==84U?4U:5U);}
+  if(!(raw_order_case>=83U && raw_order_case<=86U) && !wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 12;
+  if((raw_order_case>=83U && raw_order_case<=86U)) {
+    if(!send(valid))return 333;
+    if(!wait_for([&] {
+      std::lock_guard<std::mutex> lock(channel->mutex);wire::DummyJointStateV2 accepted{};
+      return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&accepted)==wire::CodecResult::kOk && accepted.core_state()==(raw_order_case==84U?4U:5U);
+    }))return 333;
+    wire::DummyJointStateV2 established{};
+    {std::lock_guard<std::mutex> lock(channel->mutex);wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&established);}
+    const auto before=transport.statistics().invalidations;
+    system.request_transport_stop();
+    if(!wait_for([&]{return transport.statistics().invalidations>before;}))return 330;
+    auto fault=valid;fault.send_status=false;fault.state.set_core_state(9U);
+    fault.state.set_session_id(0U);fault.state.set_reference_epoch(0U);fault.state.set_motion_epoch(11U);
+    fault.state.set_state_seq(established.state_seq()+1U);fault.state.set_produced_at_us(device_now_us());
+    if(raw_order_case==85U)fault.state.set_boot_epoch(17U);
+    if(raw_order_case==86U)fault.state.set_produced_at_us(established.produced_at_us());
+    const auto received_before=transport.statistics().state_messages;
+    if(!send(fault)||!wait_for([&]{return transport.statistics().state_messages>received_before;}))return 331;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto sample=channel->raw_cleanup_observation();
+    std::printf("public_stop_invalidations=%llu normal_admission_state=%u rawCleanupStateReceived=%llu\n",
+      static_cast<unsigned long long>(transport.statistics().invalidations),system.copy_state(&snapshot),static_cast<unsigned long long>(sample.state_received_us));
+    std::printf(" mode=%u acceptedRunCore=%u acceptedSeq=%u faultSeq=%u producerBefore=%llu producerFault=%llu\n",raw_order_case,established.core_state(),established.state_seq(),fault.state.state_seq(),static_cast<unsigned long long>(established.produced_at_us()),static_cast<unsigned long long>(fault.state.produced_at_us()));
+    transport.stop();const bool expected=raw_order_case==83U;return (sample.state_received_us!=0U)==expected?0:332;
+  }
+
+
+  // 正式State ACK先于Status Hold：不能丢掉已确认generation，也不能凭Status Hold制造ACK。
+  if(raw_order_case>=87U && raw_order_case<=96U) {
+    channel->inactive_prime_allowed.store(true,std::memory_order_release);
+    State accepted;{std::lock_guard<std::mutex> lock(channel->mutex);wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&accepted);}
+    set_command_identity({7U,8U,9U,10U,accepted.freshness_ticket()});
+    const auto generation=publish_control_update(positions,6U,0,nullptr);
+    if(!generation || !system.transfer_control_update() || ::poll(&response,1,1000)!=1) return 370;
+    Command command;
+    if(::read(input,&command,sizeof(command))!=sizeof(command)||command.producer_seq()!=generation||command.motion_epoch()!=10U) return 371;
+    auto ack=valid;ack.send_status=false;ack.state.set_state_seq(3U);
+    ack.state.set_committed_producer_seq(command.producer_seq());
+
+    if(raw_order_case==88U)ack.state.set_committed_producer_seq(0U);
+    // 原GroupSentAck以committed序号为权威，partial mask本例仍须无committed ACK。
+    if(raw_order_case==89U){ack.state.set_committed_producer_seq(0U);ack.state.set_can_sent_mask(31U);}
+    if(raw_order_case==90U)ack.state.set_motion_epoch(11U);
+    if(raw_order_case==91U)ack.state.set_core_state(5U);
+    if(raw_order_case==92U)ack.state.set_session_id(9U);
+    if(raw_order_case==93U)ack.state.set_produced_at_us(device_now_us()-2000000U);
+    if(raw_order_case==94U)ack.state.set_reference_epoch(19U);
+    if(raw_order_case==95U)ack.state.set_boot_epoch(17U);
+    const auto state_before=transport.statistics().state_messages;
+    if(!send(ack)||!wait_for([&]{return transport.statistics().state_messages>state_before;}))return 372;
+    if(raw_order_case==87U ||raw_order_case==88U ||raw_order_case==89U ||raw_order_case==91U ||raw_order_case==96U) {
+      if(!wait_for([&]{return system.copy_state(&snapshot)&&snapshot.envelope.state_seq==3U;}))return 372;
+    }
+
+    {std::lock_guard<std::mutex> lock(channel->mutex);Status cached;
+      wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&cached);
+      if(cached.core_state()!=3U || channel->hold_drain.quiescent)return 373;
+    }
+
+    if(raw_order_case==96U) {
+      const auto invalidated=transport.statistics().invalidations;
+      system.request_transport_stop();
+      if(!wait_for([&]{return transport.statistics().invalidations>invalidated;}))return 376;
+    }
+    auto hold=valid;hold.send_state=false;hold.status.set_core_state(4U);
+    if(raw_order_case!=87U &&raw_order_case!=96U)hold.status.set_can_sent_mask(0U);
+
+    hold.status.set_committed_producer_seq(raw_order_case==87U?command.producer_seq():0U);
+    const auto statuses_before=transport.statistics().status_messages;
+    if(!send(hold)||!wait_for([&]{if(raw_order_case==96U)return transport.statistics().status_messages>statuses_before;std::lock_guard<std::mutex> lock(channel->mutex);Status cached;
+      return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&cached)==wire::CodecResult::kOk&&cached.core_state()==4U;})) return 374;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    bool passed=false;
+    {std::lock_guard<std::mutex> lock(channel->mutex);const auto d=channel->hold_drain;
+      std::printf("StateACKBeforeStatusHold generation=%llu seq=%u processed=%llu committed=%u quiescent=%u disposition=%u boot=%llu session=%llu ref=%u epoch=%u\n",
+        static_cast<unsigned long long>(generation),command.producer_seq(),static_cast<unsigned long long>(d.processed_generation),d.committed_seq,d.quiescent,d.disposition,static_cast<unsigned long long>(d.boot_epoch),static_cast<unsigned long long>(d.session_id),d.reference_epoch,d.motion_epoch);
+      passed=d.processed_generation==generation&&d.committed_seq==command.producer_seq()&&d.quiescent&&d.disposition==2U&&d.boot_epoch==7U&&d.session_id==8U&&d.reference_epoch==9U&&d.motion_epoch==10U;
+    }
+
+    if(raw_order_case!=87U) {
+      std::lock_guard<std::mutex> lock(channel->mutex);
+      passed=!channel->hold_drain.quiescent&&channel->hold_drain.processed_generation==0U;
+    }
+    transport.stop();return passed?0:375;
+
+  }
   if (complete_order_mode != 0U) {
     valid.status.set_management_epoch(10U);
     valid.state.set_management_epoch(10U);
@@ -1181,7 +1646,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
     }
     Management::Request complete;
-    complete.set_schema_major(2U); complete.set_schema_minor(4U);
+    complete.set_schema_major(2U); complete.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
     complete.set_device_id(device);
     const std::uint8_t client[16]{2U};
     complete.set_client_instance_id(client);
@@ -1206,7 +1671,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       transport.stop();
       return 0;
     }
-    if(complete_order_mode==17U) {
+    if(complete_order_mode==17U || (complete_order_mode>=30U && complete_order_mode<=41U)) {
       pollfd observed_request{stops_input,POLLIN,0};
       Management::Request sent_complete;
       if(::poll(&observed_request,1,1000)!=1 ||
@@ -1239,6 +1704,112 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
          first_command.motion_epoch()!=11U || first_command.producer_seq()!=first) return 202;
       double second_position[6]{};
       std::copy(std::begin(positions),std::end(positions),second_position);
+      if(complete_order_mode>=30U && complete_order_mode<=34U) {
+        // 原Complete句柄结束并转Query时canceled清理；不能把它当真实Complete终态。
+        pending->canceled.store(true,std::memory_order_release);
+        enabling.state.set_core_state(4U);
+        enabling.state.set_hold_ready(true);
+        enabling.state.set_position_valid_mask(parameters.configured_mask);
+        enabling.state.set_committed_producer_seq(first_command.producer_seq());
+        enabling.state.set_state_seq(4U);
+        if(complete_order_mode==31U || complete_order_mode==32U || complete_order_mode==34U) {
+          const auto before_invalid=transport.statistics();
+          if(complete_order_mode==31U) enabling.state.set_boot_epoch(8U);
+          if(complete_order_mode==32U) enabling.state.set_motion_epoch(12U);
+          if(complete_order_mode==34U) enabling.state.set_produced_at_us(device_now_us()-2000000U);
+          if(!send_rejected_state(enabling)) return 368;
+          const auto after_invalid=transport.statistics();
+          const bool no_admission=system.copy_state(&snapshot) && snapshot.envelope.state_seq==3U;
+          transport.stop();
+          return no_admission && after_invalid.rejected_states>before_invalid.rejected_states &&
+              after_invalid.commands_published==before_invalid.commands_published ? 0 : 369;
+        }
+        if(!wait_for([&] { send(enabling); return system.copy_state(&snapshot) &&
+                                  snapshot.envelope.state_seq==4U; })) return 364;
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        const auto before_same=transport.statistics();
+        if(complete_order_mode==33U) second_position[0]+=0.02;
+        const auto same=publish_control_update(second_position,six_axis ? 6U : 1U,0,nullptr);
+        if(!same || !system.transfer_control_update()) return 365;
+        // 等待owner消费此代际，不能用加长sleep掩盖Stop。
+        for(unsigned n=0;n<8U;++n) {
+          enabling.state.set_state_seq(5U+n);
+          if(!send(enabling)) return 366;
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const auto after_same=transport.statistics();
+        transport.stop();
+        if(complete_order_mode==33U)
+          return after_same.rejected_commands>before_same.rejected_commands &&
+              after_same.commands_published==before_same.commands_published ? 0 : 370;
+        return after_same.rejected_commands==before_same.rejected_commands &&
+            after_same.stop_requests_sent==before_same.stop_requests_sent &&
+            after_same.commands_published==before_same.commands_published ? 0 : 367;
+      }
+      if(complete_order_mode>=35U && complete_order_mode<=41U) {
+        auto hold_status=enabling; hold_status.send_state=false; hold_status.send_status=true;
+        hold_status.status.set_core_state(4U);
+        hold_status.status.set_committed_producer_seq(first_command.producer_seq());
+        hold_status.status.set_can_submitted_mask(parameters.configured_mask);
+        hold_status.status.set_can_sent_mask(parameters.configured_mask);
+        if(complete_order_mode==37U) hold_status.status.set_can_sent_mask(0U);
+        if(complete_order_mode==40U) hold_status.status.set_committed_producer_seq(first_command.producer_seq()+1U);
+        if(complete_order_mode==41U) hold_status.status.set_can_sent_mask(parameters.configured_mask & ~1U);
+        if(complete_order_mode==38U) hold_status.status.set_motion_epoch(12U);
+        const auto before_status_stats=transport.statistics();
+        const auto before_status=before_status_stats.status_messages;
+        if(!send(hold_status) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
+              return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+                  channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
+                  observed.core_state()==4U && transport.statistics().status_messages>before_status;
+            })) return 389;
+        if(complete_order_mode==36U) second_position[0]+=0.02;
+        std::uint32_t following_state_seq=4U;
+        if(complete_order_mode==39U) {
+          const auto started=transport_steady_now_us(); std::uint32_t seq=4U;
+          while(transport_steady_now_us()-started<2100000U) {
+            enabling.state.set_state_seq(seq++); enabling.state.set_produced_at_us(device_now_us());
+            if(!send(enabling)) return 394;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          }
+          following_state_seq=seq;
+          const auto expired_elapsed=transport_steady_now_us()-started;
+          std::fprintf(stderr,"EXPIRED_COMPLETE_PENDING_WITNESS elapsed_us=%llu send_status=%d last_state_seq=%u\n",
+              static_cast<unsigned long long>(expired_elapsed),enabling.send_status,seq-1U);
+          if(expired_elapsed<2100000U) return 397;
+          std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
+          if(enabling.send_status || wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+              channel->observation.status.size(),&observed)!=wire::CodecResult::kOk || observed.core_state()!=4U ||
+              transport.statistics().heartbeat_stops!=0U || transport.statistics().stop_requests_sent!=0U ||
+              transport.statistics().invalidations!=before_status_stats.invalidations) return 396;
+        }
+        const auto before_same=transport.statistics();
+        const auto same=publish_control_update(second_position,six_axis ? 6U : 1U,0,nullptr);
+        const bool transferred=same && system.transfer_control_update();
+        if(!transferred) {
+          const auto rejected=transport.statistics();
+          transport.stop();
+          // 错Status epoch已失效授权，控制交换应直接拒绝，不要求它进入owner再拒绝。
+          return complete_order_mode==38U && rejected.invalidations>before_status_stats.invalidations &&
+              rejected.commands_published==before_same.commands_published ? 0 : 390;
+        }
+        for(unsigned n=0;n<8U;++n) {
+          enabling.state.set_state_seq(following_state_seq+n);
+          if(!send(enabling)) return 391;
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const auto after=transport.statistics();
+        transport.stop();
+        if(complete_order_mode==38U) return after.invalidations>before_status_stats.invalidations &&
+            after.commands_published==before_same.commands_published ? 0 : 395;
+        if(complete_order_mode==36U || complete_order_mode==37U || complete_order_mode==39U || complete_order_mode==40U || complete_order_mode==41U)
+          return after.rejected_commands>before_same.rejected_commands &&
+            after.commands_published==before_same.commands_published ? 0 : 392;
+        return after.rejected_commands==before_same.rejected_commands &&
+            after.stop_requests_sent==before_same.stop_requests_sent &&
+            after.commands_published==before_same.commands_published ? 0 : 393;
+      }
       second_position[0]+=0.0008;
       const auto second=publish_control_update(second_position,six_axis ? 6U : 1U,0,nullptr);
       const auto after_first=transport.statistics();
@@ -1278,6 +1849,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       return 0;
     }
     if (!wait_for([&] { return pending->complete.load(); })) return 168;
+    if(complete_order_mode==28U || complete_order_mode==29U) {
+      pollfd observed_request{stops_input,POLLIN,0};
+      Management::Request sent_complete;
+      if(::poll(&observed_request,1,1000)!=1 ||
+         ::read(stops_input,&sent_complete,sizeof(sent_complete))!=sizeof(sent_complete) ||
+         sent_complete.request_id()!=47U || sent_complete.operation()!=8U ||
+         sent_complete.terminal_producer_seq()!=0U) return 363;
+    }
     auto next=valid;
     next.status.set_motion_epoch(11U);
     next.state.set_motion_epoch(11U);
@@ -1292,7 +1871,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       part.state.set_produced_at_us(device_now_us());
       return send(part);
     };
-    if(complete_order_mode==4U) {
+    if(complete_order_mode==4U || complete_order_mode==29U) {
       next.status.set_motion_epoch(12U);
       if(!send_part(true,false) || !wait_for([&] {
           return transport.statistics().invalidations>baseline.invalidations;
@@ -1333,7 +1912,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       { std::lock_guard<std::mutex> lock(channel->mutex); channel->queued=requested; }
       return wait_for([&] { return requested->complete.load(); });
     };
-    if(complete_order_mode==1U || (complete_order_mode>=6U && complete_order_mode<=8U) ||
+    if(complete_order_mode==1U || complete_order_mode==28U || (complete_order_mode>=6U && complete_order_mode<=8U) ||
        complete_order_mode==10U || complete_order_mode==13U || complete_order_mode==14U ||
        (complete_order_mode>=18U && complete_order_mode<=27U)) {
       if(!send_part(true,false) || !wait_for([&] {
@@ -1597,7 +2176,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stimulus.send_evidence = true;
         auto &message = stimulus.evidence;
         message.set_schema_major(2U);
-        message.set_schema_minor(4U);
+        message.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
         message.set_run_id(run);
         message.set_attempt_id(run);
         message.set_evidence_seq(sequence);
@@ -1606,10 +2185,15 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         message.set_parent_run_id(parent);
         message.set_motion_epoch(raw_order_case >= 43U && raw_order_case <= 50U ?
             (run == 1U ? 1U : run == 2U && sequence == 0U ? 3U : 5U) :
-            raw_order_case >= 34U && raw_order_case <= 42U ?
+            (raw_order_case >= 34U && raw_order_case <= 42U) ||
+                (raw_order_case >= 51U && raw_order_case <= 58U) ?
             (run == 1U ? 1U : 3U) : 10U);
         if (run == 2U && sequence == 0U && raw_order_case == 38U)
           message.set_motion_epoch(0U);
+        if (raw_order_case >= 59U && run == 123U)
+          message.set_motion_epoch(category == 2U ? 10U : 9U);
+        if (raw_order_case == 70U && run == 124U && sequence == 0U)
+          message.set_motion_epoch(11U);
         if (run == 124U && sequence == 0U && raw_order_case == 31U)
           message.set_motion_epoch(0U);
         message.set_category(category);
@@ -1617,7 +2201,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         message.set_group_count(group_count);
         if (category == 4U) {
           message.set_final_state(final_state);
-          if (((run == 1U && raw_order_case >= 34U && raw_order_case <= 50U &&
+          if (((run == 1U && raw_order_case >= 34U && raw_order_case <= 58U &&
                 raw_order_case != 41U) ||
                (run >= 2U && raw_order_case >= 43U && raw_order_case <= 50U)))
             message.set_motion_complete(true);
@@ -1633,7 +2217,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }
         std::uint8_t previous_digest[32]{};
         std::copy(previous.begin(), previous.end(), previous_digest);
-        if (run == 2U && (raw_order_case == 5U ||
+        if (run == 2U && (raw_order_case == 5U || raw_order_case == 55U ||
                           (raw_order_case == 12U && sequence == 1U))) previous_digest[0] ^= 1U;
         message.set_previous_chain_sha256(previous_digest);
         std::array<std::uint8_t, wire::DummyAttemptEvidenceV2Codec::kEncodedSize> raw{};
@@ -1816,13 +2400,19 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             result.raw_evidence_pages_written == 6U &&
             result.raw_evidence_last_terminal_written_run == 3U ? 0 : 334;
       }
-      if (raw_order_case >= 34U && raw_order_case <= 42U) {
+      if ((raw_order_case >= 34U && raw_order_case <= 42U) ||
+          (raw_order_case >= 51U && raw_order_case <= 58U)) {
         valid.status.set_core_state(3U);
         valid.status.set_final_state(0U);
         valid.status.set_motion_epoch(3U);
         valid.status.set_management_epoch(7U);
         valid.state.set_motion_epoch(3U);
         valid.state.set_management_epoch(7U);
+        if (raw_order_case >= 51U) {
+          valid.state.set_core_state(4U);
+          valid.state.set_hold_ready(true);
+          valid.state.set_position_valid_mask(63U);
+        }
         std::array<std::uint8_t, 32U> first_group{}, first_terminal{}, next_group{}, next_terminal{};
         if (!send(valid) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
@@ -1845,11 +2435,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                    receipt.final_state == 6U && receipt.chain_valid &&
                    receipt.motion_complete == (raw_order_case != 41U);
              }))) return 308;
-        if (raw_order_case == 35U || raw_order_case == 36U || raw_order_case == 42U) {
+        if (raw_order_case == 35U || raw_order_case == 36U || raw_order_case == 42U ||
+            (raw_order_case >= 52U && raw_order_case <= 54U) || raw_order_case == 58U) {
           // Isolate receipt identity and publication order after the real terminal flush.
           auto receipt = channel->raw_evidence_terminal_flushed();
-          if (raw_order_case == 35U) receipt.boot_epoch = 8U;
-          if (raw_order_case == 36U) receipt.session_id = 9U;
+          if (raw_order_case == 35U || raw_order_case == 52U) receipt.boot_epoch = 8U;
+          if (raw_order_case == 36U || raw_order_case == 53U) receipt.session_id = 9U;
+          if (raw_order_case == 54U) receipt.run_id = 3U;
+          if (raw_order_case == 58U) receipt.chain_valid = false;
           if (raw_order_case == 42U) receipt = {};
           channel->publish_raw_evidence_terminal_flushed(receipt);
         }
@@ -1865,6 +2458,58 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               before.raw_evidence_last_terminal_written_run !=
                   (raw_order_case == 37U ? 0U : 1U)) return 316;
         }
+        if (raw_order_case >= 51U) {
+          auto ongoing = valid;
+          ongoing.send_status = false;
+          if (raw_order_case == 57U) {
+            ongoing.state.set_core_state(6U);
+            ongoing.state.set_hold_ready(false);
+          }
+          const auto start = transport_steady_now_us();
+          std::uint32_t seq = 2U;
+          while (transport_steady_now_us() - start <= 300000U) {
+            if (raw_order_case != 56U) {
+              ongoing.state.set_state_seq(seq++);
+              if (!send(ongoing) || !wait_for([&] {
+                    std::lock_guard<std::mutex> lock(channel->mutex);
+                    State observed;
+                    return wire::DummyJointStateV2Codec::decode(
+                        channel->observation.state.data(), channel->observation.state.size(),
+                        &observed) == wire::CodecResult::kOk &&
+                        observed.state_seq() == ongoing.state.state_seq();
+                  })) return 338;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          }
+          if (raw_order_case != 56U) {
+            ongoing.state.set_state_seq(seq);
+            if (!send(ongoing) || !wait_for([&] {
+                  std::lock_guard<std::mutex> lock(channel->mutex);
+                  State observed;
+                  return wire::DummyJointStateV2Codec::decode(
+                      channel->observation.state.data(), channel->observation.state.size(),
+                      &observed) == wire::CodecResult::kOk &&
+                      observed.state_seq() == ongoing.state.state_seq();
+                })) return 339;
+          }
+          std::lock_guard<std::mutex> lock(channel->mutex);
+          const auto now = transport_steady_now_us();
+          State observed_state;
+          if (wire::DummyJointStateV2Codec::decode(
+                  channel->observation.state.data(), channel->observation.state.size(),
+                  &observed_state) != wire::CodecResult::kOk ||
+              observed_state.core_state() != (raw_order_case == 57U ? 6U : 4U) ||
+              observed_state.hold_ready() != (raw_order_case != 57U) ||
+              observed_state.position_valid_mask() != 63U) return 341;
+          if (channel->observation.status_received_us == 0U ||
+              now - channel->observation.status_received_us <= 250000U ||
+              (raw_order_case != 56U &&
+               (channel->observation.state_received_us == 0U ||
+                now - channel->observation.state_received_us >= 100000U)) ||
+              (raw_order_case == 56U &&
+               (channel->observation.state_received_us == 0U ||
+                now - channel->observation.state_received_us <= 250000U))) return 340;
+        }
         const auto before_page = transport.statistics();
         if (!publish_page(raw_order_case == 39U ? 3U : 2U, 0U, 1U, 1U, 0U,
                           seed_for(raw_order_case == 39U ? 3U : 2U), &next_group) ||
@@ -1874,9 +2519,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                   observed.raw_evidence_failure != 0U;
             })) return 310;
         const auto first_page = transport.statistics();
-        if (raw_order_case != 34U) {
+        if (raw_order_case != 34U && raw_order_case != 51U) {
           transport.stop();
-          return first_page.raw_evidence_failure == 6U &&
+          return first_page.raw_evidence_failure == (raw_order_case == 55U ? 2U : 6U) &&
               first_page.raw_evidence_pages_written == before_page.raw_evidence_pages_written ? 0 : 311;
         }
         if (first_page.raw_evidence_failure != 0U ||
@@ -1921,28 +2566,113 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         return transport.statistics().raw_evidence_failure == 0U &&
             transport.statistics().raw_evidence_pages_written == 4U ? 0 : 315;
       }
-      if (raw_order_case >= 20U && raw_order_case <= 33U) {
+      if ((raw_order_case >= 20U && raw_order_case <= 33U) ||
+          (raw_order_case >= 59U && raw_order_case <= 70U)) {
         const bool refresh = raw_order_case >= 24U;
         const auto motion_run = refresh ? 123U : 121U;
         const auto next_run = refresh ? 124U : 122U;
         std::array<std::uint8_t, 32U> motion_group{}, motion_terminal{};
         std::array<std::uint8_t, 32U> release_page{}, release_terminal{};
-        if (refresh) valid.status.set_core_state(7U);
+        if (refresh) valid.status.set_core_state(cancel_hold_status_variant ? 4U : 7U);
         if (!send(valid) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
               Status observed;
               return wire::DummyDeviceStatusV2Codec::decode(
                   channel->observation.status.data(), channel->observation.status.size(),
                   &observed) == wire::CodecResult::kOk && observed.run_id() == motion_run &&
-                  (!refresh || (observed.core_state() == 7U && observed.final_state() == 0U &&
+                  (!refresh || (observed.core_state() == (cancel_hold_status_variant ? 4U : 7U) && observed.final_state() == 0U &&
                     std::all_of(std::begin(observed.evidence_chain_sha256()),
                         std::end(observed.evidence_chain_sha256()),
                         [](auto byte) { return byte == 0U; })));
-            }) || !publish_page(motion_run, 0U, 2U, 1U, 0U, seed_for(motion_run), &motion_group) ||
-            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; }) ||
-            !publish_page(motion_run, 1U, 4U, 1U, 7U, motion_group, &motion_terminal) ||
+            }) || !publish_page(motion_run, 0U, raw_order_case >= 59U ? 1U : 2U, 1U, 0U, seed_for(motion_run), &motion_group) ||
+            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; })) return 288;
+        if (raw_order_case >= 59U) {
+          std::array<std::uint8_t, 32U> safety_group{};
+          if (!publish_page(motion_run, 1U, 2U, 2U, 0U, motion_group, &safety_group) ||
+              !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 2U; }))
+            return 288;
+          motion_group = safety_group;
+        }
+        if (!publish_page(motion_run, raw_order_case >= 59U ? 2U : 1U, 4U,
+                          raw_order_case >= 59U ? 2U : 1U, 7U, motion_group, &motion_terminal) ||
             !wait_for([&] { return transport.statistics().raw_evidence_last_terminal_written_run == motion_run; }))
           return 288;
+        if (raw_order_case >= 59U) {
+          const auto receipt = channel->raw_evidence_terminal_flushed();
+          if (receipt.boot_epoch != 7U || receipt.session_id != 8U ||
+              receipt.run_id != motion_run || receipt.final_state != 7U ||
+              !receipt.chain_valid || !receipt.safety_hold_valid ||
+              receipt.safety_hold_motion_epoch != 10U) return 357;
+          if(cancel_status_terminal7_variant){
+            auto hold_terminal_status=valid;hold_terminal_status.send_state=false;
+            hold_terminal_status.status.set_core_state(4U);hold_terminal_status.status.set_final_state(7U);
+            std::uint8_t digest[32]{};std::copy(motion_terminal.begin(),motion_terminal.end(),digest);
+            hold_terminal_status.status.set_evidence_chain_sha256(digest);
+            if(cancel_status_bad_flags>=1U && cancel_status_bad_flags<=4U)hold_terminal_status.status.set_final_state(cancel_status_bad_flags==1U?4U:cancel_status_bad_flags==2U?5U:cancel_status_bad_flags==3U?6U:9U);
+            if(cancel_status_bad_flags==5U){digest[0]^=1U;hold_terminal_status.status.set_evidence_chain_sha256(digest);}
+            if(cancel_status_bad_flags==6U){std::fill(std::begin(digest),std::end(digest),0U);hold_terminal_status.status.set_evidence_chain_sha256(digest);}
+            if(cancel_status_bad_flags==7U)hold_terminal_status.status.set_failure_source(1U);
+            if(cancel_status_bad_flags==8U)hold_terminal_status.status.set_failure_axis_mask(1U);
+            if(cancel_status_bad_flags==9U)hold_terminal_status.status.set_first_failure_reason(1U);
+            if(!send(hold_terminal_status) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&observed)==wire::CodecResult::kOk && observed.core_state()==4U && observed.final_state()==hold_terminal_status.status.final_state() && observed.run_id()==motion_run;}))return 363;
+          }
+          auto invalid_receipt = receipt;
+          if (raw_order_case == 60U) invalid_receipt.boot_epoch = 8U;
+          if (raw_order_case == 61U) invalid_receipt.session_id = 9U;
+          if (raw_order_case == 62U) invalid_receipt.run_id = 122U;
+          if (raw_order_case == 63U) invalid_receipt.chain_valid = false;
+          if (raw_order_case == 68U) invalid_receipt.safety_hold_valid = false;
+          if (raw_order_case == 69U) invalid_receipt.safety_hold_motion_epoch = 11U;
+          if ((raw_order_case >= 60U && raw_order_case <= 63U) ||
+              raw_order_case == 68U || raw_order_case == 69U)
+            channel->publish_raw_evidence_terminal_flushed(invalid_receipt);
+          auto ongoing = valid;
+          ongoing.send_status = false;
+          ongoing.state.set_core_state(4U);
+          ongoing.state.set_hold_ready(true);
+          ongoing.state.set_position_valid_mask(63U);
+          if (raw_order_case == 65U) ongoing.state.set_core_state(cancel_state_stopping_notready?7U:6U);
+          if (raw_order_case == 66U || cancel_state_stopping_notready) ongoing.state.set_hold_ready(false);
+          if (raw_order_case == 67U) ongoing.state.set_management_epoch(1U);
+          const auto start = transport_steady_now_us();
+          std::uint32_t seq = 2U;
+          std::uint64_t accepted_state_at = 0U;
+          while (transport_steady_now_us() - start <= 300000U) {
+            if (raw_order_case != 64U || seq == 2U) {
+              ongoing.state.set_state_seq(seq++);
+              if (!send(ongoing) || !wait_for([&] {
+                    std::lock_guard<std::mutex> lock(channel->mutex);
+                    State observed;
+                    return wire::DummyJointStateV2Codec::decode(
+                        channel->observation.state.data(), channel->observation.state.size(),
+                        &observed) == wire::CodecResult::kOk &&
+                        observed.state_seq() == ongoing.state.state_seq() &&
+                        (accepted_state_at = channel->observation.state_received_us) != 0U;
+                  })) return 358;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          }
+          std::lock_guard<std::mutex> lock(channel->mutex);
+          const auto now = transport_steady_now_us();
+          State observed;
+          if (raw_order_case == 64U) {
+            if (accepted_state_at == 0U || now - accepted_state_at <= 250000U) return 359;
+          } else if (wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+                  channel->observation.state.size(), &observed) != wire::CodecResult::kOk ||
+              observed.core_state() != (raw_order_case == 65U ? (cancel_state_stopping_notready?7U:6U) : 4U) ||
+              observed.hold_ready() != (raw_order_case != 66U && !cancel_state_stopping_notready) ||
+              observed.management_epoch() != (raw_order_case == 67U ? 1U : 0U) ||
+              observed.position_valid_mask() != 63U ||
+              (raw_order_case != 64U &&
+               now - channel->observation.state_received_us >= 100000U) ||
+              (raw_order_case == 64U &&
+               now - channel->observation.state_received_us <= 250000U) ||
+              now - channel->observation.status_received_us <= 250000U) return 359;
+          std::fprintf(stderr, "cancel stale-status witness: status_age=%llu state_age=%llu final=%u run=%llu chain=%u\n",
+              (unsigned long long)(now - channel->observation.status_received_us),
+              (unsigned long long)(now - channel->observation.state_received_us),
+              receipt.final_state, (unsigned long long)receipt.run_id, receipt.chain_valid);
+        }
         auto motion_final = valid;
         motion_final.send_state = false;
         motion_final.status.set_core_state(4U);
@@ -1958,6 +2688,13 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                   &observed) == wire::CodecResult::kOk && observed.run_id() == motion_run &&
                   observed.final_state() == 7U;
             }))) return 289;
+        if (raw_order_case == 64U) {
+          // 组合State失鲜安全拒绝：不宣称隔离单个binding年龄谓词。
+          const auto before_stale_page = transport.statistics();
+          if (parameters.max_state_age_us != 250000U ||
+              (before_stale_page.state_stale_stops == 0U &&
+               before_stale_page.heartbeat_stops == 0U)) return 362;
+        }
         const auto statuses_before_page = transport.statistics().status_messages;
         const auto release_run = raw_order_case == 23U ? 120U :
             raw_order_case == 27U ? 122U : next_run;
@@ -1968,9 +2705,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                           raw_order_case == 29U ? 0U : 1U, 0U,
                           seed_for(release_run), &release_page,
                           refresh ? 1U : 3U, release_parent) ||
-            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 3U ||
+            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == (raw_order_case >= 59U ? 4U : 3U) ||
                 transport.statistics().raw_evidence_failure != 0U; })) return 290;
         const auto page_first = transport.statistics();
+        if ((raw_order_case >= 60U && raw_order_case <= 70U) || cancel_status_bad_flags!=0U) {
+          transport.stop();
+          return page_first.raw_evidence_failure == 6U &&
+              page_first.raw_evidence_pages_written == 3U ? 0 : 360;
+        }
         if ((raw_order_case >= 20U && raw_order_case <= 23U) || raw_order_case == 27U) {
           transport.stop();
           return page_first.raw_evidence_failure == 6U &&
@@ -1985,7 +2727,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               page_first.raw_evidence_pages_written == 2U ? 0 : 299;
         }
         if (page_first.raw_evidence_failure != 0U ||
-            page_first.raw_evidence_pages_written != 3U ||
+            page_first.raw_evidence_pages_written != (raw_order_case >= 59U ? 4U : 3U) ||
             page_first.status_messages != statuses_before_page) {
           std::fprintf(stderr, "page-first: failure=%u pages=%llu status_delta=%llu\n",
               static_cast<unsigned>(page_first.raw_evidence_failure),
@@ -2111,7 +2853,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         const auto capture = transport.statistics();
         return capture.raw_evidence_failure == 0U &&
             channel->raw_evidence_failure.load(std::memory_order_acquire) == 0U &&
-            capture.raw_evidence_pages_written == 4U ? 0 : 295;
+            capture.raw_evidence_pages_written == (raw_order_case >= 59U ? 5U : 4U) ? 0 : 295;
       }
       std::array<std::uint8_t, 32U> group_one{}, terminal_one{}, group_two{}, terminal_two{};
       if (!send(valid) || !wait_for([&] {
@@ -2203,7 +2945,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if (transport.statistics().raw_evidence_failure != 0U) return 273;
         std::array<std::uint8_t, 32U> disable_chain{};
         if (!publish_page(2U, 1U, 3U, 2U, 0U, group_two, &disable_chain) ||
-            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 4U ||
+            !wait_for([&] { return transport.statistics().raw_evidence_pages_written == (raw_order_case >= 59U ? 5U : 4U) ||
                 transport.statistics().raw_evidence_failure != 0U; })) return 274;
         if (raw_order_case == 11U || raw_order_case == 12U) {
           transport.stop();
@@ -2357,7 +3099,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stimulus.send_evidence = true;
         auto &message = stimulus.evidence;
         message.set_schema_major(2U);
-        message.set_schema_minor(4U);
+        message.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
         message.set_run_id(run);
         message.set_attempt_id(run);
         message.set_evidence_seq(terminal ? 1U : 0U);
@@ -2480,7 +3222,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     evidence.send_state = false;
     evidence.send_evidence = true;
     evidence.evidence.set_schema_major(2U);
-    evidence.evidence.set_schema_minor(4U);
+    evidence.evidence.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
     evidence.evidence.set_run_id(3U);
     evidence.evidence.set_attempt_id(3U);
     evidence.evidence.set_evidence_seq(0U);
@@ -2926,7 +3668,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   };
   Management::Request authorization;
   authorization.set_schema_major(2U);
-  authorization.set_schema_minor(4U);
+  authorization.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   authorization.set_device_id(device);
   const std::uint8_t client[16]{2U};
   authorization.set_client_instance_id(client);
@@ -3171,16 +3913,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         transport.statistics().unconfirmed_stop_requests == 0U) return 142;
     return 0;
   }
-  if (::poll(&query_response, 1, 3000) != 1) return 144;
-  Management::Request terminal_stop_query;
-  if (::read(stops_input, &terminal_stop_query, sizeof(terminal_stop_query)) !=
-          sizeof(terminal_stop_query) ||
-      terminal_stop_query.operation() != 12U ||
-      terminal_stop_query.queried_operation_id() != stop_request.request_id() ||
-      terminal_stop_query.request_id() == first_stop_query.request_id()) return 145;
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  if (transport.statistics().stop_requests_confirmed != 0U) return 146;
-  if (!uncommitted_stop_mode) {
+  if (!replayed_stop_host) {
+    if (::poll(&query_response, 1, 3000) != 1) return 144;
+    Management::Request terminal_stop_query;
+    if (::read(stops_input, &terminal_stop_query, sizeof(terminal_stop_query)) !=
+            sizeof(terminal_stop_query) ||
+        terminal_stop_query.operation() != 12U ||
+        terminal_stop_query.queried_operation_id() != stop_request.request_id() ||
+        terminal_stop_query.request_id() == first_stop_query.request_id()) return 145;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    if (transport.statistics().stop_requests_confirmed != 0U) return 146;
+  }
+  if (!uncommitted_stop_mode && !replayed_stop_host) {
     auto disabling = valid;
     disabling.send_state = false;
     disabling.status.set_motion_epoch(stop_request.expected_motion_epoch() + 1U);
@@ -3201,7 +3945,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   stop_idle.status.set_management_epoch(stop_request.expected_management_epoch() + 1U);
   stop_idle.status.set_core_state(1U);
   stop_idle.status.set_release_committed(true);
-  stop_idle.status.set_operation_id(900U);
+  stop_idle.status.set_operation_id(exec_expected_stop_operation);
   stop_idle.status.set_transaction_phase(3U);
   stop_idle.state.set_motion_epoch(stop_idle.status.motion_epoch());
   stop_idle.state.set_session_id(0U);
@@ -3213,6 +3957,56 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   stop_idle.state.set_state_seq(stable_sequence + 1U);
   const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
   stop_idle.state.set_raw_motor_position_rev(idle_raw);
+  if (replayed_stop_host) {
+    const auto before_idle = transport.statistics();
+    const auto idle_sent_at = transport_steady_now_us();
+    if (!send(stop_idle) || !wait_for([&] {
+          const auto after = transport.statistics();
+          return after.status_messages > before_idle.status_messages &&
+              after.state_messages > before_idle.state_messages;
+        })) return 356;
+    // Stop失败后授权已失效，Idle可被接纳层拒绝；用真实回调落盘的wire确认消费。
+    if (!wait_for([&] {
+          auto *raw_file = std::fopen(capture_path.c_str(), "rb");
+          if (!raw_file) return false;
+          std::fseek(raw_file, 8L, SEEK_SET);
+          bool idle_status_seen = false, idle_state_seen = false;
+          std::uint8_t header[39]{};
+          std::array<std::uint8_t, RawEvidenceCollector::kMaxRawSize> bytes{};
+          while (std::fread(header, 1U, sizeof(header), raw_file) == sizeof(header)) {
+            const auto size = static_cast<unsigned>(header[1]) |
+                (static_cast<unsigned>(header[2]) << 8U);
+            if (size > bytes.size() || std::fread(bytes.data(), 1U, size, raw_file) != size) break;
+            std::uint64_t received_us = 0U;
+            for (unsigned i = 0U; i < 8U; ++i)
+              received_us |= static_cast<std::uint64_t>(header[3U + i]) << (8U * i);
+            if (received_us < idle_sent_at) continue;
+            Status observed_status;
+            State observed_state;
+            if (header[0] == 3U && wire::DummyDeviceStatusV2Codec::decode(
+                    bytes.data(), size, &observed_status) == wire::CodecResult::kOk)
+              idle_status_seen = idle_status_seen || (observed_status.core_state() == 1U &&
+                  observed_status.operation_id() == 900U &&
+                  observed_status.motion_epoch() == stop_idle.status.motion_epoch() &&
+                  observed_status.management_epoch() == stop_idle.status.management_epoch());
+            if (header[0] == 2U && wire::DummyJointStateV2Codec::decode(
+                    bytes.data(), size, &observed_state) == wire::CodecResult::kOk)
+              idle_state_seen = idle_state_seen || (observed_state.core_state() == 1U &&
+                  observed_state.motion_epoch() == stop_idle.state.motion_epoch() &&
+                  observed_state.management_epoch() == stop_idle.state.management_epoch() &&
+                  observed_state.state_seq() == stop_idle.state.state_seq());
+          }
+          std::fclose(raw_file);
+          return idle_status_seen && idle_state_seen;
+        })) return 361;
+    std::fprintf(stderr, "跨exec旧Idle已由回调raw消费：op900及motion/management/State seq匹配\n");
+    if (!wait_for([&] { return transport.statistics().unconfirmed_stop_requests != 0U; }))
+      return 354;
+    transport.stop();
+    const auto stats = transport.statistics();
+    return stats.stop_requests_confirmed == 0U &&
+        stats.unconfirmed_stop_requests != 0U ? 0 : 355;
+  }
   if (uncommitted_idle_status_mode) {
     stop_idle.status.set_release_committed(false);
     stop_idle.status.set_management_epoch(stop_idle.status.management_epoch() + 1U);
@@ -3425,6 +4219,53 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
   return result;
 }
 int main(int argc, char **argv) {
+  // 仅新增固定Source测试模式；普通registered场景保原路径。
+  if(argc==3 && std::strncmp(argv[2],"cancel_coordination_",20U)==0) {
+    source_cancel_coordination=true;
+    const char* mode=argv[2]+20U;
+    source_cancel_fault=std::strcmp(mode,"positive")==0 ? nullptr : mode;
+    argv[2]=const_cast<char*>("running_deactivate");
+  }
+
+  cancel_hold_case=0U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_fresh_state")==0) cancel_hold_case=71U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_receipt_boot")==0) cancel_hold_case=72U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_receipt_session")==0) cancel_hold_case=73U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_receipt_run")==0) cancel_hold_case=74U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_receipt_chain")==0) cancel_hold_case=75U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_stale_state")==0) cancel_hold_case=76U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_non_hold_state")==0) cancel_hold_case=77U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_not_ready_state")==0) cancel_hold_case=78U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_management_mismatch")==0) cancel_hold_case=79U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_no_safety_hold")==0) cancel_hold_case=80U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_safety_motion")==0) cancel_hold_case=81U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_successor_motion")==0) cancel_hold_case=82U;
+  cancel_hold_status_variant=cancel_hold_case>=71U && cancel_hold_case<=82U;
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_fresh_state")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_old_final0")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=false;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_stopping_state_not_ready")==0){cancel_hold_case=77U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=true;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_final4")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=1U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_final5")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=2U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_final6")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=3U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_final9")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=4U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_wrong_status_chain")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=5U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_zero_status_chain")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=6U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_failure_source")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=7U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_failure_axis")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=8U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_failure_reason")==0){cancel_hold_case=71U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=9U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_bad_receipt_boot")==0){cancel_hold_case=72U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_bad_receipt_session")==0){cancel_hold_case=73U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_bad_receipt_run")==0){cancel_hold_case=74U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_bad_receipt_chain")==0){cancel_hold_case=75U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_stale_state")==0){cancel_hold_case=76U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_non_hold_state")==0){cancel_hold_case=77U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_not_ready_state")==0){cancel_hold_case=78U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_management_mismatch")==0){cancel_hold_case=79U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_no_safety_hold")==0){cancel_hold_case=80U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_bad_safety_motion")==0){cancel_hold_case=81U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_terminal7_bad_successor_motion")==0){cancel_hold_case=82U;cancel_hold_status_variant=true;cancel_status_terminal7_variant=true;cancel_status_bad_flags=0U;cancel_state_stopping_notready=false;}
+  if(cancel_hold_status_variant)std::fprintf(stderr,"CANCEL_HOLD_VARIANT_MODE=%u ORIGINAL_BASE_MODE=%u STATUS=Hold4_final0\n",cancel_hold_case,cancel_hold_case-12U);
+
   if (argc == 2 && std::strcmp(argv[1], "peer_publish_backpressure") == 0)
     return test_peer_publish_backpressure();
   if (argc == 2 && std::strcmp(argv[1], "peer_state_queue_full_once") == 0) {
@@ -3453,7 +4294,9 @@ int main(int argc, char **argv) {
   const bool raw_bad_release_mode = argc == 3 && std::strcmp(argv[2], "raw_bad_release") == 0;
   const bool raw_incomplete_mode = argc == 3 && std::strcmp(argv[2], "raw_incomplete") == 0;
   const bool raw_many_mode = argc == 3 && std::strcmp(argv[2], "raw_many") == 0;
-  const unsigned raw_order_case = argc == 3 && std::strcmp(argv[2], "raw_order") == 0 ? 1U :
+  const unsigned raw_order_case = argc == 3 && std::strcmp(argv[2],"hold_state_ack_before_status")==0 ?87U : argc == 3 && std::strcmp(argv[2],"hold_no_ACK")==0 ?88U : argc == 3 && std::strcmp(argv[2],"hold_partial_SENT")==0 ?89U : argc == 3 && std::strcmp(argv[2],"hold_wrong_epoch")==0 ?90U : argc == 3 && std::strcmp(argv[2],"hold_Run_ACK")==0 ?91U : argc == 3 && std::strcmp(argv[2],"hold_wrong_session")==0 ?92U : argc == 3 && std::strcmp(argv[2],"hold_stale_ACK")==0 ?93U : argc == 3 && std::strcmp(argv[2],"hold_wrong_reference")==0 ?94U : argc == 3 && std::strcmp(argv[2],"hold_wrong_boot")==0 ?95U : argc == 3 && std::strcmp(argv[2],"hold_Stop_before_status")==0 ?96U : argc == 3 && std::strcmp(argv[2],"raw_fault_no_RUN_anchor")==0 ?84U :
+      argc == 3 && std::strcmp(argv[2],"raw_fault_wrong_boot")==0 ?85U :
+      argc == 3 && std::strcmp(argv[2],"raw_fault_stale_produced")==0 ?86U : argc == 3 && std::strcmp(argv[2],"raw_fault_after_public_invalidate")==0 ? 83U : cancel_hold_status_variant ? cancel_hold_case-12U : argc == 3 && std::strcmp(argv[2], "raw_order") == 0 ? 1U :
       argc == 3 && std::strcmp(argv[2], "raw_order_bad_boot") == 0 ? 2U :
       argc == 3 && std::strcmp(argv[2], "raw_order_bad_session") == 0 ? 3U :
       argc == 3 && std::strcmp(argv[2], "raw_order_bad_kind") == 0 ? 4U :
@@ -3501,12 +4344,47 @@ int main(int argc, char **argv) {
       argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_bad_run") == 0 ? 47U :
       argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_no_terminal") == 0 ? 48U :
       argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_late_wrong_chain") == 0 ? 49U :
-      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_late_correct_chain") == 0 ? 50U : 0U;
+      argc == 3 && std::strcmp(argv[2], "raw_order_multi_successor_late_correct_chain") == 0 ? 50U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_status_fresh_state") == 0 ? 51U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_status_bad_boot") == 0 ? 52U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_status_bad_session") == 0 ? 53U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_status_bad_run") == 0 ? 54U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_status_bad_chain") == 0 ? 55U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_state") == 0 ? 56U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_status_non_hold_state") == 0 ? 57U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_refresh_hold_stale_status_bad_receipt_chain") == 0 ? 58U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_fresh_state") == 0 ? 59U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_bad_receipt_boot") == 0 ? 60U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_bad_receipt_session") == 0 ? 61U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_bad_receipt_run") == 0 ? 62U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_bad_receipt_chain") == 0 ? 63U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_stale_state") == 0 ? 64U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_non_hold_state") == 0 ? 65U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_not_ready_state") == 0 ? 66U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_management_mismatch") == 0 ? 67U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_no_safety_hold") == 0 ? 68U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_bad_safety_motion") == 0 ? 69U :
+      argc == 3 && std::strcmp(argv[2], "raw_order_cancel_stale_status_bad_successor_motion") == 0 ? 70U :
+      0U;
   const bool raw_capture_mode = raw_bad_release_mode || raw_incomplete_mode || raw_many_mode || raw_order_case != 0U ||
       (argc == 3 && std::strcmp(argv[2], "raw_release_receipt") == 0) ||
       (argc == 3 && std::strcmp(argv[2], "raw_direct_receipt") == 0) ||
       (argc == 3 && std::strcmp(argv[2], "raw_capture") == 0);
-  const unsigned complete_order_mode = argc == 3 && std::strcmp(argv[2],"complete_status_first")==0 ? 1U :
+  const unsigned complete_order_mode = argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_wrong_ack_seq")==0 ? 40U :
+      argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_partial_sent")==0 ? 41U :
+      argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_unconfirmed_sent")==0 ? 37U :
+      argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_wrong_epoch")==0 ? 38U :
+      argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_expired_pending")==0 ? 39U :
+      argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_same_prime")==0 ? 35U :
+      argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_divergent_prime")==0 ? 36U :
+      argc == 3 && std::strcmp(argv[2],"complete_retired_pending_wrong_hold_boot")==0 ? 31U :
+      argc == 3 && std::strcmp(argv[2],"complete_retired_pending_wrong_hold_epoch")==0 ? 32U :
+      argc == 3 && std::strcmp(argv[2],"complete_retired_pending_divergent_prime")==0 ? 33U :
+      argc == 3 && std::strcmp(argv[2],"complete_retired_pending_stale_hold_payload")==0 ? 34U :
+      argc == 3 && std::strcmp(argv[2],"complete_same_prime_fresh_state_pending_cleanup")==0 ? 30U :
+      argc == 3 && std::strcmp(argv[2],"complete_retry_status_first")==0 ? 28U :
+      argc == 3 && std::strcmp(argv[2],"complete_retry_wrong_status_epoch")==0 ? 29U :
+      argc == 3 && std::strcmp(argv[2],"complete_status_first")==0 ? 1U :
       argc == 3 && std::strcmp(argv[2],"complete_state_first")==0 ? 2U :
       argc == 3 && std::strcmp(argv[2],"complete_response_first")==0 ? 3U :
       argc == 3 && std::strcmp(argv[2],"complete_unsolicited_jump")==0 ? 4U :
@@ -3533,7 +4411,15 @@ int main(int argc, char **argv) {
       argc == 3 && std::strcmp(argv[2],"complete_refresh_stale_authority")==0 ? 26U :
       argc == 3 && std::strcmp(argv[2],"complete_export_refresh_ack_unconfirmed")==0 ? 27U : 0U;
   const bool default_ack_age_mode = argc == 3 && std::strcmp(argv[2], "default_ack_age") == 0;
-  const unsigned release_deactivate_mode = argc == 3 &&
+  const unsigned release_deactivate_mode = argc == 3 && std::strcmp(argv[2],"release_committed_idle_status_gap")==0 ? 18U :
+      argc == 3 && std::strcmp(argv[2],"release_stopping_combined_stale_candidate")==0 ? 17U :
+      argc == 3 && std::strcmp(argv[2],"release_stopping_wrong_receipt_op")==0 ? 12U :
+      argc == 3 && std::strcmp(argv[2],"release_stopping_wrong_receipt_epoch")==0 ? 13U :
+      argc == 3 && std::strcmp(argv[2],"release_stopping_wrong_receipt_management")==0 ? 14U :
+      argc == 3 && std::strcmp(argv[2],"release_stopping_pending_receipt")==0 ? 15U :
+      argc == 3 && std::strcmp(argv[2],"release_stopping_uncommitted_receipt")==0 ? 16U :
+      argc == 3 && std::strcmp(argv[2],"release_stopping_committed_idle_proof")==0 ? 11U :
+      argc == 3 &&
       (std::strcmp(argv[2], "released_idle_deactivate") == 0 ||
        std::strcmp(argv[2], "raw_release_receipt") == 0) ? 1U :
       argc == 3 && std::strcmp(argv[2], "raw_direct_receipt") == 0 ? 7U :
@@ -3545,6 +4431,8 @@ int main(int argc, char **argv) {
       argc == 3 && std::strcmp(argv[2], "released_idle_heartbeat_gap") == 0 ? 8U :
       argc == 3 && std::strcmp(argv[2], "released_idle_before_reply") == 0 ? 9U :
       argc == 3 && std::strcmp(argv[2], "released_no_final_idle") == 0 ? 10U : 0U;
+  release_receipt_fault=release_deactivate_mode>=12U && release_deactivate_mode<=16U
+      ? release_deactivate_mode-11U : 0U;
   const unsigned ticket_mode = argc == 3 && std::strcmp(argv[2], "ticket_refresh") == 0 ? 1U :
       argc == 3 && std::strcmp(argv[2], "ticket_stale") == 0 ? 2U :
       argc == 3 && std::strcmp(argv[2], "ticket_authority") == 0 ? 3U : 0U;
@@ -3556,6 +4444,12 @@ int main(int argc, char **argv) {
       std::strcmp(argv[2], "stop_uncommitted_terminal") == 0;
   const bool uncommitted_idle_status_mode = argc == 3 &&
       std::strcmp(argv[2], "stop_uncommitted_idle_status") == 0;
+  // 只在原完整six_axis场景核原Worker诊断；不把仅sent的running_deactivate冒充confirmed。
+  const bool verify_stop_policy_diag = six_axis && argc == 2;
+  std::FILE *diag_file = verify_stop_policy_diag ? std::tmpfile() : nullptr;
+  const int saved_stderr = verify_stop_policy_diag ? ::dup(STDERR_FILENO) : -1;
+  if (verify_stop_policy_diag && (!diag_file || saved_stderr < 0 ||
+      ::dup2(::fileno(diag_file), STDERR_FILENO) < 0)) return 701;
   const auto result = run_component_case(six_axis,
       argc == 3 && ticket_mode == 0U && !sequence_rebase_mode && !uncommitted_stop_mode && !uncommitted_idle_status_mode && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
           !inactive_prime_mode && !cold_idle_gap_mode && !cold_fault_gap_mode && !raw_capture_mode &&
@@ -3566,6 +4460,35 @@ int main(int argc, char **argv) {
       raw_capture_mode, raw_bad_release_mode, raw_incomplete_mode, raw_many_mode, raw_order_case,
       complete_order_mode, release_deactivate_mode, ticket_mode, reject_during_ack_mode,
       sequence_rebase_mode, uncommitted_stop_mode, uncommitted_idle_status_mode);
+  if (verify_stop_policy_diag) {
+    std::fflush(stderr);
+    ::dup2(saved_stderr, STDERR_FILENO); ::close(saved_stderr);
+    std::rewind(diag_file);
+    char line[2048]{};
+    unsigned matches=0U;
+    while (std::fgets(line, sizeof(line), diag_file)) {
+      std::fputs(line, stderr); // 原件保留，不改原错误/退出码。
+      if (std::strncmp(line, "STOP_POLICY_DIAG ", 17U)!=0) continue;
+      unsigned version=0U, known=0U, ref=0U, motion=0U, mgmt=0U, profile=0U, mask=0U;
+      unsigned long long started=0U, confirmed=0U, deadline=0U, timeout=0U, rid=0U, opid=0U, boot=0U, session=0U;
+      const int fields=std::sscanf(line,
+          "STOP_POLICY_DIAG version=%u clock=HOST_TRANSPORT_STEADY_US start_known=%u started_us=%llu confirmed_us=%llu deadline_us=%llu timeout_us=%llu request_id=%llu operation_id=%llu boot=%llu session=%llu ref=%u motion=%u mgmt=%u profile=%u mask=%u",
+          &version,&known,&started,&confirmed,&deadline,&timeout,&rid,&opid,&boot,&session,&ref,&motion,&mgmt,&profile,&mask);
+      if (fields!=15 || version!=1U || known!=1U || started==0U || confirmed<started ||
+          deadline-started!=timeout || timeout!=1000000U || confirmed-started>timeout ||
+          rid==0U || opid!=exec_expected_stop_operation || boot!=7U || session!=18U ||
+          ref==0U || motion==0U || mgmt==0U || profile!=1U || mask!=63U) {
+        std::fclose(diag_file); return result!=0 ? result : 702;
+      }
+      ++matches;
+    }
+    std::fclose(diag_file);
+    if (result!=0) return result;
+    if (matches!=1U) {
+      std::fprintf(stderr,"原confirmed回调缺唯一原Host起止诊断：events=%u\n",matches);
+      return 703;
+    }
+  }
   if (result != 0 || !six_axis || argc != 2) return result;
   return run_component_case(true, false, true);
 }

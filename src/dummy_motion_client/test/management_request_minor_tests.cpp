@@ -10,16 +10,16 @@ struct Transport : dummy_motion_client::ManagementTransport {
     std::optional<std::vector<std::uint8_t>> poll() override { return {}; }
   };
 
-  bool decoded_minor4 = false;
+  bool decoded_current_minor = false;
   dummy_motion_client::ManageRequest sent{};
 
   std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &bytes) override {
     dummy_motion_client::ManageRequest request;
-    decoded_minor4 = wire::DummyManageV2RequestCodec::decode(
+    decoded_current_minor = wire::DummyManageV2RequestCodec::decode(
         bytes.data(), bytes.size(), &request) == wire::CodecResult::kOk &&
-        request.schema_minor() == 4U;
+        request.schema_minor() == dp::protocol::dummy_robot_v2::kSchemaMinor;
     sent = request;
-    return decoded_minor4 ? std::make_unique<Handle>() : nullptr;
+    return decoded_current_minor ? std::make_unique<Handle>() : nullptr;
   }
 };
 }  // namespace
@@ -28,7 +28,7 @@ int main() {
   Transport transport;
   dummy_motion_client::WireManagementClient client(transport);
   dummy_motion_client::ManageRequest request;
-  if (client.submit(request, 123U) == 0U || !transport.decoded_minor4) return 1;
+  if (client.submit(request, 123U) == 0U || !transport.decoded_current_minor) return 1;
   // A second client gets the same first sequence after SetPermit material is bound.
   Transport permit_transport;
   dummy_motion_client::WireManagementClient permit_client(permit_transport);

@@ -442,3 +442,23 @@ while True:
         if runner.group_members(process.pid):
             os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=1)
+
+
+def test_explicit_approved_stop_budget_reaches_launch_without_freshness_change(tmp_path, monkeypatch):
+    calls=[]
+    monkeypatch.setattr(runner, "run_session", lambda *args: calls.append(args) or 0)
+    monkeypatch.setattr(runner, "deployment_tty", lambda path: Path("/dev/fake"))
+    assert runner.main(["--deployment-paths", str(tmp_path/"deployment.json"),
+        "--activation-sha256", "a"*64, "--ros-limits-json", str(tmp_path/"limits.json"),
+        "--stop-confirmation-timeout-us", "300000"]) == 0
+    assert "stop_confirmation_timeout_us:=300000" in calls[0][0]
+    assert not any(s.startswith("host_state_max_age_us:=") for s in calls[0][0])
+
+
+@pytest.mark.parametrize("value", ["250000", "300001", "1000000", "-1", "300000.0"])
+def test_session_rejects_unapproved_total_stop_budget(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(runner, "run_session", lambda *args: pytest.fail("session started"))
+    with pytest.raises(SystemExit):
+        runner.main(["--deployment-paths", str(tmp_path/"deployment.json"),
+            "--activation-sha256", "a"*64, "--ros-limits-json", str(tmp_path/"limits.json"),
+            "--stop-confirmation-timeout-us", value])

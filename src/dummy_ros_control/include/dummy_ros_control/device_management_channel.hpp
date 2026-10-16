@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -28,11 +29,18 @@ struct RawEvidenceTerminalFlushed {
   std::uint64_t run_id = 0U;
   std::uint64_t parent_run_id = 0U;
   std::uint8_t attempt_kind = 0U, final_state = 0U;
-  std::uint8_t first_failure_source = 0U, first_failure_axis_mask = 0U;
+  std::uint16_t first_failure_source = 0U;
+  std::uint8_t first_failure_axis_mask = 0U;
   bool evidence_lost = false, motion_complete = false;
   bool release_committed = false, chain_valid = false;
   std::uint32_t safety_hold_motion_epoch = 0U;
   bool safety_hold_valid = false;
+  std::uint32_t attempt_motion_epoch=0U, fault_stop_motion_epoch=0U;
+  std::uint64_t terminal_received_us=0U;
+  std::array<std::uint8_t,32> terminal_chain{};
+  bool full_fault_groups_valid=false;
+  std::array<std::array<std::uint8_t,32>,4> identity_hashes{};
+  std::uint32_t terminal_group_count=0U;
 };
 struct HoldDrainSnapshot {
   std::uint64_t boot_epoch=0U, session_id=0U, processed_generation=0U;
@@ -84,6 +92,20 @@ struct DeviceManagementChannel {
     if (receipt.run_id > raw_evidence_first_page_.run_id)
       raw_evidence_first_page_ = receipt;
   }
+  DeviceManagementObservation raw_cleanup_observation() const noexcept {
+    std::lock_guard<std::mutex> lock(raw_cleanup_mutex_);return ready.load(std::memory_order_acquire) && raw_cleanup_generation_.load(std::memory_order_acquire)!=0U?raw_cleanup_:DeviceManagementObservation{};
+  }
+  std::uint64_t raw_cleanup_generation() const noexcept {return raw_cleanup_generation_.load(std::memory_order_acquire);}
+  void reset_raw_cleanup_lifetime() noexcept {
+    std::lock_guard<std::mutex> lock(raw_cleanup_mutex_);const auto generation=raw_cleanup_generation_.load(std::memory_order_relaxed);
+    raw_cleanup_generation_=generation==0U || generation==UINT64_MAX?0U:generation+1U;raw_cleanup_={};
+  }
+  void publish_raw_cleanup_observation(bool state,const std::uint8_t* raw,std::size_t size,std::uint64_t received,bool producer_valid,std::uint64_t generation) noexcept {
+    std::lock_guard<std::mutex> lock(raw_cleanup_mutex_);
+    if(!ready.load(std::memory_order_acquire) || generation==0U || generation!=raw_cleanup_generation_.load(std::memory_order_acquire))return;
+    if(state && size==raw_cleanup_.state.size()) {std::copy_n(raw,size,raw_cleanup_.state.begin());raw_cleanup_.state_received_us=producer_valid?received:0U;}
+    if(!state && size==raw_cleanup_.status.size()) {std::copy_n(raw,size,raw_cleanup_.status.begin());raw_cleanup_.status_received_us=received;}
+  }
   const TransportParameters parameters;
   std::mutex mutex;
   std::atomic<bool> ready{false};
@@ -97,6 +119,9 @@ struct DeviceManagementChannel {
   DeviceManagementObservation observation;
   HoldDrainSnapshot hold_drain;
  private:
+  std::atomic<std::uint64_t> raw_cleanup_generation_{1U};
+  mutable std::mutex raw_cleanup_mutex_;
+  DeviceManagementObservation raw_cleanup_{};
   std::mutex request_sequence_mutex_;
   std::uint32_t last_request_sequence_ = 0U;
   mutable std::mutex raw_evidence_first_page_mutex_;

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "dummy_motion_client/goal_timeline.hpp"
 
 #include <chrono>
@@ -20,6 +21,7 @@ const char *name(TimelineEvent::Kind kind) {
     case TimelineEvent::Kind::kTerminalAborted: return "terminal_aborted";
     case TimelineEvent::Kind::kHold: return "pre_release_hold";
     case TimelineEvent::Kind::kRelease: return "post_release_status";
+    case TimelineEvent::Kind::kFaultCleanup: return "fault_cleanup_confirmed";
   }
   return "invalid";
 }
@@ -43,6 +45,11 @@ void row(std::ostream &output,const TimelineEvent &event) {
          << ',' << (event.kind==TimelineEvent::Kind::kRelease ? event.release_operation_id : 0U)
          << ',' << (event.kind==TimelineEvent::Kind::kTerminalCanceled ? event.cancel_request_id : 0U)
          << ',' << (event.kind==TimelineEvent::Kind::kTerminalCanceled ? event.cancel_operation_id : 0U);
+  if(event.kind==TimelineEvent::Kind::kFaultCleanup) {
+    const auto &p=event.fault_cleanup;
+    output << ',' << p.attempt_epoch << ',' << p.active_epoch << ',' << p.stop_epoch << ',' << p.failure_source;
+    for(auto b:p.terminal_chain) output << ',' << static_cast<unsigned>(b);
+  }
   output << '\n';
 }
 }  // namespace
@@ -85,7 +92,7 @@ bool GoalTimeline::record(TimelineEvent event) noexcept {
   const auto kind=event.kind;
   bool valid=false;
   if(kind==TimelineEvent::Kind::kAccepted) {
-    valid=!active_ && !release_recorded_ && event.identity.boot!=0 && event.identity.session!=0;
+    valid=!active_ && !release_recorded_ && !fault_cleanup_recorded_ && event.identity.boot!=0 && event.identity.session!=0;
     if(valid) { current_=event; active_=true; before_=after_=feedback_=terminal_=false; }
   } else if(active_ && event.uuid==current_.uuid) {
     event.trajectory_sha256=current_.trajectory_sha256;
@@ -100,10 +107,23 @@ bool GoalTimeline::record(TimelineEvent event) noexcept {
       if(valid) { after_=true; run_identity_=event.identity; }
     } else if(kind==TimelineEvent::Kind::kFeedback || kind==TimelineEvent::Kind::kTerminalSuccess ||
               kind==TimelineEvent::Kind::kTerminalCanceled || kind==TimelineEvent::Kind::kTerminalAborted ||
-              kind==TimelineEvent::Kind::kHold) {
+              kind==TimelineEvent::Kind::kHold || kind==TimelineEvent::Kind::kFaultCleanup) {
       valid=after_ && same_authority(run_identity_,event.identity) &&
         run_identity_.run_id==event.identity.run_id && !terminal_;
-      if(kind==TimelineEvent::Kind::kHold) {
+      if(kind==TimelineEvent::Kind::kFaultCleanup) {
+        const auto &p=event.fault_cleanup;
+        valid=after_ && terminal_ && terminal_aborted_ && same_authority(run_identity_,event.identity) &&
+          run_identity_.run_id==event.identity.run_id && event.identity.motion_epoch==run_identity_.motion_epoch &&
+          p.boot==run_identity_.boot && p.session==run_identity_.session && p.run==run_identity_.run_id &&
+          p.active_epoch==run_identity_.motion_epoch && p.attempt_epoch!=0U && p.active_epoch>=p.attempt_epoch &&
+          p.active_epoch-p.attempt_epoch<=1U && p.active_epoch!=UINT32_MAX && p.stop_epoch==p.active_epoch+1U &&
+          p.final_state==4U && (p.failure_source==0x1003U || p.failure_source==0x100aU) && p.axis_mask==63U && p.full_groups_valid && p.chain_valid &&
+          p.release_committed && !p.lost && !p.motion_complete && p.current_fault_clear_verified &&
+          std::any_of(p.terminal_chain.begin(),p.terminal_chain.end(),[](auto b){return b!=0U;}) &&
+          event.status_core_state==9U && event.state_core_state==9U && event.axis_mask==63U &&
+          event.release_request_id==0U && event.release_operation_id==0U;
+        if(valid) {active_=false;fault_cleanup_recorded_=true;++goals_;}
+      } else if(kind==TimelineEvent::Kind::kHold) {
         valid=after_ && terminal_ && same_authority(run_identity_,event.identity) &&
           run_identity_.run_id==event.identity.run_id;
         if(valid) { active_=false; ++goals_; }
@@ -111,7 +131,7 @@ bool GoalTimeline::record(TimelineEvent event) noexcept {
         if(valid) feedback_=true;
       } else {
         valid=valid && feedback_;
-        if(valid) terminal_=true;
+        if(valid) {terminal_=true;terminal_aborted_=kind==TimelineEvent::Kind::kTerminalAborted;}
       }
     } else if(kind==TimelineEvent::Kind::kRelease) {
       valid=false;
@@ -157,7 +177,7 @@ void GoalTimeline::write_loop() {
 
 void GoalTimeline::close() {
   if(closing_.exchange(true)) return;
-  if(active_ || goals_==0 || !release_recorded_) failed_=true;
+  if(active_ || goals_==0 || (!release_recorded_ && !fault_cleanup_recorded_)) failed_=true;
   cv_.notify_one();
   if(writer_.joinable()) writer_.join();
   if(output_) {

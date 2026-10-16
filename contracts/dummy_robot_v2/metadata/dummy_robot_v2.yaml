@@ -1,6 +1,6 @@
 profile_name: dummy_robot_v2
 namespace: dummy_robot_v2
-schema: {major: 2, minor: 4}
+schema: {major: 2, minor: 5}
 deployment: {product_name: dummy_robot, node_name: ref_control}
 zenoh:
   route_template: dpsdk/{product}/{device_id}/{node}/{endpoint}

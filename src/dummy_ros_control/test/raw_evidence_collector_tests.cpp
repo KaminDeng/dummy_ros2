@@ -61,7 +61,7 @@ RawEvidencePage page(std::uint64_t run, std::uint32_t seq,
   if (group_count == UINT32_MAX) group_count = terminal && seq == 0U ? 0U : 1U;
   wire::DummyAttemptEvidenceV2 message{};
   message.set_schema_major(2U);
-  message.set_schema_minor(4U);
+  message.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   message.set_run_id(run);
   message.set_attempt_id(run);
   message.set_evidence_seq(seq);
@@ -217,7 +217,7 @@ bool test_management_wire_records() {
   if (!collector.start(path)) return false;
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(4U);
+  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   std::uint8_t client[16]{};
   client[0] = 1U;
   request.set_client_instance_id(client);
@@ -234,7 +234,7 @@ bool test_management_wire_records() {
       wire::CodecResult::kOk) return false;
   wire::DummyManageV2Response response{};
   response.set_schema_major(2U);
-  response.set_schema_minor(4U);
+  response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   response.set_client_instance_id(client);
   response.set_request_id(80U);
   response.set_boot_epoch(11U);
@@ -278,11 +278,11 @@ bool test_management_wire_records() {
 bool test_management_offers_require_open_capture() {
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(4U);
+  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   std::array<std::uint8_t, wire::DummyManageV2RequestCodec::kEncodedSize> request_raw{};
   wire::DummyManageV2Response response{};
   response.set_schema_major(2U);
-  response.set_schema_minor(4U);
+  response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   std::array<std::uint8_t, wire::DummyManageV2ResponseCodec::kEncodedSize> response_raw{};
   if (wire::DummyManageV2RequestCodec::encode(request, request_raw.data(), request_raw.size()) !=
           wire::CodecResult::kOk ||
@@ -334,7 +334,7 @@ bool test_management_wrong_ids_are_preserved() {
   if (!collector.start(path)) return false;
   wire::DummyManageV2Response response{};
   response.set_schema_major(2U);
-  response.set_schema_minor(4U);
+  response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   response.set_request_id(999U);
   response.set_run_id(4U);
   response.set_boot_epoch(11U);
@@ -361,7 +361,7 @@ bool test_management_wrong_ids_are_preserved() {
 bool test_management_length_fails_closed() {
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(4U);
+  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   request.set_request_id(80U);
   request.set_request_seq(80U);
   std::array<std::uint8_t, wire::DummyManageV2RequestCodec::kEncodedSize> raw{};
@@ -537,7 +537,7 @@ bool test_management_overflow_with_running_writer() {
   }
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(4U);
+  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   std::array<std::uint8_t, wire::DummyManageV2RequestCodec::kEncodedSize> raw{};
   bool accepted = wire::DummyManageV2RequestCodec::encode(request, raw.data(), raw.size()) ==
       wire::CodecResult::kOk;

@@ -53,6 +53,15 @@ def validate_host_state_max_age_us(value):
     return int(value)
 
 
+def validate_stop_confirmation_timeout_us(value):
+    # 原默认0回退保留；仅接受本轮明确批准的独立300ms总确认预算。
+    if type(value) is int and value in (0, 300000):
+        return value
+    if type(value) is str and value in ("0", "300000"):
+        return int(value)
+    raise ValueError("stop_confirmation_timeout_us must be 0 or approved 300000")
+
+
 def _unique_pairs(pairs):
     values = {}
     for key, value in pairs:
@@ -112,7 +121,7 @@ def load_deployment(paths_file, expected_activation_sha256, usb_verifier):
     candidate = _parse_object(candidate_bytes, candidate_path)
     if (activation.get("schema") != "dummy_no_load_dev_activation_v1" or
             activation.get("scope") != "NO_LOAD_DEV" or
-            activation.get("basis") != "NO_LOAD_DEV_FUNCTIONAL" or
+            activation.get("basis") not in ("NO_LOAD_DEV_FUNCTIONAL", "NO_LOAD_DEV_FUNCTIONAL_LIMITED") or
             activation.get("qualification") != "UNQUALIFIED" or
             activation.get("candidate_manifest_sha256") != hashlib.sha256(
                 candidate_bytes).hexdigest() or
@@ -200,8 +209,11 @@ def validate_goal_timeline_path(path, report_root, raw_evidence_path):
 
 def hardware_mappings(joints, activation, endpoint, device, client,
                       control_period_us, state_publish_period_us,
-                      raw_evidence_path="", host_state_max_age_us=NO_LOAD_STATE_MAX_AGE_US):
+                      raw_evidence_path="", host_state_max_age_us=NO_LOAD_STATE_MAX_AGE_US,
+                      stop_confirmation_timeout_us=0):
     host_state_max_age_us = validate_host_state_max_age_us(str(host_state_max_age_us))
+    stop_confirmation_timeout_us = validate_stop_confirmation_timeout_us(
+        stop_confirmation_timeout_us)
     mappings = {
         "endpoint": endpoint, "device_id": device,
         "client_instance_id": client, "profile_id": "201", "configured_mask": "63",
@@ -219,6 +231,7 @@ def hardware_mappings(joints, activation, endpoint, device, client,
         "state_publish_period_us": str(state_publish_period_us),
         "max_state_age_us": str(host_state_max_age_us),
         "heartbeat_stop_budget_us": str(host_state_max_age_us),
+        "stop_confirmation_timeout_us": str(stop_confirmation_timeout_us),
     }
     if raw_evidence_path:
         mappings["raw_evidence_path"] = raw_evidence_path
@@ -272,13 +285,19 @@ def _start_real(context):
         goal_timeline_path = validate_goal_timeline_path(
             LaunchConfiguration("goal_timeline_path").perform(context),
             report_root, raw_evidence_path)
+        if activation.get("basis") == "NO_LOAD_DEV_FUNCTIONAL_LIMITED":
+            if (not raw_evidence_path or not goal_timeline_path or
+                    activation.get("goal_timeline_path") != goal_timeline_path):
+                raise ValueError("LIMITED requires pinned one-shot timeline and complete raw capture")
         host_state_max_age_us = validate_host_state_max_age_us(
             LaunchConfiguration("host_state_max_age_us").perform(context))
         mappings = {
             **hardware_mappings(
                 joints, activation, paths["endpoint"], paths["device_id"], client,
                 limits["control_period_us"], limits["state_publish_period_us"],
-                raw_evidence_path, host_state_max_age_us),
+                raw_evidence_path, host_state_max_age_us,
+                validate_stop_confirmation_timeout_us(
+                    LaunchConfiguration("stop_confirmation_timeout_us").perform(context))),
             **planning_mappings(joints),
         }
         xacro_file = share / "config" / "dummy_ref_real_6dof.urdf.xacro"
@@ -344,5 +363,6 @@ def generate_launch_description():
         DeclareLaunchArgument("raw_evidence_report_root", default_value=""),
         DeclareLaunchArgument("goal_timeline_path", default_value=""),
         DeclareLaunchArgument("host_state_max_age_us", default_value="250000"),
+        DeclareLaunchArgument("stop_confirmation_timeout_us", default_value="0"),
         OpaqueFunction(function=_start_real),
     ])

@@ -2,6 +2,7 @@
 #include "dp_comm/dp_comm.hpp"
 #include "dp_dummy_robot_v2_dp_comm.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
+#include "dummy_ros_control/management_admission_retry.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -35,15 +36,51 @@ std::uint64_t management_now_us() noexcept {
 struct DpManagementTransport::Impl {
   struct SharedHandle final : ManagementTransport::RequestHandle {
     explicit SharedHandle(std::shared_ptr<dummy_ros_control::DeviceManagementRequest> value):pending(std::move(value)) {}
+    SharedHandle(std::shared_ptr<dummy_ros_control::DeviceManagementRequest> value,
+                 const std::shared_ptr<dummy_ros_control::DeviceManagementChannel> &channel,
+                 const std::shared_ptr<std::atomic<bool>> &owner, std::uint64_t started_us)
+        :pending(std::move(value)),admission_channel(channel),admission_owner(owner),
+         admission(std::in_place,started_us,true),admitted(false) {
+      (void)admission->on_result(dp::comm::Result::kBusy,started_us,false);
+    }
     ~SharedHandle() override { pending->canceled=true; }
     std::optional<std::vector<std::uint8_t>> poll() override {
-      if(pending->failed) throw std::runtime_error("shared manage_v2 request failed");
+      if(pending->failed || pending->canceled) throw std::runtime_error("shared manage_v2 request failed");
+      if(!admitted) {
+        const auto channel=admission_channel.lock();
+        const auto owner=admission_owner.lock();
+        const auto now=management_now_us();
+        const auto reject=[this]() {
+          pending->failed=true;
+          throw std::runtime_error("shared manage_v2 admission failed");
+        };
+        if(!channel || !owner || !owner->load() || !channel->ready.load() || admission->expired(now)) reject();
+        if(!admission->ready(now)) return {};
+        std::unique_lock<std::mutex> lock(channel->mutex,std::try_to_lock);
+        if(!lock) {
+          if(admission->on_result(dp::comm::Result::kBusy,now,false)==
+             dummy_ros_control::ManagementAdmissionRetry::Decision::kFail) reject();
+          return {};
+        }
+        if(!owner->load() || !channel->ready.load() || pending->canceled || pending->failed ||
+           (channel->queued && !channel->queued->canceled)) reject();
+        if(admission->on_result(dp::comm::Result::kOk,now,false)!=
+           dummy_ros_control::ManagementAdmissionRetry::Decision::kAccepted) reject();
+        if(!owner->load() || pending->canceled || pending->failed) reject();
+        channel->queued=pending;
+        admitted=true;
+        admission.reset();
+      }
       if(delivered || !pending->complete.load(std::memory_order_acquire)) return {};
       delivered=true;
       return std::vector<std::uint8_t>(pending->response.begin(),pending->response.end());
     }
     std::shared_ptr<dummy_ros_control::DeviceManagementRequest> pending;
     bool delivered=false;
+    std::weak_ptr<dummy_ros_control::DeviceManagementChannel> admission_channel;
+    std::weak_ptr<std::atomic<bool>> admission_owner;
+    std::optional<dummy_ros_control::ManagementAdmissionRetry> admission;
+    bool admitted=true;
   };
   struct Pending {
     ManageRequest request;
@@ -77,6 +114,7 @@ struct DpManagementTransport::Impl {
     return cached;
   }
   std::atomic<bool> running{false}, connected{false};
+  std::shared_ptr<std::atomic<bool>> admission_owner=std::make_shared<std::atomic<bool>>(true);
   std::thread worker;
   std::mutex mutex;
   std::shared_ptr<Pending> queued;
@@ -95,7 +133,7 @@ struct DpManagementTransport::Impl {
   static void receive(dp::comm::BorrowedMessage<Message> borrowed,void *context) {
     Message value; if(borrowed.copy_to(&value)!=dp::comm::Result::kOk) return;
     auto &self=*static_cast<Impl *>(context);
-    if(value.schema_major()!=2 || value.schema_minor()!=4 ||
+    if(value.schema_major()!=2 || value.schema_minor()!=wire::kSchemaMinor ||
        value.profile_id()!=self.parameters.profile || value.configured_mask()!=self.parameters.mask ||
        !std::equal(self.parameters.device.begin(),self.parameters.device.end(),value.device_id())) return;
     std::vector<std::uint8_t> bytes(Codec::kEncodedSize);
@@ -164,7 +202,10 @@ bool DpManagementTransport::start() {
      p.profile==0 || (p.mask!=1 && p.mask!=63) ||
      std::all_of(p.device.begin(),p.device.end(),[](auto v){return v==0;}) ||
      std::all_of(p.client.begin(),p.client.end(),[](auto v){return v==0;})) return false;
-  if(impl_->connection==Connection::kDeviceWorker) return true;
+  if(impl_->connection==Connection::kDeviceWorker) {
+    if(!impl_->admission_owner->load()) impl_->admission_owner=std::make_shared<std::atomic<bool>>(true);
+    return true;
+  }
   if(impl_->running.exchange(true)) return true;
   if(impl_->worker.joinable()) impl_->worker.join();
   try { impl_->worker=std::thread([this]{impl_->run();}); }
@@ -190,7 +231,7 @@ bool DpManagementTransport::set_post_complete_hold_tolerance(const std::vector<d
     channel->post_complete_hold_tolerance_rad[axis].store(values[axis],std::memory_order_release);
   return true;
 }
-void DpManagementTransport::stop() { impl_->running=false; if(impl_->worker.joinable()) impl_->worker.join(); }
+void DpManagementTransport::stop() { impl_->admission_owner->store(false); impl_->running=false; if(impl_->worker.joinable()) impl_->worker.join(); }
 std::uint32_t DpManagementTransport::reserve_sequence(std::uint32_t proposed) noexcept {
   if (impl_->connection != Connection::kDeviceWorker) return proposed;
   const auto channel = impl_->shared_channel();
@@ -238,7 +279,15 @@ RawTerminalIdentity DpManagementTransport::raw_terminal_flushed() const noexcept
     value.attempt_kind,value.final_state,value.first_failure_source,
     value.first_failure_axis_mask,value.evidence_lost,value.motion_complete,
     value.release_committed,value.chain_valid,value.safety_hold_motion_epoch,
-    value.safety_hold_valid};
+    value.safety_hold_valid,value.attempt_motion_epoch,value.fault_stop_motion_epoch,
+    value.terminal_received_us,value.terminal_chain,value.full_fault_groups_valid,value.identity_hashes,value.terminal_group_count};
+}
+DeviceObservation DpManagementTransport::raw_cleanup_observation() const noexcept {
+  if(impl_->connection!=Connection::kDeviceWorker)return {};
+  const auto channel=impl_->shared_channel();if(!channel)return {};
+  const auto v=channel->raw_cleanup_observation();
+  DeviceObservation out;out.state.assign(v.state.begin(),v.state.end());out.status.assign(v.status.begin(),v.status.end());
+  out.state_received_us=v.state_received_us;out.status_received_us=v.status_received_us;out.raw_cleanup_producer_valid=v.state_received_us!=0U;return out;
 }
 RawFirstPageWritten DpManagementTransport::raw_first_page_written() const noexcept {
   if(impl_->connection!=Connection::kDeviceWorker) return {};
@@ -262,7 +311,13 @@ std::unique_ptr<ManagementTransport::RequestHandle> DpManagementTransport::send(
     auto pending=std::make_shared<dummy_ros_control::DeviceManagementRequest>();
     std::copy(bytes.begin(),bytes.end(),pending->request.begin());
     std::unique_lock<std::mutex> lock(channel->mutex,std::try_to_lock);
-    if(!lock) { log_admission(AdmissionReason::kLockBusy,bytes); return {}; }
+    if(!lock) {
+      log_admission(AdmissionReason::kLockBusy,bytes);
+      Service::Request decoded;
+      if(wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&decoded)!=wire::CodecResult::kOk ||
+         decoded.schema_major()!=2U || decoded.schema_minor()!=wire::kSchemaMinor || decoded.request_id()==0U) return {};
+      return std::make_unique<Impl::SharedHandle>(std::move(pending),channel,impl_->admission_owner,management_now_us());
+    }
     if(channel->queued && !channel->queued->canceled) {
       lock.unlock();
       log_admission(AdmissionReason::kQueued,bytes); return {};

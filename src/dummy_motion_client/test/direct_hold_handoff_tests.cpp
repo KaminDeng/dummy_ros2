@@ -54,6 +54,28 @@ int main(int argc,char **argv) {
   using namespace dummy_motion_client;
   RunLeaseEligibility lease_inputs{true,true,true,true,true,true,true};
   if(std::string_view(run_lease_first_failed(lease_inputs))!="none") return 94;
+  // Completion defer只可提供producer_active；不替代既有250ms producer freshness。
+  auto deferred_completion=lease_inputs;
+  deferred_completion.producer_active=true;
+  deferred_completion.producer_recent=false;
+  if(run_lease_eligible(deferred_completion)) return 97;
+  auto frozen_inputs=lease_inputs; frozen_inputs.producer_active=false;
+  if(run_lease_eligible(frozen_inputs) ||
+     !run_lease_eligible(run_lease_continuation_inputs(frozen_inputs,true,true)) ||
+     run_lease_eligible(run_lease_continuation_inputs(frozen_inputs,false,true)) ||
+     run_lease_eligible(run_lease_continuation_inputs(frozen_inputs,true,false))) return 98;
+  for(unsigned field=0;field<6;++field) {
+    auto bad=frozen_inputs;
+    switch(field) {
+      case 0: bad.status_running=false; break;
+      case 1: bad.state_running=false; break;
+      case 2: bad.status_state_coherent=false; break;
+      case 3: bad.same_goal_run=false; break;
+      case 4: bad.producer_recent=false; break;
+      case 5: bad.transport_ready=false; break;
+    }
+    if(run_lease_eligible(run_lease_continuation_inputs(bad,true,true))) return 99;
+  }
   const std::array<const char *,7> failures{
     "status_running","state_running","status_state_coherent",
     "same_goal_run","producer_active","producer_recent","transport_ready"};

@@ -20,6 +20,7 @@
   <xacro:arg name="state_publish_period_us" default=""/>
   <xacro:arg name="max_state_age_us" default=""/>
   <xacro:arg name="heartbeat_stop_budget_us" default=""/>
+  <xacro:arg name="stop_confirmation_timeout_us" default="0"/>
   <xacro:arg name="raw_evidence_path" default=""/>
 
   <xacro:macro name="required_param" params="key value">
@@ -47,6 +48,7 @@
       <xacro:required_param key="state_publish_period_us" value="$(arg state_publish_period_us)"/>
       <xacro:required_param key="max_state_age_us" value="$(arg max_state_age_us)"/>
       <xacro:required_param key="heartbeat_stop_budget_us" value="$(arg heartbeat_stop_budget_us)"/>
+      <param name="stop_confirmation_timeout_us">$(arg stop_confirmation_timeout_us)</param>
       <xacro:if value="${bool(xacro.arg('raw_evidence_path'))}">
         <param name="raw_evidence_path">$(arg raw_evidence_path)</param>
       </xacro:if>

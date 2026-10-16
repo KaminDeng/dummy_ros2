@@ -72,7 +72,7 @@
     <child link="reference_joint5"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
-    <limit lower="-2.0943951023931953" upper="2.0943951023931953" effort="1" velocity="0.25"/>
+    <limit lower="-1.7453292519943295" upper="1.7453292519943295" effort="1" velocity="0.25"/>
   </joint>
   <joint name="Joint5_dh" type="fixed">
     <parent link="reference_joint5"/>

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dummy-final-release-manifest-v1",
+  "type": "object",
+  "required": [
+    "format", "release_stage", "firmware_sha256", "image_size", "flash_address",
+    "model_sha256", "profile_sha256", "compiled_policy_sha256",
+    "firmware_source_binding_sha256", "contract_identity", "configured_mask",
+    "profile_id", "resource_baseline_hash", "map_sha256", "measurement_report_sha256"
+  ],
+  "properties": {
+    "format": {"const": "dummy_final_release_manifest_v1"},
+    "release_stage": {"const": "RELEASE_APPROVED"},
+    "firmware_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "image_size": {"type": "integer", "minimum": 1},
+    "flash_address": {"const": 134217728},
+    "model_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "compiled_policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "firmware_source_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contract_identity": {"const": "dummy_wire_release_v2"},
+    "configured_mask": {"const": 63},
+    "profile_id": {"const": 201},
+    "resource_baseline_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "map_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "measurement_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

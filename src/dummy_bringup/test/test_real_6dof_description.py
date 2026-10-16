@@ -29,6 +29,7 @@ PARAMETERS = {
     "control_period_us": "20000", "state_publish_period_us": "20000",
     "max_state_age_us": "250000",
     "heartbeat_stop_budget_us": "250000",
+    "stop_confirmation_timeout_us": "0",
 }
 
 
@@ -94,7 +95,8 @@ def test_no_load_description_uses_all_six_planning_bounds():
 def test_frozen_candidate_generates_matching_moveit_and_urdf_bench_bounds(
         tmp_path, monkeypatch):
     dpsdk = ROOT.parent / "dpsdk"
-    candidate = dpsdk / "build_dummy/reports/no-load-dev-candidate-7d89-20261001/manifest.json"
+    # 使用当前默认deny源码候选，历史7d89/model50产物不作为新model1测试输入。
+    candidate = ROOT / "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json"
     monkeypatch.syspath_prepend(str(dpsdk))
     from tools.dummy.generate_application_ros_limits import generate
 
@@ -186,3 +188,12 @@ def test_leading_zero_policy_hash_is_preserved():
     params = {node.attrib["name"]: node.text
               for node in root.findall("ros2_control/hardware/param")}
     assert params["compiled_policy_sha256"] == values["compiled_policy_sha256"]
+
+
+def test_independent_stop_budget_expands_without_changing_freshness():
+    mappings = dict(PARAMETERS, stop_confirmation_timeout_us="300000")
+    root = xacro.process_file(str(DESCRIPTION), mappings=mappings).toxml()
+    hardware = ET.fromstring(root).find("ros2_control/hardware")
+    params = {node.attrib["name"]: node.text for node in hardware.findall("param")}
+    assert params["stop_confirmation_timeout_us"] == "300000"
+    assert params["max_state_age_us"] == params["heartbeat_stop_budget_us"] == "250000"

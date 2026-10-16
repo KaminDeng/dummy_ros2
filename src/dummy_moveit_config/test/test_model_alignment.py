@@ -10,6 +10,7 @@ import unittest
 import xml.etree.ElementTree as element_tree
 
 import yaml
+import xacro
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
@@ -23,7 +24,9 @@ class ModelAlignmentTest(unittest.TestCase):
     def setUpClass(cls):
         cls.model = yaml.safe_load((CONTRACT / "model/model.yaml").read_text())
         cls.joints = {joint["name"]: joint for joint in cls.model["joints"]}
-        cls.urdf = element_tree.parse(DESCRIPTION / "urdf/dummy-ros2.xacro").getroot()
+        cls.urdf = element_tree.fromstring(
+            xacro.process_file(str(DESCRIPTION / "urdf/dummy-ros2.xacro")).toxml()
+        )
 
     def test_urdf_limits_match_contract_without_wrapping_joint6(self):
         urdf_joints = {

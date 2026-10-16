@@ -9,7 +9,7 @@
 namespace dp::protocol::dummy_robot_v2 {
 enum class CodecResult : uint8_t { kOk = 0, kInvalidArgument };
 inline constexpr uint16_t kSchemaMajor = 2U;
-inline constexpr uint16_t kSchemaMinor = 4U;
+inline constexpr uint16_t kSchemaMinor = 5U;
 namespace detail {
 inline void put_le8(uint8_t value, uint8_t* output) {
     for (size_t i = 0U; i < 1U; ++i) output[i] = static_cast<uint8_t>(value >> (i * 8U));
@@ -900,7 +900,7 @@ public:
         if (bits_release_committed > 1U) return CodecResult::kInvalidArgument;
         decoded.set_release_committed(bits_release_committed != 0U);
         offset += 1U;
-        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 4U)) return CodecResult::kInvalidArgument;
+        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 5U)) return CodecResult::kInvalidArgument;
         if (!(decoded.control_mode() <= 2U && decoded.reference_kind() <= 3U && decoded.transaction_phase() <= 4U)) return CodecResult::kInvalidArgument;
         if (!(decoded.final_state() <= 9U && decoded.attempt_kind() <= 3U && decoded.cleanup_state() <= 4U)) return CodecResult::kInvalidArgument;
         *message = decoded;
@@ -1123,7 +1123,7 @@ public:
             offset += 8U;
         }
         decoded.set_position_rad(value_position_rad);
-        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 4U)) return CodecResult::kInvalidArgument;
+        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 5U)) return CodecResult::kInvalidArgument;
         *message = decoded;
         return CodecResult::kOk;
     }
@@ -1195,6 +1195,10 @@ public:
     void set_core_state(uint16_t value) { core_state_ = value; }
     bool hold_ready() const { return hold_ready_; }
     void set_hold_ready(bool value) { hold_ready_ = value; }
+    const double (&hold_position_rad() const)[6] { return hold_position_rad_; }
+    void set_hold_position_rad(const double (&value)[6]) { std::memcpy(hold_position_rad_, value, sizeof(hold_position_rad_)); }
+    uint8_t hold_valid_mask() const { return hold_valid_mask_; }
+    void set_hold_valid_mask(uint8_t value) { hold_valid_mask_ = value; }
 
 private:
     uint16_t schema_major_{};
@@ -1229,11 +1233,13 @@ private:
     double raw_motor_position_rev_[6]{};
     uint16_t core_state_{};
     bool hold_ready_{};
+    double hold_position_rad_[6]{};
+    uint8_t hold_valid_mask_{};
 };
 
 class DummyJointStateV2Codec {
 public:
-    static constexpr size_t kEncodedSize = 301U;
+    static constexpr size_t kEncodedSize = 350U;
     static constexpr size_t kScratchSize = 0U;
     static constexpr size_t kAlignment = alignof(DummyJointStateV2);
     static constexpr uint32_t kMaxAge = 0U;
@@ -1412,6 +1418,18 @@ public:
         std::memcpy(&bits_hold_ready, &value_hold_ready, 1U);
         detail::put_le8(bits_hold_ready, output + offset);
         offset += 1U;
+        for (size_t index = 0U; index < 6U; ++index) {
+            double value = message.hold_position_rad()[index];
+            uint64_t bits = 0U;
+            std::memcpy(&bits, &value, 8U);
+            detail::put_le64(bits, output + offset);
+            offset += 8U;
+        }
+        uint8_t value_hold_valid_mask = message.hold_valid_mask();
+        uint8_t bits_hold_valid_mask = 0U;
+        std::memcpy(&bits_hold_valid_mask, &value_hold_valid_mask, 1U);
+        detail::put_le8(bits_hold_valid_mask, output + offset);
+        offset += 1U;
         return CodecResult::kOk;
     }
     static CodecResult decode(const uint8_t* input, size_t size, DummyJointStateV2* message) {
@@ -1589,7 +1607,19 @@ public:
         if (bits_hold_ready > 1U) return CodecResult::kInvalidArgument;
         decoded.set_hold_ready(bits_hold_ready != 0U);
         offset += 1U;
-        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 4U && decoded.core_state() <= 9U)) return CodecResult::kInvalidArgument;
+        double value_hold_position_rad[6]{};
+        for (size_t index = 0U; index < 6U; ++index) {
+            uint64_t bits = detail::get_le64(input + offset);
+            std::memcpy(&value_hold_position_rad[index], &bits, 8U);
+            offset += 8U;
+        }
+        decoded.set_hold_position_rad(value_hold_position_rad);
+        uint8_t bits_hold_valid_mask = detail::get_le8(input + offset);
+        uint8_t value_hold_valid_mask{};
+        std::memcpy(&value_hold_valid_mask, &bits_hold_valid_mask, 1U);
+        decoded.set_hold_valid_mask(value_hold_valid_mask);
+        offset += 1U;
+        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 5U && decoded.core_state() <= 9U)) return CodecResult::kInvalidArgument;
         if (!(decoded.transaction_phase() <= 4U)) return CodecResult::kInvalidArgument;
         *message = decoded;
         return CodecResult::kOk;
@@ -1705,7 +1735,7 @@ public:
     static constexpr size_t kEvidenceLostOffset = 371U;
     static CodecResult encode(const DummyAttemptEvidenceV2& message, uint8_t* output, size_t size) {
         if (output == nullptr || size != kEncodedSize) return CodecResult::kInvalidArgument;
-        if (!(message.schema_major() == 2U && message.schema_minor() == 4U)) return CodecResult::kInvalidArgument;
+        if (!(message.schema_major() == 2U && message.schema_minor() == 5U)) return CodecResult::kInvalidArgument;
         if (!(message.attempt_kind() <= 3U && message.terminal_reason() <= 14U)) return CodecResult::kInvalidArgument;
         if (!(((message.category() >= 1U && message.category() <= 3U && message.expected_mask() != 0U && message.sent_mask() <= message.expected_mask() && message.failed_mask() <= message.expected_mask() && message.final_state() == 0U && message.terminal_reason() == 0U && !message.motion_complete() && !message.release_committed()) || (message.category() == 4U && message.group_id() == 0U && message.producer_seq() == 0U && message.expected_mask() == 0U && message.submitted_mask() == 0U && message.sent_mask() == 0U && message.failed_mask() == 0U && (message.first_failure_axis_mask() == 0U || ((message.final_state() == 4U || message.final_state() == 5U || message.final_state() == 9U) && (message.first_failure_axis_mask() & ~0x3fU) == 0U)) && message.final() == 1U && message.final_state() >= 1U && message.final_state() <= 9U && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(message.queued_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(message.taken_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(message.submitted_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(message.sent_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(message.abort_at_us()))))) return CodecResult::kInvalidArgument;
         size_t offset = 0U;
@@ -2050,7 +2080,7 @@ public:
         if (bits_evidence_lost > 1U) return CodecResult::kInvalidArgument;
         decoded.set_evidence_lost(bits_evidence_lost != 0U);
         offset += 1U;
-        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 4U)) return CodecResult::kInvalidArgument;
+        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 5U)) return CodecResult::kInvalidArgument;
         if (!(decoded.attempt_kind() <= 3U && decoded.terminal_reason() <= 14U)) return CodecResult::kInvalidArgument;
         if (!(((decoded.category() >= 1U && decoded.category() <= 3U && decoded.expected_mask() != 0U && decoded.sent_mask() <= decoded.expected_mask() && decoded.failed_mask() <= decoded.expected_mask() && decoded.final_state() == 0U && decoded.terminal_reason() == 0U && !decoded.motion_complete() && !decoded.release_committed()) || (decoded.category() == 4U && decoded.group_id() == 0U && decoded.producer_seq() == 0U && decoded.expected_mask() == 0U && decoded.submitted_mask() == 0U && decoded.sent_mask() == 0U && decoded.failed_mask() == 0U && (decoded.first_failure_axis_mask() == 0U || ((decoded.final_state() == 4U || decoded.final_state() == 5U || decoded.final_state() == 9U) && (decoded.first_failure_axis_mask() & ~0x3fU) == 0U)) && decoded.final() == 1U && decoded.final_state() >= 1U && decoded.final_state() <= 9U && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(decoded.queued_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(decoded.taken_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(decoded.submitted_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(decoded.sent_at_us()) && ([](const auto& values) { for (auto value : values) if (value != 0U) return false; return true; })(decoded.abort_at_us()))))) return CodecResult::kInvalidArgument;
         *message = decoded;
@@ -2410,7 +2440,7 @@ public:
         std::memcpy(&value_requested_session_lease_us, &bits_requested_session_lease_us, 8U);
         decoded.set_requested_session_lease_us(value_requested_session_lease_us);
         offset += 8U;
-        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 4U && (decoded.operation() == 0U || decoded.operation() == 1U || decoded.operation() == 2U || decoded.operation() == 3U || decoded.operation() == 4U || decoded.operation() == 5U || decoded.operation() == 6U || decoded.operation() == 7U || decoded.operation() == 8U || decoded.operation() == 9U || decoded.operation() == 10U || decoded.operation() == 11U || decoded.operation() == 12U || decoded.operation() == 16U || decoded.operation() == 17U || decoded.operation() == 18U || decoded.operation() == 19U || decoded.operation() == 20U) && decoded.requested_control_mode() <= 2U)) return CodecResult::kInvalidArgument;
+        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 5U && (decoded.operation() == 0U || decoded.operation() == 1U || decoded.operation() == 2U || decoded.operation() == 3U || decoded.operation() == 4U || decoded.operation() == 5U || decoded.operation() == 6U || decoded.operation() == 7U || decoded.operation() == 8U || decoded.operation() == 9U || decoded.operation() == 10U || decoded.operation() == 11U || decoded.operation() == 12U || decoded.operation() == 16U || decoded.operation() == 17U || decoded.operation() == 18U || decoded.operation() == 19U || decoded.operation() == 20U) && decoded.requested_control_mode() <= 2U)) return CodecResult::kInvalidArgument;
         *message = decoded;
         return CodecResult::kOk;
     }
@@ -2794,7 +2824,7 @@ public:
         if (bits_release_committed > 1U) return CodecResult::kInvalidArgument;
         decoded.set_release_committed(bits_release_committed != 0U);
         offset += 1U;
-        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 4U && decoded.receipt() <= 4U)) return CodecResult::kInvalidArgument;
+        if (!(decoded.schema_major() == 2U && decoded.schema_minor() == 5U && decoded.receipt() <= 4U)) return CodecResult::kInvalidArgument;
         if (!(decoded.result_code() <= 36U && decoded.transaction_phase() <= 4U && decoded.attempt_kind() <= 3U)) return CodecResult::kInvalidArgument;
         *message = decoded;
         return CodecResult::kOk;

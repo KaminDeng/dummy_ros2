@@ -169,7 +169,7 @@ void begin_waits_for_final_hold_commit() {
   check(gate.submit(motion,4U));
   check(port.disables==2 && client.requests.size()==1U && !gate.ready());
   wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(4U); state.set_boot_epoch(7U);
+  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor); state.set_boot_epoch(7U);
   state.set_session_id(9U); state.set_profile_id(1U);
   state.set_configured_mask(0x3FU); state.set_position_valid_mask(0x3FU);
   state.set_core_state(wire_value(WireCoreState::kHold));
@@ -204,7 +204,7 @@ void discarded_local_hold_generation_does_not_block_begin() {
   check(gate.record_update(gate.generation(),1U,342U,Position{}));
   gate.observe(reply(1U,1U,true),3U);
   wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(4U);
+  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   state.set_session_id(9U); state.set_configured_mask(1U);
   state.set_position_valid_mask(1U); state.set_motion_epoch(1U);
   state.set_core_state(wire_value(WireCoreState::kHold)); state.set_hold_ready(true);
@@ -283,7 +283,7 @@ void begin_drain_and_reply_share_deadline() {
   check(gate.submit(trajectory(),4U));
   gate.observe_hold_drain({0U,9U,1U,0U,1U,1U},102U);
   dp::protocol::dummy_robot_v2::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(4U);
+  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   state.set_session_id(9U); state.set_state_seq(1U);
   state.set_motion_epoch(1U);
   state.set_configured_mask(1U); state.set_position_valid_mask(1U);
@@ -317,7 +317,7 @@ void hold_drain_accepts_wrap_but_rejects_old_commit() {
   check(gate.record_update(gate.generation(),1U,1U,Position{}));
   check(!gate.record_update(gate.generation(),1U,UINT32_MAX,Position{}));
   wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(4U);
+  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
   state.set_session_id(9U); state.set_configured_mask(1U);
   state.set_position_valid_mask(1U); state.set_motion_epoch(1U);
   state.set_core_state(wire_value(WireCoreState::kHold)); state.set_hold_ready(true);

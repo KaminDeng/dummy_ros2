@@ -1,0 +1,147 @@
+{
+  "native_binary": "../dpsdk/build_dummy/reports/panel-speed-flexibility-20261016/candidate63-a4/host-boundary-response-step/Host-bundle-step2/dummy_joint_cli",
+  "native_arguments": [
+    "--scenario",
+    "home-rest",
+    "--execute",
+    "--endpoint",
+    "serial//dev/serial/by-id/usb-Dummy_Robotics_STM32_Virtual_ComPort_in_FS_Mode_DEMO00000001-if00#baudrate=115200",
+    "--device",
+    "01000000000000000000000000000000",
+    "--client",
+    "02000000000000000000000000000000",
+    "--profile",
+    "201",
+    "--mask",
+    "63",
+    "--scope",
+    "manual-home-empty-supported",
+    "--firmware",
+    "b45b3fa3040eb80abe977ac6a3e244684c2037839ebdde9d6823ee04c5d69126",
+    "--contract",
+    "2ae31387d711e982bdc45743be1a4fca1355ad10a1075a4d6d3381830ff8b9e3",
+    "--model",
+    "bbbfbf070281a2e63a09061830d6dc79a9e1d7206e1e4754c53a0fc8545bdfb0",
+    "--profile-sha256",
+    "1ebe88a566c5eeab6aaf40582b71b74bca9fdfb69ebf322fad6bb7be4de6fb1d"
+  ],
+  "decoder_directory": "<home>/kamin_work/00-code/dummy_ros2/scripts/dummy",
+  "state_interface_id": 4139,
+  "rest_deg": [
+    0,
+    -60,
+    163.97260273972603,
+    0,
+    0,
+    0
+  ],
+  "joints": [
+    {
+      "name": "Joint1",
+      "direction": -1,
+      "gear_ratio": 50,
+      "limits_deg": [
+        -169.45,
+        169.45
+      ],
+      "nominal_limits_deg": [
+        -170,
+        170
+      ]
+    },
+    {
+      "name": "Joint2",
+      "direction": -1,
+      "gear_ratio": 50,
+      "limits_deg": [
+        -72.45,
+        89.45
+      ],
+      "nominal_limits_deg": [
+        -73,
+        90
+      ]
+    },
+    {
+      "name": "Joint3",
+      "direction": -1,
+      "gear_ratio": 50,
+      "limits_deg": [
+        35.55,
+        179.45
+      ],
+      "nominal_limits_deg": [
+        35,
+        180
+      ]
+    },
+    {
+      "name": "Joint4",
+      "direction": 1,
+      "gear_ratio": 50,
+      "limits_deg": [
+        -179.45,
+        179.45
+      ],
+      "nominal_limits_deg": [
+        -180,
+        180
+      ]
+    },
+    {
+      "name": "Joint5",
+      "direction": -1,
+      "gear_ratio": 50,
+      "limits_deg": [
+        -99.45,
+        99.45
+      ],
+      "nominal_limits_deg": [
+        -100,
+        100
+      ]
+    },
+    {
+      "name": "Joint6",
+      "direction": -1,
+      "gear_ratio": 50,
+      "limits_deg": [
+        -719.45,
+        719.45
+      ],
+      "nominal_limits_deg": [
+        -720,
+        720
+      ]
+    }
+  ],
+  "home_deg": [
+    0,
+    0,
+    90,
+    0,
+    0,
+    0
+  ],
+  "description_xacro": "<home>/kamin_work/00-code/dummy_ros2/src/dummy-ros2_description/urdf/dummy-ros2.xacro",
+  "working_margin_deg": 0.55,
+  "motion_speed_max_deg_s": 63.0,
+  "motion_speed_default_deg_s": 60.0,
+  "motion_acceleration_max_rad_s2": 4.0,
+  "motion_acceleration_default_rad_s2": 4.0,
+  "inward_recovery_enabled": true,
+  "wire_schema_major": 2,
+  "wire_schema_minor": 5,
+  "calibration_mode": "manual_limits",
+  "calibration_pose_deg": [
+    0,
+    -73,
+    180,
+    0,
+    0,
+    0
+  ],
+  "manual_limit_reference_enabled": true,
+  "moveit_jog_speed_default_mm_s": 100.0,
+  "moveit_preview_speed_default": 20.0
+}

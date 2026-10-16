@@ -23,9 +23,9 @@ set(DUMMY_DP_COMM_SDK_SOURCES
   "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like_transport.cpp"
   "${DPSDK_ROOT}/platform/common/dp_comm_pico_port/dp_comm_port.cpp")
 set(DUMMY_DP_COMM_SDK_HASHES
-  12743ffe67b1f2f63f14e981fea72715f6c604457b6e639817d9f8e1ffdc40b1
-  ad45bd1428548136f3a0bfbcddf012a86c7a49add90f80adfb82529459fc5f88
-  00127fe8b0e68f913f58ea7cd87bdd28c22c0e7bfd32605d2f876c14721f4e52)
+  9d0063695f25b7ceaa965823a77c25d005f6d20c1adfd2deee66738a48184a66
+  6411da9b4c32b6caebb1800d12392071af2e68d46ad97b22ac1c2af6e5c002ae
+  55f28e0e178e104c0c97e6ea8af848b5a304ae05997380adcf96eed9b03049b0)
 set(source_index 0)
 foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
   if(NOT EXISTS "${source}")
@@ -127,8 +127,84 @@ if(BUILD_TESTING)
   target_link_libraries(state_contention_tests dummy_guarded_zenbedded_system)
   add_test(NAME state_contention_tests COMMAND state_contention_tests)
   add_executable(transport_component_tests test/transport_component_tests.cpp)
+  # 台架组件的wire状态直接由D第一方正式映射产生，防止两侧手写同错。
+  target_include_directories(transport_component_tests PRIVATE
+    "${DPSDK_ROOT}/applications/dummy_ref_control/comm"
+    "${DPSDK_ROOT}/applications/dummy_ref_control/include")
   target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
+  # 仅Host测试：真实Core停止握手+现SDK/Worker回调，非设备/完整Node资格。
+  get_filename_component(_safe_prime_core_root "${ROS_WORKSPACE_ROOT}/../dpsdk" ABSOLUTE)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  set(_safe_prime_generated "${CMAKE_CURRENT_BINARY_DIR}/safe_prime_generated")
+  add_custom_command(OUTPUT "${_safe_prime_generated}/dummy_model.hpp"
+    COMMAND ${Python3_EXECUTABLE} "${_safe_prime_core_root}/tools/dummy/generate_model.py"
+      --model "${_safe_prime_core_root}/robot_profiles/dummy/model.yaml"
+      --profile "${_safe_prime_core_root}/robot_profiles/dummy/profiles/f405_6dof_bench.yaml"
+      --output "${_safe_prime_generated}/dummy_model.hpp"
+    DEPENDS "${_safe_prime_core_root}/tools/dummy/generate_model.py"
+      "${_safe_prime_core_root}/tools/dummy/rest_target.py"
+      "${_safe_prime_core_root}/robot_profiles/dummy/model.yaml"
+      "${_safe_prime_core_root}/robot_profiles/dummy/profiles/f405_6dof_bench.yaml"
+    VERBATIM)
+  add_custom_target(transport_safe_prime_model DEPENDS "${_safe_prime_generated}/dummy_model.hpp")
+  set(_safe_prime_core_sources authorization joint_mapper motor_can_codec operation_cache reference
+    command_guard bench_permit deployment_policy state_estimator stop_controller can_scheduler
+    can_commit_tracker profile_loader motion_transaction run_ledger attempt_slots robot_core)
+  set(_safe_prime_core_files "")
+  foreach(_source IN LISTS _safe_prime_core_sources)
+    list(APPEND _safe_prime_core_files "${_safe_prime_core_root}/applications/dummy_ref_control/core/${_source}.cpp")
+  endforeach()
+  add_executable(transport_safe_cancel_prime_tests test/transport_safe_cancel_prime_tests.cpp ${_safe_prime_core_files})
+  add_dependencies(transport_safe_cancel_prime_tests transport_safe_prime_model)
+  target_include_directories(transport_safe_cancel_prime_tests PRIVATE
+    "${_safe_prime_core_root}/applications/dummy_ref_control/include"
+    "${_safe_prime_core_root}/applications/dummy_ref_control/test"
+    "${_safe_prime_core_root}/applications/dummy_ref_control/comm"
+    "${_safe_prime_generated}")
+  target_link_libraries(transport_safe_cancel_prime_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  add_test(NAME transport_safe_cancel_prime_positive COMMAND transport_safe_cancel_prime_tests six_axis cancel_coordination_positive)
+  foreach(_mode drift wrong_boot wrong_session wrong_ref old_motion arbitrary_target foreign_run wrong_status_phase wrong_query_op expired no_owned second_stop)
+    add_test(NAME transport_safe_cancel_prime_${_mode} COMMAND transport_safe_cancel_prime_tests six_axis safe_prime_${_mode})
+    set_tests_properties(transport_safe_cancel_prime_${_mode} PROPERTIES TIMEOUT 20 LABELS "component_only;offline;source_model")
+  endforeach()
+  set_tests_properties(transport_safe_cancel_prime_positive PROPERTIES TIMEOUT 20 LABELS "component_only;offline;source_model")
+  # Received/Pending先到走当前严格D10；回执缺失独立验证safeprime守卫，不冒释放确认。
+  foreach(_guard_mode positive drift wrong_boot wrong_session wrong_ref old_motion arbitrary_target foreign_run wrong_status_phase no_owned expired second_stop)
+    add_test(NAME transport_safe_cancel_prime_guard_${_guard_mode}
+      COMMAND transport_safe_cancel_prime_tests six_axis safe_prime_guard_${_guard_mode})
+    set_tests_properties(transport_safe_cancel_prime_guard_${_guard_mode} PROPERTIES
+      TIMEOUT 20 LABELS "component_only;offline;source_model;initial_cancel_rpc_unavailable")
+  endforeach()
+  # 现有严格D10在CancelPending期间释放：真实Core200ms stationary模型，非实体资格。
+  add_executable(transport_current_cancel_release_tests test/transport_current_cancel_release_tests.cpp ${_safe_prime_core_files})
+  add_dependencies(transport_current_cancel_release_tests transport_safe_prime_model)
+  target_include_directories(transport_current_cancel_release_tests PRIVATE
+    "${_safe_prime_core_root}/applications/dummy_ref_control/include"
+    "${_safe_prime_core_root}/applications/dummy_ref_control/test"
+    "${_safe_prime_core_root}/applications/dummy_ref_control/comm"
+    "${_safe_prime_generated}")
+  target_link_libraries(transport_current_cancel_release_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  # 复用现Core/Worker模型：早Idle在强Query后重验；SOURCE范围不冒实体时间资格。
+  foreach(_early_mode positive no_commit wrong_boot wrong_op wrong_run stale permission second_stop commit_first direct_retired)
+    add_test(NAME transport_stop_early_idle_replay_${_early_mode}
+      COMMAND transport_current_cancel_release_tests six_axis early_idle_replay_${_early_mode})
+    set_tests_properties(transport_stop_early_idle_replay_${_early_mode} PROPERTIES
+      TIMEOUT 20 LABELS "component_only;offline;source_model")
+  endforeach()
+  add_test(NAME transport_current_cancel_release_positive COMMAND transport_current_cancel_release_tests six_axis cancel_coordination_positive)
+  foreach(_mode wrong_boot wrong_session wrong_ref old_motion incoherent foreign_run stale no_owned second_stop fault failed_final)
+    add_test(NAME transport_current_cancel_release_${_mode} COMMAND transport_current_cancel_release_tests six_axis safe_prime_${_mode})
+    set_tests_properties(transport_current_cancel_release_${_mode} PROPERTIES TIMEOUT 20 LABELS "component_only;offline;source_model")
+  endforeach()
+  set_tests_properties(transport_current_cancel_release_positive PROPERTIES TIMEOUT 20 LABELS "component_only;offline;source_model")
+  add_executable(transport_stop_exec_tests test/transport_stop_exec_tests.cpp)
+  target_include_directories(transport_stop_exec_tests PRIVATE
+    "${DPSDK_ROOT}/applications/dummy_ref_control/comm"
+    "${DPSDK_ROOT}/applications/dummy_ref_control/include")
+  target_link_libraries(transport_stop_exec_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  add_test(NAME transport_stop_exec_tests COMMAND transport_stop_exec_tests)
+  set_tests_properties(transport_stop_exec_tests PROPERTIES TIMEOUT 60 LABELS "component_only;offline")
   add_test(NAME transport_peer_publish_backpressure_tests
     COMMAND transport_component_tests peer_publish_backpressure)
   add_test(NAME transport_peer_state_queue_full_once_tests
@@ -153,10 +229,23 @@ if(BUILD_TESTING)
   add_test(NAME transport_released_idle_no_gate_reply_tests COMMAND transport_component_tests six_axis released_idle_no_gate_reply)
   add_test(NAME transport_released_state_before_status_tests COMMAND transport_component_tests six_axis released_state_before_status)
   add_test(NAME transport_released_idle_heartbeat_gap_tests COMMAND transport_component_tests six_axis released_idle_heartbeat_gap)
+  foreach(_receipt_case wrong_receipt_op wrong_receipt_epoch wrong_receipt_management pending_receipt uncommitted_receipt)
+    add_test(NAME transport_release_stopping_${_receipt_case}_tests
+      COMMAND transport_component_tests six_axis release_stopping_${_receipt_case})
+  endforeach()
+  add_test(NAME transport_release_committed_idle_status_gap_tests COMMAND transport_component_tests six_axis release_committed_idle_status_gap)
+  add_test(NAME transport_release_stopping_combined_stale_candidate_tests COMMAND transport_component_tests six_axis release_stopping_combined_stale_candidate)
+  add_test(NAME transport_release_stopping_committed_idle_proof_tests COMMAND transport_component_tests six_axis release_stopping_committed_idle_proof)
   add_test(NAME transport_released_idle_before_reply_tests COMMAND transport_component_tests six_axis released_idle_before_reply)
   add_test(NAME transport_released_no_final_idle_tests COMMAND transport_component_tests six_axis released_no_final_idle)
   add_test(NAME transport_released_idle_on_error_tests COMMAND transport_component_tests six_axis released_idle_on_error)
   add_test(NAME transport_running_deactivate_tests COMMAND transport_component_tests six_axis running_deactivate)
+  # 原250k下的exactCancel协调SOURCE回调，不代表ROS/硬件资格。
+  foreach(_cancel_stop_case IN ITEMS positive boot session ref run owner failed pending nonhold foreign_query second_stop)
+    add_test(NAME transport_cancel_stop_${_cancel_stop_case}
+      COMMAND transport_component_tests six_axis cancel_coordination_${_cancel_stop_case})
+  endforeach()
+
   add_test(NAME transport_raw_capture_component_tests COMMAND transport_component_tests six_axis raw_capture)
   add_test(NAME transport_raw_release_receipt_component_tests COMMAND transport_component_tests six_axis raw_release_receipt)
   add_test(NAME transport_raw_direct_receipt_component_tests COMMAND transport_component_tests six_axis raw_direct_receipt)
@@ -204,11 +293,77 @@ if(BUILD_TESTING)
     raw_order_multi_successor_bad_run
     raw_order_multi_successor_no_terminal
     raw_order_multi_successor_late_wrong_chain
-    raw_order_multi_successor_late_correct_chain)
+    raw_order_multi_successor_late_correct_chain
+    raw_order_refresh_hold_stale_status_fresh_state
+    raw_order_refresh_hold_stale_status_bad_boot
+    raw_order_refresh_hold_stale_status_bad_session
+    raw_order_refresh_hold_stale_status_bad_run
+    raw_order_refresh_hold_stale_status_bad_chain
+    raw_order_refresh_hold_stale_state
+    raw_order_refresh_hold_stale_status_non_hold_state
+    raw_order_refresh_hold_stale_status_bad_receipt_chain
+    raw_order_cancel_stale_status_fresh_state
+    raw_order_cancel_stale_status_bad_receipt_boot
+    raw_order_cancel_stale_status_bad_receipt_session
+    raw_order_cancel_stale_status_bad_receipt_run
+    raw_order_cancel_stale_status_bad_receipt_chain
+    raw_order_cancel_stale_status_stale_state
+    raw_order_cancel_stale_status_non_hold_state
+    raw_order_cancel_stale_status_not_ready_state
+    raw_order_cancel_stale_status_management_mismatch
+    raw_order_cancel_stale_status_no_safety_hold
+    raw_order_cancel_stale_status_bad_safety_motion
+    raw_order_cancel_stale_status_bad_successor_motion
+    raw_order_cancel_hold_status_fresh_state
+    raw_order_cancel_hold_status_bad_receipt_boot
+    raw_order_cancel_hold_status_bad_receipt_session
+    raw_order_cancel_hold_status_bad_receipt_run
+    raw_order_cancel_hold_status_bad_receipt_chain
+    raw_order_cancel_hold_status_stale_state
+    raw_order_cancel_hold_status_non_hold_state
+    raw_order_cancel_hold_status_not_ready_state
+    raw_order_cancel_hold_status_management_mismatch
+    raw_order_cancel_hold_status_no_safety_hold
+    raw_order_cancel_hold_status_bad_safety_motion
+    raw_order_cancel_hold_status_bad_successor_motion
+    raw_order_cancel_hold_terminal7_fresh_state
+    raw_order_cancel_hold_terminal7_old_final0
+    raw_order_cancel_hold_terminal7_stopping_state_not_ready
+    raw_order_cancel_hold_terminal7_final4
+    raw_order_cancel_hold_terminal7_final5
+    raw_order_cancel_hold_terminal7_final6
+    raw_order_cancel_hold_terminal7_final9
+    raw_order_cancel_hold_terminal7_wrong_status_chain
+    raw_order_cancel_hold_terminal7_zero_status_chain
+    raw_order_cancel_hold_terminal7_failure_source
+    raw_order_cancel_hold_terminal7_failure_axis
+    raw_order_cancel_hold_terminal7_failure_reason
+    raw_order_cancel_hold_terminal7_bad_receipt_boot
+    raw_order_cancel_hold_terminal7_bad_receipt_session
+    raw_order_cancel_hold_terminal7_bad_receipt_run
+    raw_order_cancel_hold_terminal7_bad_receipt_chain
+    raw_order_cancel_hold_terminal7_stale_state
+    raw_order_cancel_hold_terminal7_non_hold_state
+    raw_order_cancel_hold_terminal7_not_ready_state
+    raw_order_cancel_hold_terminal7_management_mismatch
+    raw_order_cancel_hold_terminal7_no_safety_hold
+    raw_order_cancel_hold_terminal7_bad_safety_motion
+    raw_order_cancel_hold_terminal7_bad_successor_motion)
   foreach(_case IN LISTS _refresh_cases)
     add_test(NAME transport_${_case}_component_tests
       COMMAND transport_component_tests six_axis ${_case})
     list(APPEND _refresh_tests transport_${_case}_component_tests)
+  endforeach()
+  add_test(NAME transport_complete_same_prime_fresh_state_pending_cleanup_tests COMMAND transport_component_tests six_axis complete_same_prime_fresh_state_pending_cleanup)
+  add_test(NAME transport_complete_retired_pending_wrong_hold_boot_tests COMMAND transport_component_tests six_axis complete_retired_pending_wrong_hold_boot)
+  add_test(NAME transport_complete_retired_pending_wrong_hold_epoch_tests COMMAND transport_component_tests six_axis complete_retired_pending_wrong_hold_epoch)
+  add_test(NAME transport_complete_retired_pending_divergent_prime_tests COMMAND transport_component_tests six_axis complete_retired_pending_divergent_prime)
+  add_test(NAME transport_complete_retired_pending_stale_hold_payload_tests COMMAND transport_component_tests six_axis complete_retired_pending_stale_hold_payload)
+  add_test(NAME transport_complete_retry_status_first_tests COMMAND transport_component_tests six_axis complete_retry_status_first)
+  add_test(NAME transport_complete_retry_wrong_status_epoch_tests COMMAND transport_component_tests six_axis complete_retry_wrong_status_epoch)
+  foreach(_pending_case same_prime divergent_prime unconfirmed_sent wrong_epoch expired_pending wrong_ack_seq partial_sent)
+    add_test(NAME transport_complete_hold_status_before_state_${_pending_case}_tests
+      COMMAND transport_component_tests six_axis complete_hold_status_before_state_${_pending_case})
   endforeach()
   add_test(NAME transport_complete_status_first_tests COMMAND transport_component_tests six_axis complete_status_first)
   add_test(NAME transport_complete_state_first_tests COMMAND transport_component_tests six_axis complete_state_first)
@@ -295,15 +450,38 @@ if(BUILD_TESTING)
 
   add_executable(guarded_plugin_load_tests test/guarded_plugin_load_tests.cpp)
   ament_target_dependencies(guarded_plugin_load_tests controller_interface hardware_interface pluginlib)
-  set(DUMMY_PLUGIN_TEST_PREFIX "${CMAKE_BINARY_DIR}/plugin-test-prefix")
-  add_test(NAME guarded_plugin_load_tests COMMAND bash -c
-    "cmake --install '${CMAKE_BINARY_DIR}' --prefix '${DUMMY_PLUGIN_TEST_PREFIX}' >/dev/null && AMENT_PREFIX_PATH='${DUMMY_PLUGIN_TEST_PREFIX}:/opt/ros/jazzy' LD_LIBRARY_PATH='${DUMMY_PLUGIN_TEST_PREFIX}/lib:/opt/ros/jazzy/lib' exec '${CMAKE_CURRENT_BINARY_DIR}/guarded_plugin_load_tests'")
-
+  # pluginlib组件测试只装配私有索引/链接，不运行installer或改live安装树。
+  set(DUMMY_PLUGIN_TEST_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/plugin_test_prefix")
+  set(_plugin_stage_script "${CMAKE_CURRENT_BINARY_DIR}/prepare_plugin_test_prefix.cmake")
+  set(_plugin_stage_content [=[
+file(MAKE_DIRECTORY "@DUMMY_PLUGIN_TEST_PREFIX@/share/ament_index/resource_index/packages"
+  "@DUMMY_PLUGIN_TEST_PREFIX@/share/ament_index/resource_index/controller_interface__pluginlib__plugin"
+  "@DUMMY_PLUGIN_TEST_PREFIX@/share/ament_index/resource_index/hardware_interface__pluginlib__plugin"
+  "@DUMMY_PLUGIN_TEST_PREFIX@/share/dummy_ros_control" "@DUMMY_PLUGIN_TEST_PREFIX@/lib")
+file(WRITE "@DUMMY_PLUGIN_TEST_PREFIX@/share/ament_index/resource_index/packages/dummy_ros_control" "")
+file(WRITE "@DUMMY_PLUGIN_TEST_PREFIX@/share/ament_index/resource_index/controller_interface__pluginlib__plugin/dummy_ros_control" "share/dummy_ros_control/dummy_ros_control_plugins.xml\n")
+file(WRITE "@DUMMY_PLUGIN_TEST_PREFIX@/share/ament_index/resource_index/hardware_interface__pluginlib__plugin/dummy_ros_control" "share/dummy_ros_control/dummy_ros_control_plugins.xml\n")
+file(REMOVE "@DUMMY_PLUGIN_TEST_PREFIX@/share/dummy_ros_control/package.xml")
+file(CREATE_LINK "@CMAKE_CURRENT_SOURCE_DIR@/package.xml" "@DUMMY_PLUGIN_TEST_PREFIX@/share/dummy_ros_control/package.xml" SYMBOLIC)
+file(REMOVE "@DUMMY_PLUGIN_TEST_PREFIX@/share/dummy_ros_control/dummy_ros_control_plugins.xml")
+file(CREATE_LINK "@CMAKE_CURRENT_SOURCE_DIR@/dummy_ros_control_plugins.xml" "@DUMMY_PLUGIN_TEST_PREFIX@/share/dummy_ros_control/dummy_ros_control_plugins.xml" SYMBOLIC)
+file(REMOVE "@DUMMY_PLUGIN_TEST_PREFIX@/lib/$<TARGET_FILE_NAME:dummy_command_channel>" "@DUMMY_PLUGIN_TEST_PREFIX@/lib/$<TARGET_FILE_NAME:dummy_guarded_joint_trajectory_controller>" "@DUMMY_PLUGIN_TEST_PREFIX@/lib/$<TARGET_FILE_NAME:dummy_guarded_zenbedded_system>")
+file(CREATE_LINK "$<TARGET_FILE:dummy_command_channel>" "@DUMMY_PLUGIN_TEST_PREFIX@/lib/$<TARGET_FILE_NAME:dummy_command_channel>" SYMBOLIC)
+file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_joint_trajectory_controller>" "@DUMMY_PLUGIN_TEST_PREFIX@/lib/$<TARGET_FILE_NAME:dummy_guarded_joint_trajectory_controller>" SYMBOLIC)
+file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_TEST_PREFIX@/lib/$<TARGET_FILE_NAME:dummy_guarded_zenbedded_system>" SYMBOLIC)
+]=])
+  string(CONFIGURE "${_plugin_stage_content}" _plugin_stage_content @ONLY)
+  file(GENERATE OUTPUT "${_plugin_stage_script}" CONTENT "${_plugin_stage_content}")
+  add_test(NAME prepare_plugin_test_prefix COMMAND ${CMAKE_COMMAND} -P "${_plugin_stage_script}")
+  set_tests_properties(prepare_plugin_test_prefix PROPERTIES FIXTURES_SETUP dummy_plugin_test_prefix)
+  add_test(NAME guarded_plugin_load_tests COMMAND guarded_plugin_load_tests)
   add_executable(guarded_lifecycle_probe test/guarded_lifecycle_probe.cpp)
   target_link_libraries(guarded_lifecycle_probe dummy_guarded_zenbedded_system)
   ament_target_dependencies(guarded_lifecycle_probe hardware_interface pluginlib)
-  add_test(NAME guarded_lifecycle_probe COMMAND bash -c
-    "cmake --install '${CMAKE_BINARY_DIR}' --prefix '${DUMMY_PLUGIN_TEST_PREFIX}' >/dev/null && AMENT_PREFIX_PATH='${DUMMY_PLUGIN_TEST_PREFIX}:/opt/ros/jazzy' LD_LIBRARY_PATH='${DUMMY_PLUGIN_TEST_PREFIX}/lib:/opt/ros/jazzy/lib' exec '${CMAKE_CURRENT_BINARY_DIR}/guarded_lifecycle_probe'")
+  add_test(NAME guarded_lifecycle_probe COMMAND guarded_lifecycle_probe)
+  set_tests_properties(guarded_plugin_load_tests guarded_lifecycle_probe PROPERTIES
+    FIXTURES_REQUIRED dummy_plugin_test_prefix
+    ENVIRONMENT "AMENT_PREFIX_PATH=${DUMMY_PLUGIN_TEST_PREFIX}:/opt/ros/jazzy;LD_LIBRARY_PATH=${DUMMY_PLUGIN_TEST_PREFIX}/lib:${CMAKE_CURRENT_BINARY_DIR}:/opt/ros/jazzy/lib")
 
   add_executable(request_handle_destructor_tests test/request_handle_destructor_tests.cpp)
   target_include_directories(request_handle_destructor_tests PRIVATE
@@ -364,4 +542,46 @@ install(TARGETS
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_goal_registration_gate HAS_LIBRARY_TARGET)
 ament_export_dependencies(OpenSSL)
+
+if(BUILD_TESTING)
+  add_executable(raw_cleanup_lifetime_generation_tests test/raw_cleanup_lifetime_generation_tests.cpp)
+  target_include_directories(raw_cleanup_lifetime_generation_tests PRIVATE include "${DUMMY_WIRE_INCLUDE}")
+  target_link_libraries(raw_cleanup_lifetime_generation_tests PRIVATE dummy_guarded_zenbedded_system)
+  target_compile_options(raw_cleanup_lifetime_generation_tests PRIVATE -UNDEBUG)
+  add_test(NAME fault_raw_cleanup_lifetime_generation COMMAND raw_cleanup_lifetime_generation_tests)
+  add_test(NAME fault_raw_observation_after_permission_invalidation COMMAND transport_component_tests six_axes raw_fault_after_public_invalidate)
+  add_test(NAME fault_raw_observation_no_RUN_anchor COMMAND transport_component_tests six_axes raw_fault_no_RUN_anchor)
+  add_test(NAME fault_raw_observation_wrong_boot COMMAND transport_component_tests six_axes raw_fault_wrong_boot)
+  add_test(NAME fault_raw_observation_stale_producer COMMAND transport_component_tests six_axes raw_fault_stale_produced)
+  set_tests_properties(fault_raw_cleanup_lifetime_generation fault_raw_observation_after_permission_invalidation
+    fault_raw_observation_no_RUN_anchor fault_raw_observation_wrong_boot fault_raw_observation_stale_producer
+    PROPERTIES TIMEOUT 10 LABELS "component_only;offline")
+endif()
+
+
+if(BUILD_TESTING)
+  set(_initial_hold_ack_tests)
+  add_test(NAME transport_initial_hold_state_ack_before_status_tests COMMAND transport_component_tests six_axes hold_state_ack_before_status)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_state_ack_before_status_tests)
+  add_test(NAME transport_initial_hold_no_ACK_tests COMMAND transport_component_tests six_axes hold_no_ACK)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_no_ACK_tests)
+  add_test(NAME transport_initial_hold_partial_SENT_tests COMMAND transport_component_tests six_axes hold_partial_SENT)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_partial_SENT_tests)
+  add_test(NAME transport_initial_hold_wrong_epoch_tests COMMAND transport_component_tests six_axes hold_wrong_epoch)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_wrong_epoch_tests)
+  add_test(NAME transport_initial_hold_Run_ACK_tests COMMAND transport_component_tests six_axes hold_Run_ACK)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_Run_ACK_tests)
+  add_test(NAME transport_initial_hold_wrong_session_tests COMMAND transport_component_tests six_axes hold_wrong_session)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_wrong_session_tests)
+  add_test(NAME transport_initial_hold_stale_ACK_tests COMMAND transport_component_tests six_axes hold_stale_ACK)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_stale_ACK_tests)
+  add_test(NAME transport_initial_hold_wrong_reference_tests COMMAND transport_component_tests six_axes hold_wrong_reference)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_wrong_reference_tests)
+  add_test(NAME transport_initial_hold_wrong_boot_tests COMMAND transport_component_tests six_axes hold_wrong_boot)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_wrong_boot_tests)
+  add_test(NAME transport_initial_hold_Stop_before_status_tests COMMAND transport_component_tests six_axes hold_Stop_before_status)
+  list(APPEND _initial_hold_ack_tests transport_initial_hold_Stop_before_status_tests)
+  set_tests_properties(${_initial_hold_ack_tests} PROPERTIES TIMEOUT 10 LABELS "component_only;offline")
+endif()
+
 ament_package()

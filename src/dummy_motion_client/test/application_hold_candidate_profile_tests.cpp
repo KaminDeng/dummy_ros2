@@ -450,6 +450,70 @@ int main(int argc, char **argv) {
          digest(candidate["payloads"][2]["sha256"].as<std::string>()));
   assert(functional_profile.profile_hash == digest(candidate["compiled_policy_sha256"].as<std::string>()));
   assert(functional_profile.profile_hash != digest(candidate["payloads"][2]["sha256"].as<std::string>()));
+  // COMPONENT_ONLY: synthetic APP single-run raw binding, never target qualification.
+  auto limited_activation = YAML::Clone(functional_activation);
+  limited_activation["basis"] = "NO_LOAD_DEV_FUNCTIONAL_LIMITED";
+  limited_activation["goal_limit"] = 2;
+  limited_activation["operator_powered_fixed_no_load"] = true;
+  limited_activation["goal_timeline_path"] = (functional_root / "limited-goals.csv").string();
+  auto single_hil = YAML::Clone(hil);
+  single_hil["requested_cycles"] = 1;
+  single_hil["executed_cycles"] = 1;
+  single_hil["passed_cycles"] = 1;
+  auto single_cycles = YAML::Node(YAML::NodeType::Sequence);
+  single_cycles.push_back(hil["cycles"][0]);
+  single_hil["cycles"] = single_cycles;
+  auto single_index = YAML::Clone(raw_index);
+  auto single_bindings = YAML::Node(YAML::NodeType::Sequence);
+  single_bindings.push_back(raw_index["cycles"][0]);
+  single_index["cycles"] = single_bindings;
+  { std::ofstream output(hil_path); output << single_hil; }
+  { std::ofstream output(raw_index_path); output << single_index; }
+  limited_activation["hil_report_sha256"] = file_sha256(hil_path);
+  limited_activation["hil_raw_index_sha256"] = file_sha256(raw_index_path);
+  { std::ofstream output(activation_path); output << limited_activation; }
+  functional_request.expected_activation_sha256 = file_sha256(activation_path);
+  const auto limited_profile = dummy_motion_client::load_device_profile(
+    candidate_root.string(), "f405_6dof_bench", 201U, 63U, functional_request);
+  assert(limited_profile.functional_development_basis);
+  assert(limited_profile.no_load_basis == dummy_motion_client::NoLoadBasis::kFunctionalLimited);
+  assert(limited_profile.goal_limit == 2U && limited_profile.limited_boot_epoch != 0U);
+  const auto limited_rejects = [&](const YAML::Node& changed) {
+    { std::ofstream output(activation_path); output << changed; }
+    auto checked = functional_request;
+    checked.expected_activation_sha256 = file_sha256(activation_path);
+    try { (void)dummy_motion_client::load_device_profile(
+      candidate_root.string(), "f405_6dof_bench", 201U, 63U, checked); }
+    catch(const std::invalid_argument&) { return true; }
+    return false;
+  };
+  for(const auto limit : {0,3}) {
+    auto changed=YAML::Clone(limited_activation); changed["goal_limit"]=limit;
+    assert(limited_rejects(changed));
+  }
+  auto bool_limit=YAML::Clone(limited_activation); bool_limit["goal_limit"]=true;
+  assert(limited_rejects(bool_limit));
+  auto string_limit=YAML::Clone(limited_activation); string_limit["goal_limit"]=std::string("1");
+  string_limit["goal_limit"].SetTag("tag:yaml.org,2002:str");
+  assert(limited_rejects(string_limit));
+  auto unapproved=YAML::Clone(limited_activation); unapproved["operator_powered_fixed_no_load"]=false;
+  assert(limited_rejects(unapproved));
+  auto bad_identity=YAML::Clone(limited_activation); bad_identity["model_sha256"]=std::string(64,'a');
+  assert(limited_rejects(bad_identity));
+  auto unknown=YAML::Clone(limited_activation); unknown["basis"]="UNKNOWN";
+  assert(limited_rejects(unknown));
+  auto legacy_single=YAML::Clone(limited_activation); legacy_single["basis"]="NO_LOAD_DEV_FUNCTIONAL";
+  assert(limited_rejects(legacy_single));
+  { std::ofstream output(functional_root / "limited-goals.csv"); output << "previous owned invocation"; }
+  assert(limited_rejects(limited_activation));
+  std::filesystem::remove(functional_root / "limited-goals.csv");
+
+
+  { std::ofstream output(hil_path); output << hil; }
+  { std::ofstream output(raw_index_path); output << raw_index; }
+  { std::ofstream output(activation_path); output << functional_activation; }
+  functional_request.expected_activation_sha256 = file_sha256(activation_path);
+
   dummy_motion_client::DeviceStatusIdentity live_status{};
   live_status.contract_hash = functional_profile.contract_hash;
   live_status.model_hash = functional_profile.model_hash;
@@ -622,7 +686,9 @@ int main(int argc, char **argv) {
       (fixture / "report.json").string(), real_activation["device_id"].as<std::string>(),
       real_activation["usb_serial"].as<std::string>(), real_activation["endpoint"].as<std::string>()};
     const auto real_basis = real_activation["basis"];
-    const bool functional = real_basis && real_basis.as<std::string>() == "NO_LOAD_DEV_FUNCTIONAL";
+    const bool functional = real_basis &&
+      (real_basis.as<std::string>() == "NO_LOAD_DEV_FUNCTIONAL" ||
+       real_basis.as<std::string>() == "NO_LOAD_DEV_FUNCTIONAL_LIMITED");
     if (functional) {
       real_request.qualification_report_path.clear();
       real_request.d_regression_report_path = (fixture / "d-regression.xml").string();
