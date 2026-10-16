@@ -39,11 +39,19 @@ class MoveItPlanner:
     """call_async 返回 future，由原面板 rclpy.spin_once 驱动。"""
     def __init__(self, node, names, limits_deg):
         from moveit_msgs.srv import GetMotionPlan, GetPositionFK, GetPositionIK, GetStateValidity
+        from rclpy.qos import QoSProfile, qos_profile_services_default
         self.node, self.names, self.limits = node, list(names), limits_deg
         self.fk = node.create_client(GetPositionFK, '/compute_fk')
         self.ik = node.create_client(GetPositionIK, '/compute_ik')
         self.plan = node.create_client(GetMotionPlan, '/plan_kinematic_path')
-        self.validity = node.create_client(GetStateValidity, '/check_state_validity')
+        # 每批8个请求；重复服务实例可能返回多份响应，默认depth=10会丢掉未处理的响应。
+        # 保持服务的可靠性/持久性语义，只增加此只读客户端的响应容量。
+        validity_qos = QoSProfile(
+            depth=32, history=qos_profile_services_default.history,
+            reliability=qos_profile_services_default.reliability,
+            durability=qos_profile_services_default.durability)
+        self.validity = node.create_client(GetStateValidity, '/check_state_validity',
+                                           qos_profile=validity_qos)
 
     def robot_state(self, positions):
         from moveit_msgs.msg import RobotState
