@@ -1,4 +1,6 @@
 #include "dummy_motion_client/dp_management_transport.hpp"
+#include "dummy_ros_control/diagnostic_scope.hpp"
+#include "dummy_ros_control/diagnostic_json.hpp"
 #include "dp_comm/dp_comm.hpp"
 #include "dp_dummy_robot_v2_dp_comm.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
@@ -19,6 +21,16 @@ enum class AdmissionReason : std::size_t {
   kNotReady, kNoChannel, kWrongSize, kLockBusy, kQueued, kDecodeFailed, kCount
 };
 void log_admission(AdmissionReason reason,const std::vector<std::uint8_t> &bytes) noexcept {
+  if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+    Service::Request request;
+    const bool valid=wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&request)==wire::CodecResult::kOk;
+    const dummy_ros_control::DiagnosticIdentity expected{request.expected_boot_epoch(),request.expected_session_id(),
+      request.expected_reference_epoch(),request.expected_motion_epoch(),request.request_seq(),request.expected_management_epoch(),valid};
+    journal->reject(dummy_ros_control::DiagnosticReason::kManagementRejected,{},expected,management_now_us(),
+      "management_admission",static_cast<std::uint32_t>(reason));
+    journal->detail("MANAGE_ADMISSION_DIAG reason=%u bytes=%zu",static_cast<unsigned>(reason),bytes.size());
+    return;
+  }
   static std::atomic<unsigned> counts[static_cast<std::size_t>(AdmissionReason::kCount)]{};
   constexpr const char *names[]={"not_ready","no_channel","wrong_size","lock_busy","queued","decode_failed"};
   const auto index=static_cast<std::size_t>(reason);
@@ -242,6 +254,11 @@ bool DpManagementTransport::ready() const noexcept {
     const auto channel=impl_->shared_channel(); return channel && channel->ready;
   }
   return impl_->connected;
+}
+std::string DpManagementTransport::diagnostic_json() const {
+  // 诊断读取不获取/更新control侧cached_channel共享指针锁；registry只try一次。
+  const auto channel=dummy_ros_control::DeviceTransport::management_channel(impl_->shared_parameters);
+  return channel ? dummy_ros_control::diagnostic_journal_json(channel->diagnostics) : "null";
 }
 std::uint8_t DpManagementTransport::raw_evidence_failure() const noexcept {
   if(impl_->connection!=Connection::kDeviceWorker) return 0U;

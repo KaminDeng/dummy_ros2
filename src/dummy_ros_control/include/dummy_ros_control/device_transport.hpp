@@ -1,4 +1,5 @@
 #pragma once
+#include "dummy_ros_control/diagnostic_journal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -275,6 +276,7 @@ bool parse_transport_parameters(
     std::size_t joint_count, TransportParameters *output);
 
 struct TransportStatistics {
+  DiagnosticSnapshot diagnostics{};
   std::uint64_t state_callbacks = 0U;
   std::uint64_t state_messages = 0U;
   std::uint64_t status_messages = 0U;
@@ -325,6 +327,9 @@ class DeviceTransport final {
   bool start();
   void stop();
   TransportStatistics statistics() const noexcept;
+  DiagnosticSnapshot diagnostic_snapshot() const noexcept;
+  std::optional<DiagnosticBlob> diagnostic_blob() const noexcept;
+  std::optional<DiagnosticDetail> diagnostic_detail_record(std::size_t index) const noexcept;
   static std::shared_ptr<DeviceManagementChannel> management_channel(const TransportParameters &) noexcept;
 
  private:

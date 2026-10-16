@@ -25,6 +25,9 @@
 #include "dummy_motion_client/native_goal_validation.hpp"
 #include "dummy_ros_control/guarded_joint_trajectory_controller.hpp"
 #include "dummy_ros_control/command_channel.hpp"
+#include "dummy_ros_control/diagnostic_journal.hpp"
+#include "dummy_ros_control/diagnostic_scope.hpp"
+#include "dummy_ros_control/diagnostic_json.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -530,6 +533,7 @@ template<class Handle> class GoalCancelAdmission {
 
 class GuardedPort final : public ActionPort {
  public:
+  dummy_ros_control::DiagnosticJournal diagnostics;
   std::shared_ptr<Controller> controller;
   dummy_ros_control::CommandIdentity identity{};
   dummy_ros_control::GoalUuid uuid{};
@@ -551,7 +555,7 @@ class GuardedPort final : public ActionPort {
       controller->set_update_sink(dummy_ros_control::controller_update_sink,nullptr);
     } else {
       const auto published = dummy_ros_control::publish_control_update(position.data(),active_count,0,nullptr);
-      std::fprintf(stderr, "GATE_PRIME_DIAG published=%llu boot=%llu session=%llu ref=%u motion=%u ticket=%llu\n",
+      diagnostics.detail( "GATE_PRIME_DIAG published=%llu boot=%llu session=%llu ref=%u motion=%u ticket=%llu\n",
                    static_cast<unsigned long long>(published),
                    static_cast<unsigned long long>(identity.boot),
                    static_cast<unsigned long long>(identity.session), identity.reference_epoch,
@@ -575,7 +579,7 @@ class GuardedPort final : public ActionPort {
       const auto published=dummy_ros_control::publish_control_update(
           hold_position.data(),active_count,0,nullptr);
       if(refresh_diag_count++<3U)
-        std::fprintf(stderr,"GATE_HOLD_REFRESH_DIAG published=%llu motion=%u ticket=%llu\n",
+        diagnostics.detail("GATE_HOLD_REFRESH_DIAG published=%llu motion=%u ticket=%llu\n",
                      static_cast<unsigned long long>(published),identity.motion_epoch,
                      static_cast<unsigned long long>(identity.ticket));
       if(published==0U) failed=true;
@@ -712,10 +716,13 @@ class DeviceActionGate final : public rclcpp::Node {
       }
     }
     evidence_failure_timer_=create_wall_timer(std::chrono::seconds(1),[this] {
-      if(evidence_incomplete_.load() && !evidence_failure_logged_.exchange(true))
-        RCLCPP_ERROR(get_logger(),"EVIDENCE_INCOMPLETE timeline_failed=%d raw_failure=%u",
+      if(evidence_incomplete_.load() && !evidence_failure_logged_.exchange(true)) {
+        port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kEvidenceFailure,
+          management_now_us(),"evidence_incomplete");
+        port_.diagnostics.detail("EVIDENCE_INCOMPLETE timeline_failed=%d raw_failure=%u",
           timeline_ && timeline_->failed(),
           transport_ ? static_cast<unsigned>(transport_->raw_evidence_failure()) : 0U);
+      }
     });
     port_.active_count=profile_.joints.size();
     transport_=std::make_unique<DpManagementTransport>(parameters_,DpManagementTransport::Connection::kDeviceWorker);
@@ -790,6 +797,16 @@ class DeviceActionGate final : public rclcpp::Node {
         else response->message=bootstrap_status_message(bootstrap_->phase(),bootstrap_->error(),
           false,enabled_,gate_->ready(),operation_complete);
       });
+    // 既有bootstrap/2秒receipt消息合同保持；独立只读CB组不占control admission锁。
+    diagnostic_callback_group_=create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    diagnostic_snapshot_service_=create_service<std_srvs::srv::Trigger>("~/diagnostic_snapshot",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+             std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        response->success=true;
+        response->message="{\"schema\":\"DUMMY_ROS_DIAGNOSTIC_SNAPSHOT_V1\",\"gate\":"+
+          dummy_ros_control::diagnostic_journal_json(port_.diagnostics)+",\"worker\":"+
+          (transport_?transport_->diagnostic_json():"null")+"}";
+      },rclcpp::ServicesQoS(),diagnostic_callback_group_);
     last_goal_rejection_service_=create_service<std_srvs::srv::Trigger>("~/last_goal_rejection",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -851,31 +868,39 @@ class DeviceActionGate final : public rclcpp::Node {
     server_=rclcpp_action::create_server<Follow>(this,"/arm_controller/follow_joint_trajectory",
       [this](const rclcpp_action::GoalUUID &uuid,std::shared_ptr<const Follow::Goal> goal) {
         if(!validated_device_trajectory(*goal,profile_)) {
+          port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGoalValidation,
+            management_now_us(),"kInvalid");
           goal_rejection_receipt_.record(uuid,GoalRejectionReason::kInvalid,
             renewal_reserved_.load(),false,release_stage_.load(),evidence_incomplete_.load(),
             bootstrap_fault_snapshot_.load(),GoalRejectionReceipt::Clock::now());
-          RCLCPP_WARN(get_logger(),"DEVICE_GOAL_REJECTED_VALIDATION"); return rclcpp_action::GoalResponse::REJECT;
+          port_.diagnostics.detail("DEVICE_GOAL_REJECTED_VALIDATION"); return rclcpp_action::GoalResponse::REJECT;
         }
         if(!ready_.load()) {
+          port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGoalNotReady,
+            management_now_us(),"kNotReady");
           goal_rejection_receipt_.record(uuid,GoalRejectionReason::kNotReady,
             renewal_reserved_.load(),admission_prerequisites_.load(),release_stage_.load(),
             evidence_incomplete_.load(),bootstrap_fault_snapshot_.load(),
             GoalRejectionReceipt::Clock::now());
-          std::fprintf(stderr,"GATE_GOAL_REJECTED_DIAG reason=not_ready busy=%u observation=%u renewal=%u release=%d evidence=%u\n",
+          port_.diagnostics.detail("GATE_GOAL_REJECTED_DIAG reason=not_ready busy=%u observation=%u renewal=%u release=%d evidence=%u\n",
             busy_.load() ? 1U : 0U,observation_ready_.load() ? 1U : 0U,
             renewal_reserved_.load() ? 1U : 0U,release_stage_.load(),
             evidence_incomplete_.load() ? 1U : 0U);
           return rclcpp_action::GoalResponse::REJECT;
         }
         if(busy_.exchange(true)) {
+          port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGoalBusy,
+            management_now_us(),"kBusy");
           goal_rejection_receipt_.record(uuid,GoalRejectionReason::kBusy,
             renewal_reserved_.load(),false,release_stage_.load(),evidence_incomplete_.load(),
             bootstrap_fault_snapshot_.load(),GoalRejectionReceipt::Clock::now());
-          std::fprintf(stderr,"GATE_GOAL_REJECTED_DIAG reason=busy\n");
+          port_.diagnostics.detail("GATE_GOAL_REJECTED_DIAG reason=busy\n");
           return rclcpp_action::GoalResponse::REJECT;
         }
         // 取得唯一busy后复核ready，阻止读旧ready的callback跨最后预算消费。
         if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited && !ready_.load()) {
+          port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGoalNotReady,
+            management_now_us(),"budget_admission_changed");
           busy_=false;
           return rclcpp_action::GoalResponse::REJECT;
         }
@@ -898,6 +923,7 @@ class DeviceActionGate final : public rclcpp::Node {
     }
   }
   void cycle() noexcept {
+    dummy_ros_control::HostDiagnosticScope diagnostic_scope(port_.diagnostics);
     auto admission=cancel_admission_.try_control();
     if(!admission) return;
     try {
@@ -905,7 +931,8 @@ class DeviceActionGate final : public rclcpp::Node {
       bootstrap_fault_snapshot_=bootstrap_->phase()==BootstrapPhase::kFault;
     }
     catch(const std::exception &error) {
-      RCLCPP_ERROR(get_logger(),"DEVICE_GATE_FAULT: %s",error.what());
+      port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGateFault,management_now_us(),error.what());
+      port_.diagnostics.detail("DEVICE_GATE_FAULT: %s",error.what());
       bootstrap_fault_snapshot_=true;
       admission_prerequisites_=false;
       gate_->abort("INTERNAL_BRIDGE_FAILURE",management_now_us()); ready_=false;
@@ -913,6 +940,7 @@ class DeviceActionGate final : public rclcpp::Node {
     if(!active_ || gate_->terminal()!=Terminal::kNone) admission.close();
   }
   void prepare_update() noexcept {
+    dummy_ros_control::HostDiagnosticScope diagnostic_scope(port_.diagnostics);
     auto admission=cancel_admission_.try_control();
     if(!admission) return;
     try {
@@ -955,13 +983,17 @@ class DeviceActionGate final : public rclcpp::Node {
       bootstrap_fault_snapshot_=fault;
       if(fault) admission_prerequisites_=false;
     } catch(const std::exception &error) {
-      RCLCPP_ERROR(get_logger(),"DEVICE_GATE_OBSERVATION: %s",error.what());
+      port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kObservationRejected,management_now_us(),error.what());
+      port_.diagnostics.detail("DEVICE_GATE_OBSERVATION: %s",error.what());
       bootstrap_fault_snapshot_=true;
       admission_prerequisites_=false;
       gate_->abort("INTERNAL_BRIDGE_FAILURE",management_now_us()); ready_=false;
     }
     if(!active_ || gate_->terminal()!=Terminal::kNone) admission.close();
   }
+  dummy_ros_control::DiagnosticSnapshot diagnostic_snapshot() const noexcept { return port_.diagnostics.snapshot(); }
+  std::optional<dummy_ros_control::DiagnosticBlob> diagnostic_blob() const noexcept { return port_.diagnostics.blob_record(); }
+
  private:
   bool reserve_lease_renewal(bool explicit_request=false) noexcept {
     if(explicit_request && explicit_renewal_status_.load()<0) return false;
@@ -985,15 +1017,23 @@ class DeviceActionGate final : public rclcpp::Node {
       return result==ObservationContinuity::Result::kReady;
     };
     if(!observed || observed->state.empty() || observed->status.empty()) {
-      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_EMPTY");
+      const auto identities=port_.diagnostics.context();
+      port_.diagnostics.reject(dummy_ros_control::DiagnosticReason::kObservationRejected,{},identities.second,now,"empty_observation");
+      port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_REJECTED_EMPTY");
       return wait_for_observation(observed.value_or(DeviceObservation{}),false);
     }
     wire::DummyDeviceStatusV2 status; wire::DummyJointStateV2 state;
     if(wire::DummyDeviceStatusV2Codec::decode(observed->status.data(),observed->status.size(),&status)!=wire::CodecResult::kOk ||
        wire::DummyJointStateV2Codec::decode(observed->state.data(),observed->state.size(),&state)!=wire::CodecResult::kOk) {
-      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_CODEC");
+      const auto identities=port_.diagnostics.context();
+      port_.diagnostics.reject(dummy_ros_control::DiagnosticReason::kObservationRejected,{},identities.second,now,"decode");
+      port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_REJECTED_CODEC");
       observation_lost_=true; return false;
     }
+    port_.diagnostics.publish_context(
+      {state.boot_epoch(),state.session_id(),state.reference_epoch(),state.motion_epoch(),state.state_seq(),state.management_epoch(),true},
+      {port_.identity.boot,port_.identity.session,port_.identity.reference_epoch,port_.identity.motion_epoch,
+       dummy_ros_control::wire_producer_sequence(last_update_),0U,port_.identity.boot!=0U});
     if (active_ && gate_->terminal()==Terminal::kNone &&
         observed->rejected_ack_received_us>last_typed_reject_seen_us_ &&
         observed->rejected_ack_sequence!=0U &&
@@ -1005,8 +1045,9 @@ class DeviceActionGate final : public rclcpp::Node {
       last_typed_reject_seen_us_=observed->rejected_ack_received_us;
       gate_->abort("DEVICE_COMMAND_REJECTED_DURING_ACK",now);
     }
-    const auto reject=[this](const char *reason) {
-      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_REJECTED_%s",reason);
+    const auto reject=[this,now](const char *reason) {
+      port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kBootstrapRejected,now,reason);
+      port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_REJECTED_%s",reason);
       observation_lost_=true;
       return false;
     };
@@ -1075,7 +1116,7 @@ class DeviceActionGate final : public rclcpp::Node {
                     state.reference_epoch()==status.reference_epoch()) :
                    (enabled_ || bootstrap_authority_coherent(status,state)));
     if(!wait_for_observation(*observed,coherent)) {
-      RCLCPP_WARN_THROTTLE(get_logger(),*get_clock(),1000,"DEVICE_BOOTSTRAP_INPUT_WAITING_FOR_COHERENT_OBSERVATION");
+      port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_WAITING_FOR_COHERENT_OBSERVATION");
       return false;
     }
     if(enabled_ && !releasing) {
@@ -1142,7 +1183,7 @@ class DeviceActionGate final : public rclcpp::Node {
        status.core_state()==wire_value(WireCoreState::kHold) &&
        !canceled_refresh_hold) {
       cancel_refresh_diagnostic_logged_=true;
-      std::fprintf(stderr,
+      port_.diagnostics.detail(
         "CANCEL_REFRESH_DIAG run=%llu boot=%llu session=%llu ref=%u epoch=%u goal_run=%llu "
         "status_run=%llu status_boot=%llu status_session=%llu status_ref=%u status_epoch=%u "
         "status_core=%u status_kind=%u status_parent=%llu status_final=%u status_complete=%u status_lost=%u "
@@ -1253,7 +1294,7 @@ class DeviceActionGate final : public rclcpp::Node {
         if(!evidence_incomplete_.exchange(true)) {
           const auto wait_age=now>=timeline_refresh_wait_started_us_ ?
             now-timeline_refresh_wait_started_us_ : 0U;
-          std::fprintf(stderr,
+          port_.diagnostics.detail(
             "REFRESH_CLOSURE_DIAG closure_failure=%s wait_failure=%s prior_hold=%u "
             "raw_capture=%u raw_terminal_matched=%u raw_failure=%u "
             "successor_page_present=%u successor_page_verified=%u page_run=%llu page_boot=%llu "
@@ -1425,7 +1466,7 @@ class DeviceActionGate final : public rclcpp::Node {
     if(renewal_running_.load() && !run_lease_active) {
       if(!run_lease_diag_reported_) {
         run_lease_diag_reported_=true;
-        std::fprintf(stderr,
+        port_.diagnostics.detail(
           "RUN_LEASE_DIAG first_false=%s now_us=%llu age_budget_us=%llu "
           "status_running=%d state_running=%d status_state_coherent=%d same_goal_run=%d "
           "producer_active=%d producer_recent=%d transport_ready_input=%d "
@@ -1489,7 +1530,7 @@ class DeviceActionGate final : public rclcpp::Node {
               latest_bootstrap_,requested_lease_us_,now)) :
             bootstrap_->start_operation(latest_bootstrap_,operation,now);
         if(!started) {
-          RCLCPP_WARN(get_logger(),"EXPLICIT_MANAGEMENT_OPERATION_REJECTED operation=%d",requested);
+          port_.diagnostics.detail("EXPLICIT_MANAGEMENT_OPERATION_REJECTED operation=%d",requested);
           if(operation==ManageOperation::kRenewLease) {
             bootstrap_->invalidate("LEASE_RENEWAL_REJECTED");
             clear_failed_lease_renewal(management_request_,busy_,renewal_reserved_,
@@ -1627,7 +1668,8 @@ class DeviceActionGate final : public rclcpp::Node {
   void report_bootstrap_fault(std::uint64_t now) {
     if(bootstrap_fault_reported_) return;
     bootstrap_fault_reported_=true;
-    std::fprintf(stderr,
+    port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kBootstrapRejected,now,bootstrap_->error());
+    port_.diagnostics.detail(
       "BOOTSTRAP_FAULT_DIAG now=%llu error=%s boot=%llu session=%llu observation_lost=%d renewal_reserved=%d gate_phase=%u\n",
       static_cast<unsigned long long>(now),bootstrap_->error(),
       static_cast<unsigned long long>(latest_bootstrap_.boot_epoch),
@@ -1668,7 +1710,7 @@ class DeviceActionGate final : public rclcpp::Node {
   void cycle_impl(GoalCancelAdmission<GoalHandle>::Control &admission) {
     static unsigned cycle_diag_count=0U;
     if(port_.direct_hold_started && cycle_diag_count++<3U)
-      std::fprintf(stderr,"GATE_CYCLE_DIAG direct_hold=%d publishing=%d failed=%d enabled=%d observation_ready=%d gate_ready=%d error=%s\n",
+      port_.diagnostics.detail("GATE_CYCLE_DIAG direct_hold=%d publishing=%d failed=%d enabled=%d observation_ready=%d gate_ready=%d error=%s\n",
                    port_.direct_hold,port_.publishing,port_.failed,enabled_,
                    observation_ready_.load(),gate_->ready(),gate_->error().c_str());
     const auto now=management_now_us();
@@ -1925,6 +1967,8 @@ class DeviceActionGate final : public rclcpp::Node {
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr enable_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bootstrap_status_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr last_goal_rejection_service_;
+  rclcpp::CallbackGroup::SharedPtr diagnostic_callback_group_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr diagnostic_snapshot_service_;
   std::vector<rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr> management_services_;
   std::atomic<bool> ready_{false}, busy_{false};
   PendingGoalCancels<GoalHandle> cancel_requests_;

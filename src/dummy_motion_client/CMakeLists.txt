@@ -24,7 +24,8 @@ if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp")
 endif()
 add_library(dummy_device_action STATIC
   src/action_gate.cpp src/bench_permit.cpp src/bootstrap_coordinator.cpp src/management_client.cpp)
-target_link_libraries(dummy_device_action PUBLIC OpenSSL::Crypto)
+target_link_libraries(dummy_device_action PUBLIC OpenSSL::Crypto
+  PRIVATE dummy_ros_control::dummy_goal_registration_gate)
 target_compile_features(dummy_device_action PUBLIC cxx_std_17)
 target_include_directories(dummy_device_action PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -209,6 +210,14 @@ if(BUILD_TESTING)
     set_tests_properties(shared_admission_retry_${mode} PROPERTIES LABELS "component_only;offline" TIMEOUT 5)
   endforeach()
 
+  add_executable(management_logging_scope_tests test/management_logging_scope_tests.cpp)
+  target_compile_options(management_logging_scope_tests PRIVATE -UNDEBUG)
+  target_link_libraries(management_logging_scope_tests PRIVATE dummy_dp_management)
+  add_test(NAME management_scope_slow_stderr
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/test/run_slow_stderr_fixture.py"
+      "$<TARGET_FILE:management_logging_scope_tests>")
+  set_tests_properties(management_scope_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline"
+    ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:dummy_ros_control::dummy_command_channel>:$ENV{LD_LIBRARY_PATH}")
   add_executable(shared_management_channel_tests test/shared_management_channel_tests.cpp)
   target_link_libraries(shared_management_channel_tests dummy_dp_management)
   ament_target_dependencies(shared_management_channel_tests hardware_interface)
@@ -262,6 +271,10 @@ if(BUILD_TESTING)
   ament_target_dependencies(direct_hold_handoff_tests controller_manager control_msgs rclcpp rclcpp_action
     controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
   add_test(NAME direct_hold_handoff_tests COMMAND direct_hold_handoff_tests)
+  add_test(NAME gate_control_slow_stderr
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/test/run_slow_stderr_fixture.py"
+      "$<TARGET_FILE:direct_hold_handoff_tests>")
+  set_tests_properties(gate_control_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline")
   add_executable(device_lease_transition_tests test/device_lease_transition_tests.cpp)
   target_link_libraries(device_lease_transition_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel

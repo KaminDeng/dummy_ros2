@@ -23,9 +23,9 @@ set(DUMMY_DP_COMM_SDK_SOURCES
   "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like_transport.cpp"
   "${DPSDK_ROOT}/platform/common/dp_comm_pico_port/dp_comm_port.cpp")
 set(DUMMY_DP_COMM_SDK_HASHES
-  9d0063695f25b7ceaa965823a77c25d005f6d20c1adfd2deee66738a48184a66
-  6411da9b4c32b6caebb1800d12392071af2e68d46ad97b22ac1c2af6e5c002ae
-  55f28e0e178e104c0c97e6ea8af848b5a304ae05997380adcf96eed9b03049b0)
+  66806c92e523e70489577c9086d083c068a195ab4322d5c03d36edc4dbd0817c
+  ec5dfd24763098b5ca79e3d32618afa69b88b62aaca7e574eaff303974bcd7f5
+  6b0e6d369ae8b1d2fefd1cd877ded9d6bd7d4f73c1b035b06c363de6cf86732e)
 set(source_index 0)
 foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
   if(NOT EXISTS "${source}")
@@ -110,6 +110,12 @@ ament_target_dependencies(dummy_guarded_zenbedded_system hardware_interface plug
 pluginlib_export_plugin_description_file(hardware_interface dummy_ros_control_plugins.xml)
 
 if(BUILD_TESTING)
+  add_executable(diagnostic_journal_tests test/diagnostic_journal_tests.cpp)
+  target_compile_features(diagnostic_journal_tests PRIVATE cxx_std_17)
+  target_include_directories(diagnostic_journal_tests PRIVATE include)
+  target_link_libraries(diagnostic_journal_tests PRIVATE pthread)
+  add_test(NAME diagnostic_journal_slow_stderr_and_retention COMMAND diagnostic_journal_tests)
+  set_tests_properties(diagnostic_journal_slow_stderr_and_retention PROPERTIES TIMEOUT 5 LABELS "component_only;offline")
   add_executable(trajectory_digest_tests test/trajectory_digest_tests.cpp)
   target_link_libraries(trajectory_digest_tests PRIVATE dummy_guarded_joint_trajectory_controller)
   add_test(NAME trajectory_digest_tests COMMAND trajectory_digest_tests)
@@ -133,6 +139,11 @@ if(BUILD_TESTING)
     "${DPSDK_ROOT}/applications/dummy_ref_control/include")
   target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME transport_worker_slow_stderr
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/run_slow_stderr_fixture.py"
+      "$<TARGET_FILE:transport_component_tests>" six_axis)
+  set_tests_properties(transport_worker_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline;synthetic_pty")
   # 仅Host测试：真实Core停止握手+现SDK/Worker回调，非设备/完整Node资格。
   get_filename_component(_safe_prime_core_root "${ROS_WORKSPACE_ROOT}/../dpsdk" ABSOLUTE)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
@@ -434,6 +445,8 @@ if(BUILD_TESTING)
   target_link_libraries(nonblocking_tests dummy_guarded_zenbedded_system)
 
   add_executable(wire_probe_tests test/wire_probe_tests.cpp)
+  # 白盒thunk的typed-decode观察边界来自实际当前runtime，不提供测试空stub。
+  target_link_libraries(wire_probe_tests PRIVATE dummy_dp_comm)
   target_compile_features(wire_probe_tests PRIVATE cxx_std_17)
   target_include_directories(wire_probe_tests PRIVATE
     "${DUMMY_WIRE_INCLUDE}"
@@ -483,6 +496,16 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
     FIXTURES_REQUIRED dummy_plugin_test_prefix
     ENVIRONMENT "AMENT_PREFIX_PATH=${DUMMY_PLUGIN_TEST_PREFIX}:/opt/ros/jazzy;LD_LIBRARY_PATH=${DUMMY_PLUGIN_TEST_PREFIX}/lib:${CMAKE_CURRENT_BINARY_DIR}:/opt/ros/jazzy/lib")
 
+  # 当前公共头只能配当前runtime，原析构测试独立保618/18000容量与测试hook。
+  add_library(dummy_dp_comm_current_test_runtime STATIC
+    "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like.cpp")
+  target_compile_features(dummy_dp_comm_current_test_runtime PUBLIC cxx_std_17)
+  get_target_property(_dummy_test_runtime_includes dummy_dp_comm_pic INCLUDE_DIRECTORIES)
+  get_target_property(_dummy_test_runtime_defines dummy_dp_comm_pic COMPILE_DEFINITIONS)
+  list(FILTER _dummy_test_runtime_defines EXCLUDE REGEX "^DP_COMM_RUNTIME_(MAX_MESSAGE_BYTES|STORAGE_BYTES)=")
+  target_include_directories(dummy_dp_comm_current_test_runtime PRIVATE ${_dummy_test_runtime_includes})
+  target_compile_definitions(dummy_dp_comm_current_test_runtime PRIVATE ${_dummy_test_runtime_defines}
+    DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000 DP_COMM_TESTING=1)
   add_executable(request_handle_destructor_tests test/request_handle_destructor_tests.cpp)
   target_include_directories(request_handle_destructor_tests PRIVATE
     "${DPSDK_ROOT}/libraries/dp_comm/include")
@@ -491,7 +514,7 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
     DP_COMM_RUNTIME_STORAGE_BYTES=18000
     DP_COMM_TESTING=1)
   target_link_libraries(request_handle_destructor_tests
-    "${DPSDK_ROOT}/build_dummy/g6-host/libraries/dp_comm/libdp_comm_ros_like_runtime.a"
+    dummy_dp_comm_current_test_runtime
     "${DPSDK_ROOT}/build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a"
     "${DPSDK_ROOT}/build_dummy/g6-host/platform_common_console_device/libdp_console_device.a"
     pthread)

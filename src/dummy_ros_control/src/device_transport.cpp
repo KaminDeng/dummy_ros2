@@ -1,4 +1,5 @@
 #include "dummy_ros_control/device_transport.hpp"
+#include "dummy_ros_control/diagnostic_journal.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -118,6 +119,19 @@ bool motion_authorizing_operation(std::uint16_t operation) noexcept {
       return false;
   }
 }
+thread_local DiagnosticJournal* worker_diagnostics=nullptr;
+struct WorkerDiagnosticScope {
+  DiagnosticJournal* prior;
+  explicit WorkerDiagnosticScope(DiagnosticJournal& journal) noexcept :prior(worker_diagnostics) {worker_diagnostics=&journal;}
+  ~WorkerDiagnosticScope() {worker_diagnostics=prior;}
+};
+template<class... Args> void diagnostic_detail(const char* format,Args... args) noexcept {
+  if(worker_diagnostics)worker_diagnostics->detail(format,args...);
+}
+DiagnosticIdentity request_diagnostic_identity(const Management::Request& request) noexcept {
+  return {request.expected_boot_epoch(),request.expected_session_id(),request.expected_reference_epoch(),request.expected_motion_epoch(),
+          request.request_seq(),request.expected_management_epoch(),true};
+}
 RawEvidenceIdentity raw_evidence_identity(const TransportParameters &parameters) noexcept {
   return {parameters.client_instance_id, parameters.contract_hash, parameters.model_hash,
           parameters.profile_hash, parameters.firmware_hash};
@@ -129,11 +143,17 @@ std::uint64_t management_request_id(const DeviceManagementRequest &pending) noex
 }
 void log_management_handoff(const DeviceManagementRequest &pending,const char *reason,
                             dp::comm::Result result=dp::comm::Result::kOk) noexcept {
+  if(worker_diagnostics && std::strstr(reason,"would_block")==nullptr) {
+    Management::Request decoded;
+    const bool valid=wire::DummyManageV2RequestCodec::decode(pending.request.data(),pending.request.size(),&decoded)==wire::CodecResult::kOk;
+    worker_diagnostics->reject(DiagnosticReason::kManagementRejected,{},
+      valid ? request_diagnostic_identity(decoded) : DiagnosticIdentity{},transport_steady_now_us(),reason,static_cast<std::uint32_t>(result));
+  }
   static std::atomic<unsigned> async_count{0U}, reply_count{0U}, handoff_count{0U};
   auto &count=std::strcmp(reason,"async_request_failed")==0 ? async_count :
       std::strcmp(reason,"reply_failed")==0 ? reply_count : handoff_count;
   if(count.fetch_add(1U,std::memory_order_relaxed)>=128U) return;
-  std::fprintf(stderr,"MANAGE_WORKER_DIAG reason=%s request_id=%llu result=%u\n",
+  diagnostic_detail("MANAGE_WORKER_DIAG reason=%s request_id=%llu result=%u\n",
       reason,static_cast<unsigned long long>(management_request_id(pending)),
       static_cast<unsigned>(result));
 }
@@ -232,6 +252,7 @@ struct DeviceTransport::Impl {
   std::uint64_t raw_fault_trusted_boot=0U,raw_fault_trusted_produced=0U,raw_fault_trusted_anchor_received=0U;
   std::uint32_t raw_fault_trusted_sequence=0U;
   std::int64_t raw_fault_trusted_offset=0,raw_fault_trusted_anchor_offset=0;
+  DiagnosticJournal& diagnostics=management->diagnostics;
   std::atomic<bool> running{false}, ready{false}, failed{false};
   std::thread worker;
   std::atomic<std::uint64_t> states{0}, statuses{0}, stale_run_status_rejections{0};
@@ -793,8 +814,12 @@ struct DeviceTransport::Impl {
       command_sent = false;
     } else {
       ++group_sent_ack_misses;
+      diagnostics.reject(DiagnosticReason::kCommandRejected,
+        {message.boot_epoch(),message.session_id(),message.reference_epoch(),message.motion_epoch(),message.committed_producer_seq(),message.management_epoch(),true},
+        {boot,status.session_id(),status.reference_epoch(),authorized_motion_epoch,group_sent_ack.sequence(),status.management_epoch(),boot!=0U},
+        transport_steady_now_us(),"ack_identity_or_sequence");
       if (ack_mismatch_diag_count++ < 10U)
-        fprintf(stderr,"COMMAND_ACK_DIAG expected_seq=%u observed_seq=%u status_seq=%u sent_mask=%u session=%llu/%llu motion=%u/%u\n",
+        diagnostic_detail("COMMAND_ACK_DIAG expected_seq=%u observed_seq=%u status_seq=%u sent_mask=%u session=%llu/%llu motion=%u/%u\n",
                 group_sent_ack.sequence(),message.committed_producer_seq(),
                 status.committed_producer_seq(),message.can_sent_mask(),
                 static_cast<unsigned long long>(message.session_id()),
@@ -907,7 +932,7 @@ struct DeviceTransport::Impl {
     }
     if(!complete_boundary_hold_diag_logged && status.core_state()==kWireHold) {
       complete_boundary_hold_diag_logged=true;
-      std::fprintf(stderr,
+      diagnostic_detail(
           "POST_COMPLETE_WRITE seq=%u action=%u pending_age_us=%llu confirmed=%d hold_age_us=%llu delta_rad=%.9f tolerance_rad=%.9f\n",
           wire_producer_sequence(record.generation),static_cast<unsigned>(result),
           static_cast<unsigned long long>(pending_complete.request_id!=0U &&
@@ -940,9 +965,21 @@ struct DeviceTransport::Impl {
 
   void log_state_rejection(const char *reason, const State &value,
                            std::uint64_t received_us) noexcept {
+    const DiagnosticIdentity observed{value.boot_epoch(),value.session_id(),value.reference_epoch(),
+      value.motion_epoch(),value.state_seq(),value.management_epoch(),true};
+    const DiagnosticIdentity expected{boot,status.session_id(),status.reference_epoch(),
+      authorized_motion_epoch,last_sequence,status.management_epoch(),boot!=0U};
+    const auto kind=std::strcmp(reason,"identity_or_bootstrap")==0 ? DiagnosticReason::kStateIdentity :
+      std::strcmp(reason,"authority")==0 ? DiagnosticReason::kStateAuthority :
+      std::strcmp(reason,"sequence_or_timestamp")==0 ? DiagnosticReason::kStateSequence :
+      (std::strcmp(reason,"clock_skew")==0 || std::strcmp(reason,"timestamp_overflow")==0) ? DiagnosticReason::kStateClock :
+      std::strcmp(reason,"codec")==0 ? DiagnosticReason::kStateCodec :
+      std::strcmp(reason,"stop_latched")==0 ? DiagnosticReason::kStateStopLatched :
+      std::strcmp(reason,"ingest")==0 ? DiagnosticReason::kStateIngest : DiagnosticReason::kStateAge;
+    diagnostics.reject(kind,observed,expected,received_us,reason);
     if (received_us - last_rejection_log_us < 1000000U) return;
     last_rejection_log_us = received_us;
-    fprintf(stderr, "device transport state rejected: reason=%s seq=%u produced_us=%llu received_us=%llu boot=%llu session=%llu ref=%u motion=%u expected_session=%llu expected_ref=%u expected_motion=%u status_motion=%u state_management=%u status_management=%u\n",
+    diagnostic_detail( "device transport state rejected: reason=%s seq=%u produced_us=%llu received_us=%llu boot=%llu session=%llu ref=%u motion=%u expected_session=%llu expected_ref=%u expected_motion=%u status_motion=%u state_management=%u status_management=%u\n",
             reason, value.state_seq(), static_cast<unsigned long long>(value.produced_at_us()),
             static_cast<unsigned long long>(received_us),
             static_cast<unsigned long long>(value.boot_epoch()),
@@ -1177,7 +1214,7 @@ struct DeviceTransport::Impl {
     }
     if (!self.parameters.raw_evidence_path.empty() && self.bootstrap_ready &&
         !self.bind_evidence_status(value)) {
-      std::fprintf(stderr,
+      diagnostic_detail(
           "RAW_BIND_DIAG run=%llu boot=%llu session=%llu kind=%u parent=%llu core=%u final=%u lost=%u terminal_written_run=%llu last_status_run=%llu failure=%u\n",
           static_cast<unsigned long long>(value.run_id()),
           static_cast<unsigned long long>(value.boot_epoch()),
@@ -1187,6 +1224,7 @@ struct DeviceTransport::Impl {
           static_cast<unsigned long long>(self.raw_evidence.terminal_written_run_id()),
           static_cast<unsigned long long>(self.last_status_run_id),
           static_cast<unsigned>(self.raw_evidence.failure()));
+      self.diagnostics.reject_from_context(DiagnosticReason::kEvidenceFailure,received_us,"raw_status_binding");
       self.raw_evidence.reject_invalid();
       self.failed = true;
       return;
@@ -1265,7 +1303,11 @@ struct DeviceTransport::Impl {
         observation.rejected_ack_sequence=self.group_sent_ack.sequence();
         observation.rejected_ack_received_us=transport_steady_now_us();
       }
-      fprintf(stderr,"DEVICE_COMMAND_REJECTED_DURING_ACK seq=%u rejected=%u committed=%u\n",
+      self.diagnostics.reject(DiagnosticReason::kCommandRejected,
+        {value.boot_epoch(),value.session_id(),value.reference_epoch(),value.motion_epoch(),value.committed_producer_seq(),value.management_epoch(),true},
+        {self.boot,self.status.session_id(),self.status.reference_epoch(),self.authorized_motion_epoch,self.group_sent_ack.sequence(),self.status.management_epoch(),self.boot!=0U},
+        received_us,"device_rejected_during_ack");
+      diagnostic_detail("DEVICE_COMMAND_REJECTED_DURING_ACK seq=%u rejected=%u committed=%u\n",
               self.group_sent_ack.sequence(),value.command_reject_count(),
               value.committed_producer_seq());
       self.group_sent_ack.reset();
@@ -1291,6 +1333,8 @@ struct DeviceTransport::Impl {
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) {
       ++self.state_decode_rejections;
       ++self.rejected_states;
+      const auto identities=self.diagnostics.context();
+      self.diagnostics.reject(DiagnosticReason::kStateRejected,{},identities.second,now,"decode");
       return;
     }
     if (!self.parameters.raw_evidence_path.empty()) {
@@ -1315,6 +1359,9 @@ struct DeviceTransport::Impl {
   }
 
   void process_decoded_state(const State &value,std::uint64_t now,bool replay=false) {
+    diagnostics.publish_context(
+      {value.boot_epoch(),value.session_id(),value.reference_epoch(),value.motion_epoch(),value.state_seq(),value.management_epoch(),true},
+      {boot,status.session_id(),status.reference_epoch(),authorized_motion_epoch,last_sequence,status.management_epoch(),boot!=0U});
     auto &self=*this;
     if(!replay && self.worker_idle_state_candidate(value) && now>=self.gate_release.sent_us)
       self.early_release_idle={value,self.gate_release.request_id,now};
@@ -1512,7 +1559,7 @@ struct DeviceTransport::Impl {
     auto &self = *static_cast<Impl *>(context);
     Evidence value;
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) {
-      std::fprintf(stderr,"RAW_EVIDENCE_DIAG copy_failed\n");
+      diagnostic_detail("RAW_EVIDENCE_DIAG copy_failed\n");
       self.raw_evidence.reject_invalid();
       self.failed = true;
       return;
@@ -1671,7 +1718,7 @@ struct DeviceTransport::Impl {
         binding->parent_run_id != value.parent_run_id() ||
         wire::DummyAttemptEvidenceV2Codec::encode(value, page.raw.data(), page.raw.size()) !=
             wire::CodecResult::kOk) {
-      std::fprintf(stderr,
+      diagnostic_detail(
           "RAW_EVIDENCE_DIAG rejected run=%llu seq=%u kind=%u parent=%llu binding=%u binding_kind=%u binding_parent=%llu status_run=%llu status_core=%u status_motion=%u page_motion=%u terminal_written_run=%llu terminal_receipt_run=%llu terminal_receipt_final=%u failure=%u\n",
           static_cast<unsigned long long>(value.run_id()), value.evidence_seq(),
           value.attempt_kind(), static_cast<unsigned long long>(value.parent_run_id()),
@@ -1704,7 +1751,7 @@ struct DeviceTransport::Impl {
     page.final = value.final() != 0U;
     page.evidence_lost = value.evidence_lost();
     if (!self.raw_evidence.offer_page(page, received_at_us)) {
-      std::fprintf(stderr,
+      diagnostic_detail(
           "RAW_EVIDENCE_DIAG collector_rejected run=%llu seq=%u kind=%u category=%u failure=%u\n",
           static_cast<unsigned long long>(page.run_id), page.evidence_seq,
           page.attempt_kind, page.category,
@@ -1936,7 +1983,7 @@ struct DeviceTransport::Impl {
         record.identity.reference_epoch != status.reference_epoch() ||
         record.identity.motion_epoch != authorized_motion_epoch || record.identity.ticket == 0U ||
         !bootstrap_ready || stop_latched || (stop_confirmation_pending.load(std::memory_order_acquire) && !safe_cancel_prime)) {
-      if (command_prime_reject_diag_count++ < 16U) fprintf(stderr,
+      if (command_prime_reject_diag_count++ < 16U) diagnostic_detail(
           "COMMAND_PRIME_DIAG reject seq=%u current=%d active=%d inactive_prime=%d boot=%llu/%llu session=%llu/%llu ref=%u/%u motion=%u/%u ticket=%llu ready=%d stop=%d\n",
           wire_producer_sequence(record.generation), command_record_current(record),
           system.commands_active(), inactive_prime,
@@ -1955,12 +2002,12 @@ struct DeviceTransport::Impl {
     // freshness are checked again before every retry; no new sample is made.
     if(!system.copy_state(&snapshot)) {
       if (record.identity.motion_epoch == 1U && enabling_copy_failure_log_count++ < 3U)
-        fprintf(stderr, "COMMAND_ENABLE_DIAG copy_state_unavailable seq=%u status_core=%u status_motion=%u authorized_motion=%u\n",
+        diagnostic_detail( "COMMAND_ENABLE_DIAG copy_state_unavailable seq=%u status_core=%u status_motion=%u authorized_motion=%u\n",
                 wire_producer_sequence(record.generation), status.core_state(),
                 status.motion_epoch(), authorized_motion_epoch);
       if (!logged_copy_state_failure) {
         logged_copy_state_failure = true;
-        fprintf(stderr, "COMMAND_PRIME_DIAG copy_state_unavailable seq=%u boot=%llu status_motion=%u authorized_motion=%u\n",
+        diagnostic_detail( "COMMAND_PRIME_DIAG copy_state_unavailable seq=%u boot=%llu status_motion=%u authorized_motion=%u\n",
                 wire_producer_sequence(record.generation),
                 static_cast<unsigned long long>(boot), status.motion_epoch(), authorized_motion_epoch);
       }
@@ -2015,13 +2062,13 @@ struct DeviceTransport::Impl {
       system.request_transport_stop();
     }
     if (message.motion_epoch() == 1U && enabling_publish_log_count++ < 3U)
-      fprintf(stderr, "COMMAND_ENABLE_DIAG publish seq=%u result=%u status_core=%u authorized_motion=%u\n",
+      diagnostic_detail( "COMMAND_ENABLE_DIAG publish seq=%u result=%u status_core=%u authorized_motion=%u\n",
               message.producer_seq(), static_cast<unsigned>(published), status.core_state(),
               authorized_motion_epoch);
     if (!logged_publish_attempt || (published==dp::comm::Result::kOk && !logged_publish_success)) {
       logged_publish_attempt = true;
       if (published==dp::comm::Result::kOk) logged_publish_success = true;
-      fprintf(stderr, "COMMAND_PRIME_DIAG publish seq=%u result=%u boot=%llu session=%llu ref=%u motion=%u\n",
+      diagnostic_detail( "COMMAND_PRIME_DIAG publish seq=%u result=%u boot=%llu session=%llu ref=%u motion=%u\n",
               message.producer_seq(), static_cast<unsigned>(published),
               static_cast<unsigned long long>(message.boot_epoch()),
               static_cast<unsigned long long>(message.session_id()),
@@ -2034,8 +2081,8 @@ struct DeviceTransport::Impl {
         // 原publisher参数的本地成功enqueue观测，不声明USB TX或CAN SENT。
         std::array<std::uint8_t,wire::DummyJointCommandV2Codec::kEncodedSize> encoded{};
         const auto encoded_result=wire::DummyJointCommandV2Codec::encode(message,encoded.data(),encoded.size());
-        ::flockfile(stderr);
-        fprintf(stderr,"STOP_SAFE_PRIME_DIAG version=1 scope=LOCAL_PUBLISH_ARGUMENT result=OK_LOCAL_ENQUEUE cancel_rid=%llu run=%llu producer=%u boot=%llu session=%llu ref=%u motion=%u mgmt=%u profile=%u mask=%u matched_source_state_seq=%u source_produced_us=%llu source_received_us=%llu source_received_clock=HOST_TRANSPORT_STEADY_US source_ticket=%llu send_ticket=%llu send_ticket_first_received_us=%llu publish_now_us=%llu source_is_equivalent_target_frame=1 encoded_size=%zu encoded_status=%s encoded_hex=",
+
+        diagnostic_detail("STOP_SAFE_PRIME_DIAG version=1 scope=LOCAL_PUBLISH_ARGUMENT result=OK_LOCAL_ENQUEUE cancel_rid=%llu run=%llu producer=%u boot=%llu session=%llu ref=%u motion=%u mgmt=%u profile=%u mask=%u matched_source_state_seq=%u source_produced_us=%llu source_received_us=%llu source_received_clock=HOST_TRANSPORT_STEADY_US source_ticket=%llu send_ticket=%llu send_ticket_first_received_us=%llu publish_now_us=%llu source_is_equivalent_target_frame=1 encoded_size=%zu encoded_status=%s encoded_hex=",
           (unsigned long long)cancel_prime->request_id(),(unsigned long long)cancel_run,message.producer_seq(),
           (unsigned long long)message.boot_epoch(),(unsigned long long)message.session_id(),message.reference_epoch(),message.motion_epoch(),
           prime_source.management,message.profile_id(),message.configured_mask(),prime_source.state_seq,
@@ -2043,8 +2090,9 @@ struct DeviceTransport::Impl {
           (unsigned long long)prime_source.root.ticket,(unsigned long long)message.freshness_ticket(),
           (unsigned long long)last_ticket_received_us,(unsigned long long)publish_now,encoded.size(),
           encoded_result==wire::CodecResult::kOk?"OK":"UNKNOWN");
-        if(encoded_result==wire::CodecResult::kOk)for(const auto byte:encoded)fprintf(stderr,"%02x",unsigned(byte));
-        fputc('\n',stderr);::funlockfile(stderr);
+        if(worker_diagnostics)worker_diagnostics->blob("STOP_SAFE_PRIME_LOCAL_PUBLISH_ARGUMENT",
+           encoded_result==wire::CodecResult::kOk ? encoded.data() : nullptr,encoded.size());
+
         cancel_prime_diagnostic_emitted=true;
       }
 
@@ -2072,7 +2120,8 @@ struct DeviceTransport::Impl {
     auto initialized = dp::comm::Context::init(storage,
         dp::comm::InitOptions{dp::comm::MemoryMode::kStaticOnly, &transport, nullptr});
     if (!initialized.has_value()) {
-      fprintf(stderr, "device transport context init failed result=%u endpoint=%s\\n",
+      diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"context_init_failed");
+      diagnostic_detail( "device transport context init failed result=%u endpoint=%s\\n",
               static_cast<unsigned>(initialized.result()), parameters.endpoint.c_str());
       return false;
     }
@@ -2083,7 +2132,8 @@ struct DeviceTransport::Impl {
     options.node_name = "ros_control";
     auto created = context.create_node(options);
     if (!created.has_value()) {
-      fprintf(stderr, "device transport node create failed result=%u\\n",
+      diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"node_create_failed");
+      diagnostic_detail( "device transport node create failed result=%u\\n",
               static_cast<unsigned>(created.result()));
       return false;
     }
@@ -2097,7 +2147,8 @@ struct DeviceTransport::Impl {
     auto command_result = node.create_publisher<Command>((route + "command_v2").c_str(), {});
     auto management_result=node.create_client<Management>((route+"manage_v2").c_str());
     if (!state_result.has_value() || !status_result.has_value() || !command_result.has_value() || !management_result.has_value()) {
-      fprintf(stderr, "device transport endpoint setup failed state=%u status=%u command=%u management=%u\\n",
+      diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"endpoint_setup_failed");
+      diagnostic_detail( "device transport endpoint setup failed state=%u status=%u command=%u management=%u\\n",
               static_cast<unsigned>(state_result.result()), static_cast<unsigned>(status_result.result()),
               static_cast<unsigned>(command_result.result()), static_cast<unsigned>(management_result.result()));
       return false;
@@ -2109,7 +2160,8 @@ struct DeviceTransport::Impl {
       auto evidence_result = node.create_subscription<Evidence>(
           (route + "attempt_evidence_v2").c_str(), {}, receive_evidence, this);
       if (!evidence_result.has_value()) {
-        fprintf(stderr, "device transport evidence subscription failed result=%u\n",
+        diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"evidence_subscription_failed");
+        diagnostic_detail( "device transport evidence subscription failed result=%u\n",
                 static_cast<unsigned>(evidence_result.result()));
         return false;
       }
@@ -2121,7 +2173,8 @@ struct DeviceTransport::Impl {
     const auto add_result = executor.add_node(node);
     const auto activate_result = add_result == dp::comm::Result::kOk ? node.activate() : add_result;
     if (add_result != dp::comm::Result::kOk || activate_result != dp::comm::Result::kOk) {
-      fprintf(stderr, "device transport activate failed add=%u activate=%u\\n",
+      diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"activate_failed");
+      diagnostic_detail( "device transport activate failed add=%u activate=%u\\n",
               static_cast<unsigned>(add_result), static_cast<unsigned>(activate_result));
       return false;
     }
@@ -2228,7 +2281,8 @@ struct DeviceTransport::Impl {
     auto fail_stop = [&](const char *reason) {
       if (!stop_confirmation_pending.exchange(false)) return;
       early_release_idle={};early_worker_status={};stop_candidate_revalidated=false;if(gate_release.request_id==stop_original.request_id())gate_release={};
-      fprintf(stderr, "device transport UNCONFIRMED_STOP: %s\n", reason);
+      diagnostics.reject_from_context(DiagnosticReason::kStopUnconfirmed,transport_steady_now_us(),reason);
+      diagnostic_detail( "device transport UNCONFIRMED_STOP: %s\n", reason);
       ++unconfirmed_stop_requests;
       pending_stop.reset();
       stop_query.reset();
@@ -2289,7 +2343,7 @@ struct DeviceTransport::Impl {
           const bool valid_complete=matches_complete_authority(decoded);
           if(decoded.operation()==8U) {
             if(complete_binding_diag_count++<3U)
-              std::fprintf(stderr,
+              diagnostic_detail(
                   "COMPLETE_BINDING_DIAG valid=%d req=%llu boot=%llu/%llu session=%llu/%llu ref=%u/%u motion=%u/%u management=%u/%u status_management=%u state_management=%u profile=%u/%u mask=%u/%u device_match=%d client_match=%d terminal_seq=%u\n",
                   valid_complete,static_cast<unsigned long long>(decoded.request_id()),
                   static_cast<unsigned long long>(decoded.expected_boot_epoch()),
@@ -2672,9 +2726,12 @@ struct DeviceTransport::Impl {
             response.result_code() == kWirePendingResult && response.transaction_phase() == 1U &&
             response.operation_id() == 0U;
         if (!valid_pending) {
+          diagnostics.reject(DiagnosticReason::kManagementRejected,
+            {response.boot_epoch(),response.session_id(),response.reference_epoch(),response.motion_epoch(),0U,response.management_epoch(),decoded},
+            request_diagnostic_identity(stop_original),transport_steady_now_us(),"stop_receipt_mismatch");
           if (!stop_receipt_diagnostic_emitted) {
             stop_receipt_diagnostic_emitted = true;
-            fprintf(stderr, "device transport Stop receipt mismatch: decoded=%u req_id=%llu req_boot=%llu req_session=%llu req_ref=%u req_motion=%u req_management=%u resp_id=%llu resp_boot=%llu resp_session=%llu resp_ref=%u resp_motion=%u resp_management=%u resp_opid=%llu resp_phase=%u resp_result=%u\n",
+            diagnostic_detail( "device transport Stop receipt mismatch: decoded=%u req_id=%llu req_boot=%llu req_session=%llu req_ref=%u req_motion=%u req_management=%u resp_id=%llu resp_boot=%llu resp_session=%llu resp_ref=%u resp_motion=%u resp_management=%u resp_opid=%llu resp_phase=%u resp_result=%u\n",
                     decoded ? 1U : 0U,
                     static_cast<unsigned long long>(stop_original.request_id()),
                     static_cast<unsigned long long>(stop_original.expected_boot_epoch()),
@@ -2743,8 +2800,12 @@ struct DeviceTransport::Impl {
             process_decoded_status(staged,cached_status.received_us,true);
             process_decoded_state(cached_state.state,cached_state.received_us,true);
             stop_candidate_revalidated=last_status_received_us==cached_status.received_us && last_received_us==cached_state.received_us && last_observation_raw_idle;
-            if(stop_candidate_revalidated && transport_steady_now_us()<=stop_deadline_us)
-              std::fprintf(stderr,"OWNED_RELEASE_IDLE_REVALIDATION_DIAG version=1 clock=HOST_TRANSPORT_STEADY_US request_id=%llu operation_id=%llu run_id=%llu sent_us=%llu state_received_us=%llu status_received_us=%llu commit_processed_us=%llu revalidated_us=%llu\n",(unsigned long long)stop_original.request_id(),(unsigned long long)response.operation_id(),(unsigned long long)response.run_id(),(unsigned long long)gate_release.sent_us,(unsigned long long)cached_state.received_us,(unsigned long long)cached_status.received_us,(unsigned long long)stop_terminal_at_us,(unsigned long long)transport_steady_now_us());
+            if(stop_candidate_revalidated && transport_steady_now_us()<=stop_deadline_us) {
+              const auto revalidated_us=transport_steady_now_us();
+              diagnostics.record_release_idle({stop_original.request_id(),response.operation_id(),response.run_id(),
+                gate_release.sent_us,cached_state.received_us,cached_status.received_us,stop_terminal_at_us,revalidated_us});
+              diagnostic_detail("OWNED_RELEASE_IDLE_REVALIDATION_DIAG version=1 clock=HOST_TRANSPORT_STEADY_US request_id=%llu operation_id=%llu run_id=%llu sent_us=%llu state_received_us=%llu status_received_us=%llu commit_processed_us=%llu revalidated_us=%llu\n",(unsigned long long)stop_original.request_id(),(unsigned long long)response.operation_id(),(unsigned long long)response.run_id(),(unsigned long long)gate_release.sent_us,(unsigned long long)cached_state.received_us,(unsigned long long)cached_status.received_us,(unsigned long long)stop_terminal_at_us,(unsigned long long)revalidated_us);
+            }
 
           }
 
@@ -2784,7 +2845,12 @@ struct DeviceTransport::Impl {
             ? parameters.stop_confirmation_timeout_us : parameters.max_state_age_us;
         const bool diagnostic_start_known = diagnostic_timeout_us != 0U &&
             stop_deadline_us != UINT64_MAX && stop_deadline_us >= diagnostic_timeout_us;
-        std::fprintf(stderr,
+        diagnostics.record_stop_policy({diagnostic_start_known,
+          diagnostic_start_known ? stop_deadline_us-diagnostic_timeout_us : 0U,
+          stop_now,stop_deadline_us,diagnostic_timeout_us,stop_original.request_id(),stop_operation_id,
+          request_diagnostic_identity(stop_original),stop_original.expected_profile_id(),stop_original.configured_mask(),
+          status.run_id(),status.motion_epoch(),status.management_epoch()});
+        diagnostic_detail(
             "STOP_POLICY_DIAG version=1 clock=HOST_TRANSPORT_STEADY_US start_known=%u "
             "started_us=%llu confirmed_us=%llu deadline_us=%llu timeout_us=%llu "
             "request_id=%llu operation_id=%llu boot=%llu session=%llu ref=%u motion=%u mgmt=%u profile=%u mask=%u "
@@ -2841,7 +2907,7 @@ struct DeviceTransport::Impl {
         accept_management_authority(*active_management);
       }
       if(spun!=dp::comm::Result::kOk && spun!=dp::comm::Result::kBusy) {
-        fprintf(stderr,"device transport spin result=%u\n",static_cast<unsigned>(spun));
+        diagnostic_detail("device transport spin result=%u\n",static_cast<unsigned>(spun));
         return false;
       }
       if (!gate_release.idle_confirmed && confirmed_gate_released_idle(transport_steady_now_us()))
@@ -2869,7 +2935,7 @@ struct DeviceTransport::Impl {
       }
       if (!released_idle && !reobserve_raw_idle && heartbeat_action == HeartbeatAction::kStop &&
           !heartbeat_stopped && !stop_latched) {
-        fprintf(stderr, "device transport state heartbeat stop: gap_us=%llu period_us=%llu callbacks=%llu decoded=%llu rejected=%llu decode=%llu identity=%llu authority=%llu sequence=%llu clock=%llu age=%llu ingest=%llu stop_latched=%llu ack_misses=%llu last_callback_seq=%u last_callback_produced_us=%llu last_callback_received_us=%llu last_accepted_seq=%u last_accepted_produced_us=%llu last_accepted_received_us=%llu\n",
+        diagnostic_detail( "device transport state heartbeat stop: gap_us=%llu period_us=%llu callbacks=%llu decoded=%llu rejected=%llu decode=%llu identity=%llu authority=%llu sequence=%llu clock=%llu age=%llu ingest=%llu stop_latched=%llu ack_misses=%llu last_callback_seq=%u last_callback_produced_us=%llu last_callback_received_us=%llu last_accepted_seq=%u last_accepted_produced_us=%llu last_accepted_received_us=%llu\n",
                 static_cast<unsigned long long>(now - last_received_us),
                 static_cast<unsigned long long>(parameters.state_publish_period_us),
                 static_cast<unsigned long long>(state_callbacks.load()),
@@ -2897,7 +2963,7 @@ struct DeviceTransport::Impl {
         system.request_transport_stop();
       }
       if (!released_idle && !reobserve_raw_idle && stop_causes.ack_timed_out) {
-        fprintf(stderr, "device transport group sent stop: unacked_seq=%u sent_mask=%u required_mask=%u\n",
+        diagnostic_detail( "device transport group sent stop: unacked_seq=%u sent_mask=%u required_mask=%u\n",
                 group_sent_ack.sequence(), status.can_sent_mask(), parameters.configured_mask);
         ++heartbeat_stops;
         ++group_sent_ack_timeouts;
@@ -2909,7 +2975,7 @@ struct DeviceTransport::Impl {
         ++state_stale_stops;
         if (stop_causes.ack_unconfirmed_on_state_stale_stop) {
           ++ack_unconfirmed_on_state_stale_stop;
-          fprintf(stderr, "device transport state stale stop: ACK unconfirmed before deadline; CAN SENT unknown\n");
+          diagnostic_detail( "device transport state stale stop: ACK unconfirmed before deadline; CAN SENT unknown\n");
         }
         if (!stop_latched) {
           stop_latched = true;
@@ -2926,12 +2992,12 @@ struct DeviceTransport::Impl {
         if (status.core_state() == kWireEnablingHold &&
             ((transferred && enabling_transfer_log_count < 3U) || enabling_transfer_log_count == 0U)) {
           ++enabling_transfer_log_count;
-          fprintf(stderr, "COMMAND_ENABLE_DIAG transfer=%d inactive=%d status_motion=%u authorized_motion=%u\n",
+          diagnostic_detail( "COMMAND_ENABLE_DIAG transfer=%d inactive=%d status_motion=%u authorized_motion=%u\n",
                   transferred, !system.commands_active(), status.motion_epoch(), authorized_motion_epoch);
         }
         if (transferred && !logged_prime_transfer) {
           logged_prime_transfer = true;
-          fprintf(stderr, "COMMAND_PRIME_DIAG transfer inactive=%d core_state=%u boot=%llu status_motion=%u authorized_motion=%u\n",
+          diagnostic_detail( "COMMAND_PRIME_DIAG transfer inactive=%d core_state=%u boot=%llu status_motion=%u authorized_motion=%u\n",
                   !system.commands_active(), status.core_state(),
                   static_cast<unsigned long long>(boot), status.motion_epoch(), authorized_motion_epoch);
         }
@@ -2940,7 +3006,7 @@ struct DeviceTransport::Impl {
           if (observed_at - last_enable_visibility_log_us >= 1000000U) {
             last_enable_visibility_log_us = observed_at;
             const auto visible = consume_control_update(0U);
-            fprintf(stderr, "COMMAND_ENABLE_DIAG visible=%d generation=%llu current=%d inactive_allowed=%d\n",
+            diagnostic_detail( "COMMAND_ENABLE_DIAG visible=%d generation=%llu current=%d inactive_allowed=%d\n",
                     visible.has_value(),
                     static_cast<unsigned long long>(visible ? visible->generation : 0U),
                     visible && command_record_current(*visible),
@@ -2985,11 +3051,13 @@ struct DeviceTransport::Impl {
   }
 
   void run() noexcept {
+    WorkerDiagnosticScope diagnostic_scope(diagnostics);
     while (running.load(std::memory_order_acquire)) {
       try { failed = !run_connected(); }
       catch (...) { failed = true; }
       if (stop_confirmation_pending.exchange(false)) {
-        fprintf(stderr, "device transport UNCONFIRMED_STOP: worker exited before confirmation\n");
+        diagnostics.reject_from_context(DiagnosticReason::kStopUnconfirmed,transport_steady_now_us(),"worker_exit_before_confirmation");
+      diagnostic_detail( "device transport UNCONFIRMED_STOP: worker exited before confirmation\n");
         ++unconfirmed_stop_requests;
       }
       ready = false;
@@ -3005,7 +3073,8 @@ struct DeviceTransport::Impl {
       }
       invalidate();
       if (system.take_stop_request()) {
-        fprintf(stderr, "device transport UNCONFIRMED_STOP: no connected worker\n");
+        diagnostics.reject_from_context(DiagnosticReason::kStopUnconfirmed,transport_steady_now_us(),"no_connected_worker");
+        diagnostic_detail( "device transport UNCONFIRMED_STOP: no connected worker\n");
         ++stop_request_failures;
         ++unconfirmed_stop_requests;
       }
@@ -3024,10 +3093,14 @@ bool DeviceTransport::start() {
       !impl_->raw_evidence.start(impl_->parameters.raw_evidence_path)) {
     impl_->running = false;
     impl_->failed = true;
+    impl_->diagnostics.reject_from_context(DiagnosticReason::kEvidenceFailure,transport_steady_now_us(),"raw_capture_start_failed");
     return false;
   }
   try { impl_->worker = std::thread([this] { impl_->run(); }); }
-  catch (...) { impl_->running = false; impl_->raw_evidence.stop(); return false; }
+  catch (...) {
+    impl_->diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"worker_thread_start_failed");
+    impl_->running = false; impl_->raw_evidence.stop(); return false;
+  }
   return true;
 }
 void DeviceTransport::stop() {
@@ -3057,8 +3130,12 @@ void DeviceTransport::stop() {
   }
   if (impl_->raw_evidence.failure() != RawEvidenceCollector::Failure::kNone) impl_->failed = true;
 }
+DiagnosticSnapshot DeviceTransport::diagnostic_snapshot() const noexcept { return impl_->diagnostics.snapshot(); }
+std::optional<DiagnosticBlob> DeviceTransport::diagnostic_blob() const noexcept { return impl_->diagnostics.blob_record(); }
+std::optional<DiagnosticDetail> DeviceTransport::diagnostic_detail_record(std::size_t index) const noexcept { return impl_->diagnostics.detail_record(index); }
 TransportStatistics DeviceTransport::statistics() const noexcept {
   TransportStatistics result{};
+  result.diagnostics=impl_->diagnostics.snapshot();
   result.state_callbacks = impl_->state_callbacks.load();
   result.state_messages = impl_->states.load();
   result.status_messages = impl_->statuses.load();

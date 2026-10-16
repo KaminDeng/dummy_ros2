@@ -29,6 +29,7 @@ static unsigned cancel_hold_case=0;
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 namespace {
+static dummy_ros_control::DiagnosticSnapshot final_worker_diagnostic_snapshot;
 static bool source_cancel_coordination=false;
 static const char* source_cancel_fault=nullptr;
 namespace wire = dp::protocol::dummy_robot_v2;
@@ -4131,6 +4132,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   (void)system.copy_state(&snapshot);
+  const auto first_before_reboot=transport.diagnostic_snapshot();
+  // 首拒发生在bootstrap之前时expected身份尚不可用，必须保留valid=false，不能伪造0身份。
+  if(!first_before_reboot.first_present || first_before_reboot.first.host_us==0U ||
+     !first_before_reboot.first.observed.valid) return 480;
   auto rebooted = valid;
   rebooted.status.set_boot_epoch(11U);
   rebooted.state.set_boot_epoch(11U);
@@ -4156,6 +4161,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   post_stop.state.set_produced_at_us(device_now_us());
   if (!send_rejected_state(post_stop) || system.copy_state(&snapshot)) return 104;
   const auto diagnostics = transport.statistics();
+  final_worker_diagnostic_snapshot=diagnostics.diagnostics;
+  if(!diagnostics.diagnostics.first_present ||
+     diagnostics.diagnostics.first.host_us!=first_before_reboot.first.host_us ||
+     diagnostics.diagnostics.first.reason!=first_before_reboot.first.reason ||
+     diagnostics.diagnostics.first.observed.boot!=first_before_reboot.first.observed.boot ||
+     diagnostics.diagnostics.rejections<=first_before_reboot.rejections) return 481;
   if (diagnostics.state_callbacks < diagnostics.state_messages ||
       diagnostics.state_identity_rejections == 0U ||
       diagnostics.state_authority_rejections == 0U ||
@@ -4446,10 +4457,6 @@ int main(int argc, char **argv) {
       std::strcmp(argv[2], "stop_uncommitted_idle_status") == 0;
   // 只在原完整six_axis场景核原Worker诊断；不把仅sent的running_deactivate冒充confirmed。
   const bool verify_stop_policy_diag = six_axis && argc == 2;
-  std::FILE *diag_file = verify_stop_policy_diag ? std::tmpfile() : nullptr;
-  const int saved_stderr = verify_stop_policy_diag ? ::dup(STDERR_FILENO) : -1;
-  if (verify_stop_policy_diag && (!diag_file || saved_stderr < 0 ||
-      ::dup2(::fileno(diag_file), STDERR_FILENO) < 0)) return 701;
   const auto result = run_component_case(six_axis,
       argc == 3 && ticket_mode == 0U && !sequence_rebase_mode && !uncommitted_stop_mode && !uncommitted_idle_status_mode && !default_ack_age_mode && !never_complete_stop && !heartbeat_budget_mode &&
           !inactive_prime_mode && !cold_idle_gap_mode && !cold_fault_gap_mode && !raw_capture_mode &&
@@ -4461,33 +4468,17 @@ int main(int argc, char **argv) {
       complete_order_mode, release_deactivate_mode, ticket_mode, reject_during_ack_mode,
       sequence_rebase_mode, uncommitted_stop_mode, uncommitted_idle_status_mode);
   if (verify_stop_policy_diag) {
-    std::fflush(stderr);
-    ::dup2(saved_stderr, STDERR_FILENO); ::close(saved_stderr);
-    std::rewind(diag_file);
-    char line[2048]{};
-    unsigned matches=0U;
-    while (std::fgets(line, sizeof(line), diag_file)) {
-      std::fputs(line, stderr); // 原件保留，不改原错误/退出码。
-      if (std::strncmp(line, "STOP_POLICY_DIAG ", 17U)!=0) continue;
-      unsigned version=0U, known=0U, ref=0U, motion=0U, mgmt=0U, profile=0U, mask=0U;
-      unsigned long long started=0U, confirmed=0U, deadline=0U, timeout=0U, rid=0U, opid=0U, boot=0U, session=0U;
-      const int fields=std::sscanf(line,
-          "STOP_POLICY_DIAG version=%u clock=HOST_TRANSPORT_STEADY_US start_known=%u started_us=%llu confirmed_us=%llu deadline_us=%llu timeout_us=%llu request_id=%llu operation_id=%llu boot=%llu session=%llu ref=%u motion=%u mgmt=%u profile=%u mask=%u",
-          &version,&known,&started,&confirmed,&deadline,&timeout,&rid,&opid,&boot,&session,&ref,&motion,&mgmt,&profile,&mask);
-      if (fields!=15 || version!=1U || known!=1U || started==0U || confirmed<started ||
-          deadline-started!=timeout || timeout!=1000000U || confirmed-started>timeout ||
-          rid==0U || opid!=exec_expected_stop_operation || boot!=7U || session!=18U ||
-          ref==0U || motion==0U || mgmt==0U || profile!=1U || mask!=63U) {
-        std::fclose(diag_file); return result!=0 ? result : 702;
-      }
-      ++matches;
-    }
-    std::fclose(diag_file);
-    if (result!=0) return result;
-    if (matches!=1U) {
-      std::fprintf(stderr,"原confirmed回调缺唯一原Host起止诊断：events=%u\n",matches);
-      return 703;
-    }
+    if(result!=0)return result;
+    const auto& snapshot=final_worker_diagnostic_snapshot;
+    const auto& record=snapshot.stop_policy;
+    if(!snapshot.stop_policy_present || snapshot.stop_policy_count!=1U || !record.start_known ||
+       record.started_us==0U || record.confirmed_us<record.started_us ||
+       record.deadline_us-record.started_us!=record.timeout_us || record.timeout_us!=1000000U ||
+       record.confirmed_us-record.started_us>record.timeout_us || record.request_id==0U ||
+       record.operation_id!=exec_expected_stop_operation || !record.identity.valid ||
+       record.identity.boot!=7U || record.identity.session!=18U || record.identity.reference==0U ||
+       record.identity.motion==0U || record.identity.management==0U || record.profile!=1U || record.mask!=63U)
+      return 702;
   }
   if (result != 0 || !six_axis || argc != 2) return result;
   return run_component_case(true, false, true);

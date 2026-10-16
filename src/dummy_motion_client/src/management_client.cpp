@@ -1,4 +1,5 @@
 #include "dummy_motion_client/management_client.hpp"
+#include "dummy_ros_control/diagnostic_scope.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -73,12 +74,19 @@ std::optional<ManageReply> WireManagementClient::poll(std::uint64_t request_id) 
   if (request_id != original_.request_id()) return {};
   const auto retry_query=[this](const char *cause) {
     if(current_.operation()!=wire_value(ManageOperation::kQuery) || ++query_retries_>3) {
+      if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+        const dummy_ros_control::DiagnosticIdentity expected{original_.expected_boot_epoch(),original_.expected_session_id(),
+          original_.expected_reference_epoch(),original_.expected_motion_epoch(),current_.request_seq(),original_.expected_management_epoch(),true};
+        journal->reject(dummy_ros_control::DiagnosticReason::kManagementRejected,{},expected,dummy_ros_control::host_diagnostic_now_us(),cause,query_retries_);
+        journal->detail("MANAGE_RETRY_EXHAUSTED cause=%s retries=%u",cause,query_retries_);
+      } else {
       std::fprintf(stderr,
           "MANAGE_RETRY_EXHAUSTED cause=%s original_operation=%u original_request=%llu "
           "wire_request=%llu retries=%u pending_send=%d\n",
           cause,static_cast<unsigned>(original_.operation()),
           static_cast<unsigned long long>(original_.request_id()),
           static_cast<unsigned long long>(wire_id_),query_retries_,pending_send_);
+      }
       throw std::runtime_error("manage_v2 request transport unavailable");
     }
     handle_.reset();

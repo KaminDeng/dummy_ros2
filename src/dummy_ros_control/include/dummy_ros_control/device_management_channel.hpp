@@ -51,6 +51,8 @@ struct HoldDrainSnapshot {
   std::array<double,6> position{}, tolerance{};
 };
 struct DeviceManagementChannel {
+  // 每个DeviceTransport只创建一个channel；保留共享只读句柄可在worker退出后取原记录。
+  DiagnosticJournal diagnostics;
   explicit DeviceManagementChannel(TransportParameters value)
       : parameters(std::move(value)),
         raw_evidence_capture_enabled(!parameters.raw_evidence_path.empty()) {}

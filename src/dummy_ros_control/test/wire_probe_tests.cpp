@@ -127,7 +127,7 @@ int main() {
   dp::comm::ServiceCallback<ManageService> callback = monitor_snapshot;
   if (dp::comm::service_invoke<ManageService>(
           monitor_request, sizeof(monitor_request), &callback, nullptr, request_info,
-          monitor_response, sizeof(monitor_response), &monitor_response_size) != dp::comm::Result::kOk) return 9;
+          monitor_response, sizeof(monitor_response), &monitor_response_size, nullptr) != dp::comm::Result::kOk) return 9;
   wire::DummyManageV2Response snapshot;
   if (wire::DummyManageV2ResponseCodec::decode(monitor_response, monitor_response_size, &snapshot) != wire::CodecResult::kOk) return 10;
   if (snapshot.client_instance_id()[0] != 0xB2U || snapshot.operation_id() != 9U ||

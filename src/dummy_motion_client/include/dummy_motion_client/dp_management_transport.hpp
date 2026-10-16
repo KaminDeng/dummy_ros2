@@ -214,6 +214,7 @@ class DpManagementTransport final : public ManagementTransport {
   bool start();
   void stop();
   bool ready() const noexcept;
+  std::string diagnostic_json() const;
   std::uint8_t raw_evidence_failure() const noexcept;
   bool raw_evidence_capture_enabled() const noexcept;
   bool post_complete_begin_ready() const noexcept;
