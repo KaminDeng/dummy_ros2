@@ -156,6 +156,31 @@ class MoveItTabTests(unittest.TestCase):
         self.assertEqual([box.value() for box in self.tab.inputs], [100, -200, 300, 0, 0, 0])
         self.assertEqual(self.panel.previews, [])
 
+    def test_captured_pose_schedules_automatic_plan(self):
+        self.tab.capture_actual()
+        pose = NS(position=NS(x=.1, y=-.2, z=.3), orientation=NS(x=0, y=0, z=0, w=1))
+        self.tab.pending[1].set_result(NS(error_code=NS(val=1), pose_stamped=[NS(pose=pose)]))
+        self.tab.tick()
+        self.assertTrue(self.tab.preview_timer.isActive())
+        self.tab.preview_timer.stop()
+        self.tab.preview_timer.timeout.emit()
+        self.assertEqual(self.tab.pending[0], 'ik')
+        self.assertEqual(self.panel.commands, [])
+
+    def test_automatic_plan_waits_for_fresh_feedback_without_losing_target(self):
+        self.tab.inputs[0].setValue(123)
+        self.panel.is_fresh = False
+        self.tab.preview_timer.stop()
+        self.tab.preview_timer.timeout.emit()
+        self.assertIsNone(self.tab.pending)
+        self.assertTrue(self.tab.preview_timer.isActive())
+        self.panel.is_fresh = True
+        self.tab.preview_timer.stop()
+        self.tab.preview_timer.timeout.emit()
+        self.assertEqual(self.tab.pending[0], 'ik')
+        self.assertEqual(self.tab.planner.calls[-1][1][1][0], 123)
+        self.assertEqual(self.panel.commands, [])
+
     def test_pose_inputs_preserve_precision_for_near_singular_ik(self):
         for box in self.tab.inputs:
             box.setValue(1.2345)
@@ -187,6 +212,73 @@ class MoveItTabTests(unittest.TestCase):
                 if not future.done():
                     future.set_result(NS(valid=True))
             self.tab.tick()
+
+    def complete_single_point(self, delta=0.):
+        self.tab.start_joint_plan([0, 0, 90, 0, 0, 0])
+        point = list(self.panel.actual_q)
+        point[0] += delta
+        trajectory = NS(joint_names=self.tab.planner.names, points=[NS(
+            positions=point, time_from_start=NS(sec=0, nanosec=0))])
+        self.tab.pending[1].set_result(NS(motion_plan_response=NS(error_code=NS(val=1),
+            trajectory=NS(joint_trajectory=trajectory))))
+        self.tab.tick()
+
+    def test_single_point_at_start_is_readonly_noop_with_preview(self):
+        self.complete_single_point(5e-13)
+        self.assertFalse(self.tab.target_failed)
+        self.assertEqual(self.tab.noop_goal, tuple([5e-13] + self.panel.actual_q[1:]))
+        self.assertIsNone(self.tab.path)
+        self.assertFalse(self.tab.target_failed)
+        self.assertIn('已在目标位置，无需运动', self.tab.status.text())
+        self.tab.tick()
+        self.assertTrue(self.tab.play.isEnabled())
+        self.assertFalse(self.tab.execute.isEnabled())
+        with patch.object(QtWidgets.QMessageBox, 'question') as question:
+            self.tab.play.click()
+            self.tab.start_execution()
+            question.assert_not_called()
+        self.assertEqual(self.panel.commands, [])
+        self.assertEqual(self.tab.play_index, None)
+        self.assertAlmostEqual(self.panel.previews[-1][0], module.math.degrees(5e-13))
+
+    def test_single_point_away_from_start_is_rejected(self):
+        self.complete_single_point(2e-12)
+        self.assertIsNone(getattr(self.tab, 'noop_goal', None))
+        self.assertIsNone(self.tab.path)
+        self.assertTrue(self.tab.target_failed)
+        self.assertIn('单点', self.tab.status.text())
+        self.assertEqual(self.panel.commands, [])
+
+    def test_noop_cleared_by_target_edit(self):
+        self.complete_single_point()
+        self.assertFalse(self.tab.target_failed)
+        self.tab.inputs[0].setValue(123)
+        self.assertIsNone(self.tab.noop_goal)
+        self.assertFalse(self.tab.play.isEnabled())
+
+    def test_noop_cleared_by_boot_or_reference_change(self):
+        for field in ('boot_epoch', 'reference_epoch'):
+            with self.subTest(field=field):
+                self.complete_single_point()
+                self.assertFalse(self.tab.target_failed)
+                self.panel.last_state[field] += 1
+                self.tab.tick()
+                self.assertIsNone(self.tab.noop_goal)
+                self.assertFalse(self.tab.play.isEnabled())
+                self.assertFalse(self.tab.execute.isEnabled())
+
+    def test_stale_noop_disables_preview_and_execution(self):
+        self.complete_single_point()
+        self.tab.tick()
+        self.assertTrue(self.tab.play.isEnabled())
+        self.panel.is_fresh = False
+        self.tab.tick()
+        self.assertIsNone(self.tab.noop_goal)
+        self.assertFalse(self.tab.play.isEnabled())
+        self.assertFalse(self.tab.execute.isEnabled())
+        self.assertTrue(self.tab.preview_timer.isActive())
+        self.tab.start_execution()
+        self.assertEqual(self.panel.commands, [])
 
     def preview_plan(self):
         self.validate_plan()
@@ -236,6 +328,76 @@ class MoveItTabTests(unittest.TestCase):
         self.tab.tick()
         self.assertIsNone(self.tab.path)
         self.assertEqual(len(self.panel.previews), 2)
+
+    def test_stale_validated_path_disables_buttons_and_replans_from_new_start(self):
+        self.complete_plan()
+        self.validate_plan()
+        self.tab.tick()
+        self.assertTrue(self.tab.play.isEnabled())
+        self.panel.is_fresh = False
+        self.tab.tick()
+        self.assertIsNone(self.tab.path)
+        self.assertFalse(self.tab.play.isEnabled())
+        self.assertFalse(self.tab.execute.isEnabled())
+        self.assertTrue(self.tab.preview_timer.isActive())
+        self.tab.start_execution()
+        self.assertEqual(self.panel.commands, [])
+        self.panel.actual_q[0] += .004
+        self.panel.is_fresh = True
+        self.tab.preview_timer.stop()
+        self.tab.preview_timer.timeout.emit()
+        self.assertEqual(self.tab.pending[0], 'ik')
+        self.assertEqual(self.tab.pending[5], tuple(self.panel.actual_q))
+        self.assertIsNone(self.tab.path)
+
+    def test_stale_ik_and_plan_requests_are_cancelled_then_restarted(self):
+        for phase in ('ik', 'plan'):
+            with self.subTest(phase=phase):
+                self.panel.is_fresh = True
+                self.tab.start_plan()
+                if phase == 'plan':
+                    self.tab.pending[1].set_result(NS(error_code=NS(val=1), solution=NS(joint_state=NS(
+                        name=self.tab.planner.names, position=list(self.panel.actual_q)))))
+                    self.tab.tick()
+                future = self.tab.pending[1]
+                self.panel.is_fresh = False
+                self.tab.tick()
+                self.assertTrue(future.cancelled())
+                self.assertIsNone(self.tab.pending)
+                self.assertIsNone(self.tab.path)
+                self.assertTrue(self.tab.preview_timer.isActive())
+                self.panel.is_fresh = True
+                self.tab.preview_timer.stop()
+                self.tab.preview_timer.timeout.emit()
+                self.assertEqual(self.tab.pending[0], 'ik')
+                self.assertIsNot(self.tab.pending[1], future)
+                self.tab.pending[1].cancel()
+                self.tab.pending = None
+        self.assertEqual(self.panel.commands, [])
+
+    def test_stale_capture_does_not_plan_from_old_inputs(self):
+        self.tab.capture_actual()
+        self.panel.is_fresh = False
+        self.tab.tick()
+        self.assertIsNone(self.tab.pending)
+        self.assertFalse(self.tab.preview_timer.isActive())
+        self.assertEqual([call[0] for call in self.tab.planner.calls], ['fk'])
+
+    def test_changed_reference_does_not_retry_old_plan_request(self):
+        self.tab.start_plan()
+        future = self.tab.pending[1]
+        self.panel.last_state['reference_epoch'] += 1
+        self.tab.tick()
+        self.assertTrue(future.cancelled())
+        self.assertIsNone(self.tab.pending)
+        self.assertFalse(self.tab.preview_timer.isActive())
+
+    def test_changed_reference_does_not_retry_old_path(self):
+        self.complete_plan()
+        self.panel.last_state['reference_epoch'] += 1
+        self.tab.tick()
+        self.assertIsNone(self.tab.path)
+        self.assertFalse(self.tab.preview_timer.isActive())
 
     def test_unvalidated_path_never_submits_but_preview_is_optional(self):
         self.complete_plan()

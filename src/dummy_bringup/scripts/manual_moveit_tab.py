@@ -17,6 +17,7 @@ class MoveItTab(QtWidgets.QWidget):
         self.planner = MoveItPlanner(panel.node, [j['name'] for j in panel.cfg['joints']], panel.limits)
         self.pending = None
         self.path = None
+        self.noop_goal = None
         self.identity = None
         self.revision = 0
         self.play_index = None
@@ -116,7 +117,10 @@ class MoveItTab(QtWidgets.QWidget):
             self.cancel_execution('规划内容变化，已停止后续路径。', stop=True)
         self.revision += 1
         self.path = None
+        self.noop_goal = None
         self.play_index = None
+        self.play.setEnabled(False)
+        self.execute.setEnabled(False)
         self.previewed = False
         self.set_target_failed(False)
         if self.preset_fk:
@@ -219,7 +223,11 @@ class MoveItTab(QtWidgets.QWidget):
         if self.pending and self.pending[3] != self.revision:
             self.pending[1].cancel()
             self.pending = None
-        if self.executing or not self.panel.fresh() or self.pending or not hasattr(self.panel, 'actual_q'):
+        if self.executing or self.pending:
+            return
+        if not self.panel.fresh() or not hasattr(self.panel, 'actual_q'):
+            self.status.setText('等待新鲜实测起点后自动规划，尚未发送运动。')
+            self.preview_timer.start(100)
             return
         if not self.planner.ik.service_is_ready() or not self.planner.plan.service_is_ready():
             self.status.setText('等待规划服务就绪，尚未发送运动。')
@@ -241,6 +249,12 @@ class MoveItTab(QtWidgets.QWidget):
         self.begin('plan', self.planner.request_plan(start, [math.radians(v) for v in degrees]), start)
 
     def toggle_preview(self):
+        if self.noop_goal is not None:
+            if self.current_identity() == self.identity and hasattr(self.panel, 'actual_q') and all(
+                    abs(a-b) <= .003 for a, b in zip(self.panel.actual_q, self.start)):
+                self.panel.set_preview_pose([math.degrees(q) for q in self.noop_goal])
+                self.status.setText('已在目标位置，无需运动；仅显示当前目标。')
+            return
         self.play_index = None if self.play_index is not None else (0 if self.path else None)
         if self.play_index == 0:
             self.preview_started = time.monotonic()
@@ -352,8 +366,11 @@ class MoveItTab(QtWidgets.QWidget):
 
     def tick(self):
         available = self.panel.fresh() and hasattr(self.panel, 'actual_q')
+        state = self.panel.last_state
+        observed_identity = (state['boot_epoch'], state['reference_epoch']) if state else None
+        feedback_identity = self.current_identity()
         self.capture.setEnabled(available and not self.pending and not self.executing and self.planner.fk.service_is_ready())
-        self.play.setEnabled(bool(self.path) and not self.executing and not self.samples and not self.checks)
+        self.play.setEnabled(available and (bool(self.path) or self.noop_goal is not None) and not self.executing and not self.samples and not self.checks)
         self.execute.setEnabled(bool(self.path) and self.play_index is None and not self.panel.busy and not self.executing and not self.samples and not self.checks and self.ready())
         for widget in self.inputs + self.jog_sliders + [self.step]:
             widget.setEnabled(not self.executing)
@@ -365,17 +382,23 @@ class MoveItTab(QtWidgets.QWidget):
             response = future.result()
             if revision == self.revision and response and response.error_code.val == 1 and response.pose_stamped:
                 self.fill_pose(response.pose_stamped[0].pose)
-        if self.path and self.current_identity() != self.identity:
+        if (self.path or self.noop_goal is not None) and feedback_identity != self.identity:
+            retry = feedback_identity is None and observed_identity == self.identity and not self.executing
             self.invalidate()
+            if retry:
+                self.preview_timer.start(100)
             self.status.setText('反馈失鲜或设备参考改变，路径已作废。')
-        if self.path and not self.executing and available and any(abs(a-b) > .003 for a, b in zip(self.panel.actual_q, self.start)):
+        if (self.path or self.noop_goal is not None) and not self.executing and available and any(abs(a-b) > .003 for a, b in zip(self.panel.actual_q, self.start)):
             self.invalidate()
             self.status.setText('实测起点已改变，请重新规划；未发送运动。')
         if self.pending:
             phase, future, deadline, revision, identity, start = self.pending
-            if time.monotonic() >= deadline or revision != self.revision or identity != self.current_identity():
+            if time.monotonic() >= deadline or revision != self.revision or identity != feedback_identity:
                 future.cancel()
                 self.pending = None
+                if (phase in ('ik', 'plan') and time.monotonic() < deadline and revision == self.revision
+                        and feedback_identity is None and observed_identity == identity):
+                    self.preview_timer.start(100)
                 self.status.setText('请求超时、目标或设备参考已改变；未发送运动。')
             elif future.done():
                 self.pending = None
@@ -388,7 +411,8 @@ class MoveItTab(QtWidgets.QWidget):
                             raise ValueError(f'正解失败：{response.error_code.val}')
                         pose = response.pose_stamped[0].pose
                         self.fill_pose(pose)
-                        self.status.setText('实际末端位姿已填入；可用 ±XYZ 微调后规划，不会立即运动。')
+                        self.target_changed()
+                        self.status.setText('实际末端位姿已填入，停更100ms自动规划；不会立即运动。')
                     elif phase == 'ik':
                         if response.error_code.val != 1:
                             raise ValueError(f'此完整姿态无可用逆解 / 自碰撞：{response.error_code.val}。请减小步长、换方向或规划至 Home / Rest。')
@@ -401,17 +425,27 @@ class MoveItTab(QtWidgets.QWidget):
                         result = response.motion_plan_response
                         if result.error_code.val != 1:
                             raise ValueError(f'路径规划失败：{result.error_code.val}')
-                        self.path = validate_trajectory(result.trajectory.joint_trajectory,
-                                                        self.planner.names, self.panel.limits)
+                        path = validate_trajectory(result.trajectory.joint_trajectory,
+                                                   self.planner.names, self.panel.limits)
                         self.identity, self.start = identity, start
-                        self.panel.set_preview_pose([math.degrees(q) for q in self.path[-1]])
-                        self.times = tuple(p.time_from_start.sec+p.time_from_start.nanosec/1e9 for p in result.trajectory.joint_trajectory.points)
-                        self.samples = list(collision_samples(self.path))
-                        self.checked_count = 0
-                        self.check_deadline = time.monotonic()+60.
-                        self.record('PLAN_RECEIVED', identity=identity, points=self.path, original_times_s=self.times,
-                                    sha256=hashlib.sha256(json.dumps(self.path).encode()).hexdigest())
-                        self.status.setText(f'规划成功：{len(self.path)} 个路点；正在检查实际折线插值的自碰撞…')
+                        if len(path) == 1:
+                            if any(abs(a-b) > 1e-12 for a, b in zip(path[0], start)):
+                                raise ValueError('单点规划不等于实测起点，拒绝执行')
+                            self.noop_goal = path[0]
+                            self.panel.set_preview_pose([math.degrees(q) for q in self.noop_goal])
+                            self.set_target_failed(False)
+                            self.status.setText('已在目标位置，无需运动。')
+                            self.record('PLAN_NOOP', identity=identity, goal=self.noop_goal)
+                        else:
+                            self.path = path
+                            self.panel.set_preview_pose([math.degrees(q) for q in self.path[-1]])
+                            self.times = tuple(p.time_from_start.sec+p.time_from_start.nanosec/1e9 for p in result.trajectory.joint_trajectory.points)
+                            self.samples = list(collision_samples(self.path))
+                            self.checked_count = 0
+                            self.check_deadline = time.monotonic()+60.
+                            self.record('PLAN_RECEIVED', identity=identity, points=self.path, original_times_s=self.times,
+                                        sha256=hashlib.sha256(json.dumps(self.path).encode()).hexdigest())
+                            self.status.setText(f'规划成功：{len(self.path)} 个路点；正在检查实际折线插值的自碰撞…')
                 except (ValueError, KeyError, RuntimeError) as error:
                     self.path = None
                     self.set_target_failed(True)
