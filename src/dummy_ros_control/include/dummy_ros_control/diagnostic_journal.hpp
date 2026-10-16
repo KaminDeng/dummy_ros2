@@ -16,7 +16,8 @@ enum class DiagnosticReason : std::uint16_t {
     kGoalRejected, kGoalValidation, kGoalNotReady, kGoalBusy,
     kBootstrapRejected, kGateFault, kObservationRejected, kEvidenceFailure,
     kStateIdentity, kStateAuthority, kStateSequence, kStateClock, kStateAge,
-    kStateCodec, kStateStopLatched, kStateIngest
+    kStateCodec, kStateStopLatched, kStateIngest,
+    kActionStop, kActionFail, kActionHoldDrainTimeout, kBootstrapReleaseTimeout, kBootstrapReleaseReply, kRawSequence, kRawGroupCount
 };
 struct DiagnosticIdentity {
     std::uint64_t boot=0U, session=0U;
@@ -30,6 +31,7 @@ struct DiagnosticRejection {
     std::uint32_t detail_code=0U;
     std::array<char,96> detail{};
     bool detail_truncated=false;
+    std::array<std::uint64_t,12> fields{}; // 仅宿主私有首错现场；JSON按reason命名。
 };
 struct DiagnosticStopPolicy {
     bool start_known=false;
@@ -86,7 +88,7 @@ struct DiagnosticDetail {
 class DiagnosticJournal final {
  public:
     static constexpr std::size_t kDetailCapacity=8U;
-    static constexpr std::size_t kReasonCount=21U; // 枚举0保留；每reason区分无身份/已绑定身份。
+    static constexpr std::size_t kReasonCount=28U; // 枚举0保留；每reason区分无身份/已绑定身份。
 
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
                   "宿主诊断计数必须原生无锁");
@@ -109,15 +111,18 @@ class DiagnosticJournal final {
     }
     void enable_details(bool value) noexcept { enabled_.store(value,std::memory_order_relaxed); }
     void reject(DiagnosticReason reason,DiagnosticIdentity observed,DiagnosticIdentity expected,
-                std::uint64_t host_us,const char* detail,std::uint32_t code=0U) noexcept {
+                std::uint64_t host_us,const char* detail,std::uint32_t code=0U,
+                std::array<std::uint64_t,12> fields={},bool is_rejection=true) noexcept {
+        if(is_rejection) {
         rejections_.fetch_add(1U,std::memory_order_relaxed);
         unsigned empty=0U;
         if(first_state_.compare_exchange_strong(empty,1U,std::memory_order_acq_rel)) {
             first_.reason=reason; first_.observed=observed; first_.expected=expected;
-            first_.host_us=host_us; first_.detail_code=code;
+            first_.host_us=host_us; first_.detail_code=code; first_.fields=fields;
             first_.detail_truncated=copy_text(first_.detail,detail);
             first_state_.store(2U,std::memory_order_release);
         } else first_suppressed_.fetch_add(1U,std::memory_order_relaxed);
+        }
         const auto reason_index=static_cast<std::size_t>(reason);
         const bool bound=expected.valid && expected.boot!=0U;
         if(reason_index<kReasonCount) {
@@ -125,7 +130,7 @@ class DiagnosticJournal final {
             unsigned empty_slot=0U;
             if(slot.state.compare_exchange_strong(empty_slot,1U,std::memory_order_acq_rel)) {
                 slot.value.reason=reason; slot.value.observed=observed; slot.value.expected=expected;
-                slot.value.host_us=host_us; slot.value.detail_code=code;
+                slot.value.host_us=host_us; slot.value.detail_code=code; slot.value.fields=fields;
                 slot.value.detail_truncated=copy_text(slot.value.detail,detail);
                 slot.state.store(2U,std::memory_order_release);
             }

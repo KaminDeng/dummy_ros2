@@ -1,5 +1,6 @@
 #include "dummy_motion_client/action_gate.hpp"
 #include "dummy_motion_client/deadline.hpp"
+#include "dummy_ros_control/diagnostic_scope.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -182,7 +183,12 @@ bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
   frozen_seq_=last_seq_; frozen_generation_=last_producer_generation_;
   drained_generation_=0; drained_committed_seq_=0;
   drain_worker_ready_=false; drain_state_fresh_=false; hold_drain_pending_=true;
-  std::fprintf(stderr,
+  if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+        journal->detail(
+               "GATE_HOLD_DRAIN_FREEZE_DIAG frozen=%u generation=%llu committed=%u state=%u epoch=%u submitted=%u sent=%u\n",
+               frozen_seq_,static_cast<unsigned long long>(frozen_generation_),
+               hold_committed_seq_,state_seq_,epoch_,hold_submitted_mask_,hold_sent_mask_);
+  } else std::fprintf(stderr,
                "GATE_HOLD_DRAIN_FREEZE_DIAG frozen=%u generation=%llu committed=%u state=%u epoch=%u submitted=%u sent=%u\n",
                frozen_seq_,static_cast<unsigned long long>(frozen_generation_),
                hold_committed_seq_,state_seq_,epoch_,hold_submitted_mask_,hold_sent_mask_);
@@ -201,7 +207,11 @@ bool ActionGate::prime(const ManageReply &reply,Phase phase,std::uint64_t now) {
     if (!validated) { stop(false,"TRAJECTORY_LIMIT_VIOLATION",now); return false; }
     trajectory_=*validated;
   }
-  std::fprintf(stderr, "GATE_PRIME_DIAG phase=%u epoch=%u generation=%llu q0=%.9f\n",
+  if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+        journal->detail( "GATE_PRIME_DIAG phase=%u epoch=%u generation=%llu q0=%.9f\n",
+               static_cast<unsigned>(phase), epoch_,
+               static_cast<unsigned long long>(generation_), prime_q_[0]);
+  } else std::fprintf(stderr, "GATE_PRIME_DIAG phase=%u epoch=%u generation=%llu q0=%.9f\n",
                static_cast<unsigned>(phase), epoch_,
                static_cast<unsigned long long>(generation_), prime_q_[0]);
   port_.prime(prime_q_,epoch_,generation_);
@@ -312,7 +322,13 @@ void ActionGate::observe_hold_drain(const HoldDrainEvidence &evidence,std::uint6
       evidence.reference_epoch!=authorization_.identity.expected_reference_epoch() ||
       evidence.motion_epoch!=epoch_ || (deadline_ && now>=deadline_)) return;
   if (!drain_worker_ready_)
-    std::fprintf(stderr,
+    if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+        journal->detail(
+                 "GATE_HOLD_DRAIN_WORKER_DIAG frozen_generation=%llu processed=%llu target=%u epoch=%u\n",
+                 static_cast<unsigned long long>(frozen_generation_),
+                 static_cast<unsigned long long>(evidence.processed_generation),
+                 evidence.committed_seq,epoch_);
+  } else std::fprintf(stderr,
                  "GATE_HOLD_DRAIN_WORKER_DIAG frozen_generation=%llu processed=%llu target=%u epoch=%u\n",
                  static_cast<unsigned long long>(frozen_generation_),
                  static_cast<unsigned long long>(evidence.processed_generation),
@@ -517,7 +533,18 @@ void ActionGate::tick(std::uint64_t now) {
   }
   try_completion_hold(now);
   if (hold_drain_pending_ && deadline_ && now>=deadline_) {
-    std::fprintf(stderr,
+    if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+    const auto observed=journal->context().first;
+    const auto& identity=authorization_.identity;
+    const dummy_ros_control::DiagnosticIdentity expected{identity.expected_boot_epoch(),identity.expected_session_id(),identity.expected_reference_epoch(),epoch_,last_seq_,identity.expected_management_epoch(),authorization_.session && authorization_.reference};
+    journal->reject(dummy_ros_control::DiagnosticReason::kActionHoldDrainTimeout,observed,expected,now,"HOLD_DRAIN_TIMEOUT",0U,{frozen_seq_,frozen_generation_,last_seq_,drained_generation_,drained_committed_seq_,hold_committed_seq_,state_seq_,epoch_,hold_submitted_mask_,hold_sent_mask_});
+    journal->detail(
+                 "GATE_HOLD_DRAIN_TIMEOUT_DIAG frozen=%u generation=%llu local=%u processed=%llu target=%u committed=%u state=%u epoch=%u submitted=%u sent=%u\n",
+                 frozen_seq_,static_cast<unsigned long long>(frozen_generation_),last_seq_,
+                 static_cast<unsigned long long>(drained_generation_),drained_committed_seq_,
+                 hold_committed_seq_,state_seq_,epoch_,
+                 hold_submitted_mask_,hold_sent_mask_);
+  } else std::fprintf(stderr,
                  "GATE_HOLD_DRAIN_TIMEOUT_DIAG frozen=%u generation=%llu local=%u processed=%llu target=%u committed=%u state=%u epoch=%u submitted=%u sent=%u\n",
                  frozen_seq_,static_cast<unsigned long long>(frozen_generation_),last_seq_,
                  static_cast<unsigned long long>(drained_generation_),drained_committed_seq_,
@@ -578,7 +605,15 @@ void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) 
   completing_after_renewal_=0U;
   if (phase_==Phase::kFault || phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold ||
       (ready() && terminal_!=Terminal::kNone)) return;
-  std::fprintf(stderr,"GATE_STOP_DIAG phase=%u operation=%u reason=%s request=%llu now=%llu\n",
+  if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+    const auto observed=journal->context().first;
+    const auto& identity=authorization_.identity;
+    const dummy_ros_control::DiagnosticIdentity expected{identity.expected_boot_epoch(),identity.expected_session_id(),identity.expected_reference_epoch(),epoch_,last_seq_,identity.expected_management_epoch(),authorization_.session && authorization_.reference};
+    journal->reject(dummy_ros_control::DiagnosticReason::kActionStop,observed,expected,now,error.c_str(),0U,{static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),request_,now},!canceled || !error.empty());
+    journal->detail("GATE_STOP_DIAG phase=%u operation=%u reason=%s request=%llu now=%llu\n",
+               static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),
+               static_cast<unsigned long long>(request_),static_cast<unsigned long long>(now));
+  } else std::fprintf(stderr,"GATE_STOP_DIAG phase=%u operation=%u reason=%s request=%llu now=%llu\n",
                static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),
                static_cast<unsigned long long>(request_),static_cast<unsigned long long>(now));
   port_.disable(); ++generation_; port_.cancel(); cancel_terminal_=canceled;
@@ -601,7 +636,15 @@ void ActionGate::fail(const std::string &error) {
   canceling_after_renewal_=0U; deferred_cancel_request_={};
   completing_after_renewal_=0U;
   if(phase_!=Phase::kFault || error_!=error)
-    std::fprintf(stderr,"GATE_FAIL_DIAG phase=%u operation=%u reason=%s request=%llu\n",
+    if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+    const auto observed=journal->context().first;
+    const auto& identity=authorization_.identity;
+    const dummy_ros_control::DiagnosticIdentity expected{identity.expected_boot_epoch(),identity.expected_session_id(),identity.expected_reference_epoch(),epoch_,last_seq_,identity.expected_management_epoch(),authorization_.session && authorization_.reference};
+    journal->reject(dummy_ros_control::DiagnosticReason::kActionFail,observed,expected,dummy_ros_control::host_diagnostic_now_us(),error.c_str(),0U,{static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),request_});
+    journal->detail("GATE_FAIL_DIAG phase=%u operation=%u reason=%s request=%llu\n",
+                 static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),
+                 static_cast<unsigned long long>(request_));
+  } else std::fprintf(stderr,"GATE_FAIL_DIAG phase=%u operation=%u reason=%s request=%llu\n",
                  static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),
                  static_cast<unsigned long long>(request_));
   port_.disable(); port_.cancel(); ++generation_; phase_=Phase::kFault; terminal_=Terminal::kAborted;

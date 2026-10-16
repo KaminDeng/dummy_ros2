@@ -110,6 +110,7 @@ ament_target_dependencies(dummy_guarded_zenbedded_system hardware_interface plug
 pluginlib_export_plugin_description_file(hardware_interface dummy_ros_control_plugins.xml)
 
 if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_executable(diagnostic_journal_tests test/diagnostic_journal_tests.cpp)
   target_compile_features(diagnostic_journal_tests PRIVATE cxx_std_17)
   target_include_directories(diagnostic_journal_tests PRIVATE include)
@@ -119,6 +120,13 @@ if(BUILD_TESTING)
   add_executable(trajectory_digest_tests test/trajectory_digest_tests.cpp)
   target_link_libraries(trajectory_digest_tests PRIVATE dummy_guarded_joint_trajectory_controller)
   add_test(NAME trajectory_digest_tests COMMAND trajectory_digest_tests)
+  add_executable(raw_sequence_logging_tests test/raw_sequence_logging_tests.cpp)
+  target_include_directories(raw_sequence_logging_tests PRIVATE "${DUMMY_WIRE_INCLUDE}")
+  target_link_libraries(raw_sequence_logging_tests PRIVATE dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  add_test(NAME raw_sequence_slow_stderr
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/run_slow_stderr_fixture.py"
+      "$<TARGET_FILE:raw_sequence_logging_tests>")
+  set_tests_properties(raw_sequence_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline")
   add_executable(raw_evidence_collector_tests test/raw_evidence_collector_tests.cpp)
   target_include_directories(raw_evidence_collector_tests PRIVATE "${DUMMY_WIRE_INCLUDE}")
   target_link_libraries(raw_evidence_collector_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
@@ -139,14 +147,12 @@ if(BUILD_TESTING)
     "${DPSDK_ROOT}/applications/dummy_ref_control/include")
   target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
-  find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(NAME transport_worker_slow_stderr
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/run_slow_stderr_fixture.py"
       "$<TARGET_FILE:transport_component_tests>" six_axis)
   set_tests_properties(transport_worker_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline;synthetic_pty")
   # 仅Host测试：真实Core停止握手+现SDK/Worker回调，非设备/完整Node资格。
   get_filename_component(_safe_prime_core_root "${ROS_WORKSPACE_ROOT}/../dpsdk" ABSOLUTE)
-  find_package(Python3 COMPONENTS Interpreter REQUIRED)
   set(_safe_prime_generated "${CMAKE_CURRENT_BINARY_DIR}/safe_prime_generated")
   add_custom_command(OUTPUT "${_safe_prime_generated}/dummy_model.hpp"
     COMMAND ${Python3_EXECUTABLE} "${_safe_prime_core_root}/tools/dummy/generate_model.py"
@@ -430,7 +436,6 @@ if(BUILD_TESTING)
   target_link_libraries(real_peer_state_probe dummy_guarded_zenbedded_system)
   add_executable(production_transport_tests test/production_transport_tests.cpp)
   target_link_libraries(production_transport_tests dummy_guarded_zenbedded_system)
-  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME sdk_input_lock_tests COMMAND "${CMAKE_COMMAND}"
     "-DDPSDK_ROOT=${DPSDK_ROOT}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/sdk-lock-test"
     "-DLOCK_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake"

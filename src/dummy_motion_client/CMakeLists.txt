@@ -210,6 +210,16 @@ if(BUILD_TESTING)
     set_tests_properties(shared_admission_retry_${mode} PROPERTIES LABELS "component_only;offline" TIMEOUT 5)
   endforeach()
 
+  add_executable(control_chain_logging_tests test/control_chain_logging_tests.cpp)
+  target_include_directories(control_chain_logging_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/include")
+  target_compile_options(control_chain_logging_tests PRIVATE -UNDEBUG)
+  target_link_libraries(control_chain_logging_tests PRIVATE dummy_device_action)
+  foreach(mode IN ITEMS action bootstrap)
+    add_test(NAME control_chain_slow_stderr_${mode}
+      COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/test/run_slow_stderr_fixture.py"
+        "$<TARGET_FILE:control_chain_logging_tests>" ${mode})
+    set_tests_properties(control_chain_slow_stderr_${mode} PROPERTIES TIMEOUT 45 LABELS "component_only;offline")
+  endforeach()
   add_executable(management_logging_scope_tests test/management_logging_scope_tests.cpp)
   target_compile_options(management_logging_scope_tests PRIVATE -UNDEBUG)
   target_link_libraries(management_logging_scope_tests PRIVATE dummy_dp_management)

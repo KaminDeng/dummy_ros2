@@ -28,7 +28,31 @@ inline void diagnostic_json_rejection(std::ostream& out,const DiagnosticRejectio
     diagnostic_json_text(out,record.detail.data());
     out << ",\"detail_truncated\":" << (record.detail_truncated?"true":"false") << ",\"observed\":";
     diagnostic_json_identity(out,record.observed);out << ",\"expected\":";
-    diagnostic_json_identity(out,record.expected);out << '}';
+    diagnostic_json_identity(out,record.expected);
+    const char* names[12]{};
+    switch(record.reason) {
+      case DiagnosticReason::kActionStop: names[0]="phase";names[1]="operation";names[2]="request";names[3]="now";break;
+      case DiagnosticReason::kActionFail: names[0]="phase";names[1]="operation";names[2]="request";break;
+      case DiagnosticReason::kActionHoldDrainTimeout:
+        {const char* fields[]={"frozen","generation","local","processed","target","committed","state","epoch","submitted","sent"};
+         for(unsigned i=0U;i<10U;++i)names[i]=fields[i];}break;
+      case DiagnosticReason::kBootstrapReleaseTimeout:
+        {const char* fields[]={"phase","request","session","ref","core","state_core","permit_us","idle","overdue_us"};
+         for(unsigned i=0U;i<9U;++i)names[i]=fields[i];}break;
+      case DiagnosticReason::kBootstrapReleaseReply:
+        {const char* fields[]={"request","response","phase","result","valid","success","rejected","release_committed","opid"};
+         for(unsigned i=0U;i<9U;++i)names[i]=fields[i];}break;
+      case DiagnosticReason::kRawSequence:
+        {const char* fields[]={"run","seq","expected_seq","group_count","accepted_pages","category"};
+         for(unsigned i=0U;i<6U;++i)names[i]=fields[i];}break;
+      case DiagnosticReason::kRawGroupCount:
+        {const char* fields[]={"run","seq","expected_seq","group_count","accepted_pages","last_reported","category"};
+         for(unsigned i=0U;i<7U;++i)names[i]=fields[i];}break;
+      default:break;
+    }
+    out << ",\"fields\":{";
+    for(unsigned i=0U;i<12U && names[i];++i) {if(i)out << ',';diagnostic_json_text(out,names[i]);out << ':' << record.fields[i];}
+    out << "}}";
 }
 inline std::string diagnostic_journal_json(const DiagnosticJournal& journal) {
     const auto snapshot=journal.snapshot(); std::ostringstream out;

@@ -1,3 +1,4 @@
+#include "dummy_ros_control/diagnostic_scope.hpp"
 #include "dummy_motion_client/bootstrap_coordinator.hpp"
 
 #include <algorithm>
@@ -187,7 +188,19 @@ void BootstrapCoordinator::observe(const BootstrapSnapshot &snapshot, std::uint6
   }
   if ((phase_ == BootstrapPhase::kReleasePending ||
        phase_ == BootstrapPhase::kReleaseAwaitIdle) && now_us >= release_deadline_us_) {
-    std::fprintf(stderr,
+    if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+      const dummy_ros_control::DiagnosticIdentity observed{snapshot_.boot_epoch,snapshot_.session_id,snapshot_.reference_epoch,snapshot_.motion_epoch,0U,snapshot_.management_epoch,snapshot_.boot_epoch!=0U};
+      const dummy_ros_control::DiagnosticIdentity expected{snapshot_.boot_epoch,identity_.expected_session_id(),snapshot_.reference_epoch,snapshot_.motion_epoch,0U,snapshot_.management_epoch,snapshot_.boot_epoch!=0U};
+      journal->reject(dummy_ros_control::DiagnosticReason::kBootstrapReleaseTimeout,observed,expected,now_us,"RELEASE_TIMEOUT_DIAG",0U,{static_cast<unsigned>(phase_),request_id_,snapshot_.session_id,snapshot_.reference_epoch,snapshot_.core_state,snapshot_.state_core_state,snapshot_.permit_remaining_us,release_idle()?1U:0U,now_us-release_deadline_us_});
+      journal->detail(
+        "RELEASE_TIMEOUT_DIAG phase=%u request=%llu session=%llu ref=%u core=%u state_core=%u permit_us=%llu idle=%u overdue_us=%llu\n",
+        static_cast<unsigned>(phase_), static_cast<unsigned long long>(request_id_),
+        static_cast<unsigned long long>(snapshot_.session_id), snapshot_.reference_epoch,
+        snapshot_.core_state, snapshot_.state_core_state,
+        static_cast<unsigned long long>(snapshot_.permit_remaining_us),
+        release_idle() ? 1U : 0U,
+        static_cast<unsigned long long>(now_us-release_deadline_us_));
+    } else std::fprintf(stderr,
         "RELEASE_TIMEOUT_DIAG phase=%u request=%llu session=%llu ref=%u core=%u state_core=%u permit_us=%llu idle=%u overdue_us=%llu\n",
         static_cast<unsigned>(phase_), static_cast<unsigned long long>(request_id_),
         static_cast<unsigned long long>(snapshot_.session_id), snapshot_.reference_epoch,
@@ -309,7 +322,12 @@ void BootstrapCoordinator::tick(std::uint64_t now_us) {
     if (!reply) return;
     if (phase_ == BootstrapPhase::kReleasePending &&
         (reply->result_valid || reply->rejected))
-      std::fprintf(stderr,
+      {
+if(auto* journal=dummy_ros_control::current_host_diagnostics) {
+      const dummy_ros_control::DiagnosticIdentity observed{snapshot_.boot_epoch,snapshot_.session_id,snapshot_.reference_epoch,snapshot_.motion_epoch,0U,snapshot_.management_epoch,snapshot_.boot_epoch!=0U};
+      const dummy_ros_control::DiagnosticIdentity expected{snapshot_.boot_epoch,identity_.expected_session_id(),snapshot_.reference_epoch,snapshot_.motion_epoch,0U,snapshot_.management_epoch,snapshot_.boot_epoch!=0U};
+      journal->reject(dummy_ros_control::DiagnosticReason::kBootstrapReleaseReply,observed,expected,now_us,"RELEASE_REPLY_DIAG",0U,{request_id_,reply->request_id,reply->transaction_phase,reply->result_code,reply->result_valid?1U:0U,reply->succeeded?1U:0U,reply->rejected?1U:0U,reply->release_committed?1U:0U,reply->operation_id},!reply->succeeded || reply->rejected);
+      journal->detail(
           "RELEASE_REPLY_DIAG request=%llu response=%llu phase=%u result=%u valid=%u success=%u rejected=%u release_committed=%u opid=%llu\n",
           static_cast<unsigned long long>(request_id_),
           static_cast<unsigned long long>(reply->request_id),
@@ -317,6 +335,15 @@ void BootstrapCoordinator::tick(std::uint64_t now_us) {
           reply->result_valid ? 1U : 0U, reply->succeeded ? 1U : 0U,
           reply->rejected ? 1U : 0U, reply->release_committed ? 1U : 0U,
           static_cast<unsigned long long>(reply->operation_id));
+    } else std::fprintf(stderr,
+          "RELEASE_REPLY_DIAG request=%llu response=%llu phase=%u result=%u valid=%u success=%u rejected=%u release_committed=%u opid=%llu\n",
+          static_cast<unsigned long long>(request_id_),
+          static_cast<unsigned long long>(reply->request_id),
+          reply->transaction_phase, reply->result_code,
+          reply->result_valid ? 1U : 0U, reply->succeeded ? 1U : 0U,
+          reply->rejected ? 1U : 0U, reply->release_committed ? 1U : 0U,
+          static_cast<unsigned long long>(reply->operation_id));
+    }
     const bool lease_operation=configured_session_lease_us_ != 0U &&
         (phase_ == BootstrapPhase::kGrantSession || phase_ == BootstrapPhase::kRenewLease);
     if (lease_operation && reply->request_id != request_id_) {

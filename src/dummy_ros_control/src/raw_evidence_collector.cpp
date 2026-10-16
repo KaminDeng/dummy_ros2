@@ -295,7 +295,15 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     return false;
   }
   if (page.evidence_seq != next_seq_) {
-    std::fprintf(stderr,
+    if(channel_) {
+      const auto expected=channel_->diagnostics.context().second;
+      const DiagnosticIdentity observed{page.boot_epoch,page.session_id,0U,0U,page.evidence_seq,0U,false};
+      channel_->diagnostics.reject(DiagnosticReason::kRawSequence,observed,expected,received_at_us,"RAW_SEQUENCE_DIAG",0U,{page.run_id,page.evidence_seq,next_seq_,page.group_count,can_page_count_,page.category});
+      channel_->diagnostics.detail(
+        "RAW_SEQUENCE_DIAG run=%llu seq=%u expected_seq=%u group_count=%u accepted_pages=%u category=%u reason=seq\n",
+        static_cast<unsigned long long>(page.run_id),page.evidence_seq,next_seq_,
+        page.group_count,can_page_count_,page.category);
+    } else std::fprintf(stderr,
         "RAW_SEQUENCE_DIAG run=%llu seq=%u expected_seq=%u group_count=%u accepted_pages=%u category=%u reason=seq\n",
         static_cast<unsigned long long>(page.run_id),page.evidence_seq,next_seq_,
         page.group_count,can_page_count_,page.category);
@@ -305,7 +313,15 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
       (page.category != 4U && (page.group_count == 0U ||
                                page.group_count <= can_page_count_ ||
                                page.group_count < last_reported_group_count_))) {
-    std::fprintf(stderr,
+    if(channel_) {
+      const auto expected=channel_->diagnostics.context().second;
+      const DiagnosticIdentity observed{page.boot_epoch,page.session_id,0U,0U,page.evidence_seq,0U,false};
+      channel_->diagnostics.reject(DiagnosticReason::kRawGroupCount,observed,expected,received_at_us,"RAW_SEQUENCE_DIAG",0U,{page.run_id,page.evidence_seq,next_seq_,page.group_count,can_page_count_,last_reported_group_count_,page.category});
+      channel_->diagnostics.detail(
+        "RAW_SEQUENCE_DIAG run=%llu seq=%u expected_seq=%u group_count=%u accepted_pages=%u last_reported=%u category=%u reason=group_count\n",
+        static_cast<unsigned long long>(page.run_id),page.evidence_seq,next_seq_,
+        page.group_count,can_page_count_,last_reported_group_count_,page.category);
+    } else std::fprintf(stderr,
         "RAW_SEQUENCE_DIAG run=%llu seq=%u expected_seq=%u group_count=%u accepted_pages=%u last_reported=%u category=%u reason=group_count\n",
         static_cast<unsigned long long>(page.run_id),page.evidence_seq,next_seq_,
         page.group_count,can_page_count_,last_reported_group_count_,page.category);
