@@ -70,8 +70,5 @@ seed_schema_status: 'DESIGN_ONLY: map into existing SDK profile generator during
   not an existing runtime format'
 profile_name: sil_6dof
 uses_dpsdk_device: true
-reference_kind: BENCH_SESSION
-bench_position_range_rad:
-- -0.3
-- 0.3
+reference_kind: SIM_FIXED
 profile_id: 1

@@ -98,6 +98,15 @@ if(BUILD_TESTING)
   add_executable(device_profile_tests test/device_profile_tests.cpp)
   target_link_libraries(device_profile_tests dummy_device_profile)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  # 仅检查正式镜像身份；不得据此授予DeviceProfile运行/运动权限。
+  add_executable(formal_bundle_identity_probe test/formal_bundle_identity_probe.cpp)
+  target_link_libraries(formal_bundle_identity_probe PRIVATE dummy_device_profile)
+  add_test(NAME formal_bundle_identity_integrity COMMAND formal_bundle_identity_probe
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2")
+  add_test(NAME formal_contract_canonical_mirror_integrity COMMAND ${Python3_EXECUTABLE} -m pytest -q
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/dummy/tests/test_formal_contract_mirror.py")
+  set_tests_properties(formal_bundle_identity_integrity formal_contract_canonical_mirror_integrity
+    PROPERTIES TIMEOUT 15 LABELS "component_only;offline;source_integrity")
   add_test(NAME device_profile_tests COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_device_profile_fixture.py"
     "$<TARGET_FILE:device_profile_tests>"
