@@ -195,6 +195,11 @@ if(BUILD_TESTING)
     "${_safe_prime_core_root}/applications/dummy_ref_control/comm"
     "${_safe_prime_generated}")
   target_link_libraries(transport_safe_cancel_prime_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  add_test(NAME transport_safe_prime_fixture_integrity
+    COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/safe_prime_fixture_integrity_tests.py"
+      "$<TARGET_FILE:transport_safe_cancel_prime_tests>")
+  set_tests_properties(transport_safe_prime_fixture_integrity PROPERTIES TIMEOUT 60)
   add_test(NAME transport_safe_cancel_prime_positive COMMAND transport_safe_cancel_prime_tests six_axis cancel_coordination_positive)
   foreach(_mode drift wrong_boot wrong_session wrong_ref old_motion arbitrary_target foreign_run wrong_status_phase wrong_query_op expired no_owned second_stop)
     add_test(NAME transport_safe_cancel_prime_${_mode} COMMAND transport_safe_cancel_prime_tests six_axis safe_prime_${_mode})
