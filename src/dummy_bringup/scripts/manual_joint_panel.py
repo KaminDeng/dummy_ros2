@@ -893,7 +893,7 @@ class JointPanel(QtWidgets.QWidget):
         self.move.setEnabled(self.control_state_allowed((2, 4)) and self.resume_position_issue() is None and self.authorized and bool(self.calibration) and fresh and not self.busy and
                              state['position_valid_mask'] == 63 and state['velocity_valid_mask'] == 63 and
                              state['core_state'] in (2, 4) and
-                             all(math.isfinite(v) and abs(v)<=0.01 for v in state['estimated_velocity_rad_s']))
+                             all(math.isfinite(v) for v in state['estimated_velocity_rad_s']))
         self.copy.setEnabled(fresh and state['core_state'] != 9 and not getattr(self, 'readonly_fault', False) and hasattr(self, 'actual_q'))
         self.stop.setEnabled(self.worker.state() == QtCore.QProcess.Running and not self.helper_active())
         if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
@@ -942,9 +942,8 @@ class JointPanel(QtWidgets.QWidget):
         zero = '标定进行中' if self.zero_busy else ('设备参考存在（同boot）' if self.calibration else '未标定')
         zero += ' · 已使能控制' if self.authorized else ' · 未取得控制权限'
         speed_note = ''
-        if self.calibration and not self.busy:
-            fast = [f'J{i+1} {v:.4f}rad/s' for i,v in enumerate(state['estimated_velocity_rad_s']) if abs(v)>0.01]
-            if fast: speed_note = ' · 等待静止：' + ', '.join(fast)
+        if self.calibration and self.authorized and state['core_state'] == 4 and not self.busy:
+            speed_note = ' · 保持中；执行请求仍按原静止判据开始'
         resume_note = ''
         if resume_issue and self.manual_limits_retreat_target() is not None:
             resume_note = ' · 零点保留；明确恢复后仅危险的J2下侧/J3上侧以≤2°/s缓退工作Rest，其余轴冻结，不重新采零。'

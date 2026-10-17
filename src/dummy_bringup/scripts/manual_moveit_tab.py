@@ -195,12 +195,17 @@ class MoveItTab(QtWidgets.QWidget):
         s = self.panel.last_state
         return (s['boot_epoch'], s['reference_epoch'], s['session_id']) if self.panel.fresh() and s else None
 
-    def ready(self):
+    def request_ready(self):
         p = self.panel
         return (p.fresh() and p.control_state_allowed((4,)) and p.authorized and
                 bool(p.calibration) and p.resume_position_issue() is None and
                 p.last_state['velocity_valid_mask'] == 63 and
-                all(math.isfinite(v) and abs(v) <= .01 for v in p.last_state['estimated_velocity_rad_s']))
+                all(math.isfinite(v) for v in p.last_state['estimated_velocity_rad_s']))
+
+    def ready(self):
+        # 请求入口不随瞬时微震切换，实际提交仍守原0.01rad/s静止门。
+        return self.request_ready() and all(
+            abs(v) <= .01 for v in self.panel.last_state['estimated_velocity_rad_s'])
 
     def record(self, event, **fields):
         with (self.panel.report / 'moveit-events.jsonl').open('a') as f:
@@ -268,7 +273,7 @@ class MoveItTab(QtWidgets.QWidget):
             self.status.setText('仅播放虚影；预览结束后需单独点击“执行规划路径”，不会自动运动。')
 
     def start_execution(self):
-        if not self.path or self.checks or self.samples or self.panel.busy or not self.ready() or self.pending or self.executing:
+        if not self.path or self.checks or self.samples or self.panel.busy or not self.request_ready() or self.pending or self.executing:
             return
         revision, path, identity = self.revision, self.path, self.execution_identity()
         execution_path = execution_polyline(path)
@@ -280,7 +285,7 @@ class MoveItTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        if revision != self.revision or path != self.path or identity != self.execution_identity() or self.panel.busy or not self.ready():
+        if revision != self.revision or path != self.path or identity != self.execution_identity() or self.panel.busy or not self.request_ready():
             self.status.setText('确认期间状态变化，未执行。请重新规划。')
             return
         try:
@@ -289,6 +294,7 @@ class MoveItTab(QtWidgets.QWidget):
             self.execution_speed, self.execution_acceleration = speed, acceleration
             self.started_motion = self.completed_marker = None
             self.panel.busy = True
+            self.segment_deadline = time.monotonic()+2.
             self.record('EXECUTION_CONFIRMED', identity=identity, points=path,
                         execution_points=execution_path, original_times_s=self.times,
                         speed_deg_s=speed, acceleration_rad_s2=acceleration,
@@ -350,6 +356,7 @@ class MoveItTab(QtWidgets.QWidget):
             self.record('SEGMENT_COMPLETED', index=self.execution.index-1, motion=motion,
                         actual=self.panel.actual_q)
             self.completed_marker = self.started_motion = None
+            self.segment_deadline = time.monotonic()+2.
             if self.execution.done:
                 self.panel.busy = False
                 self.record('PATH_COMPLETED', identity=self.execution.identity)
@@ -359,6 +366,7 @@ class MoveItTab(QtWidgets.QWidget):
                 return
         if not self.execution.waiting:
             if not self.ready():
+                self.status.setText('执行请求已确认，等待原静止条件（最多2秒）；未提交本段运动。')
                 return
             try:
                 goal = self.execution.next_goal(self.panel.actual_q, self.execution_identity())
@@ -380,7 +388,7 @@ class MoveItTab(QtWidgets.QWidget):
         feedback_identity = self.current_identity()
         self.capture.setEnabled(available and not self.pending and not self.executing and self.planner.fk.service_is_ready())
         self.play.setEnabled(available and (bool(self.path) or self.noop_goal is not None) and not self.executing and not self.samples and not self.checks)
-        self.execute.setEnabled(bool(self.path) and self.play_index is None and not self.panel.busy and not self.executing and not self.samples and not self.checks and self.ready())
+        self.execute.setEnabled(bool(self.path) and self.play_index is None and not self.panel.busy and not self.executing and not self.samples and not self.checks and self.request_ready())
         for widget in self.inputs + self.jog_sliders + [self.step]:
             widget.setEnabled(not self.executing)
         for widget in self.preset_buttons:
@@ -504,10 +512,14 @@ class MoveItTab(QtWidgets.QWidget):
                 self.record('PREVIEW_COMPLETED')
                 self.status.setText('预览完成；实物未运动。需要运动时单独点击“执行规划路径”并确认。')
         if self.executing:
-            if self.execution.waiting and time.monotonic() > self.segment_deadline:
-                self.cancel_execution('运动段等待超时，停止路径。', stop=True)
-            elif not self.panel.fresh() or not self.panel.authorized or not self.panel.control_state_allowed((2, 3, 4, 5, 6)):
+            if (not self.panel.fresh() or not self.panel.authorized or
+                    not self.panel.control_state_allowed((2, 3, 4, 5, 6)) or
+                    self.execution_identity() != self.execution.identity):
                 self.cancel_execution('设备反馈、授权或生命周期不再允许控制。', stop=True)
+            elif time.monotonic() > self.segment_deadline:
+                submitted = self.execution.waiting
+                self.cancel_execution('运动段等待超时，停止路径。' if submitted else
+                                      '原静止条件未在2秒内满足，已取消待执行请求；保持当前使能。', stop=submitted)
             elif self.completed_marker or not self.execution.waiting:
                 self.advance_execution()
             if self.executing:

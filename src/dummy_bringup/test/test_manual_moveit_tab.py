@@ -1,5 +1,6 @@
 """真实 Qt 控件与假异步服务；不创建 ROS 节点或硬件连接。"""
 import os
+import ast
 import sys
 import unittest
 import tempfile
@@ -439,6 +440,87 @@ class MoveItTabTests(unittest.TestCase):
             self.tab.start_execution()
         self.assertEqual(self.panel.commands, [])
         self.assertFalse(self.tab.executing)
+
+    def test_request_button_stays_available_during_fresh_velocity_crossings(self):
+        self.prepare_execution()
+        self.validate_plan()
+        for velocity in (.009, .011, -.012, .008):
+            self.panel.last_state['estimated_velocity_rad_s'] = [velocity] + [0.] * 5
+            self.tab.tick()
+            self.assertTrue(self.tab.execute.isEnabled())
+        self.panel.last_state['velocity_valid_mask'] = 0
+        self.tab.tick()
+        self.assertFalse(self.tab.execute.isEnabled())
+        self.panel.last_state['velocity_valid_mask'] = 63
+        self.panel.is_fresh = False
+        self.tab.tick()
+        self.assertFalse(self.tab.execute.isEnabled())
+
+    def test_20ms_samples_keep_request_stable_but_real_250ms_age_disables(self):
+        self.prepare_execution()
+        self.validate_plan()
+        source = Path(__file__).resolve().parents[1] / 'scripts/manual_joint_panel.py'
+        fresh = next(n for n in ast.walk(ast.parse(source.read_text()))
+                     if isinstance(n, ast.FunctionDef) and n.name == 'fresh')
+        scope = dict(time=module.time)
+        exec(compile(ast.Module(body=[fresh], type_ignores=[]), str(source), 'exec'), scope)
+        self.panel.last_state['can_rx_age_us'] = [22000] * 6
+        self.panel.fresh = lambda: scope['fresh'](self.panel)
+        clock = [1_000_000_000]
+        with patch.object(module.time, 'monotonic_ns', side_effect=lambda: clock[0]):
+            for milliseconds in range(0, 1001, 20):
+                clock[0] = 1_000_000_000 + milliseconds * 1_000_000
+                self.panel.last_state_ns = clock[0]
+                velocity = .011 if milliseconds % 40 else .009
+                self.panel.last_state['estimated_velocity_rad_s'] = [velocity] + [0.] * 5
+                self.tab.tick()
+                self.assertTrue(self.tab.execute.isEnabled())
+            clock[0] += 251_000_000
+            self.tab.tick()
+            self.assertFalse(self.tab.execute.isEnabled())
+
+    def test_confirmed_request_waits_for_original_velocity_guard_before_submission(self):
+        self.prepare_execution()
+        self.panel.last_state['estimated_velocity_rad_s'] = [.02] + [0.] * 5
+        with patch.object(module.time, 'monotonic', return_value=10.), patch.object(
+                QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            self.tab.start_execution()
+        self.assertTrue(self.tab.executing)
+        self.assertEqual(self.panel.commands, [])
+        self.panel.last_state['estimated_velocity_rad_s'] = [.009] + [0.] * 5
+        with patch.object(module.time, 'monotonic', return_value=11.):
+            self.tab.tick()
+        self.assertEqual(len(self.panel.commands), 1)
+        self.assertEqual(self.tab.segment_deadline, 671.)
+
+    def test_unsubmitted_request_timeout_cancels_without_stop_or_authority_loss(self):
+        self.prepare_execution()
+        self.panel.last_state['estimated_velocity_rad_s'] = [.02] + [0.] * 5
+        with patch.object(module.time, 'monotonic', return_value=10.), patch.object(
+                QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            self.tab.start_execution()
+        self.assertTrue(self.tab.executing)
+        self.assertEqual(self.panel.commands, [])
+        with patch.object(module.time, 'monotonic', return_value=13.):
+            self.tab.tick()
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.commands, [])
+        self.assertEqual(self.panel.releases, [])
+        self.assertTrue(self.panel.authorized)
+
+    def test_stale_pending_request_still_stops_even_when_prepare_window_expired(self):
+        self.prepare_execution()
+        self.panel.last_state['estimated_velocity_rad_s'] = [.02] + [0.] * 5
+        with patch.object(module.time, 'monotonic', return_value=10.), patch.object(
+                QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            self.tab.start_execution()
+        self.assertTrue(self.tab.executing)
+        self.panel.is_fresh = False
+        with patch.object(module.time, 'monotonic', return_value=13.):
+            self.tab.tick()
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.commands, [])
+        self.assertEqual(self.panel.releases, ['STOP'])
 
     def test_segment_watchdog_uses_public_660_second_budget(self):
         self.prepare_execution()

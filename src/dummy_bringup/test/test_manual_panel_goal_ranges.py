@@ -157,3 +157,41 @@ def test_projection_confirmation_does_not_bypass_changed_control_authority(goal_
     monkeypatch.setattr(QtWidgets.QMessageBox, 'question', decline_authority)
     panel.start_move()
     assert len(prompts) == 1 and commands == [] and not panel.busy
+
+
+def test_ordinary_move_button_accepts_request_but_preserves_invalid_and_stale_guards(goal_panel):
+    panel, scope = goal_panel
+    panel.authorized, panel.calibration, panel.busy = True, (123, 1), False
+    panel.fresh = lambda: True
+    state = dict(core_state=4, position_valid_mask=63, velocity_valid_mask=63,
+                 position_rad=[0., 0., math.pi/2, 0., 0., 0.],
+                 estimated_velocity_rad_s=[.011, 0., 0., 0., 0., 0.])
+    panel.last_state = state
+    tree = ast.parse(SOURCE.read_text())
+    tick = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'tick')
+    call = next(n for n in ast.walk(tick) if isinstance(n, ast.Call) and
+                isinstance(n.func, ast.Attribute) and n.func.attr == 'setEnabled' and
+                isinstance(n.func.value, ast.Attribute) and n.func.value.attr == 'move')
+    condition = compile(ast.Expression(call.args[0]), str(SOURCE), 'eval')
+    assert eval(condition, scope, dict(self=panel, state=state, fresh=True))
+    state['velocity_valid_mask'] = 0
+    assert not eval(condition, scope, dict(self=panel, state=state, fresh=True))
+    state['velocity_valid_mask'] = 63
+    assert not eval(condition, scope, dict(self=panel, state=state, fresh=False))
+
+
+def test_hold_status_text_does_not_reformat_instantaneous_velocity(goal_panel):
+    panel, scope = goal_panel
+    panel.authorized, panel.calibration, panel.busy = True, (123, 1), False
+    tree = ast.parse(SOURCE.read_text())
+    tick = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'tick')
+    start = next(i for i,n in enumerate(tick.body) if isinstance(n, ast.Assign) and
+                 any(isinstance(t, ast.Name) and t.id == 'speed_note' for t in n.targets))
+    fragment = compile(ast.Module(body=tick.body[start:start+2], type_ignores=[]), str(SOURCE), 'exec')
+    messages = []
+    for velocity in (.009, .011, -.012, .008):
+        local = dict(self=panel, state=dict(core_state=4, estimated_velocity_rad_s=[velocity]*6))
+        exec(fragment, scope, local)
+        messages.append(local['speed_note'])
+    assert len(set(messages)) == 1
+    assert messages[0]
