@@ -144,5 +144,6 @@
   "manual_limit_reference_enabled": true,
   "moveit_jog_speed_default_mm_s": 100.0,
   "moveit_preview_speed_default": 20.0,
-  "deployment_required": true
+  "deployment_required": true,
+  "moveit_segment_timeout_s": 660.0
 }

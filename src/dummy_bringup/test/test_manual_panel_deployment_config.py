@@ -87,3 +87,16 @@ def test_cli_creates_output_exclusively(inputs, tmp_path):
     before = output.read_bytes()
     assert subprocess.run(argv, check=False).returncode != 0
     assert output.read_bytes() == before
+
+
+@pytest.mark.parametrize('value', [0, -1, float('inf'), float('nan'), 661, True, '660'])
+def test_render_rejects_unbounded_or_invalid_segment_watchdog(inputs, value):
+    template, deployment, description = inputs
+    template['moveit_segment_timeout_s'] = value
+    with pytest.raises(ValueError, match='moveit_segment_timeout_s'):
+        renderer.render_config(template, deployment, description)
+
+
+def test_render_publishes_validated_segment_watchdog(inputs):
+    template, deployment, description = inputs
+    assert renderer.render_config(template, deployment, description)['moveit_segment_timeout_s'] == 660.

@@ -4,6 +4,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 
 
@@ -40,7 +41,13 @@ def render_config(template: dict, deployment: dict, description_xacro: Path) -> 
         raise ValueError('候选decoder目录不存在') from error
     if not decoder.is_dir() or not (decoder / 'join_real_6dof_evidence.py').is_file():
         raise ValueError('候选decoder目录缺少实际解码入口')
+    # 当前公开trial预算660s，包含Native规划/收敛/完成与清理；不是延长设备许可。
+    timeout = template.get('moveit_segment_timeout_s', 660.)
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or
+            not math.isfinite(timeout) or not 0. < timeout <= 660.):
+        raise ValueError('moveit_segment_timeout_s必须为(0,660]内的有限秒数')
     result = copy.deepcopy(template)
+    result['moveit_segment_timeout_s'] = float(timeout)
     args = result.get('native_arguments')
     if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
         raise ValueError('native_arguments必须是字符串数组')

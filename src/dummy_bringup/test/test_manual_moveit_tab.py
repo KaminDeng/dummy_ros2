@@ -440,6 +440,71 @@ class MoveItTabTests(unittest.TestCase):
         self.assertEqual(self.panel.commands, [])
         self.assertFalse(self.tab.executing)
 
+    def test_segment_watchdog_uses_public_660_second_budget(self):
+        self.prepare_execution()
+        with patch.object(module.time, 'monotonic', return_value=10.):
+            self.confirm_execution()
+        self.assertEqual(self.tab.segment_deadline, 670.)
+        with patch.object(module.time, 'monotonic', return_value=111.):
+            self.tab.tick()
+        self.assertTrue(self.tab.executing)
+        self.assertEqual(self.panel.releases, [])
+        with patch.object(module.time, 'monotonic', return_value=671.):
+            self.tab.tick()
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.releases, ['STOP'])
+
+    def test_invalid_segment_watchdog_is_rejected_before_execution(self):
+        for value in (0, -1, float('inf'), float('nan'), 661, True, '660'):
+            with self.subTest(value=value):
+                self.panel.cfg['moveit_segment_timeout_s'] = value
+                with self.assertRaises(ValueError):
+                    module.MoveItTab(self.panel)
+        self.assertEqual(self.panel.commands, [])
+
+    def test_prestart_policy_rejection_discards_path_without_stop(self):
+        self.prepare_execution()
+        self.confirm_execution()
+        self.tab.native_event('MOVE_REJECTED_POLICY', dict(boot='7', reference='2', session='9', motion='10', state_seq='100'))
+        self.assertFalse(self.tab.executing)
+        self.assertFalse(self.panel.busy)
+        self.assertTrue(self.panel.authorized)
+        self.assertEqual(self.panel.releases, [])
+        self.tab.native_event('MOVE_COMPLETED', dict(boot='7', reference='2', session='9', motion='11', state_seq='101'))
+        self.tab.advance_execution()
+        self.assertEqual(len(self.panel.commands), 1)
+
+    def test_prestart_not_ready_does_not_release_authority(self):
+        self.prepare_execution()
+        self.confirm_execution()
+        self.tab.native_event('MOVE_NOT_READY', dict(boot='7', reference='2', session='9', motion='10', state_seq='100'))
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.releases, [])
+        self.assertTrue(self.panel.authorized)
+
+    def test_policy_rejection_after_started_motion_still_stops(self):
+        self.prepare_execution()
+        self.confirm_execution()
+        self.tab.native_event('MOVE_STARTED', dict(boot='7', reference='2', session='9', motion='11', state_seq='101'))
+        self.tab.native_event('MOVE_REJECTED_POLICY', dict(boot='7', reference='2', session='9', motion='11', state_seq='102'))
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.releases, ['STOP'])
+
+    def test_not_ready_after_started_motion_still_stops(self):
+        self.prepare_execution()
+        self.confirm_execution()
+        self.tab.native_event('MOVE_STARTED', dict(boot='7', reference='2', session='9', motion='11', state_seq='101'))
+        self.tab.native_event('MOVE_NOT_READY', dict(boot='7', reference='2', session='9', motion='11', state_seq='102'))
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.releases, ['STOP'])
+
+    def test_rejection_with_changed_identity_still_stops(self):
+        self.prepare_execution()
+        self.confirm_execution()
+        self.tab.native_event('MOVE_REJECTED_POLICY', dict(boot='7', reference='2', session='10', motion='10', state_seq='100'))
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.releases, ['STOP'])
+
     def test_wrong_session_completion_aborts_without_next_segment(self):
         self.prepare_execution()
         self.confirm_execution()

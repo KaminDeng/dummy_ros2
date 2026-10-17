@@ -14,6 +14,11 @@ class MoveItTab(QtWidgets.QWidget):
     def __init__(self, panel):
         super().__init__(panel)
         self.panel = panel
+        timeout = panel.cfg.get('moveit_segment_timeout_s', 660.)
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or
+                not math.isfinite(timeout) or not 0. < timeout <= 660.):
+            raise ValueError('moveit_segment_timeout_s必须为(0,660]内的有限秒数')
+        self.segment_timeout_s = float(timeout)
         self.planner = MoveItPlanner(panel.node, [j['name'] for j in panel.cfg['joints']], panel.limits)
         self.pending = None
         self.path = None
@@ -286,7 +291,8 @@ class MoveItTab(QtWidgets.QWidget):
             self.panel.busy = True
             self.record('EXECUTION_CONFIRMED', identity=identity, points=path,
                         execution_points=execution_path, original_times_s=self.times,
-                        speed_deg_s=speed, acceleration_rad_s2=acceleration)
+                        speed_deg_s=speed, acceleration_rad_s2=acceleration,
+                        segment_timeout_s=self.segment_timeout_s)
             self.advance_execution()
         except ValueError as error:
             self.cancel_execution(str(error), stop=False)
@@ -317,6 +323,9 @@ class MoveItTab(QtWidgets.QWidget):
             self.completed_marker = (int(parts['motion']), int(parts['state_seq']))
         elif event == 'MOVE_NOOP':
             self.completed_marker = (int(parts['motion']), int(parts['state_seq']))
+        elif event in ('MOVE_REJECTED_POLICY', 'MOVE_NOT_READY') and self.started_motion is None:
+            # Native这两种同身份事件在Begin之前返回；取消队列，不额外失能。
+            self.cancel_execution('Native 未提交本段：'+event+'；路径已取消，保持当前使能。', stop=False)
         elif event.startswith('MOVE_REJECTED') or event in ('MOVE_NOT_READY', 'READONLY_FAULT', 'EXIT_CLEANUP', 'RELEASE_CONFIRMED', 'RELEASE_UNCONFIRMED'):
             self.cancel_execution('Native 拒绝或退出：'+event, stop=True)
 
@@ -358,7 +367,7 @@ class MoveItTab(QtWidgets.QWidget):
                 if not self.panel.command(command):
                     raise ValueError('通信进程未接受运动命令')
                 self.panel.busy = True
-                self.segment_deadline = time.monotonic()+100.
+                self.segment_deadline = time.monotonic()+self.segment_timeout_s
                 self.status.setText(f'执行完整路径：第 {self.execution.index} / {len(self.execution.points)-1} 段')
                 self.record('SEGMENT_SUBMITTED', index=self.execution.index, goal=goal)
             except ValueError as error:
