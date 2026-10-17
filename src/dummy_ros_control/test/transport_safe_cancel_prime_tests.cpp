@@ -34,7 +34,6 @@ static unsigned cancel_hold_case=0;
 
 namespace {
 static bool source_cancel_coordination=false;
-static const char* source_cancel_fault=nullptr;
 namespace wire = dp::protocol::dummy_robot_v2;
 using State = wire::DummyJointStateV2;
 using Status = wire::DummyDeviceStatusV2;
@@ -1276,7 +1275,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       enabling.status.set_motion_epoch(3U);enabling.state.set_motion_epoch(3U);enabling.status.set_management_epoch(4U);enabling.state.set_management_epoch(4U);enabling.state.set_hold_ready(false);
       enabling.status.set_operation_id(0U);enabling.status.set_transaction_phase(2U);enabling.status.set_final_state(0U);
       double fixed[6]{};enabling.state.set_position_rad(fixed);
-      bool intent=false, second_stop_requested=false;std::uint64_t gen=0,last_sent=0,second_stop_at=0U,first_unconfirmed_at=0U;
+      bool intent=false, intent_transferred=false, second_stop_requested=false;std::uint64_t gen=0,last_sent=0,second_stop_at=0U,first_unconfirmed_at=0U,rejected_before_intent=0U;
       while(transport_steady_now_us()-began<(prime_test_mode && (!std::strcmp(prime_test_mode,"expired") || !std::strcmp(prime_test_mode,"second_stop"))?310000U:150000U)) {
         if(transport_steady_now_us()-last_sent>=20000U){enabling.state.set_state_seq(enabling.state.state_seq()+1U);enabling.state.set_produced_at_us(device_now_us());send(enabling);last_sent=transport_steady_now_us();}
         if(prime_test_mode && !std::strcmp(prime_test_mode,"second_stop") && !second_stop_requested && (source_safe_prime_guard_only ? transport_steady_now_us()-began>=200000U : (transport.statistics().stop_requests_sent==1U && transport.statistics().stop_requests_confirmed==0U && transport.statistics().unconfirmed_stop_requests==0U && transport_steady_now_us()-began<250000U))) {
@@ -1289,7 +1288,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           if(prime_test_mode && !std::strcmp(prime_test_mode,"arbitrary_target"))fixed[0]=.001;
           if(prime_test_mode && (!std::strcmp(prime_test_mode,"old_motion") || !std::strcmp(prime_test_mode,"wrong_boot") || !std::strcmp(prime_test_mode,"wrong_session") || !std::strcmp(prime_test_mode,"wrong_ref")))
             set_command_identity({!std::strcmp(prime_test_mode,"wrong_boot")?28674U:28673U,!std::strcmp(prime_test_mode,"wrong_session")?78U:77U,!std::strcmp(prime_test_mode,"wrong_ref")?2U:1U,!std::strcmp(prime_test_mode,"old_motion")?2U:3U,ticket});
+          if(source_safe_prime_guard_only) channel->diagnostics.enable_details(true);
+          rejected_before_intent=transport.statistics().rejected_commands;
           gen=publish_control_update(fixed,6U,0,nullptr);intent=gen!=0U;
+          if(intent) intent_transferred=system.transfer_control_update();
           std::fprintf(stderr,"CORE_BOUND_SAFE_HOLD_INTENT generation=%llu boot28673/session77/ref1/newmotion3 pendingCancel(noCOMMITTED)\n",(unsigned long long)gen);
         }
         if(::poll(&response,1,0)==1) {
@@ -1323,6 +1325,25 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           (unsigned long long)actual.request_id(),(unsigned long long)gen,(unsigned long long)(first_unconfirmed_at?first_unconfirmed_at-began:0U),(unsigned long long)(second_stop_at?second_stop_at-began:0U));
       }
       if(prime_test_mode && std::strcmp(prime_test_mode,"drift")!=0 && std::strcmp(prime_test_mode,"wrong_query_op")!=0) {
+        if(!intent || gen==0U) return 894;
+        const bool pending_guard=std::strcmp(prime_test_mode,"expired")!=0 &&
+            std::strcmp(prime_test_mode,"no_owned")!=0 && std::strcmp(prime_test_mode,"second_stop")!=0;
+        if(pending_guard && (!intent_transferred || stats.rejected_commands<=rejected_before_intent)) return 895;
+        if(pending_guard) {
+          bool reached_guard=false;
+          for(std::size_t index=0;index<DiagnosticJournal::kDetailCapacity;++index) {
+            const auto detail=transport.diagnostic_detail_record(index);
+            if(detail && std::strncmp(detail->format.data(),"COMMAND_PRIME_DIAG reject seq=",29U)==0 &&
+               detail->argument_count>0U && detail->arguments[0].bits==gen) {
+              reached_guard=true;
+              std::fprintf(stderr,"COMMAND_PRIME_DIAG reject fixture_generation=%llu\n",(unsigned long long)gen);
+            }
+          }
+          if(!reached_guard) return 896;
+        }
+        std::fprintf(stderr,"SAFE_PRIME_GUARD_STIMULUS generation=%llu transferred=%d rejected_delta=%llu\n",
+            (unsigned long long)gen,intent_transferred,
+            (unsigned long long)(stats.rejected_commands-rejected_before_intent));
         std::fprintf(stderr,"NEGATIVE_SAFE_PRIME noPublisher/noD10/noConfirmed mode=%s sent=%llu confirmed=%llu\n",prime_test_mode,(unsigned long long)stats.stop_requests_sent,(unsigned long long)stats.stop_requests_confirmed);
         return stats.stop_requests_sent==0 && stats.stop_requests_confirmed==0 ? 0:889;
       }
@@ -4315,7 +4336,28 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
   ::close(requests[1]); ::close(responses[0]); ::close(stops[0]);
   return result;
 }
-int main(int argc, char **argv) {
+static int run_fixture_main(int argc, char **argv) {
+  // 仅测试入口：覆盖业务错误码经真实fork/exec传回父进程，不能被低8位截断成成功。
+  if (argc == 3 && std::strcmp(argv[1], "fixture_result") == 0) {
+    const std::array<std::pair<const char *, int>, 5> results{{{"0", 0}, {"1", 1}, {"256", 256}, {"512", 512}, {"-1", -1}}};
+    for (const auto &entry : results) if (std::strcmp(argv[2], entry.first) == 0) return entry.second;
+    return 64;
+  }
+  if(argc==3) {
+    const char *selected=argv[2];
+    const bool guard=std::strncmp(selected,"safe_prime_guard_",17U)==0;
+    const bool prime=!guard && std::strncmp(selected,"safe_prime_",11U)==0;
+    const bool cancel=std::strncmp(selected,"cancel_coordination_",20U)==0;
+    if(guard || prime || cancel) {
+      const char *mode=selected+(guard?17U:prime?11U:20U);
+      const std::array<const char *,13> allowed{{"positive","drift","wrong_boot","wrong_session","wrong_ref","old_motion","arbitrary_target","foreign_run","wrong_status_phase","wrong_query_op","expired","no_owned","second_stop"}};
+      bool known=false;
+      for(const auto *entry:allowed) if(std::strcmp(mode,entry)==0)known=true;
+      if((cancel && std::strcmp(mode,"positive")!=0) || (guard && std::strcmp(mode,"wrong_query_op")==0) || !known) {
+        std::fprintf(stderr,"UNKNOWN_SOURCE_FIXTURE_MODE %s\n",selected);return 64;
+      }
+    }
+  }
   std::string source_guard_argument;
   if(argc==3 && std::strncmp(argv[2],"safe_prime_guard_",17U)==0) {
     source_safe_prime_guard_only=true;
@@ -4328,8 +4370,6 @@ int main(int argc, char **argv) {
   // 仅新增固定Source测试模式；普通registered场景保原路径。
   if(argc==3 && std::strncmp(argv[2],"cancel_coordination_",20U)==0) {
     source_cancel_coordination=true;
-    const char* mode=argv[2]+20U;
-    source_cancel_fault=std::strcmp(mode,"positive")==0 ? nullptr : mode;
     argv[2]=const_cast<char*>("running_deactivate");
   }
 
@@ -4597,4 +4637,10 @@ int main(int argc, char **argv) {
   }
   if (result != 0 || !six_axis || argc != 2) return result;
   return run_component_case(true, false, true);
+}
+
+int main(int argc, char **argv) {
+  const auto result=run_fixture_main(argc,argv);
+  if(result!=0) std::fprintf(stderr,"FIXTURE_FAILURE result=%d\n",result);
+  return result==0 ? 0 : 1;
 }
