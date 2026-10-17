@@ -23,7 +23,7 @@ set(DUMMY_DP_COMM_SDK_SOURCES
   "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like_transport.cpp"
   "${DPSDK_ROOT}/platform/common/dp_comm_pico_port/dp_comm_port.cpp")
 set(DUMMY_DP_COMM_SDK_HASHES
-  66806c92e523e70489577c9086d083c068a195ab4322d5c03d36edc4dbd0817c
+  c53b6becb9fce0d0779339f0b4dfdfb7aacce2f13432007c75c21ba3dcfdae49
   ec5dfd24763098b5ca79e3d32618afa69b88b62aaca7e574eaff303974bcd7f5
   6b0e6d369ae8b1d2fefd1cd877ded9d6bd7d4f73c1b035b06c363de6cf86732e)
 set(source_index 0)
@@ -40,7 +40,8 @@ foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
   message(STATUS "DPSDK PIC input ${source}: ${source_sha256}")
 endforeach()
 # The prebuilt runtime uses a local-exec TLS relocation and cannot be loaded by
-# pluginlib. Compile only the unchanged transport sources as PIC in this build.
+# pluginlib. Compile the source-locked transport as PIC in this build.
+# 当前runtime锁对应Node reset释放服务及最近deadline修复，均有实际负例/回归。
 add_library(dummy_dp_comm_pic STATIC ${DUMMY_DP_COMM_SDK_SOURCES})
 add_library(dummy_dp_comm_log_shim STATIC src/zenoh_pico_log_shim.cpp)
 set_target_properties(dummy_dp_comm_log_shim PROPERTIES POSITION_INDEPENDENT_CODE ON)
