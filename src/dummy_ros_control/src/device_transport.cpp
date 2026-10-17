@@ -2836,7 +2836,7 @@ struct DeviceTransport::Impl {
           stop_now >= last_status_received_us &&
           stop_now - last_status_received_us <= parameters.max_state_age_us;
       if (stop_confirmation_pending.load(std::memory_order_acquire) &&
-          fresh_released_idle && (!stop_candidate_revalidated || stop_now<=stop_deadline_us)) {
+          fresh_released_idle && stop_now<=stop_deadline_us) {
         ++stop_requests_confirmed;
         stop_confirmation_pending = false;
         pending_stop.reset();
