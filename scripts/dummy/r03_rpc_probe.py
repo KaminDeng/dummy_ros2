@@ -2,6 +2,7 @@
 """Run ROS-owner R03 evidence against real DPSDK dp_comm binaries."""
 
 from __future__ import annotations
+import os
 
 import argparse
 import json
@@ -10,7 +11,7 @@ import subprocess
 import time
 
 
-DPSDK = Path("../dpsdk")
+DPSDK = Path(os.environ.get("DPSDK_ROOT", str(Path(__file__).resolve().parents[2].parent / "dpsdk_consolidated")))
 BUILD = DPSDK / "build/posix-zenohc"
 HOST_TESTS = BUILD / "libraries/dp_comm/dp_comm_ros_like_host_tests"
 TRANSPORT_TESTS = BUILD / "libraries/dp_comm/dp_comm_ros_like_transport_tests"

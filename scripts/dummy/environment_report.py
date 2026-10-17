@@ -15,7 +15,7 @@ from typing import Any
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", WORKSPACE_ROOT.parent / "dpsdk"))
+DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", WORKSPACE_ROOT.parent / "dpsdk_consolidated"))
 DUMMY_ROOT = Path(os.environ.get(
     "DUMMY_ROOT", WORKSPACE_ROOT.parent / "dummy_code/firmware/dummy-ref-core-fw"
 ))

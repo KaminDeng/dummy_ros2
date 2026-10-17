@@ -62,6 +62,9 @@ def panel(tmp_path, core=9):
                  rest_deg=[0, -60, 163.97, 0, 0, 0], inward_recovery_enabled=True)
     p.commands = []; p.messages = []; p.command = lambda text: p.commands.append(text) or True
     p.message = p.messages.append; p.read_state = lambda: None
+    # AST逻辑fixture补齐构造函数的预览状态；渲染由独立MoveIt测试覆盖。
+    p.preview_failed = None
+    p.set_preview_failed = lambda value: setattr(p, 'preview_failed', value)
     p.show_actual_description = lambda value: setattr(p, 'description_visible', value)
     p.published = []; p.publisher = SimpleNamespace(publish=p.published.append)
     p.target_publisher = SimpleNamespace(publish=lambda msg: None)

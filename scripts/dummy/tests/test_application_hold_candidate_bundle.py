@@ -10,11 +10,11 @@ from scripts.dummy.real_six_axis_preflight import inspect_bundle
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DPSDK = ROOT.parent / "dpsdk"
+DPSDK = ROOT.parent / "dpsdk_consolidated"
 BUNDLE = ROOT / "contracts/dummy_robot_v2_application_hold_no_load_candidate"
 POLICY = DPSDK / "configs/f405_6dof_application_hold_no_load_candidate.json"
 IMAGE = DPSDK / "build_dummy/reports/f405-p7-app-48c8-20260930.bin"
-SOURCE_CONTRACT = DPSDK / "contracts/dummy_robot_v2/manifest.json"
+SOURCE_CONTRACT = DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json"
 
 
 def digest(path):
@@ -37,7 +37,7 @@ def test_candidate_payloads_and_frozen_d_identity():
     assert manifest["compiled_policy_sha256"] == hashlib.sha256(canonical).hexdigest()
     assert manifest["firmware_image_sha256"] == digest(IMAGE)
     assert manifest["source_contract_sha256"] == json.loads(SOURCE_CONTRACT.read_text())["payload_sorted_sha256"]
-    assert manifest["model_sha256"] == digest(DPSDK / "contracts/dummy_robot_v2/model/model.yaml")
+    assert manifest["model_sha256"] == digest(DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/model/model.yaml")
     assert json.loads((BUNDLE / "policy/application_hold_no_load.json").read_text()) == source
     profile = yaml.safe_load((BUNDLE / "profiles/f405_6dof_bench.yaml").read_text())
     assert profile["active_axes"] == source["active_axes"]

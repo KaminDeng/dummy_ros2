@@ -21,7 +21,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[5]
-DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", "../dpsdk"))
+DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", str(Path(__file__).resolve().parents[5].parent / "dpsdk_consolidated")))
 D06_CASES = {"B02": "B02", "AUTH04": "AUTH04"}
 D07_CASES = {"SEN05", "SEN06"}
 BACKEND_SOURCES = (
@@ -38,7 +38,7 @@ _REAL_ACTION: dict[str, Any] | None = None
 
 
 def _load(name: str):
-    path = DPSDK_ROOT / "tools/dummy/tests/dummy_test_support/adapters" / f"{name}.py"
+    path = DPSDK_ROOT / "applications/dummy_ref_control/tools/dummy_ref_tools/tests/dummy_test_support/adapters" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"dpsdk_{name}_r07", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load upstream adapter: {path}")

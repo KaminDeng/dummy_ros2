@@ -1,0 +1,196 @@
+{
+  "capability": {
+    "active_axes": [
+      "Joint1",
+      "Joint2",
+      "Joint3",
+      "Joint4",
+      "Joint5",
+      "Joint6"
+    ],
+    "can_nodes": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "configured_mask": 63,
+    "control_period_us": 10000,
+    "effective_joint_velocity_cap_rad_s": 0.15079644737231007,
+    "max_can_tx_residence_us": 250000,
+    "motion_permitted_on_real_hardware": false,
+    "per_axis_limits": [
+      {
+        "acceleration_max_rad_s2": 1.0,
+        "direction": -1,
+        "effective_velocity_max_rad_s": 0.15079644737231007,
+        "gear_ratio": 50.0,
+        "jerk_max_rad_s3": null,
+        "motor_velocity_cap_motor_rev_s": 1.2,
+        "name": "Joint1",
+        "node": 1,
+        "position_max_rad": 2.9670597283903604,
+        "position_min_rad": -2.9670597283903604,
+        "trial_max_rad": null,
+        "trial_min_rad": null,
+        "velocity_max_rad_s": 0.5
+      },
+      {
+        "acceleration_max_rad_s2": 1.0,
+        "direction": -1,
+        "effective_velocity_max_rad_s": 0.15079644737231007,
+        "gear_ratio": 50.0,
+        "jerk_max_rad_s3": null,
+        "motor_velocity_cap_motor_rev_s": 1.2,
+        "name": "Joint2",
+        "node": 2,
+        "position_max_rad": 1.5707963267948966,
+        "position_min_rad": -1.2740903539558606,
+        "trial_max_rad": null,
+        "trial_min_rad": null,
+        "velocity_max_rad_s": 0.5
+      },
+      {
+        "acceleration_max_rad_s2": 1.0,
+        "direction": -1,
+        "effective_velocity_max_rad_s": 0.15079644737231007,
+        "gear_ratio": 50.0,
+        "jerk_max_rad_s3": null,
+        "motor_velocity_cap_motor_rev_s": 1.2,
+        "name": "Joint3",
+        "node": 3,
+        "position_max_rad": 3.141592653589793,
+        "position_min_rad": 0.6108652381980153,
+        "trial_max_rad": null,
+        "trial_min_rad": null,
+        "velocity_max_rad_s": 0.5
+      },
+      {
+        "acceleration_max_rad_s2": 1.0,
+        "direction": 1,
+        "effective_velocity_max_rad_s": 0.15079644737231007,
+        "gear_ratio": 50.0,
+        "jerk_max_rad_s3": null,
+        "motor_velocity_cap_motor_rev_s": 1.2,
+        "name": "Joint4",
+        "node": 4,
+        "position_max_rad": 3.141592653589793,
+        "position_min_rad": -3.141592653589793,
+        "trial_max_rad": null,
+        "trial_min_rad": null,
+        "velocity_max_rad_s": 0.5
+      },
+      {
+        "acceleration_max_rad_s2": 1.0,
+        "direction": -1,
+        "effective_velocity_max_rad_s": 0.15079644737231007,
+        "gear_ratio": 50.0,
+        "jerk_max_rad_s3": null,
+        "motor_velocity_cap_motor_rev_s": 1.2,
+        "name": "Joint5",
+        "node": 5,
+        "position_max_rad": 2.0943951023931953,
+        "position_min_rad": -2.0943951023931953,
+        "trial_max_rad": null,
+        "trial_min_rad": null,
+        "velocity_max_rad_s": 0.5
+      },
+      {
+        "acceleration_max_rad_s2": 1.0,
+        "direction": -1,
+        "effective_velocity_max_rad_s": 0.15079644737231007,
+        "gear_ratio": 50.0,
+        "jerk_max_rad_s3": null,
+        "motor_velocity_cap_motor_rev_s": 1.2,
+        "name": "Joint6",
+        "node": 6,
+        "position_max_rad": 12.566370614359172,
+        "position_min_rad": -12.566370614359172,
+        "trial_max_rad": null,
+        "trial_min_rad": null,
+        "velocity_max_rad_s": 0.5
+      }
+    ],
+    "policy_sha256": "7be2c5122de13cc4ca2ddf2e097f3807b023a9c13cf457a8c37680add1c2fa93",
+    "producer_period_us": null,
+    "profile_id": 201,
+    "profile_stage": "SEED",
+    "reference_kind": "BENCH_SESSION",
+    "state_publish_period_us": 50000,
+    "timing_status": "MEASUREMENT_REQUIRED"
+  },
+  "format": "dummy_wire_release_v2",
+  "payload_sorted_sha256": "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89d445ed96eda497b",
+  "payloads": [
+    {
+      "path": "codec/dp_dummy_robot_v2.hpp",
+      "sha256": "649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143"
+    },
+    {
+      "path": "codec/dp_dummy_robot_v2_dp_comm.hpp",
+      "sha256": "78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40"
+    },
+    {
+      "path": "codec/dp_dummy_robot_v2_static_requirements.h",
+      "sha256": "c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352"
+    },
+    {
+      "path": "codec/wire_layout.json",
+      "sha256": "0dbc0611cfacfd28da35d3431470be071dea0823350c4bffd96a091da83ccbb2"
+    },
+    {
+      "path": "enums/dummy_enum_values_v2.json",
+      "sha256": "6a09d91e591d2615b2e9e59aeb9a316ffa8b6f43043799cf88908e66fe1db694"
+    },
+    {
+      "path": "idl/DummyAttemptEvidenceV2.msg",
+      "sha256": "848daa404280f3424ab675f7cbae542b38a3e597ad1eb847609829896a50d265"
+    },
+    {
+      "path": "idl/DummyDeviceStatusV2.msg",
+      "sha256": "dca9436dc60101d3e25875a2d1bc0e069512a966085394bb583e92a8a4fd7c4c"
+    },
+    {
+      "path": "idl/DummyJointCommandV2.msg",
+      "sha256": "302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714"
+    },
+    {
+      "path": "idl/DummyJointStateV2.msg",
+      "sha256": "daea24db35c5f4bbb0f1210d989d77b073d74b34b104d50f913190e8a1daf8a2"
+    },
+    {
+      "path": "idl/DummyManageV2.srv",
+      "sha256": "7dcec4292e1d2e156b6642bf1bf22b316a0947c614bc06bbabdcaabdbcca08d9"
+    },
+    {
+      "path": "metadata/dummy_robot_v2.yaml",
+      "sha256": "da6285d054ec6b8e71d68d0e4cbbd361445898148fbbc02a818369bc8bfcc6d8"
+    },
+    {
+      "path": "model/model.yaml",
+      "sha256": "5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14"
+    },
+    {
+      "path": "profiles/f405_6dof_bench.yaml",
+      "sha256": "d6f55e42a41c4dea0c4dbe4f460030adbb3e11722629f0c3add37f8af44ca819"
+    },
+    {
+      "path": "profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac"
+    },
+    {
+      "path": "profiles/sil_6dof.yaml",
+      "sha256": "08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb"
+    },
+    {
+      "path": "profiles/sil_j1.yaml",
+      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c"
+    }
+  ],
+  "release_id": "dummy-wire-v2.5",
+  "runtime_enabled": false,
+  "schema_major": 2,
+  "schema_minor": 5
+}

@@ -16,6 +16,8 @@ def build_nodes(context):
     bringup = Path(get_package_share_directory('dummy_bringup'))
     config_path = LaunchConfiguration('config').perform(context)
     config = json.loads(Path(config_path).read_text())
+    if config.get("deployment_required"):
+        raise ValueError("面板模板缺少部署信息；请先运行render_manual_panel_config.py并通过config:=传入结果")
     # 安装目录的ament_python data副本可能落后；三个显示端使用同一明确源文件。
     model_path = str(Path(config['description_xacro']).resolve(strict=True))
     urdf = xacro.process_file(model_path).toxml()
@@ -42,7 +44,7 @@ def build_nodes(context):
 
 def generate_launch_description():
     bringup = Path(get_package_share_directory('dummy_bringup'))
-    report = '<home>/kamin_work/00-code/dummy_ros2/build_dummy/reports/manual-panel-' + datetime.now().strftime('%Y%m%d-%H%M%S')
+    report = str(Path.home() / '.ros/dummy_reports/manual-panel-') + datetime.now().strftime('%Y%m%d-%H%M%S')
     return LaunchDescription([
         DeclareLaunchArgument('config', default_value=str(bringup / 'config/manual_joint_panel.json')),
         DeclareLaunchArgument('report', default_value=report),

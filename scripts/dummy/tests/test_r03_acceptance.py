@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build and execute the ROS-owned R03 codec and goal-gate probes."""
+import os
 
 from pathlib import Path
 import subprocess
@@ -10,7 +11,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DPSDK = Path("../dpsdk")
+DPSDK = Path(os.environ.get("DPSDK_ROOT", str(Path(__file__).resolve().parents[3].parent / "dpsdk_consolidated")))
 C03_INCLUDE = ROOT / "contracts/dummy_robot_v2/codec"
 
 

@@ -31,7 +31,7 @@ def main():
     ]
     missing = subprocess.run(options, env=env, capture_output=True, text=True, timeout=3)
     assert missing.returncode != 0 and "bundle" in missing.stderr, "missing profile bundle must fail startup"
-    bundle = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "dummy_robot_v2"
+    bundle = pathlib.Path(sys.argv[2])
     with tempfile.TemporaryFile(mode="w+") as log:
         process = subprocess.Popen(options + ["-p", f"contract_bundle:={bundle}", "-p", "profile_name:=sil_j1"],
                                    env=env, stdout=log, stderr=log)
@@ -57,6 +57,14 @@ def main():
             response = rejection.call_async(Trigger.Request())
             rclpy.spin_until_future_complete(node, response, timeout_sec=2)
             assert response.done() and not response.result().success, "receipt exists before goal rejection"
+            diagnostic = node.create_client(Trigger, "/device_action_gate/diagnostic_snapshot")
+            assert diagnostic.wait_for_service(timeout_sec=2), "只读诊断快照服务缺失"
+            response = diagnostic.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(node, response, timeout_sec=2)
+            assert response.done() and response.result().success
+            before_gate = json.loads(response.result().message)["gate"]
+            assert not any(item["record"]["detail"] == "kInvalid" for item in before_gate["first_by_reason"]), before_gate
+            before = before_gate["counts"]
             variants = ("nan", "infinity", "unknown_joint", "empty", "negative_time", "terminal_velocity", "out_of_range")
             for variant in variants:
                 goal = FollowJointTrajectory.Goal()
@@ -80,7 +88,16 @@ def main():
             time.sleep(0.1)
             log.seek(0)
             output = log.read()
-            assert output.count("DEVICE_GOAL_REJECTED_VALIDATION") == len(variants), output
+            # 可选detail默认关闭；实际Action拒绝与必需typed原因由只读快照核对。
+            response = diagnostic.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(node, response, timeout_sec=2)
+            assert response.done() and response.result().success
+            snapshot = json.loads(response.result().message)
+            assert snapshot["schema"] == "DUMMY_ROS_DIAGNOSTIC_SNAPSHOT_V1"
+            gate = snapshot["gate"]
+            assert gate["counts"]["rejections"] - before["rejections"] >= len(variants), snapshot
+            assert gate["counts"]["detail_suppressed"] - before["detail_suppressed"] >= len(variants), snapshot
+            assert any(item["record"]["detail"] == "kInvalid" for item in gate["first_by_reason"]), snapshot
             print(json.dumps({"evidence_scope": "component_only", "public_action_validation": True,
                               "rejected_variants": list(variants)}))
             node.destroy_node()

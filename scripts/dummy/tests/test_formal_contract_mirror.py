@@ -1,11 +1,12 @@
 """当前正式contract镜像必须逐字节匹配canonical导出；不产生设备运行资格。"""
 import hashlib
+import os
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 MIRROR = ROOT / 'contracts/dummy_robot_v2'
-CANONICAL = ROOT.parent / 'dpsdk/contracts/dummy_robot_v2'
+CANONICAL = Path(os.environ['DPSDK_ROOT']) / 'applications/dummy_ref_control/contracts/dummy_robot_v2'
 
 
 def test_manifest_and_every_payload_match_canonical_export():

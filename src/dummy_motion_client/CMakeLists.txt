@@ -16,9 +16,9 @@ find_package(std_srvs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root with published wire codec")
 if(NOT DPSDK_ROOT)
-  get_filename_component(DPSDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../dpsdk" ABSOLUTE)
+  message(FATAL_ERROR "必须显式指定同版候选DPSDK_ROOT")
 endif()
-set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v2/codec")
+set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/applications/dummy_ref_control/contracts/dummy_robot_v2/codec")
 if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp")
   message(FATAL_ERROR "The published DPSDK manage_v2 wire codec is required")
 endif()
@@ -106,18 +106,21 @@ if(BUILD_TESTING)
   add_test(NAME formal_contract_canonical_mirror_integrity COMMAND ${Python3_EXECUTABLE} -m pytest -q
     "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/dummy/tests/test_formal_contract_mirror.py")
   set_tests_properties(formal_bundle_identity_integrity formal_contract_canonical_mirror_integrity
-    PROPERTIES TIMEOUT 15 LABELS "component_only;offline;source_integrity")
+    PROPERTIES TIMEOUT 15 LABELS "component_only;offline;source_integrity"
+    ENVIRONMENT "DPSDK_ROOT=${DPSDK_ROOT}")
+  set(DUMMY_SIL_FIXTURE_BUNDLE "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/trusted_sil_bundle")
   add_test(NAME device_profile_tests COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_device_profile_fixture.py"
     "$<TARGET_FILE:device_profile_tests>"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2")
+    "${DUMMY_SIL_FIXTURE_BUNDLE}")
   add_executable(application_hold_candidate_profile_tests test/application_hold_candidate_profile_tests.cpp)
   target_compile_options(application_hold_candidate_profile_tests PRIVATE -UNDEBUG)
   target_link_libraries(application_hold_candidate_profile_tests dummy_device_profile)
   add_test(NAME application_hold_candidate_profile_tests COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_application_hold_candidate_profile.py"
     "$<TARGET_FILE:application_hold_candidate_profile_tests>" "${DPSDK_ROOT}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_application_hold_no_load_candidate")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_application_hold_no_load_candidate"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/application_wire_source")
   add_test(NAME device_action_e2e_fixture
     COMMAND ${Python3_EXECUTABLE} -m pytest -q
       ${CMAKE_CURRENT_SOURCE_DIR}/test/test_device_action_e2e_fixture.py)
@@ -129,46 +132,35 @@ if(BUILD_TESTING)
   set_tests_properties(device_action_activation_wiring PROPERTIES
     ENVIRONMENT "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" LABELS "component_only;offline")
   add_test(NAME device_action_public_probe COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_public_probe.py $<TARGET_FILE:device_action_gate>)
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_public_probe.py $<TARGET_FILE:device_action_gate>
+    "${DUMMY_SIL_FIXTURE_BUNDLE}")
   set_tests_properties(device_action_public_probe PROPERTIES TIMEOUT 30 LABELS "component_only;ros_action")
-  set(DUMMY_D08_PEER_EXECUTABLE "$ENV{DUMMY_D08_PEER_EXECUTABLE}" CACHE FILEPATH
-    "DPSDK D08 peer executable for device_action_e2e_probe")
-  if(NOT DUMMY_D08_PEER_EXECUTABLE)
-    set(DUMMY_D08_PEER_EXECUTABLE
-      "${DPSDK_ROOT}/build_dummy/v2-tests/applications/dummy_ref_control/dummy_ref_d08_device_peer")
-  endif()
-  # 两种 SIL 测试时钟角色必须由调用方显式绑定；旧参数仅兼容 fallback。
+  # 两种SIL测试时钟角色由调用方显式绑定，不探测旧build或复用面板角色。
   set(DUMMY_D08_J1_PEER_EXECUTABLE "$ENV{DUMMY_D08_J1_PEER_EXECUTABLE}" CACHE FILEPATH
-    "DPSDK D08 10/10ms synthetic peer for device_action_e2e_probe")
+    "候选J1 10/10ms SIL peer，必须显式提供")
   set(DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE "$ENV{DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE}" CACHE FILEPATH
-    "DPSDK D08 10/20ms synthetic peer for smoke probes")
-  if(NOT DUMMY_D08_J1_PEER_EXECUTABLE)
-    set(DUMMY_D08_J1_PEER_EXECUTABLE "${DUMMY_D08_PEER_EXECUTABLE}")
-  endif()
-  if(NOT DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE)
-    set(DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE "${DUMMY_D08_PEER_EXECUTABLE}")
-  endif()
+    "候选six 10/20ms SIL peer，必须显式提供")
   add_test(NAME device_action_e2e_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
     "${DUMMY_D08_J1_PEER_EXECUTABLE}"
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real)
+    ${DUMMY_SIL_FIXTURE_BUNDLE} real)
   add_test(NAME device_action_smoke_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
     "${DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE}"
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real_smoke)
+    ${DUMMY_SIL_FIXTURE_BUNDLE} real_smoke)
   add_test(NAME device_action_six_axis_smoke_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
     "${DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE}"
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 real_six_axis_smoke)
+    ${DUMMY_SIL_FIXTURE_BUNDLE} real_six_axis_smoke)
   add_test(NAME device_motion_unsupported_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 unsupported)
+    $<TARGET_FILE:c05_action_peer> ${DUMMY_SIL_FIXTURE_BUNDLE} unsupported)
   add_test(NAME device_motion_supported_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2)
+    $<TARGET_FILE:c05_action_peer> ${DUMMY_SIL_FIXTURE_BUNDLE})
   add_test(NAME device_motion_six_axis_smoke_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_e2e_probe.py $<TARGET_FILE:device_action_gate>
-    $<TARGET_FILE:c05_action_peer> ${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2 six_axis_smoke)
+    $<TARGET_FILE:c05_action_peer> ${DUMMY_SIL_FIXTURE_BUNDLE} six_axis_smoke)
   set_tests_properties(device_action_e2e_probe PROPERTIES
     TIMEOUT 60 ENVIRONMENT "DUMMY_E2E_TRANSPORT=serial"
     LABELS "real_dpsdk_peer;ros_action;bench_release")
@@ -190,6 +182,10 @@ if(BUILD_TESTING)
     device_action_six_axis_smoke_probe device_motion_unsupported_probe
     device_motion_supported_probe device_motion_six_axis_smoke_probe
     APPEND PROPERTY ENVIRONMENT "DUMMY_SERIAL_BRIDGE_EXECUTABLE=$<TARGET_FILE:serial_pty_bridge>")
+  set_property(TEST device_action_e2e_fixture APPEND PROPERTY ENVIRONMENT
+    "DUMMY_C05_PEER_EXECUTABLE=$<TARGET_FILE:c05_action_peer>"
+    "DUMMY_ROS_CONTROL_LIBRARY_DIR=$<TARGET_FILE_DIR:dummy_ros_control::dummy_guarded_zenbedded_system>"
+    "DPSDK_ROOT=${DPSDK_ROOT}")
   add_executable(device_goal_validation_tests test/device_goal_validation_tests.cpp)
   target_link_libraries(device_goal_validation_tests dummy_native_goal_validation)
   ament_target_dependencies(device_goal_validation_tests control_msgs)

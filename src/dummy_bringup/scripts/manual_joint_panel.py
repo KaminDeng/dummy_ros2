@@ -992,10 +992,16 @@ def main():
     parser.add_argument('--moveit', action='store_true', help='启用末端规划页；另启动仅规划 MoveIt 服务')
     args = parser.parse_args(rclpy.utilities.remove_ros_args(args=sys.argv)[1:])
     config = json.loads(Path(args.config).read_text())
+    if config.get("deployment_required"):
+        parser.error("面板模板缺少部署信息；请先生成部署配置")
     config['description_xacro'] = args.description_xacro
     config['moveit_enabled'] = args.moveit
-    sys.path.insert(0, config['decoder_directory'])
-    from join_real_6dof_evidence import _decode
+    import importlib.util
+    decoder_file = Path(config['decoder_directory']).resolve(strict=True) / 'join_real_6dof_evidence.py'
+    decoder_spec = importlib.util.spec_from_file_location('dummy_manual_panel_decoder', decoder_file)
+    decoder_module = importlib.util.module_from_spec(decoder_spec)
+    decoder_spec.loader.exec_module(decoder_module)
+    _decode = decoder_module._decode
     app = QtWidgets.QApplication(sys.argv[:1])
     app.setStyle('Fusion')
     rclpy.init(args=[], signal_handler_options=rclpy.signals.SignalHandlerOptions.NO)

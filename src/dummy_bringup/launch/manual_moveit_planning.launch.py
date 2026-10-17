@@ -13,6 +13,8 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 def build_nodes(context):
     cfg = json.loads(Path(LaunchConfiguration('config').perform(context)).read_text())
+    if cfg.get("deployment_required"):
+        raise ValueError("面板模板缺少部署信息；请先运行render_manual_panel_config.py并通过config:=传入结果")
     moveit = (MoveItConfigsBuilder('dummy-ros2', package_name='dummy_moveit_config')
               .robot_description(file_path=cfg['description_xacro'])
               .planning_pipelines(pipelines=['ompl']).to_moveit_configs())

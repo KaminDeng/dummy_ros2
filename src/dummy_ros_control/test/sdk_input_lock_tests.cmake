@@ -1,31 +1,56 @@
-if(NOT DEFINED LOCK_FILE OR NOT DEFINED DPSDK_ROOT OR NOT DEFINED TEST_ROOT)
-  message(FATAL_ERROR "LOCK_FILE, DPSDK_ROOT and TEST_ROOT are required")
+if(NOT DEFINED LOCK_FILE OR NOT DEFINED DPSDK_ROOT OR NOT DEFINED TEST_ROOT OR
+   NOT DEFINED DPSDK_HOST_SDK_PREFIX)
+  message(FATAL_ERROR "LOCK_FILE, DPSDK_ROOT, TEST_ROOT与DPSDK_HOST_SDK_PREFIX必需")
 endif()
-# Symlink unchanged inputs so the 864 MB archive need not be copied. Replace
-# exactly one input with altered bytes, then execute the configure-time checker.
-set(paths
-  contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp
-  contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp
-  build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a
-  build_dummy/g6-host/platform_common_console_device/libdp_console_device.a
-  build_dummy/g6-host/lib/libzenohpico.a)
+# 在隔离配置工程分别损坏两codec与三安装归档，不修改真实源码/prefix。
+set(codecs
+  applications/dummy_ref_control/contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp
+  applications/dummy_ref_control/contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp)
+set(archives libdp_osal.a libdp_console_device.a libzenohpico.a)
 file(MAKE_DIRECTORY "${TEST_ROOT}")
-foreach(changed IN LISTS paths)
+set(project_text "cmake_minimum_required(VERSION 3.16)\nproject(sdk_lock_probe NONE)\ninclude(\"${LOCK_FILE}\")\n")
+file(MAKE_DIRECTORY "${TEST_ROOT}/positive")
+file(WRITE "${TEST_ROOT}/positive/CMakeLists.txt" "${project_text}")
+execute_process(COMMAND "${CMAKE_COMMAND}" -S "${TEST_ROOT}/positive" -B "${TEST_ROOT}/positive-build"
+  "-DDPSDK_ROOT=${DPSDK_ROOT}" "-DDPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX}"
+  RESULT_VARIABLE result OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "原真实SDK正例失败:\n${stdout}\n${stderr}")
+endif()
+foreach(changed IN LISTS codecs archives)
   string(SHA256 case_id "${changed}")
   set(case_root "${TEST_ROOT}/${case_id}")
-  foreach(path IN LISTS paths)
-    get_filename_component(parent "${case_root}/${path}" DIRECTORY)
+  set(prefix "${case_root}/prefix")
+  set(source "${case_root}/source")
+  file(MAKE_DIRECTORY "${prefix}/lib/cmake/DPSDKHostSDK" "${source}" "${case_root}/project")
+  file(CREATE_LINK "${DPSDK_HOST_SDK_PREFIX}/include" "${prefix}/include" SYMBOLIC)
+  file(READ "${DPSDK_HOST_SDK_PREFIX}/lib/cmake/DPSDKHostSDK/DPSDKHostSDKConfig.cmake" config)
+  string(REPLACE "${DPSDK_ROOT}" "${source}" config "${config}")
+  file(WRITE "${prefix}/lib/cmake/DPSDKHostSDK/DPSDKHostSDKConfig.cmake" "${config}")
+  file(COPY "${DPSDK_HOST_SDK_PREFIX}/lib/cmake/DPSDKHostSDK/DPSDKHostSDKInputs.cmake"
+       DESTINATION "${prefix}/lib/cmake/DPSDKHostSDK")
+  foreach(path IN LISTS codecs)
+    get_filename_component(parent "${source}/${path}" DIRECTORY)
     file(MAKE_DIRECTORY "${parent}")
     if(path STREQUAL changed)
-      file(WRITE "${case_root}/${path}" "intentional altered SDK input\n")
+      file(WRITE "${source}/${path}" "intentional altered codec\n")
     else()
-      file(CREATE_LINK "${DPSDK_ROOT}/${path}" "${case_root}/${path}" SYMBOLIC)
+      file(CREATE_LINK "${DPSDK_ROOT}/${path}" "${source}/${path}" SYMBOLIC)
     endif()
   endforeach()
-  execute_process(COMMAND "${CMAKE_COMMAND}" "-DDPSDK_ROOT=${case_root}" -P "${LOCK_FILE}"
-                  RESULT_VARIABLE result OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr)
-  if(result EQUAL 0 OR NOT stderr MATCHES "DPSDK input SHA256 mismatch")
-    message(FATAL_ERROR "Changed input was not rejected: ${changed}\n${stdout}\n${stderr}")
+  foreach(archive IN LISTS archives)
+    if(archive STREQUAL changed)
+      file(WRITE "${prefix}/lib/${archive}" "intentional altered archive\n")
+    else()
+      file(CREATE_LINK "${DPSDK_HOST_SDK_PREFIX}/lib/${archive}" "${prefix}/lib/${archive}" SYMBOLIC)
+    endif()
+  endforeach()
+  file(WRITE "${case_root}/project/CMakeLists.txt" "${project_text}")
+  execute_process(COMMAND "${CMAKE_COMMAND}" -S "${case_root}/project" -B "${case_root}/build"
+    "-DDPSDK_ROOT=${source}" "-DDPSDK_HOST_SDK_PREFIX=${prefix}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr)
+  if(result EQUAL 0 OR NOT stderr MATCHES "SHA256 mismatch|安装归档身份不一致")
+    message(FATAL_ERROR "变更未被正确拒绝: ${changed}\n${stdout}\n${stderr}")
   endif()
 endforeach()
-message(STATUS "Published codec and both linked archive changes rejected")
+message(STATUS "两codec与三ROS PIC安装归档篡改均被拒绝，真实SDK正例通过")

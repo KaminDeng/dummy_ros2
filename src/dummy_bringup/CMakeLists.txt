@@ -6,6 +6,7 @@ find_package(ament_cmake REQUIRED)
 if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(manual_panel_deployment_config test/test_manual_panel_deployment_config.py)
   ament_add_pytest_test(sensor_optional test/test_sensor_optional.py)
   ament_add_pytest_test(real_6dof_description test/test_real_6dof_description.py)
   ament_add_pytest_test(real_six_axis_preflight ../../scripts/dummy/tests/test_real_six_axis_preflight.py)
@@ -31,6 +32,7 @@ install(FILES
 install(FILES ../../contracts/dummy_robot_v2/model/model.yaml
   DESTINATION share/${PROJECT_NAME}/contracts/dummy_robot_v2/model)
 install(PROGRAMS
+  scripts/render_manual_panel_config.py
   scripts/manual_joint_panel.py
   scripts/manual_moveit_planner.py
   scripts/manual_moveit_execution.py

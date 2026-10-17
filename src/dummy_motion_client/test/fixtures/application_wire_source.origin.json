@@ -1,0 +1,9 @@
+{
+  "source_commit": "55b52b71280e898045e0758ba242800e84e9d7cc",
+  "source_path": "contracts/dummy_robot_v2",
+  "aggregate": "1d5d4cd6e7a99282a7a049f82e758df7ba810eea07e4cb49215cfc775070ce94",
+  "model_sha256": "5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14",
+  "manifest_original_bytes_sha256": "9758da28017b3c01255c61da2ff4df76eea9bda8eebfcf2513a957e3fbef6de0",
+  "payload_count": 16,
+  "role": "exact legacy software APP unit source; current 2ae contract remains separately tested"
+}

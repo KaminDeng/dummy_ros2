@@ -13,7 +13,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[5]
-DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT") or ROOT.parent / "dpsdk").resolve()
+DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT") or ROOT.parent / "dpsdk_consolidated").resolve()
 CORE_CASES = {
     "EN01", "EN02", "EN03", "EN04", "EN05", "MOV01", "MOV02", "MOV03",
     "MOV04", "MOV05", "MOV06", "MOV07", "MOV16", "MOV17", "STOP01",
@@ -41,7 +41,7 @@ _REAL_DEVICE_E2E: dict[str, Any] | None = None
 
 
 def _load_upstream_adapter(name: str):
-    path = DPSDK_ROOT / "tools/dummy/tests/dummy_test_support/adapters" / f"{name}.py"
+    path = DPSDK_ROOT / "applications/dummy_ref_control/tools/dummy_ref_tools/tests/dummy_test_support/adapters" / f"{name}.py"
     if not path.is_file():
         raise RuntimeError(f"DPSDK_ROOT must contain the published {name} adapter: {path}")
     spec = importlib.util.spec_from_file_location(f"dpsdk_{name}_adapter", path)
@@ -85,7 +85,7 @@ def _core_case(case_id: str) -> dict[str, Any]:
 
 
 def _component(name: str, arguments: list[str]) -> dict[str, Any]:
-    codec = DPSDK_ROOT / "contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp"
+    codec = DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp"
     if not codec.is_file():
         raise RuntimeError(f"DPSDK_ROOT must contain the published manage_v2 codec: {codec}")
     binary = ROOT / "build_dummy/dummy_motion_client" / name

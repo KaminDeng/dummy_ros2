@@ -11,7 +11,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[5]
-DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", ROOT.parent / "dpsdk")).resolve()
+DPSDK_ROOT = Path(os.environ.get("DPSDK_ROOT", ROOT.parent / "dpsdk_consolidated")).resolve()
 FILES = (
     ROOT / "docs/dummy/versions.lock",
     ROOT / "docs/dummy/ros-runbook.md",
@@ -65,14 +65,14 @@ def _dpsdk_peer_current() -> bool:
         return False
     inputs = []
     for directory in (
-        DPSDK_ROOT / "contracts/dummy_robot_v2",
+        DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2",
         DPSDK_ROOT / "applications/dummy_ref_control",
     ):
         inputs.extend(
             path for path in directory.rglob("*")
             if path.is_file() and path.name != "dummy_ref_control_main.cpp"
         )
-    generated = DPSDK_ROOT / "libraries/dp_protocol/generated/include"
+    generated = DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2/codec"
     inputs.extend(path for path in generated.glob("dp_dummy_robot_v2*") if path.is_file())
     inputs.append(DPSDK_ROOT / "config/products/posix_demo.cmake")
     return peer.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in inputs)
@@ -108,7 +108,7 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     sil_boundary = "SIL uses" in runbook or "两个 SIL 入口仅使用" in runbook
     separated = simulation_boundary and sil_boundary and "`NOT_RUN`" in runbook
     ros_manifest = json.loads((ROOT / "contracts/dummy_robot_v2/manifest.json").read_text())
-    dpsdk_manifest = json.loads((DPSDK_ROOT / "contracts/dummy_robot_v2/manifest.json").read_text())
+    dpsdk_manifest = json.loads((DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json").read_text())
     wire_lock_matches_bundle = (
         locks.get("wire_release") == ros_manifest.get("release_id") == "dummy-wire-v2"
         and locks.get("wire_payload_sorted_sha256") == ros_manifest.get("payload_sorted_sha256")

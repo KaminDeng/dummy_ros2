@@ -14,7 +14,7 @@ from typing import Any
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[5]
 DPSDK_ROOT = Path(
-    os.environ.get("DPSDK_ROOT", os.environ.get("DUMMY_DPSDK_ROOT", WORKSPACE_ROOT.parent / "dpsdk"))
+    os.environ.get("DPSDK_ROOT", os.environ.get("DUMMY_DPSDK_ROOT", WORKSPACE_ROOT.parent / "dpsdk_consolidated"))
 )
 SOURCE_FILES = (
     WORKSPACE_ROOT / "src/dummy_moveit_config/launch/gz_moveit.launch.py",

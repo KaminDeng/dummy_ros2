@@ -13,7 +13,7 @@ set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake")
 get_filename_component(ROS_WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v2/codec")
-set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/contracts/dummy_robot_v2/codec")
+set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/applications/dummy_ref_control/contracts/dummy_robot_v2/codec")
 if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2_dp_comm.hpp")
   message(FATAL_ERROR "Production device transport requires the published DPSDK wire-v1 codec")
 endif()
@@ -41,7 +41,9 @@ foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
 endforeach()
 # The prebuilt runtime uses a local-exec TLS relocation and cannot be loaded by
 # pluginlib. Compile only the unchanged transport sources as PIC in this build.
-add_library(dummy_dp_comm_pic STATIC ${DUMMY_DP_COMM_SDK_SOURCES} src/zenoh_pico_log_shim.cpp)
+add_library(dummy_dp_comm_pic STATIC ${DUMMY_DP_COMM_SDK_SOURCES})
+add_library(dummy_dp_comm_log_shim STATIC src/zenoh_pico_log_shim.cpp)
+set_target_properties(dummy_dp_comm_log_shim PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(dummy_dp_comm_pic PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(dummy_dp_comm_pic PUBLIC cxx_std_17)
 target_compile_definitions(dummy_dp_comm_pic PUBLIC
@@ -62,18 +64,19 @@ target_include_directories(dummy_dp_comm_pic PRIVATE
   "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/interface"
   "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/debug"
   "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/impl/posix/include"
-  "${DPSDK_ROOT}/build_dummy/g6-host"
+  "${DPSDKHostSDK_VERSION_INCLUDE_DIR}"
   "${DPSDK_ROOT}/platform/common/zenoh_port"
-  "${DPSDK_ROOT}/thirdparty/zenoh-pico/include")
+  "${DPSDKHostSDK_ZENOH_INCLUDE_DIR}")
 target_include_directories(dummy_dp_comm INTERFACE
   "${DUMMY_WIRE_INCLUDE}" "${DPSDK_ROOT}/libraries/dp_comm/include")
 target_compile_definitions(dummy_dp_comm INTERFACE
   DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=651 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
 target_link_libraries(dummy_dp_comm INTERFACE
   dummy_dp_comm_pic
-  "${DPSDK_ROOT}/build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a"
-  "${DPSDK_ROOT}/build_dummy/g6-host/platform_common_console_device/libdp_console_device.a"
-  "${DPSDK_ROOT}/build_dummy/g6-host/lib/libzenohpico.a"
+  DPSDKHostSDK::osal
+  DPSDKHostSDK::console
+  DPSDKHostSDK::zenoh
+  dummy_dp_comm_log_shim
   rt pthread m dl)
 if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v2.hpp")
   message(FATAL_ERROR "ROS C03 prototype mirror does not contain the Dummy generated codec")
@@ -162,17 +165,18 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:transport_component_tests>" six_axis)
   set_tests_properties(transport_worker_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline;synthetic_pty")
   # 仅Host测试：真实Core停止握手+现SDK/Worker回调，非设备/完整Node资格。
-  get_filename_component(_safe_prime_core_root "${ROS_WORKSPACE_ROOT}/../dpsdk" ABSOLUTE)
+  set(_safe_prime_core_root "${DPSDK_ROOT}")
   set(_safe_prime_generated "${CMAKE_CURRENT_BINARY_DIR}/safe_prime_generated")
   add_custom_command(OUTPUT "${_safe_prime_generated}/dummy_model.hpp"
-    COMMAND ${Python3_EXECUTABLE} "${_safe_prime_core_root}/tools/dummy/generate_model.py"
-      --model "${_safe_prime_core_root}/robot_profiles/dummy/model.yaml"
-      --profile "${_safe_prime_core_root}/robot_profiles/dummy/profiles/f405_6dof_bench.yaml"
+    COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${DPSDK_ROOT}/applications/dummy_ref_control/tools"
+      ${Python3_EXECUTABLE} -m dummy_ref_tools.generate_model
+      --model "${_safe_prime_core_root}/applications/dummy_ref_control/model/model.yaml"
+      --profile "${_safe_prime_core_root}/applications/dummy_ref_control/profiles/f405_6dof_bench.yaml"
       --output "${_safe_prime_generated}/dummy_model.hpp"
-    DEPENDS "${_safe_prime_core_root}/tools/dummy/generate_model.py"
-      "${_safe_prime_core_root}/tools/dummy/rest_target.py"
-      "${_safe_prime_core_root}/robot_profiles/dummy/model.yaml"
-      "${_safe_prime_core_root}/robot_profiles/dummy/profiles/f405_6dof_bench.yaml"
+    DEPENDS "${_safe_prime_core_root}/applications/dummy_ref_control/tools/dummy_ref_tools/generate_model.py"
+      "${_safe_prime_core_root}/applications/dummy_ref_control/tools/dummy_ref_tools/rest_target.py"
+      "${_safe_prime_core_root}/applications/dummy_ref_control/model/model.yaml"
+      "${_safe_prime_core_root}/applications/dummy_ref_control/profiles/f405_6dof_bench.yaml"
     VERBATIM)
   add_custom_target(transport_safe_prime_model DEPENDS "${_safe_prime_generated}/dummy_model.hpp")
   set(_safe_prime_core_sources authorization joint_mapper motor_can_codec operation_cache reference
@@ -449,6 +453,7 @@ if(BUILD_TESTING)
   add_test(NAME sdk_input_lock_tests COMMAND "${CMAKE_COMMAND}"
     "-DDPSDK_ROOT=${DPSDK_ROOT}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/sdk-lock-test"
     "-DLOCK_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake"
+    "-DDPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX}"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/test/sdk_input_lock_tests.cmake")
   add_test(NAME production_transport_peer_discovery_tests COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_transport_peer_test_tests.py")
@@ -503,6 +508,11 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
   add_test(NAME prepare_plugin_test_prefix COMMAND ${CMAKE_COMMAND} -P "${_plugin_stage_script}")
   set_tests_properties(prepare_plugin_test_prefix PROPERTIES FIXTURES_SETUP dummy_plugin_test_prefix)
   add_test(NAME guarded_plugin_load_tests COMMAND guarded_plugin_load_tests)
+  add_test(NAME independent_guarded_library_load
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/independent_library_load.py"
+      "$<TARGET_FILE:dummy_guarded_zenbedded_system>")
+  set_tests_properties(independent_guarded_library_load PROPERTIES
+    TIMEOUT 15 LABELS "component_only;offline;runtime_link")
   add_executable(guarded_lifecycle_probe test/guarded_lifecycle_probe.cpp)
   target_link_libraries(guarded_lifecycle_probe dummy_guarded_zenbedded_system)
   ament_target_dependencies(guarded_lifecycle_probe hardware_interface pluginlib)
@@ -530,8 +540,8 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
     DP_COMM_TESTING=1)
   target_link_libraries(request_handle_destructor_tests
     dummy_dp_comm_current_test_runtime
-    "${DPSDK_ROOT}/build_dummy/g6-host/core/dp_sdk_core/dp_osal/libdp_osal.a"
-    "${DPSDK_ROOT}/build_dummy/g6-host/platform_common_console_device/libdp_console_device.a"
+    DPSDKHostSDK::osal
+    DPSDKHostSDK::console
     pthread)
   add_test(NAME request_handle_destructor_tests COMMAND request_handle_destructor_tests)
 
@@ -573,13 +583,14 @@ install(TARGETS
   dummy_goal_registration_gate
   dummy_dp_comm
   dummy_dp_comm_pic
+  dummy_dp_comm_log_shim
   dummy_command_channel
   dummy_guarded_joint_trajectory_controller
   dummy_guarded_zenbedded_system
   EXPORT export_dummy_goal_registration_gate
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_goal_registration_gate HAS_LIBRARY_TARGET)
-ament_export_dependencies(OpenSSL)
+ament_export_dependencies(OpenSSL DPSDKHostSDK)
 
 if(BUILD_TESTING)
   add_executable(raw_cleanup_lifetime_generation_tests test/raw_cleanup_lifetime_generation_tests.cpp)

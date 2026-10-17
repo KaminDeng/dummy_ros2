@@ -28,8 +28,9 @@ spec.loader.exec_module(probe)
 
 def test_ctest_uses_v2_fixture_under_configured_dpsdk_root():
     cmake = (TEST_DIR.parent / "CMakeLists.txt").read_text()
-    assert "${DPSDK_ROOT}/build_dummy/v2-tests/applications/dummy_ref_control/dummy_ref_d08_device_peer" in cmake
-    assert "${DUMMY_D08_PEER_EXECUTABLE}" in cmake
+    assert "build_dummy/v2-tests" not in cmake
+    assert "${DUMMY_D08_J1_PEER_EXECUTABLE}" in cmake
+    assert "${DUMMY_D08_SIX_AXIS_PEER_EXECUTABLE}" in cmake
 
 
 def test_six_axis_smoke_uses_all_axes_and_sil_profile():
@@ -37,8 +38,8 @@ def test_six_axis_smoke_uses_all_axes_and_sil_profile():
     assert "device_action_six_axis_smoke_probe" in cmake
     assert "real_six_axis_smoke" in cmake
     assert "device_motion_six_axis_smoke_probe" in cmake
-    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
-    dpsdk_manifest = bundle.parents[2] / "dpsdk/contracts/dummy_robot_v2/manifest.json"
+    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
+    dpsdk_manifest = Path(os.environ["DPSDK_ROOT"]) / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json"
     capability = probe.real_peer_capability(bundle, "sil_6dof")
     description = ET.fromstring(probe.urdf("serial//dev/pts/1#baudrate=3000000", capability, 6))
     joint_names = [joint.attrib["name"] for joint in description.findall("./ros2_control/joint")]
@@ -393,7 +394,7 @@ def test_serial_fixture_identifies_chunks_around_maximum_gap():
 
 
 def test_real_peer_capability_comes_from_verified_bundle():
-    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
     capability = probe.real_peer_capability(bundle)
     manifest = probe.json.loads((bundle / "manifest.json").read_text())
     payloads = {entry["path"]: entry["sha256"] for entry in manifest["payloads"]}
@@ -420,8 +421,8 @@ def test_real_peer_capability_comes_from_verified_bundle():
 
 
 def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture(tmp_path):
-    # 两仓当前bundle相同；构造内容hash有效但不在精确信任锁内的独立负例。
-    source = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    # 从精确SIL fixture构造hash自洽但不在既有strict pin内的独立负例。
+    source = TEST_DIR / "fixtures/trusted_sil_bundle"
     bundle = tmp_path / "foreign_bundle"
     shutil.copytree(source, bundle)
     payload = bundle / "profiles/sil_j1.yaml"
@@ -441,7 +442,7 @@ def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture(tmp_path
 
 def test_current_sil_fixture_rejects_forged_aggregate_hash(tmp_path):
     bundle = tmp_path / "forged_bundle"
-    shutil.copytree(TEST_DIR.parents[2] / "contracts/dummy_robot_v2", bundle)
+    shutil.copytree(TEST_DIR / "fixtures/trusted_sil_bundle", bundle)
     path = bundle / "manifest.json"
     manifest = json.loads(path.read_text())
     manifest["payload_sorted_sha256"] = "f" * 64
@@ -452,7 +453,7 @@ def test_current_sil_fixture_rejects_forged_aggregate_hash(tmp_path):
 
 def test_current_sil_fixture_rejects_tampered_payload(tmp_path):
     bundle = tmp_path / "tampered_bundle"
-    shutil.copytree(TEST_DIR.parents[2] / "contracts/dummy_robot_v2", bundle)
+    shutil.copytree(TEST_DIR / "fixtures/trusted_sil_bundle", bundle)
     path = bundle / "profiles/sil_j1.yaml"
     path.write_bytes(path.read_bytes() + b"\n# unlisted tamper\n")
     with pytest.raises(ValueError, match="payload hash mismatch"):
@@ -460,8 +461,8 @@ def test_current_sil_fixture_rejects_tampered_payload(tmp_path):
 
 
 def test_c05_ticket_expires_at_profile_window():
-    executable = TEST_DIR.parents[2] / "build_dummy/dummy_motion_client/c05_action_peer"
-    control_library = TEST_DIR.parents[2] / "install_dummy/dummy_ros_control/lib"
+    executable = Path(os.environ["DUMMY_C05_PEER_EXECUTABLE"])
+    control_library = Path(os.environ["DUMMY_ROS_CONTROL_LIBRARY_DIR"])
     completed = subprocess.run([str(executable), "--self-test"], capture_output=True,
                                text=True, check=True, env={**os.environ, "LD_LIBRARY_PATH":
                                    str(control_library) + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")})
@@ -472,7 +473,7 @@ def test_c05_ticket_expires_at_profile_window():
 
 
 def test_50ms_candidate_changes_only_runtime_state_period(monkeypatch):
-    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
     baseline = probe.real_peer_capability(bundle)
     monkeypatch.setenv("DUMMY_E2E_STATE_PERIOD_US", "50000")
 
@@ -483,7 +484,7 @@ def test_50ms_candidate_changes_only_runtime_state_period(monkeypatch):
 
 
 def test_20ms_candidate_changes_only_runtime_state_period(monkeypatch):
-    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
     baseline = probe.real_peer_capability(bundle)
     monkeypatch.setenv("DUMMY_E2E_STATE_PERIOD_US", "20000")
 
@@ -491,7 +492,7 @@ def test_20ms_candidate_changes_only_runtime_state_period(monkeypatch):
 
 
 def test_controller_update_rate_matches_sil_control_period():
-    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
     capability = probe.real_peer_capability(bundle)
 
     assert capability["control_period_us"] == 10000
@@ -500,8 +501,8 @@ def test_controller_update_rate_matches_sil_control_period():
 
 def test_synthetic_peer_pending_result_matches_v24_enum():
     root = TEST_DIR.parents[2]
-    peer = root / "build_dummy/dummy_motion_client/c05_action_peer"
-    library_path = root / "install_dummy/dummy_ros_control/lib"
+    peer = Path(os.environ["DUMMY_C05_PEER_EXECUTABLE"])
+    library_path = Path(os.environ["DUMMY_ROS_CONTROL_LIBRARY_DIR"])
     env = {**os.environ, "LD_LIBRARY_PATH": str(library_path) + os.pathsep +
            os.environ.get("LD_LIBRARY_PATH", "")}
     completed = subprocess.run([str(peer), "--self-test"], capture_output=True,
@@ -513,7 +514,7 @@ def test_synthetic_peer_pending_result_matches_v24_enum():
 
 
 def test_smooth_goal_respects_sil_command_derivative_limits():
-    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
     capability = probe.real_peer_capability(bundle)
     control_dt = capability["control_period_us"] / 1000000
     points = probe.smooth_motion_points(0.0, 0.05, duration_s=5)
@@ -532,7 +533,7 @@ def test_smooth_goal_respects_sil_command_derivative_limits():
 
 
 def test_smooth_goal_keeps_derivative_margin_after_coalesced_ros_sample():
-    bundle = TEST_DIR.parents[2] / "contracts/dummy_robot_v2"
+    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
     capability = probe.real_peer_capability(bundle)
     control_dt = capability["control_period_us"] / 1000000
     points = probe.smooth_motion_points(0.0, 0.05)

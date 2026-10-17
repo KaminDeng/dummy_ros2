@@ -12,8 +12,8 @@ import signal
 import subprocess
 import time
 
-R = Path('<home>/kamin_work/00-code/dummy_ros2')
-D = Path('../dpsdk')
+R = Path(__file__).resolve().parents[2]
+D = Path(os.environ.get("DPSDK_ROOT", str(Path(__file__).resolve().parents[2].parent / "dpsdk_consolidated")))
 S = R / 'scripts/dummy'
 REPORTS = R / 'build_dummy/reports'
 FREEZE = D / 'build_dummy/reports/native-ros-candidate-v7-20261009.json'
@@ -172,7 +172,7 @@ class NativeRun:
         self.owner = load_owner()
         self.freeze = json.loads(FREEZE.read_text())
         self.paths = [FREEZE, DEP, LIMITS, MANIFEST, POLICY, PROBE, Path(__file__).resolve(),
-                      D / 'tools/dummy/flash_ref.py'] + [S / name for name in (
+                      D / 'applications/dummy_ref_control/tools/dummy_ref_tools/flash_ref.py'] + [S / name for name in (
             'run_real_6dof_session.py', 'ros_six_axis_movej.py', 'ros_six_axis_long_goal.py',
             'build_real_6dof_context.py', 'join_real_6dof_evidence.py', 'application_e2e.py',
             'validate_p9_long_goal.py', 'convert_application_ros_limits.py')]
@@ -208,7 +208,8 @@ class NativeRun:
         with (root / f'{name}.stdout').open('w') as out, (root / f'{name}.stderr').open('w') as err:
             try:
                 result = subprocess.run([str(x) for x in argv], stdout=out, stderr=err,
-                                        timeout=timeout, check=False)
+                                        timeout=timeout, check=False,
+                                        env=dict(os.environ, PYTHONPATH=str(D / "applications/dummy_ref_control/tools")))
             except BaseException as error:
                 save(root / f'{name}.command.json', dict(argv=[str(x) for x in argv],
                      started_monotonic_ns=started, ended_monotonic_ns=time.monotonic_ns(), error=str(error)))
@@ -338,7 +339,7 @@ class NativeRun:
             if item['reset']:
                 if self.owner.inspect_owners(TTY):
                     raise ValueError('flash refused occupied STM32')
-                self.command(['/usr/bin/python3', D / 'tools/dummy/flash_ref.py', '--execute',
+                self.command(['/usr/bin/python3', '-m', 'dummy_ref_tools.flash_ref', '--execute',
                     '--image', self.freeze['firmware']['path'], '--expected-sha256', FIRMWARE,
                     '--hardware', 'connected', '--approved-powered-bench', '--jlink-serial', 'DEMO_JLINK_SERIAL'],
                     root, 'flash', 60)

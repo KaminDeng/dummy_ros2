@@ -1,0 +1,48 @@
+profile_name: f405_6dof_bench
+artifact_kind: design_seed_default_deny
+source_seed: dummy_robot_v2/model/model.yaml
+uses_dpsdk_device: true
+test_only: false
+motion_supported: true
+motion_permitted_on_real_hardware: false
+physical_calibration_verified: false
+active_axes:
+- Joint1
+- Joint2
+- Joint3
+- Joint4
+- Joint5
+- Joint6
+configured_mask: 63
+can_nodes: [1, 2, 3, 4, 5, 6]
+# Deprecated uniform alias for historical readers; current mapping uses the
+# model's per-axis ratios, checked against gear_ratios below.
+gear_ratio: 50
+gear_ratios: [50, 50, 50, 50, 50, 50]
+home_joint_positions_rad: [0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0]
+# 工作Rest沿原Home→边界Rest路径内收，保留完整反馈窗口的停车余量。
+rest_joint_positions_rad: [0.0, -1.0471975511965976, 2.861861800872894, 0.0, 0.0, 0.0]
+# 空载低速功能候选：仅机械Home参考的反馈越界带，不改变目标限位。
+feedback_soft_limit_margin_deg: 0.1
+reference_kind: BENCH_SESSION
+timing:
+  control_period_us: 10000
+  state_publish_period_us: 50000
+  command_timeout_us: 1000000
+  completion_timeout_us: 3000000
+  max_can_tx_residence_us: 250000
+# Legacy aliases retained for readers of the pre-bundle profile format.
+control_period_us: 10000
+state_publish_period_us: 50000
+command_timeout_us: 1000000
+completion_timeout_us: 3000000
+max_can_tx_residence_us: 250000
+limits:
+  velocity_max_rad_s: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+  acceleration_max_rad_s2: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  position_min_rad: [-2.9670597, -1.2740904, 0.6108652, -3.1415927, -2.0943952, -12.5663706]
+  position_max_rad: [2.9670597, 1.5707963, 3.1415927, 3.1415927, 2.0943952, 12.5663706]
+  can_velocity_cap_motor_rev_s: 1.2
+  effective_joint_velocity_cap_rad_s: 0.15079644737231007
+note: First-stage six-axis bench profile. All six axes use the installed 1:50 reducers. The selected joint velocity cap remains 0.1508 rad/s on all axes; The selected cap and all physical qualification flags remain unchanged. Human Home confirmation remains a final experience check; no EEPROM writes are performed.
+profile_id: 201

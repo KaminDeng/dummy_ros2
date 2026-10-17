@@ -1,5 +1,5 @@
 {
-  "native_binary": "../dpsdk/build_dummy/reports/panel-speed-flexibility-20261016/candidate63-a4/host-boundary-response-step/Host-bundle-step2/dummy_joint_cli",
+  "native_binary": "",
   "native_arguments": [
     "--scenario",
     "home-rest",
@@ -17,15 +17,15 @@
     "--scope",
     "manual-home-empty-supported",
     "--firmware",
-    "b45b3fa3040eb80abe977ac6a3e244684c2037839ebdde9d6823ee04c5d69126",
+    "",
     "--contract",
-    "2ae31387d711e982bdc45743be1a4fca1355ad10a1075a4d6d3381830ff8b9e3",
+    "",
     "--model",
-    "bbbfbf070281a2e63a09061830d6dc79a9e1d7206e1e4754c53a0fc8545bdfb0",
+    "",
     "--profile-sha256",
-    "1ebe88a566c5eeab6aaf40582b71b74bca9fdfb69ebf322fad6bb7be4de6fb1d"
+    ""
   ],
-  "decoder_directory": "<home>/kamin_work/00-code/dummy_ros2/scripts/dummy",
+  "decoder_directory": "",
   "state_interface_id": 4139,
   "rest_deg": [
     0,
@@ -123,7 +123,7 @@
     0,
     0
   ],
-  "description_xacro": "<home>/kamin_work/00-code/dummy_ros2/src/dummy-ros2_description/urdf/dummy-ros2.xacro",
+  "description_xacro": "",
   "working_margin_deg": 0.55,
   "motion_speed_max_deg_s": 63.0,
   "motion_speed_default_deg_s": 60.0,
@@ -143,5 +143,6 @@
   ],
   "manual_limit_reference_enabled": true,
   "moveit_jog_speed_default_mm_s": 100.0,
-  "moveit_preview_speed_default": 20.0
+  "moveit_preview_speed_default": 20.0,
+  "deployment_required": true
 }
