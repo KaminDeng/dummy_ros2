@@ -4,7 +4,7 @@
 # @brief 固定历史冻结产物的原生台架M3功能批次编排。
 #
 # 默认只打印计划；--execute会实际查USB owner、运行串口probe、启动ROS launch/Action，reset用例还执行flash_ref --execute烧录并复位。
-# 所有路径/hash/序列号/探针号是固定历史输入，非当前产物自动发现。FUNCTIONAL_POSITIVE始终qualified=false，不替代H0-H5、资源floor或机械/发布门禁。
+# 路径/hash保留固定历史输入；串口与探针号为公开合成示例，不能作为真实本地设备身份。FUNCTIONAL_POSITIVE始终qualified=false，不替代H0-H5、资源floor或机械/发布门禁。
 """固定原生台架M3功能批量编排；默认只打印计划，永不签H资格。"""
 
 import argparse
@@ -24,7 +24,7 @@ S = R / 'scripts/dummy'
 REPORTS = R / 'build_dummy/reports'
 ##
 # @brief 历史冻结manifest/部署/limits/候选/探针路径，SDK根可由DPSDK_ROOT覆盖。
-# POLICY仍为旧configs路径，固件/库/激活/目标SHA与STM32 serial/JLink号均硬编码；文件缺失或源码注释导致freeze漂移会失败，不允许自动刷新。
+# POLICY仍为旧configs路径，固件/库/激活/目标SHA保留历史冻结值；STM32 serial/JLink号为公开合成示例；文件缺失或源码注释导致freeze漂移会失败，不允许自动刷新。
 FREEZE = D / 'build_dummy/reports/native-ros-candidate-v7-20261009.json'
 DEP = D / 'build_dummy/reports/no-load-dev-deployment-paths-p9-nonblocking-20261006.json'
 LIMITS = D / 'build_dummy/reports/no-load-dev-ros-limits-p9-nonblocking-20261006.json'

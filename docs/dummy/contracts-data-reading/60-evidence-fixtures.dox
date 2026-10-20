@@ -6,7 +6,9 @@
 
 `cases` fixture主要列“应跑哪些ID/期望什么观察”；task-report是某个历史commit/环境的摘要；`commands`内exit_code是该报告记载，不是本说明重执行。`NOT_RUN`、`PASS_WITH_LIMITATION`、`SUPERSEDED`、`IN_PROGRESS`各保原义。software peer可是真实本机进程，同时仍明确hardware none，不能把“真实”二字扩成现场CAN/USB/J1。
 
-数学FK/离线CAN golden只证明各自输入的算式/bytes。shape有限六轴trajectory、JSON解析、hash自洽及仿真碰撞有效，也不等当前机械几何、物理停车/Disable或正式H资格。原件路径、源SHA与当时软件层次都必须一起保留。
+数学FK/离线CAN golden只证明各自输入的算式/bytes。shape有限六轴trajectory、JSON解析、hash自洽及仿真碰撞有效，也不等当前机械几何、物理停车/Disable或正式H资格。原件来源、源SHA与当时软件层次必须分别核对。
+
+公开文档对个人绝对路径作显示脱敏：`<workspace-root>`、`<dpsdk-root>`与“原开发路径已省略”都是展示标记，不是原JSON中source/resolved_path/dpsdk_root的新值。此显示不能用于重算原件SHA或声称原件身份未变；原始数据及其公开身份须另行处理。其余fixture字段、状态、数值与原SHA保留原义。
 
 R00–R08 task-report和scripts fixtures不是同一数据：前者记录结论/限制，后者记录case清单及预期。R00摘要内部仍保ROS01 NOT_RUN；R05越界guard未发service不能算MoveIt深层越界分支已执行。R03/C04交接prototype明示wire_release=false，不因wire_layout与冻结codec同SHA就批准原型发布。
 
@@ -256,7 +258,7 @@ READY_FOR_C04是ROS交接可供下一owner独立验收，不是C04/C05自动通�
 
 原文 SHA256：`9eb1d92746595146a77c3978306b284ec3ce11adcdae3e7daae622420b58d092`；1460 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
 
-这是正式release **结构schema**，不是已批准实例。required十五个字段绑定image大小/0x08000000地址、model/profile/compiled policy、firmware源码、contract、mask63/profile201及resource/map/measurement摘要；additionalProperties=false、stage常量RELEASE_APPROVED也不能认证任意自填JSON已获批准。本说明不刷写该地址。
+这是正式release **结构schema**，不是已批准实例。required十五个字段绑定image大小/0x08000000地址、model/profile/compiled policy、firmware源码、contract、mask63/profile201及resource/map/measurement摘要；additionalProperties=false、stage常量RELEASE_APPROVED也不能认证任意自填JSON已获批准。该地址是schema约束，不是刷写操作指令。
 
 | 必需键 | 原schema约束 | 绑定角色 |
 | --- | --- | --- |
@@ -320,7 +322,9 @@ READY_FOR_C04是ROS交接可供下一owner独立验收，不是C04/C05自动通�
 
 原C02未发布时的阻塞快照，后来标SUPERSEDED并列替代bundle；保留缺源事实，禁止手写替换model/profile/manifest。
 
-原文 SHA256：`8595debc01c85a43707dc3ea9057759ddbabfb4879eda668b74eb8ea71c74bc6`；1673 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+当前公开文件 SHA256：`7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3`；1645 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+公开脱敏前的归档原文 SHA256：`8595debc01c85a43707dc3ea9057759ddbabfb4879eda668b74eb8ea71c74bc6`；1673 B。章节锚沿用此旧SHA前缀，仅供稳定导航，不表示当前公开字节仍等于旧HEAD或旧原件。仅来源路径元数据已脱敏，原数值、payload与资格/运行结论未改。
 
 | 报告键 | 原快照内容 | 阶段/来源/范围 |
 | --- | --- | --- |
@@ -329,7 +333,7 @@ READY_FOR_C04是ROS交接可供下一owner独立验收，不是C04/C05自动通�
 | `superseded_by` | `{"dpsdk_commit":"99ebc36","bundle_path":"contracts/dummy_robot_v1","payload_sorted_sha256":"f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634","verification":"PASS"}` | 替代该blocked快照的历史commit/bundle，不回写旧快照。 |
 | `checked_at` | `2026-09-14` | 原检查日期，不是本说明重新检查现场。 |
 | `ros_workspace_commit` | `16da75dc0204e97c8d060e4c73b2c5fc8b2c6322` | 原ROS来源commit。 |
-| `dpsdk_root` | `../dpsdk` | 原开发环境路径，不保证当前checkout相同。 |
+| `dpsdk_root` | `../dpsdk` | 公开版以仓库相对路径../dpsdk表示历史SDK根，非原开发绝对路径或当前checkout已验证声明。 |
 | `dpsdk_commit` | `74b9da55878f0b99c600f49115f49beba5419964` | 原SDK来源commit，不借当前构建信用替代。 |
 | `required_contract` | `{"release_id":"dummy-model-v1","stage":"model","required_paths":["robot_profiles/dummy/model.yaml","robot_profiles/dummy/geometry_reference.yaml","robot_profiles/dummy/profiles/gazebo_6dof.yaml","generated/dummy_robot_v1/manifest.json"]}` | 当时所需contract/release/path清单，不能手写替身补齐缺失。 |
 | `observed` | `{"all_required_paths_missing":true,"dummy_ros_idl_missing":true,"all_local_dpsdk_branches_checked":["feat/dummy-dpsdk-ros2-v3","feat/ros-like-comm-api","master"],"unreachable_commits_checked_for_contract_paths":true}` | 当时观察事实，缺路径/枚举旧值仍保历史。 |
@@ -738,9 +742,11 @@ guarded_probe:
 
 这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
 
-原文 SHA256：`14cccf7d3768cca59953e7ad6dd380229ebff4713baaa8841aed6ab14912131d`；17732 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+当前公开文件 SHA256：`68a8e2a7ed86ab9bf9a967ec84b6eab56729e543700b9454dac5dd5981e35f06`；15862 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
 
-2026-10-20两domain187/83的只读规划快照，readonly=true/executed=false。每个run绑定URDF/SRDF canonical SHA及17个package资源原SHA；mesh_hash_scope说明cached BVH另有行为回归，不是此说明重新检查了缓存或当前进程。每向76 waypoints/193 samples均valid是有限采样，不等连续轨迹全空间无碰撞或可物理执行。
+公开脱敏前的归档原文 SHA256：`14cccf7d3768cca59953e7ad6dd380229ebff4713baaa8841aed6ab14912131d`；17732 B。章节锚沿用此旧SHA前缀，仅供稳定导航，不表示当前公开字节仍等于旧HEAD或旧原件。仅来源路径元数据已脱敏，原数值、payload与资格/运行结论未改。
+
+2026-10-20两domain187/83的只读规划快照，readonly=true/executed=false。每个run绑定URDF/SRDF canonical SHA及17个package资源原SHA；mesh_hash_scope说明cached BVH另有行为回归，不能据此推断当前缓存或运行进程已重新验证。每向76 waypoints/193 samples均valid是有限采样，不等连续轨迹全空间无碰撞或可物理执行。
 
 | domain | started UTC | elapsed s | provider | Home有效 | Rest有效 | 双向规划 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -756,7 +762,7 @@ guarded_probe:
 | srdf_canonical_sha256 | `b102fd11cbb4506fb19a9fdafbee42fa2006bed2af950d0785a4f098ea321e9d` |
 | source_matches | `True` |
 | mesh_hash_scope | `current referenced package files; cached BVH additionally checked by behavioral regression` |
-| 资源URI | 记录路径 | 原SHA |
+| 资源URI | 公开resolved_path（仓库相对路径） | 原SHA |
 | --- | --- | --- |
 | `package://dummy-ros2_description/meshes/MINIF08_approx.stl` | `src/dummy-ros2_description/meshes/MINIF08_approx.stl` | `779e8be3ed23ae571dd36d66719d1838f93a46148d18827195627b194564e93a` |
 | `package://dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl` | `src/dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl` | `1e83390aec6dfc9c25a10c0aea3f1337991e86d6012b9e97dbf0c3f394e23d1e` |
@@ -794,7 +800,7 @@ contact列表与states/plans分列，JSON没有给这两个contact列表附原�
 | srdf_canonical_sha256 | `b102fd11cbb4506fb19a9fdafbee42fa2006bed2af950d0785a4f098ea321e9d` |
 | source_matches | `True` |
 | mesh_hash_scope | `current referenced package files; cached BVH additionally checked by behavioral regression` |
-| 资源URI | 记录路径 | 原SHA |
+| 资源URI | 公开resolved_path（仓库相对路径） | 原SHA |
 | --- | --- | --- |
 | `package://dummy-ros2_description/meshes/MINIF08_approx.stl` | `src/dummy-ros2_description/meshes/MINIF08_approx.stl` | `779e8be3ed23ae571dd36d66719d1838f93a46148d18827195627b194564e93a` |
 | `package://dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl` | `src/dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl` | `1e83390aec6dfc9c25a10c0aea3f1337991e86d6012b9e97dbf0c3f394e23d1e` |
@@ -827,11 +833,15 @@ contact列表与states/plans分列，JSON没有给这两个contact列表附原�
 
 这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
 
-原文 SHA256：`646d32078897b626685a5ab92149f810fbea88a76078419ac2802c5a8a0d916c`；2242 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+当前公开文件 SHA256：`e9387fbc339df750e36fec25528de6b92545ee70f1d3a1d47741da62cef4dce0`；2182 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+公开脱敏前的归档原文 SHA256：`646d32078897b626685a5ab92149f810fbea88a76078419ac2802c5a8a0d916c`；2242 B。章节锚沿用此旧SHA前缀，仅供稳定导航，不表示当前公开字节仍等于旧HEAD或旧原件。仅来源路径元数据已脱敏，原数值、payload与资格/运行结论未改。
 
 只读圆柱规划场景/服务拓扑修复快照，physical_motion_executed=false。before同服务有2 providers、after6种服务各1；owner数组含public/private node名不等after仍有两服务provider。原坏路径第24 waypoint触圆柱collision，depth约.003653m；这证明当时有限样本拒撞，不是连续场景回读或密码学进程绑定。
 
-| 键 | 原记录/边界 |
+公开副本的 `collision_recheck.source` 字段已实际改为独立来源文件名；下面据当前公开原文同步该值，其余字段与运行结论保留原记录。
+
+| 键 | 当前公开记录/边界 |
 | --- | --- |
 | `readonly` | `true` |
 | `physical_motion_executed` | `false` |
@@ -846,6 +856,6 @@ contact列表与states/plans分列，JSON没有给这两个contact列表附原�
 | `limits` | `Current discovery graph consistency gate, not cryptographic process binding or continuous world-content readback` |
 | `qt_fixture_regression` | `{"red":"旧Qt夹具仅伪造Apply回执，缺唯一发现图；move按钮保持禁用，原断言失败","fix":"给真实rclpy测试节点注入Graph三项发现方法，原断言及生产检查保持不变","green":"1 passed in 1.38s","domain":187,"native_process_started":false,"physical_motion_executed":false}` |
 
-checked_samples1135是该历史回查计数，targeted_tests179/build passed/Qt RED→GREEN均仅报告自述，没有在此重跑。Qt fixture只补发现图、native_process_started=false；不能把GUI用例通过当原生MoveIt或物理运动执行。
+checked_samples1135是该历史回查计数，targeted_tests179/build passed/Qt RED→GREEN均仅报告自述，不自动成为当前版本的复验结果。Qt fixture只补发现图、native_process_started=false；不能把GUI用例通过当原生MoveIt或物理运动执行。
 
 */

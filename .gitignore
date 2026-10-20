@@ -1,12 +1,55 @@
-# @file .gitignore
-# @brief 本工作区的默认构建输出和Python缓存忽略规则，保留原匹配范围。
-# 默认colcon的build/install/log目录及下面的_dummy角色输出不进入普通未跟踪清单；其他自定义后缀目录未必被这些字面模式覆盖。
-build/
-install/
-log/
-build_dummy/
-install_dummy/
-log_dummy/
-# 忽略新生成Python缓存不等于删除历史已经受git追踪的pyc；被追踪原件仍需单独审查。
+# 根目录的 colcon 输出，包含下划线、连字符等自定义后缀。
+# 仅匹配目录；不屏蔽其他位置的构建脚本和源码。
+/build*/
+/install*/
+/log*/
+
+# Python 缓存、离线检查与覆盖率产物。
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# 本地虚拟环境和编辑器配置、交换文件。
+.venv/
+venv/
+/env/
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ROS 本地配置、录包及运行日志；合同 JSON/YAML 和媒体资源保留可见。
+/.ros/
+rosbag2_*/
+*.bag
+*.bag.active
+*.db3
+*.db3-shm
+*.db3-wal
+*.mcap
+*.log
+*.log.*
+
+# 临时目录和文件，不泛化忽略补丁、模板或公开文档。
+/tmp/
+/temp/
+.cache/
+*.tmp
+*.temp
+
+# 本地 AI 工具及会话计划；已跟踪文件仍需显式取消跟踪。
+/.agents/
+/.claude/
+/.codex/
+/docs/superpowers/

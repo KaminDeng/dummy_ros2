@@ -1,6 +1,6 @@
 # 包布局、资源标记和历史缓存阅读说明
 
-本页补充模型资源指南之外的包元数据与六个保持原字节的标记/二进制文件。
+本页补充模型资源指南之外的包元数据、资源标记与不随公开仓库分发的历史字节码缓存。
 包名、安装目录、插件名、规划组、设备profile和线协议版本各有自己的用途，不能因名称相似混用。
 
 ## 从源码到安装区
@@ -18,22 +18,22 @@ MoveIt配置包使用 `ament_cmake`：[CMakeLists.txt](../../src/dummy_moveit_co
 
 [.setup_assistant](../../src/dummy_moveit_config/.setup_assistant) 是历史生成元数据，
 记录URDF来源、SRDF路径、作者/生成时间与控制接口。原件有两段同名且同值的`control_xacro`；
-本轮保留结构，当前YAML加载器对同名映射取最后一段。它不能代替运行期设备能力或许可。
+该历史结构保留，当前YAML加载器对同名映射取最后一段。它不能代替运行期设备能力或许可。
 
-## 保持原字节的六个文件
+## 资源标记与历史缓存
 
 | 文件 | 用途与阅读边界 |
 | --- | --- |
 | [src/dummy-ros2_description/resource/dummy-ros2_description](../../src/dummy-ros2_description/resource/dummy-ros2_description) | 零字节ament资源索引marker，安装到share/ament_index/resource_index/packages后使包可被索引。这里靠文件名/存在性标记，不向其中插入注释。 |
-| [src/dummy-ros2_description/launch/__pycache__/display.launch.cpython-314.pyc](../../src/dummy-ros2_description/launch/__pycache__/display.launch.cpython-314.pyc) | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
-| [src/dummy-ros2_description/launch/__pycache__/gazebo.launch.cpython-314.pyc](../../src/dummy-ros2_description/launch/__pycache__/gazebo.launch.cpython-314.pyc) | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应的gazebo.launch.py源文件当前不在该受控launch目录，保留的pyc不会因此自动成为标准launch入口。 |
-| [src/dummy_moveit_config/launch/__pycache__/demo.launch.cpython-314.pyc](../../src/dummy_moveit_config/launch/__pycache__/demo.launch.cpython-314.pyc) | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
-| [src/dummy_moveit_config/launch/__pycache__/gz_moveit.launch.cpython-314.pyc](../../src/dummy_moveit_config/launch/__pycache__/gz_moveit.launch.cpython-314.pyc) | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
-| [src/dummy_moveit_config/launch/__pycache__/gz_sim.launch.cpython-314.pyc](../../src/dummy_moveit_config/launch/__pycache__/gz_sim.launch.cpython-314.pyc) | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
+| 历史缓存 `src/dummy-ros2_description/launch/__pycache__/display.launch.cpython-314.pyc`（不随仓库发布） | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
+| 历史缓存 `src/dummy-ros2_description/launch/__pycache__/gazebo.launch.cpython-314.pyc`（不随仓库发布） | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应的gazebo.launch.py源文件当前不在该受控launch目录，保留的pyc不会因此自动成为标准launch入口。 |
+| 历史缓存 `src/dummy_moveit_config/launch/__pycache__/demo.launch.cpython-314.pyc`（不随仓库发布） | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
+| 历史缓存 `src/dummy_moveit_config/launch/__pycache__/gz_moveit.launch.cpython-314.pyc`（不随仓库发布） | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
+| 历史缓存 `src/dummy_moveit_config/launch/__pycache__/gz_sim.launch.cpython-314.pyc`（不随仓库发布） | 历史CPython 3.14字节码缓存；当前Jazzy测试使用系统Python 3.12，不能把此缓存当作当前Python源码或验证产物。对应可读实现以同目录外的.launch.py源文件为准，launch安装/发现按源码文件名处理。 |
 
-`.pyc`包含解释器版本相关的字节码/头信息，不能插入Doxygen文本，也不应为了注释任务重生成它们。
-[.gitignore](../../.gitignore) 忽略新缓存不等于取消追踪既有缓存；上述五个文件仍是当前git已追踪原件，
-没有把“忽略匹配”误记为“文件不存在”。本页的保留策略也不是建议在部署中加载旧解释器缓存。
+`.pyc`包含解释器版本相关的字节码/头信息，不能插入Doxygen文本，也不应为了文档说明重生成它们。
+上述五个缓存仅保留历史名称供阅读，不随公开仓库发布，也不是部署时应加载的运行资源。
+[.gitignore](../../.gitignore) 用于忽略本地新缓存；启动和安装以可读源码及所选解释器为准。
 
 ## RViz保存的内容
 

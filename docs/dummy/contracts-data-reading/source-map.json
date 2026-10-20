@@ -366,12 +366,16 @@
     },
     {
       "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
-      "sha256": "b8f5554df04b2b090b85454784587e12626a6079e003ccef9b7baa80839d953a",
-      "bytes": 1991,
+      "sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811",
+      "bytes": 2110,
       "page": "ros_contract_manifests_origins",
       "document": "50-manifests-origins.dox",
       "anchor": "raw_b8f5554df04b2b09",
-      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json"
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
+      "archived_original_sha256": "b8f5554df04b2b090b85454784587e12626a6079e003ccef9b7baa80839d953a",
+      "archived_original_bytes": 1991,
+      "public_redaction": "provenance_metadata_only",
+      "anchor_identity": "archived original SHA prefix; stable navigation only"
     },
     {
       "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate/model/model.yaml",
@@ -402,12 +406,16 @@
     },
     {
       "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
-      "sha256": "1717985d07d923ab5194f4cf110da5ddb42d0369b1aa2b1cbc57f52301fb66ce",
-      "bytes": 1920,
+      "sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2",
+      "bytes": 2039,
       "page": "ros_contract_manifests_origins",
       "document": "50-manifests-origins.dox",
       "anchor": "raw_1717985d07d923ab",
-      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json"
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
+      "archived_original_sha256": "1717985d07d923ab5194f4cf110da5ddb42d0369b1aa2b1cbc57f52301fb66ce",
+      "archived_original_bytes": 1920,
+      "public_redaction": "provenance_metadata_only",
+      "anchor_identity": "archived original SHA prefix; stable navigation only"
     },
     {
       "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml",
@@ -600,12 +608,16 @@
     },
     {
       "path": "docs/dummy/task-reports/R01.blocked.json",
-      "sha256": "8595debc01c85a43707dc3ea9057759ddbabfb4879eda668b74eb8ea71c74bc6",
-      "bytes": 1673,
+      "sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3",
+      "bytes": 1645,
       "page": "ros_contract_evidence_fixtures",
       "document": "60-evidence-fixtures.dox",
       "anchor": "raw_8595debc01c85a43",
-      "representative": "docs/dummy/task-reports/R01.blocked.json"
+      "representative": "docs/dummy/task-reports/R01.blocked.json",
+      "archived_original_sha256": "8595debc01c85a43707dc3ea9057759ddbabfb4879eda668b74eb8ea71c74bc6",
+      "archived_original_bytes": 1673,
+      "public_redaction": "provenance_metadata_only",
+      "anchor_identity": "archived original SHA prefix; stable navigation only"
     },
     {
       "path": "docs/dummy/task-reports/R01.json",
@@ -915,12 +927,16 @@
     },
     {
       "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
-      "sha256": "79298aa0c2f6bb36fc5d10e7316df12511f1afd453f154c3cadfbfb525b799fe",
-      "bytes": 4836,
+      "sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762",
+      "bytes": 4752,
       "page": "ros_contract_manifests_origins",
       "document": "50-manifests-origins.dox",
       "anchor": "raw_79298aa0c2f6bb36",
-      "representative": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json"
+      "representative": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
+      "archived_original_sha256": "79298aa0c2f6bb36fc5d10e7316df12511f1afd453f154c3cadfbfb525b799fe",
+      "archived_original_bytes": 4836,
+      "public_redaction": "provenance_metadata_only",
+      "anchor_identity": "archived original SHA prefix; stable navigation only"
     },
     {
       "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/codec/wire_layout.json",
@@ -1059,21 +1075,32 @@
     },
     {
       "path": "docs/dummy/rest-planning-evidence.json",
-      "sha256": "14cccf7d3768cca59953e7ad6dd380229ebff4713baaa8841aed6ab14912131d",
-      "bytes": 17732,
+      "sha256": "68a8e2a7ed86ab9bf9a967ec84b6eab56729e543700b9454dac5dd5981e35f06",
+      "bytes": 15862,
       "page": "ros_contract_evidence_fixtures",
       "document": "60-evidence-fixtures.dox",
       "anchor": "raw_14cccf7d3768cca5",
-      "representative": "docs/dummy/rest-planning-evidence.json"
+      "representative": "docs/dummy/rest-planning-evidence.json",
+      "archived_original_sha256": "14cccf7d3768cca59953e7ad6dd380229ebff4713baaa8841aed6ab14912131d",
+      "archived_original_bytes": 17732,
+      "public_redaction": "provenance_metadata_only",
+      "anchor_identity": "archived original SHA prefix; stable navigation only"
     },
     {
       "path": "docs/dummy/cylinder-service-topology-evidence.json",
-      "sha256": "646d32078897b626685a5ab92149f810fbea88a76078419ac2802c5a8a0d916c",
-      "bytes": 2242,
+      "sha256": "e9387fbc339df750e36fec25528de6b92545ee70f1d3a1d47741da62cef4dce0",
+      "bytes": 2182,
       "page": "ros_contract_evidence_fixtures",
       "document": "60-evidence-fixtures.dox",
       "anchor": "raw_646d32078897b626",
-      "representative": "docs/dummy/cylinder-service-topology-evidence.json"
+      "representative": "docs/dummy/cylinder-service-topology-evidence.json",
+      "archived_original_sha256": "646d32078897b626685a5ab92149f810fbea88a76078419ac2802c5a8a0d916c",
+      "archived_original_bytes": 2242,
+      "public_redaction": "provenance_metadata_only",
+      "anchor_identity": "archived original SHA prefix; stable navigation only"
     }
-  ]
+  ],
+  "source_HEAD_role": "首次归档基线；六份公开脱敏副本不再声称逐字节等于该历史HEAD",
+  "public_redacted_source_count": 6,
+  "sha256_scope": "sha256/bytes为当前公开文件；六份副本另存archived_original_sha256/bytes，旧SHA前缀仅作稳定导航锚。"
 }

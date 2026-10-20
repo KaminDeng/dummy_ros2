@@ -41,9 +41,8 @@ J5局部安装点为 `[-0.0168,0.0625,0]` m，输出端再延伸28mm。
   规划服务验证不等同于实机路径执行资格。
 - 未执行完整STEP模型的实机运动，未授予连续20分钟测试通过结论。
 
-可复用流程见项目技能
-[step-to-ros-model](../../.agents/skills/step-to-ros-model/SKILL.md)。
-本机原件在相邻DPSDK的 `build_dummy/reports/full-step-model-20261019/`，
+可复用流程见[STEP装配转换工程说明](model-conversion/README.md)。
+历史记录的原件位于DPSDK的 `build_dummy/reports/full-step-model-20261019/`，
 包含 `real-runtime-model-verification.json`、`real-panel-restart.log` 和候选转换记录。
 
 2026-10-20加入近端到腕部至少5mm的规划间隙，保留源视觉和运动学。适用范围、距离证据和重建方法见[collision-clearance.md](collision-clearance.md)。

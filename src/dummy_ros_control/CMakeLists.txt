@@ -700,4 +700,6 @@ if(BUILD_TESTING)
 endif()
 
 # 生成ament包配置/resource索引并使install/export对下游可见；必须位于本包目标与导出声明之后。
+install(FILES LICENSE DESTINATION share/${PROJECT_NAME})
+
 ament_package()

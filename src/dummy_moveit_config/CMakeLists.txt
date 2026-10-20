@@ -44,6 +44,8 @@ install(
 )
 
 # 生成ament配置和索引；本包后续安装规则继续声明资源目录，不在配置阶段运行机器人。
+install(FILES LICENSE DESTINATION share/${PROJECT_NAME})
+
 ament_package()
 
 # 安装launch目录；当前EXCLUDE模式为setup_assistant.launch，实际源文件名带.py，不能据该模式声称已经排除了setup_assistant.launch.py。

@@ -2,7 +2,7 @@
 @page ros_contract_data_reading 冻结合同数据阅读入口
 
 
-本组说明把冻结输入与它的用途分开：先确认原SHA及版本，再查字段/模型/策略，最后判断历史证据能支持哪一级结论。119个物理文件、80种唯一原文，所有原件以ROS Git基线 `7c9285f6c63cc162245df1299a0b6b8522044d38` 对照并保持原字节；同内容只解释一次，每条物理路径仍有独立SHA/页锚映射。
+本组说明把冻结输入与用途分开：先确认当前公开SHA及版本，再查字段/模型/策略，最后判断历史证据能支持哪一级结论。119个物理文件、80种内容首次按ROS Git基线 `7c9285f6c63cc162245df1299a0b6b8522044d38` 归档；公开版对其中6份来源元数据JSON脱敏。机器映射分别保存当前sha256/bytes与archived_original_sha256/bytes，旧SHA前缀锚仅供稳定导航，不声称这6份当前字节仍与旧HEAD一致。
 
 @section data_reading_route 新读者顺序
 
@@ -22,12 +22,12 @@
 
 @section data_evidence_boundary 本页验证的实际范围
 
-原文校验是文件bytes/SHA及Git HEAD对照；manifest引用另读原件重SHA，聚合按已读消费者的明确算法静态重算。文档验证是实际Doxygen 1.9.8提取页/锚/表项，不是原生ROS IDL/proto符号绑定；没有运行rosidl、protoc、任何产品生成器、validator、test/collect、CMake/编译、SDK、ROS节点或设备。
+归档时曾对照原文件bytes/SHA与Git基线；公开版六份来源元数据则按当前完整原文重算SHA/bytes，并独立保留归档旧身份；manifest引用另读原件重SHA，聚合按已读消费者的明确算法静态重算。文档验证是实际Doxygen 1.9.8提取页/锚/表项，不是原生ROS IDL/proto符号绑定；没有运行rosidl、protoc、任何产品生成器、validator、test/collect、CMake/编译、SDK、ROS节点或设备。
 
 因此“页存在/表项全”不等“设备可执行”。`operator_confirmed`不是认证，Queued不是accepted/Committed，Committed不是CAN SENT，SENT不是物理Disable，Motion完成Holding不是Release child完成，原页链自洽不是现场来源认证。每一层都需要相应独立前置与原件。
 
 @section data_changes_policy 为什么说明在外部
 
-原件的注释/格式也可能参与hash；更改JSON/YAML/IDL/lock、fixture或manifest会改变身份甚至破坏既有证据。这里仅在新阅读目录补说明，不替原件重排/补默认/改名或把历史矛盾修成一致。历史报告记载的失败/局限也不直接断言当前HEAD仍有该问题，更不因后来的修复把过去NOT_RUN改成PASS。
+原件的注释/格式也可能参与hash；更改JSON/YAML/IDL/lock、fixture或manifest会改变身份甚至破坏既有证据。公开版仅对明确标注的六份来源元数据做路径脱敏；正式合同、原payload、数值及历史资格/运行结论保留，不把历史矛盾修成一致。两份candidate manifest的原字节SHA改变后，旧activation绑定失效，未重签旧activation或转移旧资格。历史报告记载的失败/局限也不直接断言当前HEAD仍有该问题，更不因后来的修复把过去NOT_RUN改成PASS。
 
 */

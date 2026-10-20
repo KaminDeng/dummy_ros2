@@ -10030,272 +10030,326 @@
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "format",
-      "meaning": "manifest结构格式，v1/v2与真正wire schema共同判断，不能单凭release标签猜布局。"
+      "meaning": "manifest结构格式，v1/v2与真正wire schema共同判断，不能单凭release标签猜布局。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "release_id",
-      "meaning": "发布目录身份；历史v1 manifest曾写dummy-wire-v2，当前2.5/legacy2.4才明确带minor。"
+      "meaning": "发布目录身份；历史v1 manifest曾写dummy-wire-v2，当前2.5/legacy2.4才明确带minor。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "schema_major",
-      "meaning": "声明wire主版本，必须与metadata/enums/codec一致。"
+      "meaning": "声明wire主版本，必须与metadata/enums/codec一致。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "schema_minor",
-      "meaning": "声明wire次版本，当前5与legacy4不自动兼容。"
+      "meaning": "声明wire次版本，当前5与legacy4不自动兼容。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "artifact_kind",
-      "meaning": "candidate类别而非已发行image；no_load标签不证明真实机械无负载。"
+      "meaning": "candidate类别而非已发行image；no_load标签不证明真实机械无负载。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "runtime_enabled",
-      "meaning": "false明确未启运行；文件自述true也不能代外部activation/原件/设备门。"
+      "meaning": "false明确未启运行；文件自述true也不能代外部activation/原件/设备门。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "motion_permitted_on_real_hardware",
-      "meaning": "实体motion许可标志；candidate为false，不从软件PASS回填。"
+      "meaning": "实体motion许可标志；candidate为false，不从软件PASS回填。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "profile_id",
-      "meaning": "六轴bench目录201，必须同时匹配mask/model/policy/identity。"
+      "meaning": "六轴bench目录201，必须同时匹配mask/model/policy/identity。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "configured_mask",
-      "meaning": "63为六轴bit0..5，不是CAN节点位图。"
+      "meaning": "63为六轴bit0..5，不是CAN节点位图。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability",
-      "meaning": "声明的轴/参考/时序/限制目录，SEED与MEASUREMENT_REQUIRED不能升格为已测能力。"
+      "meaning": "声明的轴/参考/时序/限制目录，SEED与MEASUREMENT_REQUIRED不能升格为已测能力。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability.profile_id",
-      "meaning": "目录ID201，不是policy摘要。"
+      "meaning": "目录ID201，不是policy摘要。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability.configured_mask",
-      "meaning": "六轴63，bit0起。"
+      "meaning": "六轴63，bit0起。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability.motion_permitted_on_real_hardware",
-      "meaning": "本capability明确false，不由SEED数值批准实机。"
+      "meaning": "本capability明确false，不由SEED数值批准实机。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability.active_axes",
-      "meaning": "列明六轴顺序，不凭列表推六轴真实SENT。"
+      "meaning": "列明六轴顺序，不凭列表推六轴真实SENT。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability.reference_kind",
-      "meaning": "BENCH_SESSION参考，非自动永久物理Home。"
+      "meaning": "BENCH_SESSION参考，非自动永久物理Home。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability.control_period_us",
-      "meaning": "名义控制周期µs，不等producer/Host节拍实测。"
+      "meaning": "名义控制周期µs，不等producer/Host节拍实测。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "capability.state_publish_period_us",
-      "meaning": "状态名义发布µs，不能从PC接收间隔反证设备时钟。"
+      "meaning": "状态名义发布µs，不能从PC接收间隔反证设备时钟。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "compiled_policy_sha256",
-      "meaning": "编译策略canonical身份，与policy原文件SHA、model及source contract各有角色。"
+      "meaning": "编译策略canonical身份，与policy原文件SHA、model及source contract各有角色。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "firmware_image_sha256",
-      "meaning": "image原SHA，candidate null说明未绑定可部署固件，不能用旧image补。"
+      "meaning": "image原SHA，candidate null说明未绑定可部署固件，不能用旧image补。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "source_contract_sha256",
-      "meaning": "candidate所引用源contract聚合，当前candidate仍明确指冻结1d5d…，不是当前base2ae3…。"
+      "meaning": "candidate所引用源contract聚合，当前candidate仍明确指冻结1d5d…，不是当前base2ae3…。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "model_sha256",
-      "meaning": "payload model原bytes身份，变化会影响缩放/方向/限位，不能只比文件名。"
+      "meaning": "payload model原bytes身份，变化会影响缩放/方向/限位，不能只比文件名。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "source_policy",
-      "meaning": "冻结来源绝对路径；机器路径不是现场授权或当前文件仍存在的证明。"
+      "meaning": "公开副本仅保留独立来源文件名；历史SDK根已脱敏，此字段不是相对当前bundle的payload路径，也不授现场许可。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "source_firmware_image",
-      "meaning": "来源image路径，candidate null保缺失事实。"
+      "meaning": "来源image路径，candidate null保缺失事实。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "qualification_gap",
-      "meaning": "明确尚缺的FW/Host、post-build、runtimefreeze/maps及正式资格环节，不能被文档索引补齐。"
+      "meaning": "明确尚缺的FW/Host、post-build、runtimefreeze/maps及正式资格环节，不能被文档索引补齐。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "payloads",
-      "meaning": "白名单payload path/原SHA；只绑定所列原件，目录额外文件不会自动纳入可信集合。"
+      "meaning": "白名单payload path/原SHA；只绑定所列原件，目录额外文件不会自动纳入可信集合。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "payload_sorted_sha256",
-      "meaning": "按严格升序path:sha256行、LF连接且末尾无额外LF求SHA256；不是manifest原bytes SHA。"
+      "meaning": "按严格升序path:sha256行、LF连接且末尾无额外LF求SHA256；不是manifest原bytes SHA。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
       "path": "draft_status",
-      "meaning": "原件自述未资格/待新绑定范围，保历史内容不重签当前资格。"
+      "meaning": "原件自述未资格/待新绑定范围，保历史内容不重签当前资格。",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "format",
-      "meaning": "manifest结构格式，v1/v2与真正wire schema共同判断，不能单凭release标签猜布局。"
+      "meaning": "manifest结构格式，v1/v2与真正wire schema共同判断，不能单凭release标签猜布局。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "release_id",
-      "meaning": "发布目录身份；历史v1 manifest曾写dummy-wire-v2，当前2.5/legacy2.4才明确带minor。"
+      "meaning": "发布目录身份；历史v1 manifest曾写dummy-wire-v2，当前2.5/legacy2.4才明确带minor。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "schema_major",
-      "meaning": "声明wire主版本，必须与metadata/enums/codec一致。"
+      "meaning": "声明wire主版本，必须与metadata/enums/codec一致。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "schema_minor",
-      "meaning": "声明wire次版本，当前5与legacy4不自动兼容。"
+      "meaning": "声明wire次版本，当前5与legacy4不自动兼容。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "artifact_kind",
-      "meaning": "candidate类别而非已发行image；no_load标签不证明真实机械无负载。"
+      "meaning": "candidate类别而非已发行image；no_load标签不证明真实机械无负载。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "runtime_enabled",
-      "meaning": "false明确未启运行；文件自述true也不能代外部activation/原件/设备门。"
+      "meaning": "false明确未启运行；文件自述true也不能代外部activation/原件/设备门。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "motion_permitted_on_real_hardware",
-      "meaning": "实体motion许可标志；candidate为false，不从软件PASS回填。"
+      "meaning": "实体motion许可标志；candidate为false，不从软件PASS回填。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "profile_id",
-      "meaning": "六轴bench目录201，必须同时匹配mask/model/policy/identity。"
+      "meaning": "六轴bench目录201，必须同时匹配mask/model/policy/identity。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "configured_mask",
-      "meaning": "63为六轴bit0..5，不是CAN节点位图。"
+      "meaning": "63为六轴bit0..5，不是CAN节点位图。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability",
-      "meaning": "声明的轴/参考/时序/限制目录，SEED与MEASUREMENT_REQUIRED不能升格为已测能力。"
+      "meaning": "声明的轴/参考/时序/限制目录，SEED与MEASUREMENT_REQUIRED不能升格为已测能力。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability.profile_id",
-      "meaning": "目录ID201，不是policy摘要。"
+      "meaning": "目录ID201，不是policy摘要。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability.configured_mask",
-      "meaning": "六轴63，bit0起。"
+      "meaning": "六轴63，bit0起。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability.motion_permitted_on_real_hardware",
-      "meaning": "本capability明确false，不由SEED数值批准实机。"
+      "meaning": "本capability明确false，不由SEED数值批准实机。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability.active_axes",
-      "meaning": "列明六轴顺序，不凭列表推六轴真实SENT。"
+      "meaning": "列明六轴顺序，不凭列表推六轴真实SENT。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability.reference_kind",
-      "meaning": "BENCH_SESSION参考，非自动永久物理Home。"
+      "meaning": "BENCH_SESSION参考，非自动永久物理Home。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability.control_period_us",
-      "meaning": "名义控制周期µs，不等producer/Host节拍实测。"
+      "meaning": "名义控制周期µs，不等producer/Host节拍实测。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "capability.state_publish_period_us",
-      "meaning": "状态名义发布µs，不能从PC接收间隔反证设备时钟。"
+      "meaning": "状态名义发布µs，不能从PC接收间隔反证设备时钟。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "compiled_policy_sha256",
-      "meaning": "编译策略canonical身份，与policy原文件SHA、model及source contract各有角色。"
+      "meaning": "编译策略canonical身份，与policy原文件SHA、model及source contract各有角色。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "firmware_image_sha256",
-      "meaning": "image原SHA，candidate null说明未绑定可部署固件，不能用旧image补。"
+      "meaning": "image原SHA，candidate null说明未绑定可部署固件，不能用旧image补。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "source_contract_sha256",
-      "meaning": "candidate所引用源contract聚合，当前candidate仍明确指冻结1d5d…，不是当前base2ae3…。"
+      "meaning": "candidate所引用源contract聚合，当前candidate仍明确指冻结1d5d…，不是当前base2ae3…。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "model_sha256",
-      "meaning": "payload model原bytes身份，变化会影响缩放/方向/限位，不能只比文件名。"
+      "meaning": "payload model原bytes身份，变化会影响缩放/方向/限位，不能只比文件名。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "source_policy",
-      "meaning": "冻结来源绝对路径；机器路径不是现场授权或当前文件仍存在的证明。"
+      "meaning": "公开副本仅保留独立来源文件名；历史SDK根已脱敏，此字段不是相对当前bundle的payload路径，也不授现场许可。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "source_firmware_image",
-      "meaning": "来源image路径，candidate null保缺失事实。"
+      "meaning": "来源image路径，candidate null保缺失事实。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "qualification_gap",
-      "meaning": "明确尚缺的FW/Host、post-build、runtimefreeze/maps及正式资格环节，不能被文档索引补齐。"
+      "meaning": "明确尚缺的FW/Host、post-build、runtimefreeze/maps及正式资格环节，不能被文档索引补齐。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "payloads",
-      "meaning": "白名单payload path/原SHA；只绑定所列原件，目录额外文件不会自动纳入可信集合。"
+      "meaning": "白名单payload path/原SHA；只绑定所列原件，目录额外文件不会自动纳入可信集合。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "payload_sorted_sha256",
-      "meaning": "按严格升序path:sha256行、LF连接且末尾无额外LF求SHA256；不是manifest原bytes SHA。"
+      "meaning": "按严格升序path:sha256行、LF连接且末尾无额外LF求SHA256；不是manifest原bytes SHA。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
       "path": "draft_status",
-      "meaning": "原件自述未资格/待新绑定范围，保历史内容不重签当前资格。"
+      "meaning": "原件自述未资格/待新绑定范围，保历史内容不重签当前资格。",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2"
     },
     {
       "source": "contracts/dummy_robot_v2_legacy_2_4/manifest.json",
@@ -11395,42 +11449,50 @@
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "role",
-      "meaning": "数据用于历史software/APP/SIL fixture的角色，不能借用真实设备资格。"
+      "meaning": "数据用于历史software/APP/SIL fixture的角色，不能借用真实设备资格。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "payload_authority",
-      "meaning": "固定trusted聚合来源说明，不是任意新child manifest可自行替换。"
+      "meaning": "固定trusted聚合来源说明，不是任意新child manifest可自行替换。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "origin_repo_commit",
-      "meaning": "重构payload所指历史Git树commit。"
+      "meaning": "重构payload所指历史Git树commit。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "origin_manifest_sha256",
-      "meaning": "历史来源manifest原bytes身份；当前重序列化manifest不声称同原SHA。"
+      "meaning": "历史来源manifest原bytes身份；当前重序列化manifest不声称同原SHA。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "origin_manifest_aggregate",
-      "meaning": "历史原manifest的payload聚合，和新的trusted aggregate分列。"
+      "meaning": "历史原manifest的payload聚合，和新的trusted aggregate分列。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "reconstruction",
-      "meaning": "明确重构方法及SIL profile例外来源；序列化新manifest不能冒称历史原bytes。"
+      "meaning": "明确重构方法及SIL profile例外来源；序列化新manifest不能冒称历史原bytes。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "aggregate",
-      "meaning": "冻结/重构后的payload聚合，不是此origin JSON自身原SHA。"
+      "meaning": "冻结/重构后的payload聚合，不是此origin JSON自身原SHA。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
       "path": "inputs",
-      "meaning": "16项逐payload origin/path/SHA来源清单，明确一项可来自保留历史文件，不表示运行过16个case。"
+      "meaning": "16项逐payload SHA与历史来源说明；SIL来源只保留独立文件名，脱敏不改变其payload SHA或可信聚合。",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762"
     },
     {
       "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/manifest.json",
@@ -12110,67 +12172,80 @@
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "task",
-      "meaning": "历史独立任务编号，不是当前执行动作。"
+      "meaning": "历史独立任务编号，不是当前执行动作。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "status",
-      "meaning": "原快照结论，PASS_WITH_LIMITATION/SUPERSEDED/IN_PROGRESS必须保留，不推当前HEAD结果。"
+      "meaning": "原快照结论，PASS_WITH_LIMITATION/SUPERSEDED/IN_PROGRESS必须保留，不推当前HEAD结果。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "superseded_by",
-      "meaning": "替代该blocked快照的历史commit/bundle，不回写旧快照。"
+      "meaning": "替代该blocked快照的历史commit/bundle，不回写旧快照。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "checked_at",
-      "meaning": "原检查日期，不是本说明重新检查现场。"
+      "meaning": "原检查日期，不是本说明重新检查现场。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "ros_workspace_commit",
-      "meaning": "原ROS来源commit。"
+      "meaning": "原ROS来源commit。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "dpsdk_root",
-      "meaning": "原开发环境路径，不保证当前checkout相同。"
+      "meaning": "公开版以仓库相对路径../dpsdk表示历史SDK根，非原开发绝对路径或当前checkout已验证声明。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "dpsdk_commit",
-      "meaning": "原SDK来源commit，不借当前构建信用替代。"
+      "meaning": "原SDK来源commit，不借当前构建信用替代。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "required_contract",
-      "meaning": "当时所需contract/release/path清单，不能手写替身补齐缺失。"
+      "meaning": "当时所需contract/release/path清单，不能手写替身补齐缺失。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "observed",
-      "meaning": "当时观察事实，缺路径/枚举旧值仍保历史。"
+      "meaning": "当时观察事实，缺路径/枚举旧值仍保历史。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "owner",
-      "meaning": "阻塞/来源归属或节点名单，不等加密进程绑定。"
+      "meaning": "阻塞/来源归属或节点名单，不等加密进程绑定。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "unblock_condition",
-      "meaning": "历史解阻条件，非自动从数据生成新原件。"
+      "meaning": "历史解阻条件，非自动从数据生成新原件。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "prohibited_workaround",
-      "meaning": "明确禁止伪造/手写替换协议原件的范围。"
+      "meaning": "明确禁止伪造/手写替换协议原件的范围。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.blocked.json",
       "path": "next_tasks",
-      "meaning": "历史任务依赖图，不表示后续已通过。"
+      "meaning": "历史任务依赖图，不表示后续已通过。",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3"
     },
     {
       "source": "docs/dummy/task-reports/R01.json",
@@ -12656,6 +12731,18 @@
       "source": "docs/dummy/task-reports/v3-repair-checkpoint.json",
       "path": "known_runtime_limitation",
       "meaning": "该历史环境运行/退出限制，不作为当前实现诊断。"
+    },
+    {
+      "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811",
+      "path": "redaction",
+      "meaning": "公开版的来源元数据脱敏说明；明确payload、聚合与未资格结论不变，原manifest字节SHA已改变，旧activation绑定无效且未重签。"
+    },
+    {
+      "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2",
+      "path": "redaction",
+      "meaning": "公开版的来源元数据脱敏说明；明确payload、聚合与未资格结论不变，原manifest字节SHA已改变，旧activation绑定无效且未重签。"
     }
   ],
   "case_rows": [
@@ -14967,5 +15054,55 @@
       "scope": "CASE_INVENTORY_NOT_EXECUTION"
     }
   ],
-  "product_execution_performed": false
+  "product_execution_performed": false,
+  "public_redaction_sources": [
+    {
+      "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
+      "source_sha256": "d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811",
+      "bytes": 2110,
+      "archived_original_sha256": "b8f5554df04b2b090b85454784587e12626a6079e003ccef9b7baa80839d953a",
+      "archived_original_bytes": 1991,
+      "stable_anchor": "raw_b8f5554df04b2b09"
+    },
+    {
+      "source": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
+      "source_sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2",
+      "bytes": 2039,
+      "archived_original_sha256": "1717985d07d923ab5194f4cf110da5ddb42d0369b1aa2b1cbc57f52301fb66ce",
+      "archived_original_bytes": 1920,
+      "stable_anchor": "raw_1717985d07d923ab"
+    },
+    {
+      "source": "docs/dummy/task-reports/R01.blocked.json",
+      "source_sha256": "7fa09745fcb11473169d2965518bd91a0fb723e8bbf7489433b8701e216ceff3",
+      "bytes": 1645,
+      "archived_original_sha256": "8595debc01c85a43707dc3ea9057759ddbabfb4879eda668b74eb8ea71c74bc6",
+      "archived_original_bytes": 1673,
+      "stable_anchor": "raw_8595debc01c85a43"
+    },
+    {
+      "source": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
+      "source_sha256": "62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762",
+      "bytes": 4752,
+      "archived_original_sha256": "79298aa0c2f6bb36fc5d10e7316df12511f1afd453f154c3cadfbfb525b799fe",
+      "archived_original_bytes": 4836,
+      "stable_anchor": "raw_79298aa0c2f6bb36"
+    },
+    {
+      "source": "docs/dummy/rest-planning-evidence.json",
+      "source_sha256": "68a8e2a7ed86ab9bf9a967ec84b6eab56729e543700b9454dac5dd5981e35f06",
+      "bytes": 15862,
+      "archived_original_sha256": "14cccf7d3768cca59953e7ad6dd380229ebff4713baaa8841aed6ab14912131d",
+      "archived_original_bytes": 17732,
+      "stable_anchor": "raw_14cccf7d3768cca5"
+    },
+    {
+      "source": "docs/dummy/cylinder-service-topology-evidence.json",
+      "source_sha256": "e9387fbc339df750e36fec25528de6b92545ee70f1d3a1d47741da62cef4dce0",
+      "bytes": 2182,
+      "archived_original_sha256": "646d32078897b626685a5ab92149f810fbea88a76078419ac2802c5a8a0d916c",
+      "archived_original_bytes": 2242,
+      "stable_anchor": "raw_646d32078897b626"
+    }
+  ]
 }

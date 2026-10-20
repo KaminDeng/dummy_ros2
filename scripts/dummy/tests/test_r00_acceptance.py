@@ -43,7 +43,7 @@ class R00AcceptanceTest(unittest.TestCase):
     # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_build_script_preserves_explicit_dpsdk_root(self):
         build_source = BUILD.read_text()
-        self.assertNotIn("../dpsdk", build_source)
+        self.assertNotRegex(build_source, r"/(?:home|Users)/[^/\s]+(?:/|$)")
         self.assertIn('DPSDK_ROOT="${DPSDK_ROOT:-', build_source)
         self.assertIn("export DPSDK_ROOT", build_source)
 

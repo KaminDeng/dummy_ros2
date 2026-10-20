@@ -87,4 +87,6 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME})
 
 # 最后生成 ament 包导出/索引信息；运行依赖在 package.xml 声明，启动选择由各 launch 文件明确区分。
+install(FILES LICENSE DESTINATION share/${PROJECT_NAME})
+
 ament_package()

@@ -416,4 +416,6 @@ install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_manage
   dummy_goal_timeline EXPORT export_dummy_device_action ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_device_action)
 ament_export_dependencies(dummy_ros_control control_msgs yaml-cpp OpenSSL)
+install(FILES LICENSE DESTINATION share/${PROJECT_NAME})
+
 ament_package()

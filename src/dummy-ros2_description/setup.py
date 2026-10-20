@@ -25,7 +25,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name, ['package.xml', 'LICENSE']),
         ##
         # 仅安装匹配*.launch.py的启动源文件，不将__pycache__作为launch入口。
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
@@ -37,9 +37,9 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='author',
-    maintainer_email='todo@todo.com',
-    description='The ' + package_name + ' package',
+    maintainer='Dummy ROS maintainers',
+    maintainer_email='maintainer@example.invalid',
+    description='Robot description and model resources for the Dummy six-axis arm',
     license='Apache-2.0',
     tests_require=['pytest'],
     ##

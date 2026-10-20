@@ -51,5 +51,6 @@
     }
   ],
   "payload_sorted_sha256": "413232db922624fb841048f6b09448df0f5a878c5e1e8d8e6ec5b53a68a56964",
-  "draft_status": "UNQUALIFIED: wire2.5/current model; original conservative short-goal policy. No prior hardware qualification transferred."
+  "draft_status": "UNQUALIFIED: wire2.5/current model; original conservative short-goal policy. No prior hardware qualification transferred.",
+  "redaction": "仅脱敏历史来源路径；payload、聚合和未资格结论不变。原manifest字节SHA已改变，旧activation绑定无效且未重签。"
 }

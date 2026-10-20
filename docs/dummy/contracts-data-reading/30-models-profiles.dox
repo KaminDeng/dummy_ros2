@@ -106,7 +106,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `profile_name` | `f405_j1_bench` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
 | `source_seed_sha256` | `6cb0db199ba9341b513153c0662078bbf4e16ab433c0f555556a8a8f435bcfe0` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
 | `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `artifact_kind` | `design_seed_default_deny` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
 | `active_axes` | `["Joint1"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `configured_mask` | `1` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
@@ -130,7 +130,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `profile_name` | `f405_j1_passive` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
 | `source_seed_sha256` | `671dc9349df010a26845348bf816953765b8702ac8560e2737459596f2091695` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
 | `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `artifact_kind` | `design_seed_default_deny` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
 | `active_axes` | `["Joint1"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `configured_mask` | `1` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
@@ -154,7 +154,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
 | `source_seed_sha256` | `1f655ef12e9251790459cca8ffebf43d640ab0374e34e7d11ee6b842e7c79368` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
 | `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
 | `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
@@ -180,7 +180,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
 | `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
 | `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
-| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，所列CI种子不作真实电机动态模型。 |
 | `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
 | `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
 | `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
@@ -216,7 +216,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
 | `source_seed_sha256` | `ff1768b5bdc36dfad0d73ed25ae56862ea78bbd014af5fe7808eb7b274907f5c` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
 | `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
 | `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
@@ -242,7 +242,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
 | `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
 | `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
-| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，所列CI种子不作真实电机动态模型。 |
 | `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
 | `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
 | `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
@@ -278,7 +278,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
 | `source_seed_sha256` | `56ff12aa200887712241ad71e6f394962ff5f8d8420385f55579c9df76927e34` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
 | `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `active_axes` | `["Joint1"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
 | `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
@@ -304,7 +304,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
 | `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
 | `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
-| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，所列CI种子不作真实电机动态模型。 |
 | `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
 | `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
 | `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
@@ -370,7 +370,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
 | `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
 | `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
 | `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
@@ -442,7 +442,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
 | `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
 | `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
 | `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
@@ -461,7 +461,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `timing.session_lease_us` | `30000000` | 会话租期µs，APP候选30000000=30s；需独立续租与原提交锚，非660s总试用许可。 |
 | `timing.max_goal_duration_us` | `10000000` | 单goal上限µs；候选10000000=10s，不能因trial660s就声称可跑600s单goal。 |
 | `timing.local_hold_budget_us` | `5000000` | 本地Hold阶段预算µs，候选5000000=5s，不自动覆盖重力负载或长时物理保持。 |
-| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，所列CI种子不作真实电机动态模型。 |
 | `simulation.velocity_limit_rad_s` | `0.15079644737231007` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
 | `simulation.acceleration_limit_rad_s2` | `1.0` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
 | `simulation.max_tracking_error_rad` | `0.05` | 模型位置跟踪误差阈rad，需有效反馈/窗口，不能靠mask外轴零值通过。 |
@@ -509,7 +509,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
 | `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
 | `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
 | `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
@@ -551,7 +551,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
 | `source_seed_sha256` | `ff1768b5bdc36dfad0d73ed25ae56862ea78bbd014af5fe7808eb7b274907f5c` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
 | `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
 | `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
@@ -577,7 +577,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
 | `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
 | `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
-| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，所列CI种子不作真实电机动态模型。 |
 | `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
 | `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
 | `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
@@ -617,7 +617,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 | `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
 | `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
 | `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
-| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本文所列profiles均false，仿真/seed参数不能改写为硬件通过。 |
 | `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
 | `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
 | `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |

@@ -11,10 +11,13 @@ Qt面板的Native执行路径请先读 [主 README](../../README.md)，不要混
 
 ## 构建与测试
 
+以下命令在zsh中使用；先把 `ROS_WS` 和 `DPSDK_ROOT` 设置为本机ROS工作区和DPSDK checkout的实际绝对路径。
+环境变量检查会在缺少路径时停止，示例不绑定开发者的目录布局。
+
 ```sh
-cd <workspace-root>
+cd "${ROS_WS:?请先设置ROS_WS为本机ROS工作区绝对路径}"
 source /opt/ros/jazzy/setup.zsh
-export DPSDK_ROOT=../dpsdk
+export DPSDK_ROOT="${DPSDK_ROOT:?请先设置DPSDK_ROOT为本机DPSDK仓库绝对路径}"
 colcon --log-base log_dummy build --build-base build_dummy --install-base install_dummy
 source install_dummy/setup.zsh
 colcon --log-base log_dummy test --build-base build_dummy --install-base install_dummy
@@ -40,7 +43,7 @@ ros2 launch dummy_bringup mock_6dof.launch.py
 ```sh
 source /opt/ros/jazzy/setup.zsh
 source install_dummy/setup.zsh
-export DPSDK_ROOT=../dpsdk
+export DPSDK_ROOT="${DPSDK_ROOT:?请先设置DPSDK_ROOT为本机DPSDK仓库绝对路径}"
 ros2 launch dummy_bringup sil_j1.launch.py endpoint:=tcp/127.0.0.1:17447
 ```
 
@@ -84,7 +87,7 @@ ros2 launch dummy_bringup real_j1.launch.py \
 
 该命令只声明显式只读配置。J1 实体后端状态仍为 `NOT_RUN`，不得由此推断连接、
 reference、drive enable 或运动有效。任何带电动作都必须通过独立 G6 人工门禁流程，
-不属于本次 `--hardware none` 发布范围。
+不属于 `--hardware none` 的验证范围。
 
 ## 真实六轴无负载开发证据
 

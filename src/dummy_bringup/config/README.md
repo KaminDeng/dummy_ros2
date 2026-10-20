@@ -4,7 +4,7 @@
 减速器采用完整模型的支架安装面定位；当前版本见
 [完整STEP模型](../../../docs/dummy/full-step-model.md)，REST双向规划修复见
 [REST规划说明](../../../docs/dummy/rest-planning.md)，转换经验见
-[STEP转换技能](../../../.agents/skills/step-to-ros-model/SKILL.md)。
+[STEP转换工程说明](../../../docs/dummy/model-conversion/README.md)。
 
 J6 的 MINIF08 减速器已补入共享描述模型，原输出法兰向外延伸28mm，
 控制减速比保持50:1；显示、FK/IK和碰撞检查使用同一模型。

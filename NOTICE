@@ -1,0 +1,48 @@
+Dummy ROS 2
+
+本仓库根 LICENSE 的 Apache-2.0 许可适用于本项目有权以该许可发布的原创贡献。
+下列第三方材料保留其原版权及许可；本声明不对第三方材料重新授予许可。
+具体范围、原文及模型来源记录见 LICENSES/。
+
+MoveIt Servo 示例
+----------------
+src/dummy_moveit_config/src/servo_cpp_interface_demo.cpp
+  Copyright (c) 2020, PickNik Inc. All rights reserved.
+src/dummy_moveit_config/src/servo_keyboard_input.cpp
+  Copyright (c) 2021, PickNik LLC. All rights reserved.
+
+两文件源自 moveit2_tutorials，原作者署名为 Adam Pettinger；源码另保留
+Muzhxiaowen 的 Dummy 适配说明。本仓库继续作 Dummy 配置与文档适配。
+原 BSD 三条款声明逐字保留在源码和 LICENSES/PickNik-2020-BSD-3-Clause.txt、
+LICENSES/PickNik-2021-BSD-3-Clause.txt 中，不因根 LICENSE 改为 Apache-2.0。
+上游：https://github.com/moveit/moveit2_tutorials
+
+OSRF 测试模板
+-------------
+src/dummy-ros2_description/test/test_copyright.py
+src/dummy-ros2_description/test/test_pep257.py
+  Copyright 2015 Open Source Robotics Foundation, Inc.
+src/dummy-ros2_description/test/test_flake8.py
+  Copyright 2017 Open Source Robotics Foundation, Inc.
+
+上述文件原有 Apache License, Version 2.0 版权及许可头保持不变。
+许可原文另见 LICENSES/Apache-2.0.txt。
+
+Dummy 模型及来源边界
+-------------------
+旧版 base_link.stl 和 link1_1_1.stl 至 link6_1_1.stl 与 switchpi/Dummy
+上游 ROS 描述目录中的文件逐字节一致。该上游仓库随附 GNU GPL v3 文本；
+保留其上游许可范围，不将这些资产作为本项目原创 Apache-2.0 材料。
+上游：https://gitee.com/switchpi/dummy
+原文及固定版本、文件摘要见 LICENSES/GPL-3.0.txt、LICENSES/MODEL-PROVENANCE.md。
+
+完整装配 Dummy-B-v2.step 的23份派生几何/材质及 MINIF08_approx.stl
+按维护者选择以 Apache-2.0 随仓库分发，与本项目原创代码使用同一许可。
+完整显示、碰撞规划及相关几何测试需要的网格均随附；正常克隆无需另行补齐。
+原始 CAD 输入的文件身份及已有来源记录保留在 LICENSES/MODEL-PROVENANCE.md；
+本声明不补写未记录的原作者，也不对未随仓库提供的原始 CAD 文件重新授予许可。
+七份旧版 STL 仍保留上游 GPL-3.0，不因其余模型采用 Apache-2.0 而改变。
+模型目录内 LICENSE 随模型安装，保存各文件范围和完整许可文本。
+
+本 NOTICE 用于保存来源及归属信息，不修改任何原许可证条款，
+各项材料的许可范围以上述逐项说明为准。

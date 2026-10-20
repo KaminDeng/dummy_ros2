@@ -12,7 +12,7 @@
   <version>0.0.0</version>
 <description>The dummy-ros2_description package</description>
   <maintainer email="xin.li@switchpi.com">Muzixiaowen</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
 <!--
 Xacro展开模型，RSP读取关节状态发布TF；joint_state_publisher及GUI用于软件显示，均不是DPSDK真机控制端口。

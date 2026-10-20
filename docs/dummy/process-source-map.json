@@ -1,30 +1,23 @@
 {
-  "purpose": "保留技能流程与历史设计原件的阅读索引，不重写任务状态或授权。",
+  "purpose": "公开模型转换工程文档的版本与用途索引；文档SHA不认证模型来源或设备权限。",
   "files": [
     {
-      "path": ".agents/skills/step-to-ros-model/SKILL.md",
-      "sha256": "ba6f830d0171b9a0133e8779c42380a464c83a4391662652d1f6ff7113e8d82c",
-      "lines": 69
+      "path": "docs/dummy/model-conversion/README.md",
+      "sha256": "85a22c70b3fc223159d01d3832baad7e158c9cfbaae2f352955ff049b09dd36f",
+      "lines": 78,
+      "purpose": "STEP装配到ROS的工程流程、运动归属、局部变换、单位与分层验证。"
     },
     {
-      "path": ".agents/skills/step-to-ros-model/references/conversion-details.md",
-      "sha256": "0b05ae40b1f6d09a0b0faa040e9a636bf7d331b1bddf48fbcaf0b03ceea34db3",
-      "lines": 149
+      "path": "docs/dummy/model-conversion/cad-import.md",
+      "sha256": "327f895447afa7c91fa2b31cb8f8e0fd5a2cf91ae1a9ea190fc8aac18856d567",
+      "lines": 128,
+      "purpose": "XCAF实例/颜色、OBJ材质、保守碰撞包络、SRDF、显示性能与规划间隙。"
     },
     {
-      "path": ".agents/skills/step-to-ros-model/references/dummy-b-v2-case.md",
-      "sha256": "bd517f339121021592b3167036e3c6342684dc5e8aa57e9500121d258ebaa398",
-      "lines": 76
-    },
-    {
-      "path": "docs/superpowers/plans/2026-09-15-v3-conformance-repair.md",
-      "sha256": "d272dfc4a24c2229bacfcd2799d6b8605776103b1cf4a4aaf2a3f552608f4f00",
-      "lines": 89
-    },
-    {
-      "path": "docs/superpowers/specs/2026-09-15-v3-conformance-repair-design.md",
-      "sha256": "39e1a071c044a13202a1726e43fa0ca2563830e577dabc6955e2b559890e2c96",
-      "lines": 79
+      "path": "docs/dummy/model-conversion/assembly-example.md",
+      "sha256": "58de0c9d8a8a550deec44e7bdce008a74314ce928a2374688ba8f1b23dd6db13",
+      "lines": 87,
+      "purpose": "Dummy-B v2固定来源SHA、实例与安装差异、历史验证及REST后续修复边界。"
     }
   ]
 }

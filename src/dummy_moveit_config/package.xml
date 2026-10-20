@@ -13,7 +13,7 @@
   </description>
   <maintainer email="xin.li@switchpi.com">muzixiaowen</maintainer>
 
-  <license>BSD</license>
+  <license>BSD-3-Clause</license>
 
   <url type="website">http://moveit.ros.org/</url>
   <url type="bugtracker">https://github.com/ros-planning/moveit2/issues</url>

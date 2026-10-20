@@ -51,5 +51,6 @@
     }
   ],
   "payload_sorted_sha256": "0d95d2604c780406b40b6ed4112c34203cc9de99f14e1575869a722bd629c867",
-  "draft_status": "SOURCE_PAYLOAD_ONLY_PENDING_NEW_FW_HOST_ACTIVATION"
+  "draft_status": "SOURCE_PAYLOAD_ONLY_PENDING_NEW_FW_HOST_ACTIVATION",
+  "redaction": "仅脱敏历史来源路径；payload、聚合和未资格结论不变。原manifest字节SHA已改变，旧activation绑定无效且未重签。"
 }

@@ -50,7 +50,7 @@ python scripts/dummy/optimize_step_visuals.py /path/to/original_meshes /path/to/
 验证JSON，不读写碰撞资源，不连接ROS/硬件。工具保留材质/源文件的回归通过，
 完整模型资源、减速器、目标标记等针对性回归通过。扩大运行模型历史测试时，
 仍有两项旧断言不兼容完整STEP迁移（仅支持7个链接、全部碰撞为box/STL）；
-本轮没有修改这些断言或碰撞模型。
+该视觉优化未修改这些断言或碰撞模型。
 
-本机完整证据位于相邻DPSDK的 `build_dummy/reports/rviz-fps-20261020/`，
+历史记录的完整证据位于DPSDK的 `build_dummy/reports/rviz-fps-20261020/`，
 包括原始视觉备份、逐材质误差、帧计数日志与 `fps-comparison.json`。

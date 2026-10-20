@@ -1,6 +1,8 @@
 # 冻结合同数据阅读
 
-这里给原件补外部中文说明，原JSON/YAML/IDL/lock/fixture/manifest保持每字节。共119物理源、80个唯一SHA，基线ROS HEAD `7c9285f6c63cc162245df1299a0b6b8522044d38`。
+这里提供外部中文说明，共119物理源、80种内容。首次归档基线为ROS HEAD `7c9285f6c63cc162245df1299a0b6b8522044d38`；公开版对其中6份来源元数据JSON做路径脱敏，不再声称这6份当前字节等于旧HEAD。当前SHA/bytes与归档旧SHA分别记录在机器映射中，原页锚保留为稳定导航。
+
+脱敏仅涉及来源路径与公开说明，正式合同、原payload、数值及历史资格/运行结论不变。两份candidate manifest的原文SHA已改变，旧activation原文绑定失效，未重签旧activation或转移旧资格。
 
 先读 [总览](00-overview.dox)，再按问题查：
 

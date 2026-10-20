@@ -6,7 +6,8 @@
 `--hardware none`排除实体IO，静态配置测试成功也不等于Gazebo真正启动或控制器已加载。
 表中exit=3明确表示运行时未执行，不能把AUD通过合并为全套PASS。
 当前仓库名为`dummy_ros2_consolidated`，新手操作请从 [主 README](../../README.md) 的现行入口开始；
-不要直接回退仓库、包版本或源码以追随本历史表。旧路径和摘要保留供报告溯源。
+不要直接回退仓库、包版本或源码以追随本历史表。历史提交和摘要保留供报告溯源。
+公开文档省略原开发机绝对路径；下表根目录占位符只用于说明来源，不是原报告字段的新值。
 
 ## Scope
 
@@ -18,9 +19,9 @@ or motor controller is opened.
 
 | Root | State |
 | --- | --- |
-| ROS_WS: `<home>/kamin_work/00-code/dummy_ros2` | Branch `feat/ros-v3-r00-baseline`, based on `0dc69ac6948dfc8ddbd6ee584431770f01c73a9a`. The pre-existing untracked `build/`, `install/`, and `log/` directories were preserved. |
-| DPSDK_ROOT: `../dpsdk` | `323e5fa929cb4ac60583bd97ab374f5486f133a3`; pre-existing modified RTOS/Zenoh submodules and `tools/dummy/` are not owned by ROS. |
-| DUMMY_ROOT: `<dummy-code-root>/firmware/dummy-ref-core-fw` | `3a9d17464308e1532b3d648a80da6db899cc1f01`; it already reports local ROS/demo changes. It was read only. |
+| ROS_WS: `<workspace-root>` | Historical branch `feat/ros-v3-r00-baseline`, based on `0dc69ac6948dfc8ddbd6ee584431770f01c73a9a`. |
+| DPSDK_ROOT: `<dpsdk-root>` | Historical SDK revision `323e5fa929cb4ac60583bd97ab374f5486f133a3`; SDK dependencies and tools have their own source/version ownership. |
+| DUMMY_ROOT: `<dummy-code-root>/firmware/dummy-ref-core-fw` | Historical firmware revision `3a9d17464308e1532b3d648a80da6db899cc1f01`; this report provides no firmware execution or physical-motion result. |
 
 The R00 source sentinels and their SHA-256 values are:
 
@@ -55,8 +56,8 @@ It does not change Python, ROS, or package-manager global configuration.
 joint-feedback movement are R02 deliverables after C02 `model-v1` is available.
 The R00 runner returns 3 so a missing runtime cannot be silently treated as a pass.
 
-## Next Task
+## Historical follow-up dependencies
 
-R01 is the next ROS task, but it is blocked on the C02 `model-v1` contract bundle
-and manifest hash. R02 remains the first task that may claim a real Gazebo runtime
-result.
+The R00 snapshot recorded R01 waiting for the C02 `model-v1` contract bundle
+and manifest hash. R02 was the first planned stage requiring actual Gazebo runtime
+evidence; these historical labels do not describe the current release status.

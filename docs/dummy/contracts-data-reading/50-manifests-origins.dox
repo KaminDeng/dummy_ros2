@@ -11,7 +11,9 @@
 
 当前base bundle聚合`2ae31387…`、application原快照`1d5d4cd6…`、trusted重构`0afb58dd…`并列。它们可有相同wire2.5 codec与不同model/profile/SIL reference内容；schema相同不等完整身份相同。当前APP candidate明确source_contract=1d5d…，不能静默改绑到2ae3…再沿用旧资格。
 
-每个manifest的payload引用都须读本地原件重算，原文锁包括.md/.py，不是只锁消息字段。这里的核对是只读文件/SHA和排序检查，没有执行产品validator、生成器或测试。已核对应codec适配头原SHA后，才复用其service元ID说明：v1 4134、v2 4140。
+每个manifest的payload引用都须读本地原件重算，原文锁包括.md/.py，不是只锁消息字段。文件/SHA和排序核对仅验证静态完整性，不能代替产品validator、生成器或测试的实际执行。对应codec适配头的service元ID为：v1 4134、v2 4140。
+
+公开文档对个人绝对路径作显示脱敏：标有“原开发路径已省略”的内容不是原JSON字段的新值，不参与原件SHA重算。原件身份与公开数据的处理需另行核对；本说明不改写冻结输入或继承旧授权。
 
 
 @section raw_4a2f5b938027080f contracts/dummy_robot_v1/manifest.json
@@ -357,7 +359,9 @@ false
 
 以下保留该快照自述和所绑原件；历史状态/绝对路径不自动升级为当前运行许可。
 
-原文 SHA256：`b8f5554df04b2b090b85454784587e12626a6079e003ccef9b7baa80839d953a`；1991 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+当前公开文件 SHA256：`d76e1e42bfa34c6851b49cc1bb5c050eeb5b4bc7b1be098e19f48d35c7bcd811`；2110 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+公开脱敏前的归档原文 SHA256：`b8f5554df04b2b090b85454784587e12626a6079e003ccef9b7baa80839d953a`；1991 B。章节锚沿用此旧SHA前缀，仅供稳定导航，不表示当前公开字节仍等于旧HEAD或旧原件。仅来源路径元数据已脱敏，原数值、payload与资格/运行结论未改。
 
 
 ## format
@@ -480,7 +484,7 @@ payload model原bytes身份，变化会影响缩放/方向/限位，不能只比
 
 ## source_policy
 
-冻结来源绝对路径；机器路径不是现场授权或当前文件仍存在的证明。
+公开副本仅保留独立来源文件名；历史SDK根已脱敏，此字段不是相对当前bundle的payload路径，也不授现场许可。
 
 @code{.json}
 "f405_6dof_application_hold_no_load_candidate.json"
@@ -533,13 +537,23 @@ null
 "UNQUALIFIED: wire2.5/current model; original conservative short-goal policy. No prior hardware qualification transferred."
 @endcode
 
+## redaction
+
+公开版的来源元数据脱敏说明；明确payload、聚合与未资格结论不变，原manifest字节SHA已改变，旧activation绑定无效且未重签。
+
+@code{.json}
+"仅脱敏历史来源路径；payload、聚合和未资格结论不变。原manifest字节SHA已改变，旧activation绑定无效且未重签。"
+@endcode
+
 此candidate只有model/policy/profile三个payload，缺FW/Host/runtimefreeze/maps与正式qualification；`firmware_image_sha256:null`和runtime false不得由别份历史报告填充。
 
 @section raw_1717985d07d923ab contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json
 
 以下保留该快照自述和所绑原件；历史状态/绝对路径不自动升级为当前运行许可。
 
-原文 SHA256：`1717985d07d923ab5194f4cf110da5ddb42d0369b1aa2b1cbc57f52301fb66ce`；1920 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+当前公开文件 SHA256：`b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2`；2039 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+公开脱敏前的归档原文 SHA256：`1717985d07d923ab5194f4cf110da5ddb42d0369b1aa2b1cbc57f52301fb66ce`；1920 B。章节锚沿用此旧SHA前缀，仅供稳定导航，不表示当前公开字节仍等于旧HEAD或旧原件。仅来源路径元数据已脱敏，原数值、payload与资格/运行结论未改。
 
 
 ## format
@@ -662,7 +676,7 @@ payload model原bytes身份，变化会影响缩放/方向/限位，不能只比
 
 ## source_policy
 
-冻结来源绝对路径；机器路径不是现场授权或当前文件仍存在的证明。
+公开副本仅保留独立来源文件名；历史SDK根已脱敏，此字段不是相对当前bundle的payload路径，也不授现场许可。
 
 @code{.json}
 "f405_6dof_application_hold_no_load_candidate.json"
@@ -713,6 +727,14 @@ null
 
 @code{.json}
 "SOURCE_PAYLOAD_ONLY_PENDING_NEW_FW_HOST_ACTIVATION"
+@endcode
+
+## redaction
+
+公开版的来源元数据脱敏说明；明确payload、聚合与未资格结论不变，原manifest字节SHA已改变，旧activation绑定无效且未重签。
+
+@code{.json}
+"仅脱敏历史来源路径；payload、聚合和未资格结论不变。原manifest字节SHA已改变，旧activation绑定无效且未重签。"
 @endcode
 
 此candidate只有model/policy/profile三个payload，缺FW/Host/runtimefreeze/maps与正式qualification；`firmware_image_sha256:null`和runtime false不得由别份历史报告填充。
@@ -1221,7 +1243,9 @@ false
 
 以下保留该快照自述和所绑原件；历史状态/绝对路径不自动升级为当前运行许可。
 
-原文 SHA256：`79298aa0c2f6bb36fc5d10e7316df12511f1afd453f154c3cadfbfb525b799fe`；4836 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+当前公开文件 SHA256：`62165d583ab751cb2991c4a5d7137ad7f653b6ef1c33c8049edc2b78b50a9762`；4752 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+公开脱敏前的归档原文 SHA256：`79298aa0c2f6bb36fc5d10e7316df12511f1afd453f154c3cadfbfb525b799fe`；4836 B。章节锚沿用此旧SHA前缀，仅供稳定导航，不表示当前公开字节仍等于旧HEAD或旧原件。仅来源路径元数据已脱敏，原数值、payload与资格/运行结论未改。
 
 
 ## role
@@ -1282,9 +1306,9 @@ false
 
 ## inputs
 
-16项逐payload origin/path/SHA来源清单，明确一项可来自保留历史文件，不表示运行过16个case。
+16项逐payload SHA与历史来源说明；SIL来源只保留独立文件名，脱敏不改变其payload SHA或可信聚合。
 
-| fixture相对路径 | 原SHA256 | 记录的来源 |
+| fixture相对路径 | 原SHA256 | 当前公开的来源字段 |
 | --- | --- | --- |
 | `codec/dp_dummy_robot_v2.hpp` | `649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143` | `55b52b71280e898045e0758ba242800e84e9d7cc:contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp` |
 | `codec/dp_dummy_robot_v2_dp_comm.hpp` | `78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40` | `55b52b71280e898045e0758ba242800e84e9d7cc:contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp` |
@@ -1300,9 +1324,11 @@ false
 | `model/model.yaml` | `5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14` | `55b52b71280e898045e0758ba242800e84e9d7cc:contracts/dummy_robot_v2/model/model.yaml` |
 | `profiles/f405_6dof_bench.yaml` | `d6f55e42a41c4dea0c4dbe4f460030adbb3e11722629f0c3add37f8af44ca819` | `55b52b71280e898045e0758ba242800e84e9d7cc:contracts/dummy_robot_v2/profiles/f405_6dof_bench.yaml` |
 | `profiles/f405_j1_bench.yaml` | `facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac` | `55b52b71280e898045e0758ba242800e84e9d7cc:contracts/dummy_robot_v2/profiles/f405_j1_bench.yaml` |
-| `profiles/sil_6dof.yaml` | `08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb` | `task1-stale-sil_6dof.original.yaml` |
+| `profiles/sil_6dof.yaml` | `08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb` | `task1-stale-sil_6dof.original.yaml`（公开副本保留独立来源文件名） |
 | `profiles/sil_j1.yaml` | `765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c` | `55b52b71280e898045e0758ba242800e84e9d7cc:contracts/dummy_robot_v2/profiles/sil_j1.yaml` |
 
+
+公开origin字段脱敏只改变此来源说明JSON的原SHA；trusted bundle的16份payload、可信聚合和历史来源commit原值保留。
 @section raw_c2b25d9b33b51767 src/dummy_motion_client/test/fixtures/trusted_sil_bundle/manifest.json
 
 以下保留该快照自述和所绑原件；历史状态/绝对路径不自动升级为当前运行许可。
