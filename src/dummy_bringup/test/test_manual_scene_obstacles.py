@@ -1,11 +1,13 @@
 """障碍物真实场景差量、持久化和停车屏障回归。"""
 import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
 
 SOURCE = Path(__file__).resolve().parents[1]/'scripts/manual_scene_obstacles.py'
+sys.path.insert(0, str(SOURCE.parent))
 spec = importlib.util.spec_from_file_location('manual_scene_obstacles', SOURCE)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
@@ -24,6 +26,12 @@ def panel():
     p = NS(node=NS(create_client=lambda *args: client,
                   create_publisher=lambda *args: NS(publish=lambda message: None)), last_state=state, actual_q=[0.]*6,
            fresh=lambda: True, busy=False, cancel_motion_hold=lambda: calls.append('CANCEL_HOLD'))
+    from test_manual_moveit_service_topology import Graph
+    graph = Graph()
+    p.node.resolve_service_name = graph.resolve_service_name
+    p.node.count_services = graph.count_services
+    p.node.get_node_names_and_namespaces = graph.get_node_names_and_namespaces
+    p.node.get_service_names_and_types_by_node = graph.get_service_names_and_types_by_node
     return p, calls
 
 

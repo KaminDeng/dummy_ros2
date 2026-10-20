@@ -35,6 +35,12 @@ def test_simulator_panel_move_stop_and_switch_without_hardware(tmp_path, monkeyp
     monkeypatch.setattr(QtWidgets.QMessageBox, 'question', lambda *args: QtWidgets.QMessageBox.Yes)
     rclpy.init(args=[])
     node = rclpy.create_node('panel_backend_test')
+    # 与Apply回执替身配套，显式提供唯一MoveIt发现图，不依赖真实MoveIt或绕过生产检查。
+    from test_manual_moveit_service_topology import Graph
+    graph = Graph()
+    for method in ('count_services', 'get_node_names_and_namespaces',
+                   'get_service_names_and_types_by_node'):
+        monkeypatch.setattr(node, method, getattr(graph, method))
     panel = JointPanel(config, tmp_path/'report', lambda *_: None, node)
     # 本测试隔离MoveIt进程，显式模拟ApplyPlanningScene的成功回执。
     panel.obstacle_tab.phase = 'apply'

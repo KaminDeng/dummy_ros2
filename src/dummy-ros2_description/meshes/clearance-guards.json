@@ -29,11 +29,11 @@
     {
       "source": "full_step_link1-collision-local.stl",
       "output": "full_step_link1-collision-local-clearance-5mm.stl",
-      "parts": 13,
-      "minimum_expansion_after_stl_roundtrip_mm": 5.009998282599923,
-      "source_sha256": "67bf3033aee97c6e6204173dc18cb97fdb35b7865d1281fba0441c6f99228601",
-      "output_sha256": "f694d35ab0c15d9973dd8db25d293ac163b71839c0486ff2ce17b4ac278bb9a0",
-      "triangles": 8268
+      "parts": 14,
+      "minimum_expansion_after_stl_roundtrip_mm": 5.009998321533203,
+      "source_sha256": "038d033a9fee033981e84320968ae6fc41faa264409eb8c7f497303f18e938b9",
+      "output_sha256": "c36497c4ee3b988a8d116dc1fd6766363c70036b10cce016750eee0b3bb38fc3",
+      "triangles": 8904
     },
     {
       "source": "full_step_link2-collision-local.stl",

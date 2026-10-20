@@ -1,0 +1,7 @@
+# 已实际通过 REST 几何回归及网格重建的 Python 依赖版本。
+# 在能访问系统 ROS Python 包的虚拟环境安装，不修改系统 Python。
+numpy==2.5.4
+scipy==1.18.1
+trimesh==5.1.1
+shapely==2.2.0
+python-fcl==0.7.0.11

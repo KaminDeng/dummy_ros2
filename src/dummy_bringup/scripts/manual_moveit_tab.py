@@ -216,6 +216,8 @@ class MoveItTab(QtWidgets.QWidget):
 
     def scene_ready(self):
         scene=getattr(self.panel,'obstacle_tab',None)
+        if scene is not None and hasattr(scene, 'validate_topology') and not scene.validate_topology():
+            return False
         return scene is None or scene.scene_ready and not scene.blocked
 
     def scene_revision(self):
@@ -511,7 +513,9 @@ class MoveItTab(QtWidgets.QWidget):
         answer = QtWidgets.QMessageBox.Yes if confirmed and self.auto_test.active else self.panel.confirm_execution('执行 MoveIt 完整路径', f'规划含 {len(path)} 个采样点；{detail}\n速度上限 {speed:g}°/s、加速度 {acceleration:g}rad/s²。确认现场路径畅通后执行。')
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        if revision != self.revision or path != self.path or identity != self.execution_identity() or self.panel.busy or not self.request_ready():
+        if (not self.scene_ready() or getattr(self,'path_scene_revision',None)!=self.scene_revision() or
+                revision != self.revision or path != self.path or identity != self.execution_identity() or
+                self.panel.busy or not self.request_ready()):
             self.status.setText('确认期间状态变化，未执行。请重新规划。')
             return
         try:

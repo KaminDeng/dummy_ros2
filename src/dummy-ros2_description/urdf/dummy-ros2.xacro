@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dummy-ros2">
-  <!--完整STEP装配：安装关系与颜色已经人工核对；Rest碰撞仍保留，禁止用旧豁免掩盖。-->
+  <!--完整STEP装配：安装关系与颜色已经人工核对；Rest误碰撞通过凹支架分区包络修复，接触检查仍保留。-->
   <xacro:arg name="Joint1_lower" default="-2.9670597283903604" />
   <xacro:arg name="Joint1_upper" default="2.9670597283903604" />
   <xacro:arg name="Joint2_lower" default="-1.2740903539558606" />

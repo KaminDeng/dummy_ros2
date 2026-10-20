@@ -66,7 +66,7 @@
     "link1": {
       "link": "link1_1_1",
       "triangles": 211399,
-      "collision_triangles": 8268,
+      "collision_triangles": 8904,
       "motor_collision_links": [],
       "local_bounds_mm": [
         [
@@ -299,6 +299,7 @@
     "j6": 1.6880431371219265e-15
   },
   "user_visual_review": "confirmed",
-  "unresolved": "Rest: link1_1_1 vs step_link2_motor_2 remains collision; no physical motion qualification",
-  "runtime_verification": "real-runtime-model-verification.json"
+  "unresolved": "No physical motion qualification; REST planning geometry resolved by rest-collision-refinement.json",
+  "runtime_verification": "real-runtime-model-verification.json",
+  "collision_refinement_manifest": "rest-collision-refinement.json"
 }

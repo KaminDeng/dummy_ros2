@@ -51,6 +51,9 @@
 
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>python3-yaml</test_depend>
+  <test_depend>python3-numpy</test_depend>
+  <test_depend>python3-scipy</test_depend>
+  <test_depend>python3-shapely</test_depend>
 
 
   <export>

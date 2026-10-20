@@ -1,0 +1,18 @@
+{
+  "source_step_sha256": "7099178daac19d822df14ca0495921032a858feabcb8ffb8678c8b06c68b5682",
+  "source_part": "J1/Dummy-0001",
+  "units": "mm",
+  "cut_axis": "z",
+  "cut_mm": 24.0,
+  "padding_mm": 0.301,
+  "minimum_source_margin_mm": [
+    0.3009986877441406,
+    0.300998670785134
+  ],
+  "source_bracket_sha256": "e579bfc4d06ed646e894a037980e74a4786279b27a72499a29a12f5f51ac5c4c",
+  "source_fasteners_sha256": "89977225fc4350993223b6b961ed922a36e07f89edf2b150e56ec4de45a78d6b",
+  "output_sha256": "038d033a9fee033981e84320968ae6fc41faa264409eb8c7f497303f18e938b9",
+  "guard_sha256": "c36497c4ee3b988a8d116dc1fd6766363c70036b10cce016750eee0b3bb38fc3",
+  "guard_minimum_expansion_mm": 5.009998321533203,
+  "triangles": 8904
+}

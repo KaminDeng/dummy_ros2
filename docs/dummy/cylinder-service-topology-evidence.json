@@ -1,0 +1,83 @@
+{
+  "readonly": true,
+  "physical_motion_executed": false,
+  "root_cause": "Two move_group providers in domain83 returned two-cylinder and empty worlds for same service",
+  "annotation_ast_unchanged_before_fix": true,
+  "before_counts": {
+    "/apply_planning_scene": 2,
+    "/get_planning_scene": 2,
+    "/plan_kinematic_path": 2,
+    "/check_state_validity": 2,
+    "/compute_ik": 2,
+    "/compute_fk": 2
+  },
+  "after_counts": {
+    "/apply_planning_scene": 1,
+    "/get_planning_scene": 1,
+    "/plan_kinematic_path": 1,
+    "/check_state_validity": 1,
+    "/compute_ik": 1,
+    "/compute_fk": 1
+  },
+  "collision_recheck": {
+    "readonly": true,
+    "executed": false,
+    "owner": [
+      [
+        "manual_move_group",
+        "/"
+      ],
+      [
+        "manual_move_group_private_104126917397248",
+        "/"
+      ]
+    ],
+    "source": "moveit-events.jsonl",
+    "checked_samples": 1135,
+    "previous_path_cylinder_collision": {
+      "positions_rad": [
+        1.3123902664780245,
+        0.4619978663430956,
+        2.006518882104445,
+        -1.3394372104711478,
+        -0.702754696586957,
+        -0.1260914836417063
+      ],
+      "valid": false,
+      "contacts": [
+        {
+          "a": "link5_1_1",
+          "b": "manual_cylinder_58cc3b2492cc",
+          "depth_m": 0.0036529689495806016
+        }
+      ],
+      "record_host_ns": 599209806452117,
+      "waypoint_index": 24
+    },
+    "home_valid": true,
+    "colliding_goal_plan_error": 99999
+  },
+  "targeted_tests": 179,
+  "bringup_build": "passed",
+  "rest_bidirectional": [
+    [
+      "home_to_rest",
+      76,
+      193
+    ],
+    [
+      "rest_to_home",
+      76,
+      193
+    ]
+  ],
+  "limits": "Current discovery graph consistency gate, not cryptographic process binding or continuous world-content readback",
+  "qt_fixture_regression": {
+    "red": "旧Qt夹具仅伪造Apply回执，缺唯一发现图；move按钮保持禁用，原断言失败",
+    "fix": "给真实rclpy测试节点注入Graph三项发现方法，原断言及生产检查保持不变",
+    "green": "1 passed in 1.38s",
+    "domain": 187,
+    "native_process_started": false,
+    "physical_motion_executed": false
+  }
+}

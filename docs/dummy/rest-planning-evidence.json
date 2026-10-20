@@ -1,0 +1,372 @@
+{
+  "readonly": true,
+  "executed": false,
+  "runs": [
+    {
+      "domain": 187,
+      "success": true,
+      "started_utc": "2026-10-20T01:23:54.234257+00:00",
+      "elapsed_s": 2.892033713986166,
+      "runtime_identity": {
+        "provider": "/manual_move_group",
+        "urdf_canonical_sha256": "afbad8366b80c200a603494606dac556650560d68eb9ee447448e0275b028781",
+        "srdf_canonical_sha256": "b102fd11cbb4506fb19a9fdafbee42fa2006bed2af950d0785a4f098ea321e9d",
+        "source_matches": true,
+        "referenced_package_resources": [
+          {
+            "uri": "package://dummy-ros2_description/meshes/MINIF08_approx.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/MINIF08_approx.stl",
+            "sha256": "779e8be3ed23ae571dd36d66719d1838f93a46148d18827195627b194564e93a"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl",
+            "sha256": "1e83390aec6dfc9c25a10c0aea3f1337991e86d6012b9e97dbf0c3f394e23d1e"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_base-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_base-collision-local.stl",
+            "sha256": "2db87db875b0aaec18e091327c80c4a1d79e34877fa42d8174359c19731007d1"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_base-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_base-colors.obj",
+            "sha256": "e0ed7e89b7cefec39970e8d8cc8fec8e3cee71227c9403b2cca0b9a26e4a12ed"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link1-collision-local-clearance-5mm.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link1-collision-local-clearance-5mm.stl",
+            "sha256": "c36497c4ee3b988a8d116dc1fd6766363c70036b10cce016750eee0b3bb38fc3"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link1-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link1-collision-local.stl",
+            "sha256": "038d033a9fee033981e84320968ae6fc41faa264409eb8c7f497303f18e938b9"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link1-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link1-colors.obj",
+            "sha256": "cbd38c8a51a36dc5a1c373f126d6c9fbfb0c8ad83e6e2607629fd64f2fb9f163"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link2-collision-local-clearance-5mm.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link2-collision-local-clearance-5mm.stl",
+            "sha256": "75e1a48d1ae9c2d57809ef28256ba0c02ff35bbc57d5faa9ae237f84275578a7"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link2-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link2-collision-local.stl",
+            "sha256": "9efe3423d3a6174650dd43a3878d8a0bc75e342a5fcad17a143032a638b5d9a4"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link2-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link2-colors.obj",
+            "sha256": "76ad0dd7c5c070dd2efc8655810cbd4ec9beb6dd2e955714ab2e3bc68f91d45c"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link3-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link3-collision-local.stl",
+            "sha256": "864d57f863b7cbb93d7f10a6efac82126b6ca150ba3daa7214b79632e0d46572"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link3-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link3-colors.obj",
+            "sha256": "2d9012a16dd5994469843227e89eb0dc57b2e1169a6c85fef07c7567730a251c"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link4-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link4-collision-local.stl",
+            "sha256": "a88e00d019bfd713b9c4f50a2d3daf4c50e7c54305336f67a863c25a19d16cb1"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link4-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link4-colors.obj",
+            "sha256": "189a2fe8dccf2986d3d468bd7b1f62ad9725aaaf994545094e5347edca5beab9"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link5-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link5-collision-local.stl",
+            "sha256": "96460d96d0871da40702eae038a408630c2348e41eabae7644465bf3f460a2b0"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link5-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link5-colors.obj",
+            "sha256": "4a7d5ff13d2267623b129a012db9e5d1addf781a3f82ec9a9fe29433835bbb5a"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/link6_1_1.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/link6_1_1.stl",
+            "sha256": "5554538d053939e45d1ad6f8b321ce72d0d181fe55b269ba99d93368acdbaa6f"
+          }
+        ],
+        "mesh_hash_scope": "current referenced package files; cached BVH additionally checked by behavioral regression"
+      },
+      "states": {
+        "home": {
+          "label": "home",
+          "positions_rad": [
+            0.0,
+            0.0,
+            1.5707963267948966,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "valid": true,
+          "contacts": []
+        },
+        "rest": {
+          "label": "rest",
+          "positions_rad": [
+            0.0,
+            -1.0471975511965976,
+            2.861861800872894,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "valid": true,
+          "contacts": []
+        }
+      },
+      "plans": [
+        {
+          "direction": "home_to_rest",
+          "error_code": 1,
+          "waypoint_count": 76,
+          "sample_count": 193,
+          "all_samples_valid": true
+        },
+        {
+          "direction": "rest_to_home",
+          "error_code": 1,
+          "waypoint_count": 76,
+          "sample_count": 193,
+          "all_samples_valid": true
+        }
+      ],
+      "self_contacts": [
+        {
+          "body_1": "clearance_base_link",
+          "body_2": "j6_reducer_housing",
+          "depth_m": 0.0013186719317314689
+        },
+        {
+          "body_1": "link5_1_1",
+          "body_2": "clearance_base_link",
+          "depth_m": 0.001814955967701419
+        },
+        {
+          "body_1": "clearance_base_link",
+          "body_2": "step_link5_motor_1",
+          "depth_m": 0.0018233904700947084
+        },
+        {
+          "body_1": "link4_1_1",
+          "body_2": "clearance_link2_1_1",
+          "depth_m": 0.001436530911125708
+        },
+        {
+          "body_1": "link5_1_1",
+          "body_2": "clearance_link2_1_1",
+          "depth_m": 0.002247088320485152
+        },
+        {
+          "body_1": "clearance_link2_1_1",
+          "body_2": "step_link4_motor_1",
+          "depth_m": 0.0038675467789389384
+        }
+      ],
+      "floor_contacts": [
+        {
+          "body_1": "link6_1_1",
+          "body_2": "manual_base_floor",
+          "depth_m": 0.0002012339276658004
+        }
+      ]
+    },
+    {
+      "domain": 83,
+      "success": true,
+      "started_utc": "2026-10-20T01:23:51.049623+00:00",
+      "elapsed_s": 2.9662937169196084,
+      "runtime_identity": {
+        "provider": "/manual_move_group",
+        "urdf_canonical_sha256": "afbad8366b80c200a603494606dac556650560d68eb9ee447448e0275b028781",
+        "srdf_canonical_sha256": "b102fd11cbb4506fb19a9fdafbee42fa2006bed2af950d0785a4f098ea321e9d",
+        "source_matches": true,
+        "referenced_package_resources": [
+          {
+            "uri": "package://dummy-ros2_description/meshes/MINIF08_approx.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/MINIF08_approx.stl",
+            "sha256": "779e8be3ed23ae571dd36d66719d1838f93a46148d18827195627b194564e93a"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl",
+            "sha256": "1e83390aec6dfc9c25a10c0aea3f1337991e86d6012b9e97dbf0c3f394e23d1e"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_base-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_base-collision-local.stl",
+            "sha256": "2db87db875b0aaec18e091327c80c4a1d79e34877fa42d8174359c19731007d1"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_base-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_base-colors.obj",
+            "sha256": "e0ed7e89b7cefec39970e8d8cc8fec8e3cee71227c9403b2cca0b9a26e4a12ed"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link1-collision-local-clearance-5mm.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link1-collision-local-clearance-5mm.stl",
+            "sha256": "c36497c4ee3b988a8d116dc1fd6766363c70036b10cce016750eee0b3bb38fc3"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link1-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link1-collision-local.stl",
+            "sha256": "038d033a9fee033981e84320968ae6fc41faa264409eb8c7f497303f18e938b9"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link1-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link1-colors.obj",
+            "sha256": "cbd38c8a51a36dc5a1c373f126d6c9fbfb0c8ad83e6e2607629fd64f2fb9f163"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link2-collision-local-clearance-5mm.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link2-collision-local-clearance-5mm.stl",
+            "sha256": "75e1a48d1ae9c2d57809ef28256ba0c02ff35bbc57d5faa9ae237f84275578a7"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link2-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link2-collision-local.stl",
+            "sha256": "9efe3423d3a6174650dd43a3878d8a0bc75e342a5fcad17a143032a638b5d9a4"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link2-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link2-colors.obj",
+            "sha256": "76ad0dd7c5c070dd2efc8655810cbd4ec9beb6dd2e955714ab2e3bc68f91d45c"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link3-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link3-collision-local.stl",
+            "sha256": "864d57f863b7cbb93d7f10a6efac82126b6ca150ba3daa7214b79632e0d46572"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link3-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link3-colors.obj",
+            "sha256": "2d9012a16dd5994469843227e89eb0dc57b2e1169a6c85fef07c7567730a251c"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link4-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link4-collision-local.stl",
+            "sha256": "a88e00d019bfd713b9c4f50a2d3daf4c50e7c54305336f67a863c25a19d16cb1"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link4-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link4-colors.obj",
+            "sha256": "189a2fe8dccf2986d3d468bd7b1f62ad9725aaaf994545094e5347edca5beab9"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link5-collision-local.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link5-collision-local.stl",
+            "sha256": "96460d96d0871da40702eae038a408630c2348e41eabae7644465bf3f460a2b0"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/full_step_link5-colors.obj",
+            "resolved_path": "src/dummy-ros2_description/meshes/full_step_link5-colors.obj",
+            "sha256": "4a7d5ff13d2267623b129a012db9e5d1addf781a3f82ec9a9fe29433835bbb5a"
+          },
+          {
+            "uri": "package://dummy-ros2_description/meshes/link6_1_1.stl",
+            "resolved_path": "src/dummy-ros2_description/meshes/link6_1_1.stl",
+            "sha256": "5554538d053939e45d1ad6f8b321ce72d0d181fe55b269ba99d93368acdbaa6f"
+          }
+        ],
+        "mesh_hash_scope": "current referenced package files; cached BVH additionally checked by behavioral regression"
+      },
+      "states": {
+        "home": {
+          "label": "home",
+          "positions_rad": [
+            0.0,
+            0.0,
+            1.5707963267948966,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "valid": true,
+          "contacts": []
+        },
+        "rest": {
+          "label": "rest",
+          "positions_rad": [
+            0.0,
+            -1.0471975511965976,
+            2.861861800872894,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "valid": true,
+          "contacts": []
+        }
+      },
+      "plans": [
+        {
+          "direction": "home_to_rest",
+          "error_code": 1,
+          "waypoint_count": 76,
+          "sample_count": 193,
+          "all_samples_valid": true
+        },
+        {
+          "direction": "rest_to_home",
+          "error_code": 1,
+          "waypoint_count": 76,
+          "sample_count": 193,
+          "all_samples_valid": true
+        }
+      ],
+      "self_contacts": [
+        {
+          "body_1": "clearance_base_link",
+          "body_2": "j6_reducer_housing",
+          "depth_m": 0.0013186719317314689
+        },
+        {
+          "body_1": "link5_1_1",
+          "body_2": "clearance_base_link",
+          "depth_m": 0.001814955967701419
+        },
+        {
+          "body_1": "clearance_base_link",
+          "body_2": "step_link5_motor_1",
+          "depth_m": 0.0018233904700947084
+        },
+        {
+          "body_1": "link4_1_1",
+          "body_2": "clearance_link2_1_1",
+          "depth_m": 0.001436530911125708
+        },
+        {
+          "body_1": "link5_1_1",
+          "body_2": "clearance_link2_1_1",
+          "depth_m": 0.002247088320485152
+        },
+        {
+          "body_1": "clearance_link2_1_1",
+          "body_2": "step_link4_motor_1",
+          "depth_m": 0.0038675467789389384
+        }
+      ],
+      "floor_contacts": [
+        {
+          "body_1": "link6_1_1",
+          "body_2": "manual_base_floor",
+          "depth_m": 0.0002012339276658004
+        }
+      ]
+    }
+  ]
+}

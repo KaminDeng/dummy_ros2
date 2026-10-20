@@ -956,6 +956,32 @@ class MoveItTabTests(unittest.TestCase):
         f=Future();self.tab.begin('plan',f,self.panel.actual_q)
         self.assertTrue(f.cancelled())
 
+    def test_duplicate_provider_revokes_checked_path_before_execution(self):
+        self.prepare_execution()
+        def topology_failed():
+            self.tab.scene_change_requested()
+            return False
+        self.panel.obstacle_tab=NS(scene_ready=True,blocked=False,scene_revision=1,
+                                  validate_topology=topology_failed)
+        self.tab.path_scene_revision=1
+        self.tab.start_execution(confirmed=True)
+        self.assertFalse(self.tab.executing)
+        self.assertIsNone(self.tab.path)
+        self.assertEqual(self.panel.commands,[])
+
+    def test_provider_changes_while_confirmation_dialog_open_blocks_execution(self):
+        self.prepare_execution()
+        scene=NS(scene_ready=True,blocked=False,scene_revision=1,validate_topology=lambda:True)
+        self.panel.obstacle_tab=scene
+        self.tab.path_scene_revision=1
+        def confirm(*args):
+            scene.validate_topology=lambda:False
+            return QtWidgets.QMessageBox.Yes
+        self.panel.confirm_execution=confirm
+        self.tab.start_execution()
+        self.assertFalse(self.tab.executing)
+        self.assertEqual(self.panel.commands,[])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import time
 import uuid
+from manual_moveit_planner import require_unique_moveit, MoveItDiscoveryPending
 
 PREFIX = 'manual_cylinder_'
 
@@ -179,6 +180,7 @@ class ObstacleScene:
         self.known_ids |= {r['id'] for r in rows}
         self.scene_revision += 1
         self.scene_ready = False; self.blocked = True; self.error = None
+        self.service_owner = None
         self.phase = 'read'
         self.hold_marker = None
         self.wait_hold = moving
@@ -234,8 +236,40 @@ class ObstacleScene:
             all(math.isfinite(h) and math.isfinite(q) and abs(h-q) <= .003 for h,q in zip(held,p.actual_q)) and
             all(math.isfinite(v) and abs(v) <= .01 for v in velocities))
 
+    def validate_topology(self):
+        """每次使用场景前复核唯一服务来源；失效立即撤销路径，运动中请求停车。"""
+        try:
+            owner = require_unique_moveit(self.panel.node)
+            previous = getattr(self, 'service_owner', None)
+            if previous is not None and owner != previous:
+                raise ValueError('MoveIt服务提供节点已改变，请重新同步圆柱场景')
+            self.service_owner = owner
+            return True
+        except ValueError as error:
+            if (isinstance(error, MoveItDiscoveryPending) and
+                    getattr(self, 'service_owner', None) is None and self.future is None and
+                    not self.scene_ready and time.monotonic() <= self.deadline):
+                self.status = str(error)
+                return False
+            first_failure = not self.error
+            self.fail(str(error))
+            if first_failure:
+                tab = getattr(self.panel, 'moveit_tab', None)
+                moving = self.panel.busy or (tab is not None and (tab.executing or tab.auto_test.active))
+                state = self.panel.last_state
+                if state:
+                    moving = moving or state.get('core_state') in (3, 5, 6)
+                    moving = moving or any(not math.isfinite(v) or abs(v) > .01
+                                          for v in state.get('estimated_velocity_rad_s', ()))
+                if tab is not None:
+                    tab.scene_change_requested()
+                if moving:
+                    self.panel.cancel_motion_hold()
+            return False
+
     def tick(self):
         if self.error: return
+        if not self.validate_topology(): return
         now = time.monotonic()
         if self.wait_hold:
             if self.hold_confirmed():

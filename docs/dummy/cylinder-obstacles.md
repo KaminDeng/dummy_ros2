@@ -27,3 +27,40 @@ QT_QPA_PLATFORM=offscreen /usr/bin/python3 -m pytest -q \
 Get回执未成功、ACM格式错误、服务未就绪或超时，均不会进入Apply，也不会开放规划。Get与Apply各自等待服务回执，事务期间不能再提交重叠的场景修改。
 
 世界删除操作同时读取`WORLD_OBJECT_NAMES`：持久化的`known_ids`只代表本功能曾管理的ID，不代表物体当前仍存在。每次仅对Get实际世界中存在、且本次已删除的已知圆柱发送REMOVE，避免MoveIt因“移除不存在物体”拒绝整个事务。删除后的基准编辑及重启空场景同步不会重复REMOVE；外部对象不在本模块清理范围内。
+
+## 重复MoveIt会产生两个不同的碰撞世界
+
+同一`ROS_DOMAIN_ID`中若同时启动两套MoveIt，RViz圆柱和一次Apply成功不能证明随后规划
+请求用了相同场景。实际复现中六类服务各有2个实例，同名Get请求分别返回两个圆柱和空世界。
+原先已通过检查的一条路径，在唯一正确世界重新检查时，腕部与圆柱接触约3.65mm，规划被拒绝。
+
+面板现在要求Apply/Get/Plan/Validity/IK/FK每类服务只有一个实例；公共服务必须属于同一节点，
+Get允许Jazzy同节点组的`<move_group>_private_<数字>`场景监视器。数量检查在节点名去重之前，
+不会把两个完全同名的进程当成一个。发现尚未完整时在启动预算内等待；重复、来源不符或查询失败
+保持封锁。每次场景tick、规划请求和执行确认前后都复核；失效立即作废旧路径/未来链，运动中请求
+受控停车。恢复单实例后须重新同步场景并重新规划，旧路径不能自动恢复。
+
+查看与关闭旧实例（按实际域设置环境）：
+
+```zsh
+source /opt/ros/jazzy/setup.zsh
+export ROS_DOMAIN_ID=83
+ros2 node list --no-daemon
+ps -eo pid,ppid,args | rg 'move_group|ros2 launch.*manual'
+ros2 service info /plan_kinematic_path
+ros2 service info /get_planning_scene
+```
+
+优先在旧实例的启动终端按Ctrl+C；找不到原终端时，先用`ps -p <PID> -o pid,ppid,args`
+复核对应`ros2 launch`进程，再执行`kill -INT <PID>`。保留当前使用的面板，不使用killall/pkill
+批量结束所有ROS进程。六类服务的`Services count`都应为1；`ros2 daemon stop`只停发现缓存，
+不会停止MoveIt。清理后重新打开/同步圆柱页并重新规划。
+
+本门检查当前ROS发现图，不是跨进程的加密身份或对所有外部场景修改的持续认证。
+相同节点组重启、场景服务图尚未收敛时应重新同步。MoveIt退出也不等于Native已停车或机械臂
+已失能，真实后端运动应先使用面板受控停止。HTML用户指导同步见SDK仓库
+`applications/dummy_ref_control/docs/six-axis-stability-debugging-review.html`的09A节。
+
+离线Qt后端测试中的Apply成功回执必须配套唯一发现图替身，不能依赖环境恰好启动MoveIt。
+补齐三项图查询后，原模拟运动/STOP/后端切换断言通过；这只验证软件界面与发现门协作，
+不启动Native或MoveIt、不进行机械臂运动。该项已执行失败→修复后通过（1项），独立于前述179项回归。

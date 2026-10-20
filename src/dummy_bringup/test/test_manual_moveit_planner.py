@@ -14,6 +14,13 @@ NAMES = [f'Joint{i}' for i in range(1, 7)]
 LIMITS = [(-180, 180)] * 6
 
 
+@pytest.fixture(autouse=True)
+def unique_service_graph_for_request_builders(monkeypatch):
+    from test_manual_moveit_service_topology import Graph
+    # Existing request-shape tests bypass __init__; supply a real-shaped discovery fixture.
+    monkeypatch.setattr(module.MoveItPlanner, 'node', Graph(), raising=False)
+
+
 def trajectory(names=None, positions=None, times=None):
     positions = positions or [[0.] * 6, [.1] * 6, [.2] * 6]
     times = times or list(range(len(positions)))
