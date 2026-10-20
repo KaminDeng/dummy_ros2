@@ -1,0 +1,48 @@
+{
+  "minimum_clearance_mm": 5.0,
+  "generation_offset_mm": 5.01,
+  "proximal": [
+    "base_link",
+    "link1_1_1",
+    "link2_1_1",
+    "step_link2_motor_1",
+    "step_link2_motor_2"
+  ],
+  "distal": [
+    "link4_1_1",
+    "link5_1_1",
+    "step_link4_motor_1",
+    "step_link5_motor_1",
+    "j6_reducer_housing",
+    "link6_1_1"
+  ],
+  "meshes": [
+    {
+      "source": "full_step_base-collision-local.stl",
+      "output": "full_step_base-collision-local-clearance-5mm.stl",
+      "parts": 32,
+      "minimum_expansion_after_stl_roundtrip_mm": 5.009997605326264,
+      "source_sha256": "2db87db875b0aaec18e091327c80c4a1d79e34877fa42d8174359c19731007d1",
+      "output_sha256": "1e83390aec6dfc9c25a10c0aea3f1337991e86d6012b9e97dbf0c3f394e23d1e",
+      "triangles": 20352
+    },
+    {
+      "source": "full_step_link1-collision-local.stl",
+      "output": "full_step_link1-collision-local-clearance-5mm.stl",
+      "parts": 13,
+      "minimum_expansion_after_stl_roundtrip_mm": 5.009998282599923,
+      "source_sha256": "67bf3033aee97c6e6204173dc18cb97fdb35b7865d1281fba0441c6f99228601",
+      "output_sha256": "f694d35ab0c15d9973dd8db25d293ac163b71839c0486ff2ce17b4ac278bb9a0",
+      "triangles": 8268
+    },
+    {
+      "source": "full_step_link2-collision-local.stl",
+      "output": "full_step_link2-collision-local-clearance-5mm.stl",
+      "parts": 59,
+      "minimum_expansion_after_stl_roundtrip_mm": 5.0099945068359375,
+      "source_sha256": "9efe3423d3a6174650dd43a3878d8a0bc75e342a5fcad17a143032a638b5d9a4",
+      "output_sha256": "75e1a48d1ae9c2d57809ef28256ba0c02ff35bbc57d5faa9ae237f84275578a7",
+      "triangles": 37524
+    }
+  ]
+}

@@ -52,6 +52,35 @@ def test_collinear_sampling_can_execute_same_geometric_line_without_stopping_at_
     assert module.execution_polyline(points) == (points[0], points[-1])
 
 
+def test_dense_bent_path_only_stops_at_real_corners():
+    # 两条直线相接：全路径不共线，也不能逐采样点停车。
+    first = tuple((i/100., 0., 0., 0., 0., 0.) for i in range(101))
+    second = tuple((1., i/100., 0., 0., 0., 0.) for i in range(1, 101))
+    points = first+second
+    assert module.execution_polyline(points) == (points[0], first[-1], points[-1])
+
+
+def test_dense_backtracking_retains_turnaround_but_removes_internal_samples():
+    points = tuple((v,)*6 for v in (0., .1, .2, .15, .1, .05, 0., 0., -.1))
+    assert module.execution_polyline(points) == (points[0], points[2], points[-1])
+
+
+def test_closed_path_preserves_corners_and_end_identity():
+    points = tuple((a,b,0.,0.,0.,0.) for a,b in
+                   ((0.,0.),(.1,0.),(.2,0.),(.2,.1),(.2,.2),(.1,.1),(0.,0.)))
+    assert module.execution_polyline(points) == (points[0],points[2],points[4],points[-1])
+
+
+def test_stationary_samples_do_not_create_stop_go_commands():
+    points = ((0.,)*6,)*4+((.1,)*6,)*3+((.2,)*6,)*2
+    assert module.execution_polyline(points) == (points[0],points[-1])
+
+
+def test_small_real_detour_is_not_smoothed_out():
+    points = ((0.,)*6, (.1,1e-7,0.,0.,0.,0.), (.2,0.,0.,0.,0.,0.))
+    assert module.execution_polyline(points) == points
+
+
 @pytest.mark.parametrize('points', [
     ((0.,)*6, (.2,)*6, (.1,)*6, (.3,)*6),
     ((0.,)*6, (.1, .11, .1, .1, .1, .1), (.3,)*6),

@@ -106,14 +106,16 @@ def test_opposite_j2_upper_and_j3_lower_sides_cannot_request_manual_retreat(tmp_
     assert p.manual_limits_retreat_target() is None
 
 
-def test_original_feedback_band_allowed_without_changing_actual_state(tmp_path):
+def test_rest_reentry_continuity_band_does_not_change_actual_state(tmp_path):
     p, _ = limits_panel(tmp_path)
     p.last_state['position_rad'][1] = math.radians(-73.09)
     p.last_state['position_rad'][2] = math.radians(180.09)
     actual = list(p.last_state['position_rad'])
     assert p.manual_limits_retreat_target() is not None
     assert p.last_state['position_rad'] == actual
-    p.last_state['position_rad'][1] = math.radians(-73.11)
+    p.last_state['position_rad'][1] = math.radians(-73.14)
+    assert p.manual_limits_retreat_target() is not None
+    p.last_state['position_rad'][1] = math.radians(-73.18)
     assert p.manual_limits_retreat_target() is None
 
 

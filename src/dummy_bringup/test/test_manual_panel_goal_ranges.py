@@ -87,6 +87,15 @@ def test_home_rest_previews_do_not_expand_ordinary_ranges_or_send_commands(goal_
     assert_nominal_request_endpoints(panel, scope)
 
 
+def test_trajectory_preview_updates_without_commands_or_per_frame_log(goal_panel):
+    panel,_=goal_panel
+    from unittest.mock import Mock
+    panel.command=Mock();panel.message=Mock()
+    panel.set_preview_pose([1.,2.,90.,4.,5.,6.],announce=False)
+    assert [box.value() for box in panel.inputs]==[1.,2.,90.,4.,5.,6.]
+    panel.command.assert_not_called();panel.message.assert_not_called()
+
+
 def prepare_move(panel, monkeypatch, answer=QtWidgets.QMessageBox.Yes):
     panel.restore_ordinary_goal_ranges()
     panel.authorized, panel.calibration, panel.busy = True, (123, 1), False

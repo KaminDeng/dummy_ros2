@@ -10,22 +10,40 @@ def checked_points(points):
 
 
 def execution_polyline(points):
-    """只合并可证明同一直线且不回头的采样点；弯曲/绕行路径原样保留。"""
+    """逐段消除同一直线上的冗余采样；保留拐点及回头点。
+
+    仅容许1e-12 rad浮点误差，不作近似平滑或碰撞捷径。用显式栈避免
+    长路径递归溢出；参数单调检查避免共线的往返运动被误删。
+    """
     points = checked_points(points)
-    start, goal = points[0], points[-1]
-    delta = tuple(b-a for a,b in zip(start, goal))
-    axis = max(range(6), key=lambda i:abs(delta[i]))
-    if abs(delta[axis]) < 1e-12:
-        return points
-    previous = 0.
-    for q in points:
-        ratio = (q[axis]-start[axis])/delta[axis]
-        if ratio < previous or not 0. <= ratio <= 1.:
-            return points
-        if any(abs(v-(a+d*ratio)) > 1e-12 for v,a,d in zip(q,start,delta)):
-            return points
-        previous = ratio
-    return (start, goal)
+    keep = {0, len(points)-1}
+    pending = [(0, len(points)-1)]
+    while pending:
+        first, last = pending.pop()
+        if last-first < 2:
+            continue
+        start, goal = points[first], points[last]
+        delta = tuple(b-a for a,b in zip(start, goal))
+        norm2 = sum(d*d for d in delta)
+        scale = max(abs(d) for d in delta)
+        worst, split = 0., None
+        previous, reversal = 0., None
+        for index in range(first+1, last):
+            q = points[index]
+            ratio = sum((v-a)*d for v,a,d in zip(q,start,delta))/norm2 if norm2 else 0.
+            clipped = max(0., min(1., ratio))
+            error = max(abs(v-(a+d*clipped)) for v,a,d in zip(q,start,delta))
+            if error > worst:
+                worst, split = error, index
+            if reversal is None and (previous-ratio)*scale > 1e-12:
+                reversal = index-1
+            previous = ratio
+        if worst <= 1e-12:
+            split = reversal
+        if split is not None:
+            keep.add(split)
+            pending.extend(((first, split), (split, last)))
+    return tuple(points[index] for index in sorted(keep))
 
 
 def collision_samples(points, step_rad=math.radians(.5)):

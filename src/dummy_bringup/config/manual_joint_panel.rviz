@@ -116,40 +116,19 @@ Visualization Manager:
     Enabled: true
     Frame Timeout: 15
     Frames:
-      All Enabled: true
-      back_motor_left_2:
-        Value: true
-      back_motor_right_2:
-        Value: true
-      back_wheel_left_2:
-        Value: true
-      back_wheel_right_2:
-        Value: true
+      All Enabled: false
       base_link:
         Value: true
-      front_motor_left_2:
+      link6_1_1:
         Value: true
-      front_motor_right_2:
-        Value: true
-      front_wheel_left_2:
-        Value: true
-      front_wheel_right_2:
-        Value: true
-    Marker Scale: 0.5
+      j6_reducer_housing:
+        Value: false
+    Marker Scale: 0.3
     Name: TF
-    Show Arrows: true
+    Show Arrows: false
     Show Axes: true
     Show Names: false
-    Tree:
-      base_link:
-        back_motor_right_2:
-          back_wheel_right_2: {}
-        back_wheel_left_2:
-          back_motor_left_2: {}
-        front_motor_left_2:
-          front_wheel_left_2: {}
-        front_motor_right_2:
-          front_wheel_right_2: {}
+    Tree: {}
     Update Interval: 0
     Value: true
   - Class: rviz_default_plugins/RobotModel
@@ -173,6 +152,16 @@ Visualization Manager:
     Value: true
     Topic:
       Value: /manual_target_marker
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+  - Class: rviz_default_plugins/MarkerArray
+    Name: 已确认碰撞圆柱障碍物
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /manual_obstacle_markers
       Depth: 1
       Durability Policy: Transient Local
       History Policy: Keep Last

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import itertools
+import json
 from pathlib import Path
 import struct
 import unittest
@@ -11,6 +14,7 @@ import xml.etree.ElementTree as element_tree
 
 import yaml
 import xacro
+import numpy as np
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
@@ -50,33 +54,91 @@ class ModelAlignmentTest(unittest.TestCase):
         self.assertGreater(5.0 * math.pi, upper)
         self.assertNotEqual(3.0 * math.pi, math.remainder(3.0 * math.pi, 2.0 * math.pi))
 
-    def test_mesh_bounds_match_transformed_collision_boxes(self):
+    def test_visual_and_collision_geometry_align_with_cad_bounds(self):
         def vertices(path: Path):
+            self.assertTrue(path.is_file(), str(path))
+            if path.suffix == '.obj':
+                return np.array([tuple(map(float, line.split()[1:4]))
+                                 for line in path.read_text().splitlines() if line.startswith('v ')])
+            self.assertEqual('.stl', path.suffix)
             data = path.read_bytes()
             triangle_count = struct.unpack_from("<I", data, 80)[0]
             self.assertEqual(84 + triangle_count * 50, len(data), path.name)
-            for triangle in range(triangle_count):
-                offset = 84 + triangle * 50 + 12
-                for vertex in range(3):
-                    yield struct.unpack_from("<fff", data, offset + vertex * 12)
+            triangles = np.frombuffer(data, dtype=np.dtype([
+                ('normal', '<f4', (3,)), ('vertices', '<f4', (3, 3)), ('attribute', '<u2')]),
+                offset=84, count=triangle_count)
+            return triangles['vertices'].reshape(-1, 3).astype(float)
+
+        def bounds(element, cad_bounds=None):
+            origin = element.find('origin')
+            self.assertIsNotNone(origin)
+            xyz, rpy = [np.array(list(map(float, origin.get(key, '0 0 0').split())))
+                        for key in ('xyz', 'rpy')]
+            self.assertEqual((3,), xyz.shape)
+            self.assertEqual((3,), rpy.shape)
+            self.assertTrue(np.isfinite(xyz).all() and np.isfinite(rpy).all())
+            r, p, y = rpy
+            rotation = np.array([
+                [math.cos(y)*math.cos(p), math.cos(y)*math.sin(p)*math.sin(r)-math.sin(y)*math.cos(r), math.cos(y)*math.sin(p)*math.cos(r)+math.sin(y)*math.sin(r)],
+                [math.sin(y)*math.cos(p), math.sin(y)*math.sin(p)*math.sin(r)+math.cos(y)*math.cos(r), math.sin(y)*math.sin(p)*math.cos(r)-math.cos(y)*math.sin(r)],
+                [-math.sin(p), math.cos(p)*math.sin(r), math.cos(p)*math.cos(r)]])
+            geometry = element.find('geometry')
+            mesh, box, cylinder = (geometry.find(kind) for kind in ('mesh', 'box', 'cylinder'))
+            if mesh is not None:
+                prefix = 'package://dummy-ros2_description/'
+                self.assertTrue(mesh.get('filename').startswith(prefix))
+                scale = np.array(list(map(float, mesh.get('scale', '1 1 1').split())))
+                np.testing.assert_allclose(scale, [.001]*3, atol=0, rtol=0)
+                points = (vertices(DESCRIPTION / mesh.get('filename')[len(prefix):])
+                          if cad_bounds is None else np.array(list(itertools.product(*zip(*cad_bounds)))))
+                self.assertGreater(len(points), 3)
+                self.assertTrue(np.isfinite(points).all())
+                points = (points*scale) @ rotation.T + xyz
+                return points.min(axis=0), points.max(axis=0)
+            if box is not None:
+                dimensions = np.array(list(map(float, box.get('size').split())))
+                self.assertEqual((3,), dimensions.shape)
+                self.assertTrue(np.isfinite(dimensions).all() and (dimensions > 0).all())
+                extent = np.abs(rotation) @ (dimensions/2)
+            else:
+                self.assertIsNotNone(cylinder)
+                radius, length = (float(cylinder.get(key)) for key in ('radius', 'length'))
+                self.assertTrue(all(math.isfinite(value) and value > 0 for value in (radius, length)))
+                extent = radius*np.linalg.norm(rotation[:, :2], axis=1) + length/2*np.abs(rotation[:, 2])
+            return xyz-extent, xyz+extent
 
         links = [link for link in self.urdf.findall("link") if link.find("visual/geometry/mesh") is not None]
-        self.assertEqual(7, len(links))
+        self.assertEqual({'base_link', 'j6_reducer_housing', *[f'link{i}_1_1' for i in range(1, 7)]},
+                         {link.get('name') for link in links})
+        cad_groups = {item['link']: item for item in json.loads(
+            (DESCRIPTION/'meshes/full_step_manifest.json').read_text())['groups'].values()}
+        self.assertEqual({'base_link', *[f'link{i}_1_1' for i in range(1, 6)]}, set(cad_groups))
+        visual_report = json.loads(
+            (DESCRIPTION/'meshes/full_step_visual_optimization.json').read_text())
+        visual_variant = visual_report.get('active_visual_variant', 'optimized')
+        self.assertIn(visual_variant, ('original', 'optimized'))
+        identity_key = 'original_sha256' if visual_variant == 'original' else 'sha256'
+        visual_identities = {item['file']: item[identity_key] for item in visual_report['files']}
         for link in links:
-            visual = link.find("visual")
-            collision = link.find("collision")
-            mesh_name = Path(visual.find("geometry/mesh").attrib["filename"]).name
-            points = list(vertices(DESCRIPTION / "meshes" / mesh_name))
-            raw_size = [(max(point[axis] for point in points) - min(point[axis] for point in points)) * 0.001
-                        for axis in range(3)]
-            collision_size = [float(value) for value in collision.find("geometry/box").attrib["size"].split()]
-            self.assertEqual(3, len(collision_size))
-            self.assertTrue(all(value > 0.0 for value in collision_size))
-            self.assertAlmostEqual(sorted(raw_size)[0], sorted(collision_size)[0], places=5, msg=link.attrib["name"])
-            self.assertAlmostEqual(sorted(raw_size)[1], sorted(collision_size)[1], places=5, msg=link.attrib["name"])
-            self.assertAlmostEqual(sorted(raw_size)[2], sorted(collision_size)[2], places=5, msg=link.attrib["name"])
-            self.assertIsNotNone(visual.find("origin"), link.attrib["name"])
-            self.assertIsNotNone(collision.find("origin"), link.attrib["name"])
+            visual_min, visual_max = bounds(link.find('visual'))
+            self.assertTrue((visual_max > visual_min).all(), link.get('name'))
+            collisions = link.findall('collision')
+            self.assertTrue(collisions, link.get('name'))
+            if link.get('name') in cad_groups:
+                # STEP曲面的原始显示离散与碰撞包络不是同一几何；碰撞覆盖以独立CAD
+                # bounds为依据，而非把有离散误差的OBJ顶点当物理外轮廓。
+                visual = link.find('visual')
+                mesh_path = DESCRIPTION/'meshes'/Path(visual.find('geometry/mesh').get('filename')).name
+                self.assertEqual(visual_identities[mesh_path.name], hashlib.sha256(mesh_path.read_bytes()).hexdigest())
+                self.assertEqual(visual.find('origin').attrib, collisions[0].find('origin').attrib)
+                visual_min, visual_max = bounds(visual, cad_groups[link.get('name')]['local_bounds_mm'])
+            collision_bounds = [bounds(collision) for collision in collisions]
+            collision_min = np.min([item[0] for item in collision_bounds], axis=0)
+            collision_max = np.max([item[1] for item in collision_bounds], axis=0)
+            # 逐轴比较连杆局部坐标，不能排序尺寸掩盖轴向/安装原点错误。
+            # 1e-8m仅允许STL float32舍入；这里仍不证明任意内部凹面或实机间隙。
+            self.assertTrue((collision_min <= visual_min + 1e-8).all(), link.get('name'))
+            self.assertTrue((collision_max >= visual_max - 1e-8).all(), link.get('name'))
         report = " ".join((WORKSPACE_ROOT / "docs/dummy/model_alignment.md").read_text().split())
         self.assertIn("does not establish real collision clearance", report)
 

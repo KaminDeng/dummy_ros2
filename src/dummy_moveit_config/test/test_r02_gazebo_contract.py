@@ -2,8 +2,13 @@
 """Static prerequisites for the R02 Gazebo runtime test."""
 
 from pathlib import Path
+import math
+import struct
 import unittest
 import xml.etree.ElementTree as element_tree
+
+import numpy as np
+import xacro
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
@@ -30,19 +35,61 @@ class R02GazeboContractTest(unittest.TestCase):
         self.assertTrue(launch.is_file())
         self.assertIn("install(DIRECTORY launch", (BRINGUP / "CMakeLists.txt").read_text())
 
-    def test_collision_geometry_uses_gazebo_supported_positive_boxes(self):
-        root = element_tree.parse(
-            WORKSPACE_ROOT / "src/dummy-ros2_description/urdf/dummy-ros2.xacro"
-        ).getroot()
+    def test_complete_collision_geometry_uses_supported_positive_shapes(self):
+        description = WORKSPACE_ROOT / 'src/dummy-ros2_description'
+        root = element_tree.fromstring(xacro.process_file(
+            str(description / 'urdf/dummy-ros2.xacro')).toxml())
         links = root.findall("link")
-        self.assertEqual(7, len(links))
+        motors = {'step_link2_motor_1', 'step_link2_motor_2', 'step_link3_motor_1',
+                  'step_link4_motor_1', 'step_link5_motor_1'}
+        guards = {'clearance_base_link', 'clearance_link1_1_1', 'clearance_link2_1_1',
+                  'clearance_step_link2_motor_1', 'clearance_step_link2_motor_2'}
+        visuals = {'base_link', 'j6_reducer_housing', *[f'link{i}_1_1' for i in range(1, 7)]}
+        self.assertEqual(visuals | motors | guards, {link.get('name') for link in links})
         for link in links:
-            self.assertIsNotNone(link.find("visual/geometry/mesh"), link.attrib["name"])
-            collision = link.find("collision/geometry")
-            self.assertIsNone(collision.find("mesh"), link.attrib["name"])
-            size = [float(value) for value in collision.find("box").attrib["size"].split()]
-            self.assertEqual(3, len(size))
-            self.assertTrue(all(value > 0 for value in size), link.attrib["name"])
+            name = link.get('name')
+            if name in visuals:
+                self.assertIsNotNone(link.find('visual/geometry/mesh'), name)
+            else:
+                self.assertIsNone(link.find('visual'), name)
+                attachment = root.find(f"joint/child[@link='{name}']/..")
+                self.assertIsNotNone(attachment, name)
+                self.assertEqual('fixed', attachment.get('type'), name)
+            collisions = link.findall('collision')
+            self.assertTrue(collisions, name)
+            for collision in collisions:
+                origin = collision.find('origin')
+                self.assertIsNotNone(origin, name)
+                for key in ('xyz', 'rpy'):
+                    values = list(map(float, origin.get(key).split()))
+                    self.assertEqual(3, len(values), name)
+                    self.assertTrue(all(math.isfinite(value) for value in values), name)
+                geometry = collision.find('geometry')
+                self.assertEqual(1, len(geometry), name)
+                shape = geometry[0]
+                self.assertIn(shape.tag, ('box', 'cylinder', 'mesh'), name)
+                if shape.tag == 'mesh':
+                    prefix = 'package://dummy-ros2_description/'
+                    self.assertTrue(shape.get('filename').startswith(prefix), name)
+                    path = description / shape.get('filename')[len(prefix):]
+                    self.assertTrue(path.is_file(), str(path))
+                    self.assertEqual('.stl', path.suffix)
+                    scale = list(map(float, shape.get('scale', '1 1 1').split()))
+                    self.assertEqual([.001]*3, scale, name)
+                    data = path.read_bytes()
+                    count = struct.unpack_from('<I', data, 80)[0]
+                    self.assertGreater(count, 3, name)
+                    self.assertEqual(84+50*count, len(data), name)
+                    records = np.frombuffer(data, offset=84, count=count, dtype=np.dtype([
+                        ('normal', '<f4', (3,)), ('vertices', '<f4', (3, 3)), ('attribute', '<u2')]))
+                    points = records['vertices'].reshape(-1, 3)
+                    self.assertTrue(np.isfinite(points).all(), name)
+                    self.assertTrue((points.max(axis=0) > points.min(axis=0)).all(), name)
+                else:
+                    dimensions = (list(map(float, shape.get('size').split())) if shape.tag == 'box'
+                                  else [float(shape.get(key)) for key in ('radius', 'length')])
+                    self.assertEqual(3 if shape.tag == 'box' else 2, len(dimensions), name)
+                    self.assertTrue(all(math.isfinite(value) and value > 0 for value in dimensions), name)
 
 
 if __name__ == "__main__":

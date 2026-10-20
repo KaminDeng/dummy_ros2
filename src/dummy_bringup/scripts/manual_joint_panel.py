@@ -27,6 +27,8 @@ class JointPanel(QtWidgets.QWidget):
     def __init__(self, config, report, decoder, node):
         super().__init__()
         self.cfg, self.report, self.decode, self.node = config, report, decoder, node
+        self.backend = config.get("backend", "real")
+        self.pending_backend = None
         self.publisher = node.create_publisher(JointState, '/joint_states', 10)
         self.target_publisher = node.create_publisher(JointState, '/target_joint_states', 10)
         self.description_publisher = node.create_publisher(String, '/measured_robot_description', QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
@@ -68,132 +70,16 @@ class JointPanel(QtWidgets.QWidget):
         self.previous_raw = None
         self.calibration_event_ns = 0
         self.limits = [j['limits_deg'] for j in config['joints']]
-        self.setWindowTitle('Dummy 六轴机械臂 · 实机标定与角度控制')
-        self.resize(920, 550)
-        layout = QtWidgets.QVBoxLayout(self)
-        title = QtWidgets.QLabel('六轴实机控制  /  RViz 实时反馈')
-        title.setStyleSheet('font-size:22px;font-weight:bold;margin:8px')
-        layout.addWidget(title)
-        self.status = QtWidgets.QLabel('正在连接；启动不会采零或运动')
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        reference_note = ('零点：人工轻靠双限位 [0°, −73°, 180°, 0°, 0°, 0°] → 标定 → 低速退工作 Rest。\n'
-                          if self.manual_limits_mode() else '零点：人工 Home [0°, 0°, 90°, 0°, 0°, 0°] → 缓慢 Rest。\n')
-        note = QtWidgets.QLabel(reference_note +
-                               '滑块仅设置目标，点击“执行六轴目标”才运动。同一设备boot内，失能和软件重连保留已完成零点；重启后重新标定。')
-        note.setWordWrap(True)
-        layout.addWidget(note)
-        grid = QtWidgets.QGridLayout()
-        for col, label in enumerate(['关节', '实际角度', '目标滑块', '目标角度（°）', '软件范围（°）']):
-            grid.addWidget(QtWidgets.QLabel(label), 0, col)
-        self.feedback_labels, self.inputs, self.sliders = [], [], []
-        preview_pose = config.get('calibration_pose_deg') if self.manual_limits_mode() else None
-        if not isinstance(preview_pose, (list, tuple)) or len(preview_pose) != 6 or any(type(q) not in (int, float) or not math.isfinite(q) for q in preview_pose):
-            preview_pose = config.get('home_deg', [0, 0, 90, 0, 0, 0])
-        for i, (joint, (lo, hi)) in enumerate(zip(config['joints'], self.limits)):
-            actual = QtWidgets.QLabel('—')
-            slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-            # 仅首次标定预览可显示P；普通目标授权仍由self.limits严格检查。
-            preview_lo, preview_hi = min(lo, preview_pose[i]), max(hi, preview_pose[i])
-            slider.setRange(round(preview_lo * 100), round(preview_hi * 100))
-            spin = QtWidgets.QDoubleSpinBox()
-            spin.setDecimals(2)
-            spin.setRange(preview_lo, preview_hi)
-            spin.setSingleStep(0.1)
-            spin.setSuffix(' °')
-            spin.setKeyboardTracking(False)
-            spin.setValue(preview_pose[i])
-            slider.setValue(round(spin.value() * 100))
-            slider.valueChanged.connect(lambda v, box=spin: box.setValue(v / 100))
-            spin.valueChanged.connect(lambda v, bar=slider: self.sync_slider(bar, v))
-            grid.addWidget(QtWidgets.QLabel(joint['name']), i + 1, 0)
-            grid.addWidget(actual, i + 1, 1)
-            grid.addWidget(slider, i + 1, 2)
-            grid.addWidget(spin, i + 1, 3)
-            grid.addWidget(QtWidgets.QLabel(f'{lo:g} … {hi:g}'), i + 1, 4)
-            self.feedback_labels.append(actual)
-            self.inputs.append(spin)
-            self.sliders.append(slider)
-        grid.setColumnStretch(2, 1)
-        layout.addLayout(grid)
-        speed_row = QtWidgets.QHBoxLayout()
-        speed_row.addWidget(QtWidgets.QLabel('普通目标速度（°/s）'))
-        self.speed_input = QtWidgets.QDoubleSpinBox()
-        self.speed_input.setDecimals(1)
-        self.speed_input.setRange(0.1, config.get('motion_speed_max_deg_s', 17.2))
-        self.speed_input.setSingleStep(0.1)
-        self.speed_input.setValue(config.get('motion_speed_default_deg_s', 17.2))
-        self.speed_input.setSuffix(' °/s')
-        speed_row.addWidget(self.speed_input)
-        speed_row.addWidget(QtWidgets.QLabel('加速度（rad/s²）'))
-        self.acceleration_input = QtWidgets.QDoubleSpinBox()
-        self.acceleration_input.setDecimals(2)
-        self.acceleration_input.setRange(0.05, config.get('motion_acceleration_max_rad_s2', 1.0))
-        self.acceleration_input.setSingleStep(0.05)
-        self.acceleration_input.setValue(config.get('motion_acceleration_default_rad_s2', 0.4))
-        speed_row.addWidget(self.acceleration_input)
-        speed_row.addWidget(QtWidgets.QLabel('双限位退Rest固定≤2°/s、≤0.1rad/s²' if self.manual_limits_mode() else 'Home→Rest标定段保持原限速'))
-        speed_row.addStretch()
-        layout.addLayout(speed_row)
-        row = QtWidgets.QHBoxLayout()
-        self.zero = QtWidgets.QPushButton('① 人工轻靠双限位 → 标定 → 低速退工作Rest' if self.manual_limits_mode() else '① Home → Rest 标定零点')
-        self.copy = QtWidgets.QPushButton('实际角度填入目标')
-        self.move = QtWidgets.QPushButton('② 执行滑块 / 输入框中的目标')
-        self.resume = QtWidgets.QPushButton('使能 / 恢复已有零点')
-        self.recover = QtWidgets.QPushButton('低速回工作区')
-        self.reconnect = QtWidgets.QPushButton('重新连接（只读）')
-        self.clear_fault = QtWidgets.QPushButton('清除已处理故障')
-        self.stop = QtWidgets.QPushButton('停止并失能（保留已完成零点）')
-        self.stop.setStyleSheet('background:#b42318;color:white;font-weight:bold;padding:8px')
-        for button in [self.zero, self.resume, self.recover, self.copy, self.move, self.stop]:
-            row.addWidget(button)
-        layout.addLayout(row)
-        connection_row = QtWidgets.QHBoxLayout()
-        connection_row.addWidget(self.reconnect)
-        connection_row.addWidget(self.clear_fault)
-        layout.addLayout(connection_row)
-        self.reconnect.clicked.connect(self.request_reconnect)
-        self.clear_fault.clicked.connect(self.request_clear_fault)
-        self.zero.clicked.connect(self.start_zero)
-        self.resume.clicked.connect(self.start_resume)
-        self.recover.clicked.connect(self.start_recovery)
-        self.move.clicked.connect(self.start_move)
-        self.copy.clicked.connect(self.copy_actual)
-        self.stop.clicked.connect(lambda: self.release('STOP'))
-        preview_row = QtWidgets.QHBoxLayout()
-        for title, pose in [('仅预览 Home 示意（不运动）', [0,0,90,0,0,0]), ('仅预览 Rest 目标（不运动）', config['rest_deg'])]:
-            button = QtWidgets.QPushButton(title)
-            button.clicked.connect(lambda _checked, q=pose: self.set_preview_pose(q))
-            preview_row.addWidget(button)
-        layout.addLayout(preview_row)
-        self.target_hint = QtWidgets.QLabel('修改滑块或输入框仅设置目标；点击②执行才会驱动实物。')
-        layout.addWidget(self.target_hint)
-        for box in self.inputs:
-            box.valueChanged.connect(lambda _v: self.target_hint.setText('目标已修改，尚未发送。请点击②执行滑块 / 输入框中的目标。'))
+        from manual_panel_ui import build_panel_ui
+        build_panel_ui(self, config)
         if config.get('moveit_enabled', False):
-            from manual_moveit_tab import MoveItTab
-            self.tabs = QtWidgets.QTabWidget()
-            joint_tab = QtWidgets.QWidget()
-            joint_layout = QtWidgets.QVBoxLayout(joint_tab)
-            for item in (grid, preview_row):
-                layout.removeItem(item)
-                joint_layout.addLayout(item)
-            layout.removeWidget(self.target_hint)
-            joint_layout.addWidget(self.target_hint)
-            self.tabs.addTab(joint_tab, '关节控制')
-            self.moveit_tab = MoveItTab(self)
-            self.tabs.addTab(self.moveit_tab, '末端规划 · MoveIt')
-            self.tabs.currentChanged.connect(self.planning_tab_changed)
-            # 连接、使能与停止仍在公共区域，两页始终可见。
-            layout.insertWidget(3, self.tabs)
-        self.log = QtWidgets.QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(200)
-        layout.addWidget(self.log)
-        self.worker = QtCore.QProcess(self)
-        self.worker.readyReadStandardOutput.connect(self.stdout_ready)
-        self.worker.readyReadStandardError.connect(self.stderr_ready)
-        self.worker.finished.connect(self.finished)
+            from manual_scene_obstacles import create_obstacle_tab
+            obstacle_widget, self.obstacle_tab = create_obstacle_tab(self)
+            scroll = QtWidgets.QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(obstacle_widget)
+            self.tabs.addTab(scroll, '圆柱障碍物')
+        self.create_worker()
         self.manage_worker = QtCore.QProcess(self)
         self.manage_worker.readyReadStandardOutput.connect(self.manage_stdout_ready)
         self.manage_worker.readyReadStandardError.connect(self.manage_stderr_ready)
@@ -205,11 +91,85 @@ class JointPanel(QtWidgets.QWidget):
         self.timer.start(30)
         self.tick()
 
+    def confirm_execution(self, title, text):
+        checkbox = getattr(self, 'skip_confirmations', None)
+        if checkbox is not None and checkbox.isChecked():
+            self.message('已跳过确认：' + title)
+            return QtWidgets.QMessageBox.Yes
+        return QtWidgets.QMessageBox.question(self, title, text,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+
+    def create_worker(self):
+        if self.backend == 'simulator':
+            from manual_panel_simulator import SimulatorWorker
+            self.worker = SimulatorWorker(self.cfg, self)
+            self.backend_notice.setText('模拟模式 · 不连接硬件')
+            self.backend_notice.setStyleSheet('color:#b45309;font-weight:bold')
+        else:
+            self.worker = QtCore.QProcess(self)
+            self.backend_notice.setText('真机反馈 · 启动仅只读')
+            self.backend_notice.setStyleSheet('color:#b42318;font-weight:bold')
+        self.worker.readyReadStandardOutput.connect(self.stdout_ready)
+        self.worker.readyReadStandardError.connect(self.stderr_ready)
+        self.worker.finished.connect(self.finished)
+
+    def request_backend_change(self, _index=None):
+        selected = self.backend_choice.currentData()
+        self.backend_choice.blockSignals(True)
+        self.backend_choice.setCurrentIndex(1 if self.backend == 'simulator' else 0)
+        self.backend_choice.blockSignals(False)
+        if selected == self.backend:
+            return
+        parameter_busy = hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue)
+        if self.closing or self.busy or self.helper_active() or self.connection_action is not None or parameter_busy:
+            self.message('请先停止当前操作，再切换连接目标。')
+            return
+        if selected == 'real' and self.cfg.get('_config_path'):
+            from manual_panel_config import resolve_config_path, load_panel_config, load_decoder
+            try:
+                path = (resolve_config_path('', 'real', Path()) if not self.cfg.get('native_binary')
+                        else Path(self.cfg['_config_path']))
+                real_config = load_panel_config(path, 'real')
+                decoder = load_decoder(real_config)
+            except (OSError, ValueError, KeyError) as error:
+                self.message(str(error))
+                return
+            real_config['moveit_enabled'] = self.cfg.get('moveit_enabled', False)
+            self.cfg = real_config
+            self.decode = decoder
+        self.pending_backend = selected
+        self.queue_connection_action('backend')
+
+    def apply_backend_change(self):
+        self.worker.deleteLater()
+        self.backend, self.pending_backend = self.pending_backend, None
+        # 两个目标的参考、反馈、规划和控制权限不能互相继承。
+        self.last_state = self.calibration = self.control_session = None
+        self.last_state_ns = 0
+        self.state_boot = None
+        self.state_sequence = 0
+        self.retired_state_boots.clear()
+        self.authorized = self.wait_home = self.busy = self.zero_busy = False
+        self.pending_authorization = None
+        self.anchor = self.previous_raw = None
+        self.display_initialized = False
+        if hasattr(self, 'actual_q'):
+            del self.actual_q
+        if hasattr(self, 'moveit_tab'):
+            self.moveit_tab.cancel_execution('连接目标改变，原规划作废。')
+            self.moveit_tab.invalidate()
+        self.show_actual_description(False)
+        for label in self.feedback_labels:
+            label.setText('—')
+        self.backend_choice.setCurrentIndex(1 if self.backend == 'simulator' else 0)
+        self.create_worker()
+        self.start_worker()
+
     def planning_tab_changed(self, index):
         # 规划页只能走整条路径按钮，避免误把关节页的末点按钮当作规划执行。
         self.move.setVisible(index == 0)
         self.copy.setVisible(index == 0)
-        if index == 1 and not self.moveit_tab.path and not self.moveit_tab.pending and not self.moveit_tab.executing:
+        if hasattr(self, 'moveit_tab') and self.tabs.widget(index).widget() is self.moveit_tab and not self.moveit_tab.path and not self.moveit_tab.pending and not self.moveit_tab.executing:
             self.moveit_tab.capture_actual()
 
     def helper_active(self):
@@ -217,7 +177,7 @@ class JointPanel(QtWidgets.QWidget):
         return helper is not None and helper.state() != QtCore.QProcess.NotRunning
 
     def fault_clear_available(self):
-        return (self.fresh() and self.last_state['core_state'] == 9 and
+        return (getattr(self, 'backend', 'real') == 'real' and self.fresh() and self.last_state['core_state'] == 9 and
                 self.last_state['session_id'] == 0 and not self.authorized and
                 not self.busy and not self.helper_active() and getattr(self, 'connection_action', None) is None)
 
@@ -229,11 +189,9 @@ class JointPanel(QtWidgets.QWidget):
     def request_clear_fault(self):
         if self.closing or not self.fault_clear_available():
             return
-        answer = QtWidgets.QMessageBox.question(self, '清除已处理故障',
-            '请确认故障原因已处理、机械臂有支撑，并已停止手动调整。\n'
+        answer = self.confirm_execution('清除已处理故障', '请确认故障原因已处理、机械臂有支撑，并已停止手动调整。\n'
             '此操作仅清故障并重新只读连接，不采零、不使能、不运动。\n'
-            '后续仍需另行点击“使能 / 恢复已有零点”；近限位时该步骤会低速退工作Rest。',
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+            '后续仍需另行点击“使能 / 恢复已有零点”；近限位时该步骤会低速退工作Rest。')
         if answer == QtWidgets.QMessageBox.Yes and not self.closing and self.fault_clear_available():
             self.queue_connection_action('clear_fault')
 
@@ -260,7 +218,9 @@ class JointPanel(QtWidgets.QWidget):
         if self.closing or self.worker.state() != QtCore.QProcess.NotRunning or self.helper_active():
             return
         action, self.connection_action = self.connection_action, None
-        if action == 'clear_fault':
+        if action == 'backend':
+            self.apply_backend_change()
+        elif action == 'clear_fault':
             self.start_fault_helper()
         elif action == 'reconnect':
             self.busy = False
@@ -330,6 +290,12 @@ class JointPanel(QtWidgets.QWidget):
         self.release_confirmed = False
         if self.pending_home:
             self.zero_busy = self.busy = True
+        if getattr(self, 'backend', 'real') == 'simulator':
+            (self.report / f'simulator-{self.worker_generation}.json').write_text(json.dumps({
+                'backend': 'PANEL_KINEMATIC_SIMULATOR', 'hardware_connected': False}, indent=2))
+            self.worker_generation += 1
+            self.worker.start()
+            return
         args = list(self.cfg['native_arguments']) + ['--panel', '--raw-transport-output', str(self.raw)]
         suffix = '' if self.worker_generation == 0 else f'-{self.worker_generation}'
         (self.report / f'argv{suffix}.json').write_text(json.dumps([self.cfg['native_binary']] + args, indent=2))
@@ -384,8 +350,11 @@ class JointPanel(QtWidgets.QWidget):
         boundary = False
         for axis, (value, joint, (lower, upper)) in enumerate(zip(state['position_rad'], self.cfg['joints'], self.limits)):
             nominal_lower, nominal_upper = map(math.radians, joint['nominal_limits_deg'])
-            # 只有原0.1°反馈带、≤.003rad起点投影可请求Rest；实际State不夹紧。
-            if not math.isfinite(value) or value < nominal_lower - math.radians(.1) or value > nominal_upper + math.radians(.1):
+            # 与专用Rest恢复保持一致：仅J2下侧/J3上侧使用原.003rad连续性带。
+            # 实测State不夹紧；普通目标和其余边界仍按原规则拒绝。
+            lower_band = .003 if axis == 1 else math.radians(.1)
+            upper_band = .003 if axis == 2 else math.radians(.1)
+            if not math.isfinite(value) or value < nominal_lower - lower_band or value > nominal_upper + upper_band:
                 return None
             projected = min(nominal_upper, max(nominal_lower, value))
             if abs(projected - value) > .003:
@@ -415,6 +384,10 @@ class JointPanel(QtWidgets.QWidget):
         for spin, slider, (lower, upper) in zip(self.inputs, self.sliders, nominal):
             spin.setRange(lower, upper)
             slider.setRange(round(lower * 100), round(upper * 100))
+        if hasattr(self, 'target_presets'):
+            for row in self.target_presets.rows:
+                for box, (lower, upper) in zip(row, nominal):
+                    box.setRange(lower, upper)
 
     def optional_display_anchor(self, state):
         candidate = self.cfg.get('initial_display_anchor')
@@ -475,11 +448,9 @@ class JointPanel(QtWidgets.QWidget):
         target=self.recovery_target()
         if not self.control_state_allowed((2, 4)) or not self.authorized or not self.calibration or not self.fresh() or self.busy or target is None:
             return
-        answer=QtWidgets.QMessageBox.question(self,'低速回工作区',
-            '仅将缺少停车余量的关节向内收至原限位内15°，其它轴保持当前实测位置。\n'
+        answer=self.confirm_execution('低速回工作区', '仅将缺少停车余量的关节向内收至原限位内15°，其它轴保持当前实测位置。\n'
             '固定最高0.1°/s、加速度0.01rad/s²；请确认有支撑且内收路径畅通。\n'
-            + '目标：' + ' / '.join(f'J{i+1} {q:.3f}°' for i,q in enumerate(target)),
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,QtWidgets.QMessageBox.No)
+            + '目标：' + ' / '.join(f'J{i+1} {q:.3f}°' for i,q in enumerate(target)))
         if answer==QtWidgets.QMessageBox.Yes and self.control_state_allowed((2, 4)) and self.authorized and self.fresh() and not self.busy and self.recovery_target() is not None:
             if self.command('RECOVER'):
                 self.busy=True
@@ -497,9 +468,7 @@ class JointPanel(QtWidgets.QWidget):
                        if retreat is not None else
                        '复用设备本次boot的零点，并在当前实测位置使能保持。不会回到Home或Rest。\n'
                        + ('当前位置仅允许固定0.1°/s低速内收；使能后请点击“低速回工作区”。\n' if issue else ''))
-        answer = QtWidgets.QMessageBox.question(self, '恢复控制',
-            resume_text + '请确认机械臂有支撑、路径安全且可操作现场保护。',
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+        answer = self.confirm_execution('恢复控制', resume_text + '请确认机械臂有支撑、路径安全且可操作现场保护。')
         if answer == QtWidgets.QMessageBox.Yes:
             # 模态对话期间反馈仍会更新；确认后再次检查实际位置和连接，不能使用旧位置。
             issue = self.resume_position_issue()
@@ -531,20 +500,25 @@ class JointPanel(QtWidgets.QWidget):
             self.preview_description_publisher.publish(message)
             self.preview_failed = failed
 
-    def set_preview_pose(self, degrees):
+    def set_preview_pose(self, degrees, announce=True):
         for box, value in zip(self.inputs, degrees):
             box.setValue(value)
-        self.message('仅更新目标虚影，未发送实机命令。')
+        if announce:self.message('仅更新目标虚影，未发送实机命令。')
 
     def message(self, text):
-        self.log.appendPlainText(text)
+        from manual_panel_messages import explain_panel_log
+        explanation = explain_panel_log(str(text))
+        self.log.appendPlainText(explanation)
+        with (self.report/'panel.log').open('a') as log:
+            log.write(time.strftime('%Y-%m-%d %H:%M:%S')+' '+explanation+'\n')
 
     def command(self, text):
         if self.worker.state() != QtCore.QProcess.Running:
             self.message('通信进程已退出；需重新只读连接，零点以设备本次boot反馈为准。')
             return False
         self.worker.write((text + '\n').encode())
-        with (self.report / 'commands.jsonl').open('a') as f:
+        journal = 'simulator-commands.jsonl' if getattr(self, 'backend', 'real') == 'simulator' else 'commands.jsonl'
+        with (self.report / journal).open('a') as f:
             f.write(json.dumps({'host_ns': time.monotonic_ns(), 'command': text}) + '\n')
         return True
 
@@ -582,9 +556,7 @@ class JointPanel(QtWidgets.QWidget):
                             f"有支撑、现场可操作保护，且到工作 Rest {self.cfg['rest_deg']}° 的路径畅通？\n"
                             '点击“是”将捕获 Home 零点并立即缓慢运动到 Rest。\n'
                             '当前若仍在 Rest，请点“否”，先手动恢复 Home。')
-        answer = QtWidgets.QMessageBox.question(
-            self, title, confirmation,
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+        answer = self.confirm_execution(title, confirmation)
         if answer != QtWidgets.QMessageBox.Yes or not self.control_state_allowed() or not self.fresh():
             return
         # 用户明确重新Home才可重采零；先确认旧owner已失能释放。
@@ -607,6 +579,11 @@ class JointPanel(QtWidgets.QWidget):
         self.message('已确认当次人工双限位；等待失能释放后捕获新参考并低速退工作Rest。' if self.manual_limits_mode() else '已确认当次人工Home；等待失能释放后捕获新参考并缓慢Rest。')
 
     def start_move(self):
+        if hasattr(self, 'obstacle_tab') and (self.obstacle_tab.blocked or not self.obstacle_tab.scene_ready):
+            self.message('障碍物场景尚未确认，禁止提交运动。')
+            return
+        if hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue):
+            return
         if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
             return
         if not self.control_state_allowed((2, 4)) or not self.authorized or not self.calibration or not self.fresh() or self.busy:
@@ -629,16 +606,33 @@ class JointPanel(QtWidgets.QWidget):
         text = ' / '.join(f'J{i + 1} {v:.2f}°' for i, v in enumerate(goal))
         if projection:
             text = '请求 → 有效目标：' + projection + '\n实际发送：' + text
-        answer = QtWidgets.QMessageBox.question(
-            self, '执行六轴目标', text + f'\n本次目标速度 {self.speed_input.value():.1f}°/s，加速度 {self.acceleration_input.value():.2f}rad/s²；确认实物路径畅通后执行。\n'
-            '将按所选速度和加速度规划；较长运动使用原有会话续租。',
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+        answer = self.confirm_execution('执行六轴目标', text + f'\n本次目标速度 {self.speed_input.value():.1f}°/s，加速度 {self.acceleration_input.value():.2f}rad/s²；确认实物路径畅通后执行。\n'
+            '将按所选速度和加速度规划；较长运动使用原有会话续租。')
         if answer == QtWidgets.QMessageBox.Yes and self.control_state_allowed((2, 4)) and self.authorized and self.fresh() and self.command(f'MOVE_SPEED {self.speed_input.value():.1f} ACCEL {self.acceleration_input.value():.2f} ' + ' '.join(f'{v:.8f}' for v in goal)):
             self.busy = True
 
+    def cancel_motion_hold(self):
+        if not self.fresh() or not self.authorized or not self.control_state_allowed((2,3,4,5,6)):
+            self.release('STOP');return
+        self.busy = True
+        self.cancel_hold_pending = True
+        if not self.command('CANCEL_HOLD'):
+            self.cancel_hold_pending = False;self.release('STOP');return
+        self.message('已请求受控停车并保持使能；等待设备确认。')
+        QtCore.QTimer.singleShot(3000,self.check_cancel_hold)
+
+    def check_cancel_hold(self):
+        if getattr(self,'cancel_hold_pending',False):
+            self.cancel_hold_pending = False
+            self.message('受控停车未确认，转入停止释放。')
+            self.release('STOP')
+
     def release(self, command):
+        if hasattr(self,'moveit_tab') and self.moveit_tab.auto_test.active:
+            self.moveit_tab.auto_test.abort('已请求停止或释放设备',stop=False)
         if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
             self.moveit_tab.cancel_execution('已请求停止；剩余规划路径作废。')
+        self.cancel_hold_pending = False
         self.remember_readonly_handoff()
         self.authorized = False
         self.pending_authorization = None
@@ -664,11 +658,14 @@ class JointPanel(QtWidgets.QWidget):
 
     def stdout_ready(self):
         text = bytes(self.worker.readAllStandardOutput()).decode(errors='replace')
-        with (self.report / 'native.stdout').open('a') as f:
+        journal = 'simulator.events' if getattr(self, 'backend', 'real') == 'simulator' else 'native.stdout'
+        with (self.report / journal).open('a') as f:
             f.write(text)
         self.stdout_buffer += text
         while '\n' in self.stdout_buffer:
             line, self.stdout_buffer = self.stdout_buffer.split('\n', 1)
+            if hasattr(self, 'motor_parameter_tab') and self.motor_parameter_tab.handle_line(line):
+                continue
             if not line.startswith('home_rest_event='):
                 if line:
                     self.message(line)
@@ -720,8 +717,12 @@ class JointPanel(QtWidgets.QWidget):
                     for box, value in zip(self.inputs, self.cfg['rest_deg']):
                         box.setValue(value)
                 self.message('设备零点有效，本控制会话已就绪；失能或换软件连接保留同boot已完成零点。')
-            elif event == 'MOVE_COMPLETED':
+            elif event == 'MOVE_CANCELED_HOLD':
+                self.cancel_hold_pending = False
                 self.busy = False
+                self.message('已停止测试运动并确认保持使能；不会自动继续或回Home。')
+            elif event == 'MOVE_COMPLETED':
+                self.busy = bool(hasattr(self,'moveit_tab') and self.moveit_tab.auto_test.active)
                 self.message('目标完成。连接正常时持续保持；停止、断连会释放控制；已完成零点由设备同boot保留。')
             elif event == 'RESUME_NOT_READY':
                 self.authorized = False
@@ -737,6 +738,8 @@ class JointPanel(QtWidgets.QWidget):
                 self.message('设备已确认失能与释放；已完成零点由设备同boot保留。')
             if hasattr(self, 'moveit_tab'):
                 self.moveit_tab.native_event(event, parts)
+            if hasattr(self, 'obstacle_tab'):
+                self.obstacle_tab.native_event(event, parts)
 
     def stderr_ready(self):
         text = bytes(self.worker.readAllStandardError()).decode(errors='replace')
@@ -833,6 +836,10 @@ class JointPanel(QtWidgets.QWidget):
             self.authorized = False
 
     def read_state(self):
+        if getattr(self, 'backend', 'real') == 'simulator':
+            if self.worker.state() == QtCore.QProcess.Running:
+                self.accept_state(self.worker.model.snapshot(), time.monotonic_ns())
+            return
         if not self.raw.exists():
             return
         with self.raw.open('rb') as f:
@@ -865,6 +872,10 @@ class JointPanel(QtWidgets.QWidget):
         for _ in range(8):
             rclpy.spin_once(self.node, timeout_sec=0)
         self.read_state()
+        if hasattr(self, 'obstacle_tab'):
+            self.obstacle_tab.tick()
+        if hasattr(self, 'motor_parameter_tab'):
+            self.motor_parameter_tab.tick()
         if self.preview_failed is None:
             self.set_preview_failed(False)
         # 独立目标topic/TF；仅预览，永不写入实机反馈topic或发MOVE。
@@ -876,7 +887,10 @@ class JointPanel(QtWidgets.QWidget):
         fresh = self.fresh()
         state = self.last_state
         self.reconcile_control_state()
-        quiet = fresh and state['velocity_valid_mask'] == 63 and state['raw_position_valid_mask'] == 63 and all(math.isfinite(v) and abs(v) <= 0.01 for v in state['estimated_velocity_rad_s'])
+        position_ready = fresh and state['raw_position_valid_mask'] == 63
+        if getattr(self, 'backend', 'real') == 'simulator':
+            position_ready = fresh and state['position_valid_mask'] == 63
+        quiet = fresh and position_ready and state['velocity_valid_mask'] == 63 and all(math.isfinite(v) and abs(v) <= 0.01 for v in state['estimated_velocity_rad_s'])
         if (self.pending_home and self.wait_home and quiet and not self.closing and
                 self.pending_home_generation is not None and
                 self.worker_generation >= self.pending_home_generation and self.control_state_allowed((1, 2))):
@@ -896,13 +910,21 @@ class JointPanel(QtWidgets.QWidget):
                              all(math.isfinite(v) for v in state['estimated_velocity_rad_s']))
         self.copy.setEnabled(fresh and state['core_state'] != 9 and not getattr(self, 'readonly_fault', False) and hasattr(self, 'actual_q'))
         self.stop.setEnabled(self.worker.state() == QtCore.QProcess.Running and not self.helper_active())
-        if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
+        if hasattr(self, 'obstacle_tab') and (self.obstacle_tab.blocked or not self.obstacle_tab.scene_ready):
+            self.move.setEnabled(False)
+        if hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue):
+            for button in (self.zero, self.resume, self.recover, self.move):
+                button.setEnabled(False)
+        if hasattr(self, 'moveit_tab') and (self.moveit_tab.executing or self.moveit_tab.auto_test.active):
             self.busy = True
             for button in (self.move, self.zero, self.resume, self.recover, self.clear_fault):
                 button.setEnabled(False)
         if hasattr(self, 'reconnect'):
             self.reconnect.setEnabled(not self.closing and not self.busy and not self.helper_active())
             self.clear_fault.setEnabled(not self.closing and self.fault_clear_available())
+        if hasattr(self, 'backend_choice'):
+            parameter_busy = hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue)
+            self.backend_choice.setEnabled(not self.closing and not self.busy and not self.helper_active() and self.connection_action is None and not parameter_busy)
         if not fresh:
             self.show_actual_description(False)
             self.status.setText('反馈未就绪 / 已失鲜；运动入口禁用。零点状态以设备同boot反馈为准，当前不授权运动。')
@@ -951,7 +973,8 @@ class JointPanel(QtWidgets.QWidget):
             resume_note = ' · 零点保留；仅允许固定0.1°/s低速内收，需明确使能并点击低速回工作区。'
         elif resume_issue and self.wait_home and not self.authorized:
             resume_note = ' · 零点保留，实际位置不足停车余量，需支撑调整后恢复；无需重新归零。' + resume_issue
-        self.status.setText(f'USB 实时反馈{speed_note} · {zero} · {scope}{resume_note} · boot={state["boot_epoch"]:016x}')
+        feedback_source = '纯软件模拟反馈' if getattr(self, 'backend', 'real') == 'simulator' else 'USB 实时反馈'
+        self.status.setText(f'{feedback_source}{speed_note} · {zero} · {scope}{resume_note} · boot={state["boot_epoch"]:016x}')
 
     def closeEvent(self, event):
         self.closing = True
@@ -987,20 +1010,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)
     parser.add_argument('--report', required=True)
-    parser.add_argument('--description-xacro', required=True)
+    parser.add_argument('--description-xacro', default='')
+    parser.add_argument('--backend', choices=('real', 'simulator'), default='real')
     parser.add_argument('--moveit', action='store_true', help='启用末端规划页；另启动仅规划 MoveIt 服务')
     args = parser.parse_args(rclpy.utilities.remove_ros_args(args=sys.argv)[1:])
-    config = json.loads(Path(args.config).read_text())
-    if config.get("deployment_required"):
-        parser.error("面板模板缺少部署信息；请先生成部署配置")
-    config['description_xacro'] = args.description_xacro
+    from manual_panel_config import load_panel_config, load_decoder
+    try:
+        config = load_panel_config(Path(args.config), args.backend, args.description_xacro)
+        _decode = load_decoder(config) if args.backend == 'real' else None
+    except (OSError, ValueError, KeyError) as error:
+        parser.error(str(error))
     config['moveit_enabled'] = args.moveit
-    import importlib.util
-    decoder_file = Path(config['decoder_directory']).resolve(strict=True) / 'join_real_6dof_evidence.py'
-    decoder_spec = importlib.util.spec_from_file_location('dummy_manual_panel_decoder', decoder_file)
-    decoder_module = importlib.util.module_from_spec(decoder_spec)
-    decoder_spec.loader.exec_module(decoder_module)
-    _decode = decoder_module._decode
+    config['backend'] = args.backend
     app = QtWidgets.QApplication(sys.argv[:1])
     app.setStyle('Fusion')
     rclpy.init(args=[], signal_handler_options=rclpy.signals.SignalHandlerOptions.NO)

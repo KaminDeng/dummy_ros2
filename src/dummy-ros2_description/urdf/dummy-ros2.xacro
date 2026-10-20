@@ -1,238 +1,387 @@
-<?xml version="1.0" ?>
-<robot name="dummy-ros2" xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:arg name="Joint1_lower" default="-2.9670597283903604"/>
-  <xacro:arg name="Joint1_upper" default="2.9670597283903604"/>
-  <xacro:arg name="Joint2_lower" default="-1.2740903539558606"/>
-  <xacro:arg name="Joint2_upper" default="1.5707963267948966"/>
-  <xacro:arg name="Joint3_lower" default="0.6108652381980153"/>
-  <xacro:arg name="Joint3_upper" default="3.141592653589793"/>
-  <xacro:arg name="Joint4_lower" default="-3.141592653589793"/>
-  <xacro:arg name="Joint4_upper" default="3.141592653589793"/>
-  <xacro:arg name="Joint5_lower" default="-1.7453292519943295"/>
-  <xacro:arg name="Joint5_upper" default="1.7453292519943295"/>
-  <xacro:arg name="Joint6_lower" default="-12.566370614359172"/>
-  <xacro:arg name="Joint6_upper" default="12.566370614359172"/>
+<?xml version='1.0' encoding='utf-8'?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dummy-ros2">
+  <!--完整STEP装配：安装关系与颜色已经人工核对；Rest碰撞仍保留，禁止用旧豁免掩盖。-->
+  <xacro:arg name="Joint1_lower" default="-2.9670597283903604" />
+  <xacro:arg name="Joint1_upper" default="2.9670597283903604" />
+  <xacro:arg name="Joint2_lower" default="-1.2740903539558606" />
+  <xacro:arg name="Joint2_upper" default="1.5707963267948966" />
+  <xacro:arg name="Joint3_lower" default="0.6108652381980153" />
+  <xacro:arg name="Joint3_upper" default="3.141592653589793" />
+  <xacro:arg name="Joint4_lower" default="-3.141592653589793" />
+  <xacro:arg name="Joint4_upper" default="3.141592653589793" />
+  <xacro:arg name="Joint5_lower" default="-1.7453292519943295" />
+  <xacro:arg name="Joint5_upper" default="1.7453292519943295" />
+  <xacro:arg name="Joint6_lower" default="-12.566370614359172" />
+  <xacro:arg name="Joint6_upper" default="12.566370614359172" />
+  <material name="silver">
+    <color rgba="0.700 0.700 0.700 1.000" />
+  </material>
+  <transmission name="Joint1_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Joint1">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Joint1_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Joint2_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Joint2">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Joint2_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Joint3_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Joint3">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Joint3_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Joint4_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Joint4">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Joint4_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Joint5_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Joint5">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Joint5_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Joint6_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Joint6">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Joint6_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <link name="base_link">
+    <!-- 地面根：XY为J1轴心、Z=0为完整CAD基座底面。旧CAD统一平移
+         [+0.019225,+0.000523,-0.004684]m；不改变关节机械零位和装配关系。 -->
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.000061443307707055 0.0011047485706867557 0.05077890448958129" />
+      <mass value="3.4054232030550327" />
+      <inertia ixx="0.006318" ixy="-1.1e-05" ixz="-2e-06" iyy="0.00644" iyz="-0.000164" izz="0.006723" />
+    </inertial>
+    <visual>
+      <origin xyz="0.019225 0.000523 -0.004684" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_base-colors.obj" scale="0.001 0.001 0.001" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.019225 0.000523 -0.004684" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_base-collision-local.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link1_1_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.005744742318232344 0.005464327027038366 0.012045619429015192" />
+      <mass value="0.4000119946706078" />
+      <inertia ixx="0.000172" ixy="5.8e-05" ixz="2.7e-05" iyy="0.000152" iyz="-3.9e-05" izz="0.00025" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link1-colors.obj" scale="0.001 0.001 0.001" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link1-collision-local.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link2_1_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.022476329402049397 0.0015836740439541114 0.0701478637986927" />
+      <mass value="0.9644194016592866" />
+      <inertia ixx="0.003808" ixy="-1e-05" ixz="0.000274" iyy="0.003848" iyz="1.3e-05" izz="0.000499" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link2-colors.obj" scale="0.001 0.001 0.001" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link2-collision-local.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link3_1_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.010730263185093621 -0.022369081214190782 0.036467614070683996" />
+      <mass value="0.3817226974329336" />
+      <inertia ixx="0.000328" ixy="-2.4e-05" ixz="6.5e-05" iyy="0.00037" iyz="6.8e-05" izz="0.000146" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link3-colors.obj" scale="0.001 0.001 0.001" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link3-collision-local.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link4_1_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.004221306676286125 0.09021372117053507 0.00026828289249919424" />
+      <mass value="0.44370009904209484" />
+      <inertia ixx="0.001103" ixy="-3.2e-05" ixz="1e-06" iyy="0.00012" iyz="-1e-06" izz="0.001078" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link4-colors.obj" scale="0.001 0.001 0.001" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link4-collision-local.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link5_1_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.0007044959912857188 0.04181588666040692 1.9856549020258463e-05" />
+      <mass value="0.1329416987985629" />
+      <inertia ixx="0.000148" ixy="3e-05" ixz="0.0" iyy="3.5e-05" iyz="-0.0" izz="0.00016" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link5-colors.obj" scale="0.001 0.001 0.001" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link5-collision-local.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="j6_reducer_housing">
+    <visual>
+      <origin rpy="-1.5707963267948966 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/MINIF08_approx.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <material name="minif08_cad_reducer_grey">
+        <color rgba="0.627451 0.627451 0.627451 1" />
+      </material>
+    </visual>
+    <collision name="j6_reducer_mount_flange">
+      <origin rpy="-1.5707963267948966 0 0" xyz="0 0.0035 0" />
+      <geometry>
+        <box size="0.032 0.032 0.007" />
+      </geometry>
+    </collision>
+    <collision name="j6_reducer_body">
+      <origin rpy="-1.5707963267948966 0 0" xyz="0 0.0175 0" />
+      <geometry>
+        <cylinder length="0.021" radius="0.01525" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link6_1_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="8.866549679534264e-08 0.001500477150790519 2.701463612808652e-07" />
+      <mass value="0.00918018258883941" />
+      <inertia ixx="1e-06" ixy="0.0" ixz="0.0" iyy="1e-06" iyz="0.0" izz="1e-06" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0.018331 -0.228477 -0.327078" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/link6_1_1.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <material name="silver" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.018331 -0.228477 -0.327078" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/link6_1_1.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Joint1" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.096" />
+    <parent link="base_link" />
+    <child link="link1_1_1" />
+    <axis xyz="0.0 -0.0 -1.0" />
+    <limit effort="150" lower="$(arg Joint1_lower)" upper="$(arg Joint1_upper)" velocity="3.15" />
+  </joint>
+  <joint name="Joint2" type="revolute">
+    <origin rpy="0 0 0" xyz="-0.0155 0.035 0.0375" />
+    <parent link="link1_1_1" />
+    <child link="link2_1_1" />
+    <axis xyz="-1.0 -0.0 0.0" />
+    <limit effort="150" lower="$(arg Joint2_lower)" upper="$(arg Joint2_upper)" velocity="3.15" />
+  </joint>
+  <joint name="Joint3" type="revolute">
+    <origin rpy="1.5707963267948966 0 0" xyz="0.03665 0.0 0.146" />
+    <parent link="link2_1_1" />
+    <child link="link3_1_1" />
+    <axis xyz="-1.0 0.0 -0.0" />
+    <limit effort="150" lower="$(arg Joint3_lower)" upper="$(arg Joint3_upper)" velocity="3.15" />
+  </joint>
+  <joint name="Joint4" type="revolute">
+    <origin rpy="0 0 0" xyz="-0.02047870211141205 -0.01 0.052" />
+    <parent link="link3_1_1" />
+    <child link="link4_1_1" />
+    <axis xyz="0.0 -1.0 0.0" />
+    <limit effort="150" lower="$(arg Joint4_lower)" upper="$(arg Joint4_upper)" velocity="3.15" />
+  </joint>
+  <joint name="Joint5" type="revolute">
+    <origin rpy="0 0 0" xyz="0.0168 0.127 0.0" />
+    <parent link="link4_1_1" />
+    <child link="link5_1_1" />
+    <axis xyz="-1.0 0.0 -0.0" />
+    <limit effort="150" lower="$(arg Joint5_lower)" upper="$(arg Joint5_upper)" velocity="3.15" />
+  </joint>
+  <joint name="j6_reducer_mount" type="fixed">
+    <origin rpy="0 0 0" xyz="-0.0168 0.0625 0" />
+    <parent link="link5_1_1" />
+    <child link="j6_reducer_housing" />
+  </joint>
+  <joint name="Joint6" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0.028 0" />
+    <parent link="j6_reducer_housing" />
+    <child link="link6_1_1" />
+    <axis xyz="-0.0 -1.0 0.0" />
+    <limit effort="150" lower="$(arg Joint6_lower)" upper="$(arg Joint6_upper)" velocity="3.15" />
+  </joint>
+  <link name="step_link2_motor_1">
+    <collision>
+      <origin xyz="0.016100006103515627 -0.002549998764622004 0.10099999901198893" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06279998779296875 0.04710001018934622 0.04200000627105299" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="step_link2_motor_1_fixed" type="fixed">
+    <parent link="link2_1_1" />
+    <child link="step_link2_motor_1" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+  <link name="step_link2_motor_2">
+    <collision>
+      <origin xyz="0.017899993896484376 -0.002549998239391926 0.04500000000704173" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06879998779296875 0.047100009219087635 0.04200000466165402" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="step_link2_motor_2_fixed" type="fixed">
+    <parent link="link2_1_1" />
+    <child link="step_link2_motor_2" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+  <link name="step_link3_motor_1">
+    <collision>
+      <origin xyz="-0.02047870483398435 -0.03390000006534599 0.05349999700673708" rpy="0 0 0" />
+      <geometry>
+        <box size="0.03520001220703125 0.0588000181295944 0.03820000769570342" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="step_link3_motor_1_fixed" type="fixed">
+    <parent link="link3_1_1" />
+    <child link="step_link3_motor_1" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+  <link name="step_link4_motor_1">
+    <collision>
+      <origin xyz="-0.0004500149296035264 0.07349999741796959 1.3958294988597464e-09" rpy="0 0 0" />
+      <geometry>
+        <box size="0.05229998779296875 0.038200004230395726 0.03520001147232782" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="step_link4_motor_1_fixed" type="fixed">
+    <parent link="link4_1_1" />
+    <child link="step_link4_motor_1" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+  <link name="step_link5_motor_1">
+    <collision>
+      <origin xyz="-0.015300002722572346 0.049350000689001944 -4.671982054699209e-10" rpy="0 0 0" />
+      <geometry>
+        <box size="0.03820001220703125 0.05230000598585641 0.035200013466531996" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="step_link5_motor_1_fixed" type="fixed">
+    <parent link="link5_1_1" />
+    <child link="step_link5_motor_1" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
 
-<xacro:include filename="$(find dummy-ros2_description)/urdf/materials.xacro" />
-<xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.trans" />
-<link name="base_link">
-  <inertial>
-    <origin xyz="-0.019286443307707055 0.0005817485706867557 0.05546290448958129" rpy="0 0 0"/>
-    <mass value="3.4054232030550327"/>
-    <inertia ixx="0.006318" iyy="0.00644" izz="0.006723" ixy="-1.1e-05" iyz="-0.000164" ixz="-2e-06"/>
-  </inertial>
-  <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="silver"/>
-  </visual>
-  <collision>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
-</link>
-
-<link name="link1_1_1">
-  <inertial>
-    <origin xyz="-0.005744742318232344 0.005464327027038366 0.012045619429015192" rpy="0 0 0"/>
-    <mass value="0.4000119946706078"/>
-    <inertia ixx="0.000172" iyy="0.000152" izz="0.00025" ixy="5.8e-05" iyz="-3.9e-05" ixz="2.7e-05"/>
-  </inertial>
-  <visual>
-    <origin xyz="0.019225 0.000523 -0.100684" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link1_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="silver"/>
-  </visual>
-  <collision>
-    <origin xyz="0.019225 0.000523 -0.100684" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link1_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
-</link>
-
-<link name="link2_1_1">
-  <inertial>
-    <origin xyz="0.022476329402049397 0.0015836740439541114 0.0701478637986927" rpy="0 0 0"/>
-    <mass value="0.9644194016592866"/>
-    <inertia ixx="0.003808" iyy="0.003848" izz="0.000499" ixy="-1e-05" iyz="1.3e-05" ixz="0.000274"/>
-  </inertial>
-  <visual>
-    <origin xyz="0.034725 -0.034477 -0.129184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link2_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="silver"/>
-  </visual>
-  <collision>
-    <origin xyz="0.034725 -0.034477 -0.129184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link2_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
-</link>
-
-<link name="link3_1_1">
-  <inertial>
-    <origin xyz="-0.010730263185093621 -0.022369081214190782 0.036467614070683996" rpy="0 0 0"/>
-    <mass value="0.3817226974329336"/>
-    <inertia ixx="0.000328" iyy="0.00037" izz="0.000146" ixy="-2.4e-05" iyz="6.8e-05" ixz="6.5e-05"/>
-  </inertial>
-  <visual>
-    <origin xyz="-0.001925 -0.034477 -0.275184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link3_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="silver"/>
-  </visual>
-  <collision>
-    <origin xyz="-0.001925 -0.034477 -0.275184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link3_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
-</link>
-
-<link name="link4_1_1">
-  <inertial>
-    <origin xyz="-0.004221306676286125 0.09021372117053507 0.00026828289249919424" rpy="0 0 0"/>
-    <mass value="0.44370009904209484"/>
-    <inertia ixx="0.001103" iyy="0.00012" izz="0.001078" ixy="-3.2e-05" iyz="-1e-06" ixz="1e-06"/>
-  </inertial>
-  <visual>
-    <origin xyz="0.016625 -0.024477 -0.327184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link4_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="silver"/>
-  </visual>
-  <collision>
-    <origin xyz="0.016625 -0.024477 -0.327184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link4_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
-</link>
-
-<link name="link5_1_1">
-  <inertial>
-    <origin xyz="-0.0007044959912857188 0.04181588666040692 1.9856549020258463e-05" rpy="0 0 0"/>
-    <mass value="0.1329416987985629"/>
-    <inertia ixx="0.000148" iyy="3.5e-05" izz="0.00016" ixy="3e-05" iyz="-0.0" ixz="0.0"/>
-  </inertial>
-  <visual>
-    <origin xyz="-0.000175 -0.151477 -0.327184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link5_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="silver"/>
-  </visual>
-  <collision>
-    <origin xyz="-0.000175 -0.151477 -0.327184" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link5_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
-</link>
-
-<link name="link6_1_1">
-  <inertial>
-    <origin xyz="8.866549679534264e-08 0.001500477150790519 2.701463612808652e-07" rpy="0 0 0"/>
-    <mass value="0.00918018258883941"/>
-    <inertia ixx="1e-06" iyy="1e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
-  </inertial>
-  <visual>
-    <origin xyz="0.018331 -0.228477 -0.327078" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link6_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-    <material name="silver"/>
-  </visual>
-  <collision>
-    <origin xyz="0.018331 -0.228477 -0.327078" rpy="0 0 0"/>
-    <geometry>
-      <mesh filename="file://$(find dummy-ros2_description)/meshes/link6_1_1.stl" scale="0.001 0.001 0.001"/>
-    </geometry>
-  </collision>
-</link>
-
-<joint name="Joint1" type="revolute">
-  <origin xyz="-0.019225 -0.000523 0.100684" rpy="0 0 0"/>
-  <parent link="base_link"/>
-  <child link="link1_1_1"/>
-  <axis xyz="0.0 -0.0 -1.0"/>
-  <limit
-    lower="$(arg Joint1_lower)"
-    upper="$(arg Joint1_upper)"
-    effort="150"
-    velocity="3.15" />
-</joint>
-
-<joint name="Joint2" type="revolute">
-  <origin xyz="-0.0155 0.035 0.0285" rpy="0 0 0"/>
-  <parent link="link1_1_1"/>
-  <child link="link2_1_1"/>
-  <axis xyz="-1.0 -0.0 0.0"/>
-  <limit
-    lower="$(arg Joint2_lower)"
-    upper="$(arg Joint2_upper)"
-    effort="150"
-    velocity="3.15" />
-</joint>
-
-<!-- Display: CAD q3=0 is the 7 pose; canonical Home q3=90 uses +X90 with axis -X. All ROS viewers must load this same file. -->
-<joint name="Joint3" type="revolute">
-  <origin xyz="0.03665 0.0 0.146" rpy="1.5707963267948966 0 0"/>
-  <parent link="link2_1_1"/>
-  <child link="link3_1_1"/>
-  <axis xyz="-1.0 0.0 -0.0"/>
-  <limit
-    lower="$(arg Joint3_lower)"
-    upper="$(arg Joint3_upper)"
-    effort="150"
-    velocity="3.15" />
-</joint>
-
-<joint name="Joint4" type="revolute">
-  <origin xyz="-0.01855 -0.01 0.052" rpy="0 0 0"/>
-  <parent link="link3_1_1"/>
-  <child link="link4_1_1"/>
-  <axis xyz="0.0 -1.0 0.0"/>
-  <limit
-    lower="$(arg Joint4_lower)"
-    upper="$(arg Joint4_upper)"
-    effort="150"
-    velocity="3.15" />
-</joint>
-
-<joint name="Joint5" type="revolute">
-  <origin xyz="0.0168 0.127 0.0" rpy="0 0 0"/>
-  <parent link="link4_1_1"/>
-  <child link="link5_1_1"/>
-  <axis xyz="-1.0 0.0 -0.0"/>
-  <limit
-    lower="$(arg Joint5_lower)"
-    upper="$(arg Joint5_upper)"
-    effort="150"
-    velocity="3.15" />
-</joint>
-
-<joint name="Joint6" type="revolute">
-  <origin xyz="-0.018506 0.077 -0.000106" rpy="0 0 0"/>
-  <parent link="link5_1_1"/>
-  <child link="link6_1_1"/>
-  <axis xyz="-0.0 -1.0 0.0"/>
-  <limit
-    lower="$(arg Joint6_lower)"
-    upper="$(arg Joint6_upper)"
-    effort="150"
-    velocity="3.15" />
-</joint>
-
+  <!-- 近端到远端的5mm碰撞间隙保护；无视觉，不改变关节链。 -->
+<link name="clearance_base_link"><collision>
+      <origin rpy="0 0 0" xyz="0.019225 0.000523 -0.004684" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_base-collision-local-clearance-5mm.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision></link>
+<joint name="clearance_base_link_fixed" type="fixed"><parent link="base_link" /><child link="clearance_base_link" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<link name="clearance_link1_1_1"><collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link1-collision-local-clearance-5mm.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision></link>
+<joint name="clearance_link1_1_1_fixed" type="fixed"><parent link="link1_1_1" /><child link="clearance_link1_1_1" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<link name="clearance_link2_1_1"><collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://dummy-ros2_description/meshes/full_step_link2-collision-local-clearance-5mm.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision></link>
+<joint name="clearance_link2_1_1_fixed" type="fixed"><parent link="link2_1_1" /><child link="clearance_link2_1_1" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<link name="clearance_step_link2_motor_1"><collision>
+      <origin rpy="0 0 0" xyz="0.016100006103515627 -0.002549998764622004 0.10099999901198893" />
+      <geometry>
+        <box size="0.07281998779296875 0.05712001018934622 0.05202000627105299" />
+      </geometry>
+    </collision></link>
+<joint name="clearance_step_link2_motor_1_fixed" type="fixed"><parent link="step_link2_motor_1" /><child link="clearance_step_link2_motor_1" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<link name="clearance_step_link2_motor_2"><collision>
+      <origin rpy="0 0 0" xyz="0.017899993896484376 -0.002549998239391926 0.04500000000704173" />
+      <geometry>
+        <box size="0.07881998779296875 0.05712000921908764 0.05202000466165402" />
+      </geometry>
+    </collision></link>
+<joint name="clearance_step_link2_motor_2_fixed" type="fixed"><parent link="step_link2_motor_2" /><child link="clearance_step_link2_motor_2" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
 </robot>
