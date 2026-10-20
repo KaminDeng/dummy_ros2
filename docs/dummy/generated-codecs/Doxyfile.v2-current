@@ -1,0 +1,15 @@
+PROJECT_NAME = DummyFrozenCodec_v2-current
+OUTPUT_DIRECTORY = /tmp/dummy-doxygen-audit/generated-codecs18m/v2-current
+GENERATE_HTML = NO
+GENERATE_LATEX = NO
+GENERATE_XML = YES
+QUIET = YES
+WARN_IF_UNDOCUMENTED = NO
+EXTRACT_ALL = NO
+EXTRACT_STATIC = YES
+EXTRACT_PRIVATE = YES
+SEARCH_INCLUDES = NO
+ENABLE_PREPROCESSING = YES
+MAX_INITIALIZER_LINES = 0
+INPUT_ENCODING = UTF-8
+INPUT = contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_static_requirements.h docs/dummy/generated-codecs/v25-symbols.dox docs/dummy/generated-codecs/v2-current-files.dox

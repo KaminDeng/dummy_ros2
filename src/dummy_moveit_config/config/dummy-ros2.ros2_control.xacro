@@ -1,12 +1,31 @@
 <?xml version="1.0"?>
+<!--
+@file dummy-ros2.ros2_control.xacro
+@brief 六轴ROS2控制接口宏，供mock/Gazebo入口复用；与历史Effort transmission分开。
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+<!--
+@brief 为六轴生成ROS2 position命令和position/velocity状态接口。
+@param name ros2_control组件名。
+@param initial_positions_file 包含initial_positions六轴rad值的YAML文件。
+@param hardware_plugin 默认mock_components/GenericSystem，Gazebo入口显式改用GazeboSimSystem；切换插件字符串并不自动补齐真机部署参数。
+-->
     <xacro:macro name="dummy-ros2_ros2_control" params="name initial_positions_file hardware_plugin:=mock_components/GenericSystem">
+<!--
+Xacro展开时读取YAML的initial_positions映射；键缺失会影响展开，文件中的位置不是现场标定值。
+-->
         <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
 
+<!--
+type=system表示多关节硬件组件；plugin由所选后端提供，接口名称必须与控制器配置一致。
+-->
         <ros2_control name="${name}" type="system">
             <hardware>
                 <plugin>${hardware_plugin}</plugin>
             </hardware>
+<!--
+Joint1只声明position命令；状态为position（rad）及velocity（rad/s）。initial_value只给position，velocity没有在此指定初值；声明接口不意味着已发布反馈。
+-->
             <joint name="Joint1">
                 <command_interface name="position"/>
                 <state_interface name="position">
@@ -14,6 +33,9 @@
                 </state_interface>
                 <state_interface name="velocity"/>
             </joint>
+<!--
+Joint2只声明position命令；状态为position（rad）及velocity（rad/s）。initial_value只给position，velocity没有在此指定初值；声明接口不意味着已发布反馈。
+-->
             <joint name="Joint2">
                 <command_interface name="position"/>
                 <state_interface name="position">
@@ -21,6 +43,9 @@
                 </state_interface>
                 <state_interface name="velocity"/>
             </joint>
+<!--
+Joint3只声明position命令；状态为position（rad）及velocity（rad/s）。initial_value只给position，velocity没有在此指定初值；声明接口不意味着已发布反馈。
+-->
             <joint name="Joint3">
                 <command_interface name="position"/>
                 <state_interface name="position">
@@ -28,6 +53,9 @@
                 </state_interface>
                 <state_interface name="velocity"/>
             </joint>
+<!--
+Joint4只声明position命令；状态为position（rad）及velocity（rad/s）。initial_value只给position，velocity没有在此指定初值；声明接口不意味着已发布反馈。
+-->
             <joint name="Joint4">
                 <command_interface name="position"/>
                 <state_interface name="position">
@@ -35,6 +63,9 @@
                 </state_interface>
                 <state_interface name="velocity"/>
             </joint>
+<!--
+Joint5只声明position命令；状态为position（rad）及velocity（rad/s）。initial_value只给position，velocity没有在此指定初值；声明接口不意味着已发布反馈。
+-->
             <joint name="Joint5">
                 <command_interface name="position"/>
                 <state_interface name="position">
@@ -42,6 +73,9 @@
                 </state_interface>
                 <state_interface name="velocity"/>
             </joint>
+<!--
+Joint6只声明position命令；状态为position（rad）及velocity（rad/s）。initial_value只给position，velocity没有在此指定初值；声明接口不意味着已发布反馈。
+-->
             <joint name="Joint6">
                 <command_interface name="position"/>
                 <state_interface name="position">

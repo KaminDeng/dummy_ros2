@@ -1,4 +1,9 @@
 """六轴长目标的离线边界，绝不启动 ROS 或硬件。"""
+##
+# @file test_ros_six_axis_long_goal.py
+# @brief 600秒单目标路径、时间锚与结果门的纯离线回归。
+#
+# build_path只生成数值轨迹；_send_goal/capture通过假ROS对象和monotonic_ns跳时推进，未真实等待600s或发送目标。当前候选/独立long policy从已有文件读，不等新HIL或实机许可。位置rad、动态rad/s与rad/s²，轨迹时间ns、报告µs。
 
 import importlib.util
 import hashlib
@@ -19,15 +24,24 @@ ROOT = Path(__file__).resolve().parents[3]
 CANDIDATE = ROOT / "contracts/dummy_robot_v2_application_hold_no_load_candidate"
 
 
+##
+# @brief 返回六轴±0.6rad、速度0.15rad/s、加速度1rad/s²的合成边界。
+# @return 六份(lower,upper,vmax,amax)元组，单位rad/rad/s/rad/s²。
 def limits():
     return tuple((-0.6, 0.6, 0.15, 1.0) for _ in range(6))
 
 
+##
+# @brief 动态加载邻近converter核validate_bound可调用，不执行转换/ROS。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_neighboring_converter_loads_from_real_client_entry():
     module = long_goal._load_neighbor("convert_application_ros_limits")
     assert callable(module.validate_bound)
 
 
+##
+# @brief 人工时间accepted后600.1s成功可成报告，599.9s拒绝；actual字样是报告时间角色，不是真时长实验。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_success_report_binds_actual_600_second_action_and_joiner_fields():
     path = long_goal.build_path((0.0,) * 6, limits())
     result = SimpleNamespace(status=4, result=SimpleNamespace(error_code=0))
@@ -47,6 +61,9 @@ def test_success_report_binds_actual_600_second_action_and_joiner_fields():
                                  accepted_ns + 599_900_000_000, [])
 
 
+##
+# @brief 起发后5s才接纳，不能把admission等待计入所需600s运行跨度。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_delayed_goal_admission_does_not_count_toward_600_seconds():
     path = long_goal.build_path((0.0,) * 6, limits())
     result = SimpleNamespace(status=4, result=SimpleNamespace(error_code=0))
@@ -58,6 +75,9 @@ def test_delayed_goal_admission_does_not_count_toward_600_seconds():
                                  started_ns + 600_100_000_000, [])
 
 
+##
+# @brief 数值路径301点/2s间隔、端点静止/回起点、六轴均变化、总行程≤10rad及有限动态界，不执行路径。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_600_second_goal_has_bounded_knots_and_stationary_end():
     path = long_goal.build_path((0.0,) * 6, limits())
     assert path.joint_names == tuple(f"Joint{axis}" for axis in range(1, 7))
@@ -79,6 +99,10 @@ def test_600_second_goal_has_bounded_knots_and_stationary_end():
                for axis in range(6))
 
 
+##
+# @brief 长度5、非有限/bool或0.7rad越BENCH界均构造前ValueError。
+# @param start 长目标起点六轴rad，参数化非法形状/值。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 @pytest.mark.parametrize("start", [
     (0.0,) * 5, (0.0,) * 5 + (float("nan"),),
     (0.0,) * 5 + (float("inf"),), (0.0,) * 5 + (True,),
@@ -89,6 +113,9 @@ def test_bad_start_is_rejected(start):
         long_goal.build_path(start, limits())
 
 
+##
+# @brief 轴数不足、速度能力过低或幅度0.04导致预算问题均拒，不能只按duration生成任意轨迹。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_bad_limits_and_travel_overflow_rejected():
     with pytest.raises(ValueError):
         long_goal.build_path((0.0,) * 6, limits()[:5])
@@ -98,6 +125,9 @@ def test_bad_limits_and_travel_overflow_rejected():
         long_goal.build_path((0.0,) * 6, limits(), amplitude_rad=0.04)
 
 
+##
+# @brief 读取既有普通10s policy并要求long timing拒绝，不改冻结候选。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_old_ten_second_candidate_cannot_pass_long_policy():
     import json
     policy = json.loads((CANDIDATE / "policy/application_hold_no_load.json").read_text())
@@ -106,6 +136,9 @@ def test_old_ten_second_candidate_cannot_pass_long_policy():
         long_goal.validate_long_policy(policy)
 
 
+##
+# @brief 独立dpsdk long policy可缺而skip；存在时规范policy SHA匹配，普通旧policy摘要不能代替。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_normal_bound_candidate_rejected_against_explicit_long_source():
     source = (Path(__file__).resolve().parents[4] / "dpsdk/configs" /
               "f405_6dof_application_long_goal_no_load_candidate.json")
@@ -123,6 +156,9 @@ def test_normal_bound_candidate_rejected_against_explicit_long_source():
         long_goal.validate_long_policy_binding(policy, hashlib.sha256(old_canonical).hexdigest())
 
 
+##
+# @brief 合成BENCH/no-load/630s目标/650s permit/660s trial/30s session门，短目标/permit或10ms节奏拒绝。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_long_policy_requires_exact_hashed_timing_and_no_load():
     policy = {"reference_kind": "BENCH_SESSION", "no_load_bench": True,
               "gravity_loaded": False, "active_axes": list(long_goal.JOINTS),
@@ -141,6 +177,9 @@ def test_long_policy_requires_exact_hashed_timing_and_no_load():
             long_goal.validate_long_policy(changed)
 
 
+##
+# @brief 人工样本六轴顺序、≤年龄、安静速度及有限位置都须满足，不仅看数据数量。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_joint_state_requires_fresh_stationary_six_axes():
     sample = {"names": long_goal.JOINTS, "positions": (0.0,) * 6,
               "velocities": (0.0,) * 6, "age_s": 0.1}
@@ -152,6 +191,16 @@ def test_joint_state_requires_fresh_stationary_six_axes():
             long_goal.validate_start_sample({**sample, **changed}, limits())
 
 
+##
+# @brief 构造假Action client、ns时钟与plan/result桥，admission/running各独立跳时，feedback按开关人工回调。
+# @param monkeypatch pytest替换fixture，结束自动恢复模块/时钟/环境。
+# @param admission_ns fake发送到接受时钟增加ns，默认5s。
+# @param running_ns fake接受到结果时钟增加ns，默认600.1s。
+# @param status 人工Action状态码或bootstrap分类文本，按对应测试接口解释。
+# @param error_code 模拟Action result错误码，0为成功。
+# @param feedback_valid true完整六轴反馈，false仅五轴名。
+# @param feedback_sent 是否同步注入反馈回调。
+# @return (movej模块替身依赖已注入, fake Action client)。
 def goal_entry(monkeypatch, *, admission_ns=5_000_000_000,
                running_ns=600_100_000_000, status=4, error_code=0,
                feedback_valid=True, feedback_sent=True):
@@ -161,6 +210,13 @@ def goal_entry(monkeypatch, *, admission_ns=5_000_000_000,
     movej.remaining_time = lambda deadline: 1.0
     movej.wait = lambda node, future, timeout: future
 
+    ##
+    # @par 内部回调 await_goal
+    # 假等待把clock增加running_ns并返回指定status/error_code，不实际等待或轮询设备。
+    # 参数 node：节点占位NS/object，相关ROS边界已替换。
+    # 参数 handle：已接受/被测试的FakeHandle或NS，非真实设备owner。
+    # 参数 timeout：本次允许等待秒数，替身不真实等待。
+    # 返回：指定status/error_code的NS结果。
     def await_goal(node, handle, timeout):
         clock[0] += running_ns
         return SimpleNamespace(status=status, result=SimpleNamespace(error_code=error_code))
@@ -176,6 +232,12 @@ def goal_entry(monkeypatch, *, admission_ns=5_000_000_000,
     monkeypatch.setitem(sys.modules, "rclpy.serialization", SimpleNamespace(
         serialize_message=lambda trajectory: b"trajectory"))
 
+    ##
+    # @par 内部回调 send_goal
+    # 假发送先加admission_ns，按开关发六轴/五轴反馈，再返回固定accepted UUID句柄。
+    # 参数 goal：Action Goal占位，携轨迹供断言，未真正发送。
+    # 参数 feedback_callback：调用方反馈回调，替身在本地同步调用。
+    # 返回：accepted=True且固定ef UUID的NS handle。
     def send_goal(goal, feedback_callback):
         clock[0] += admission_ns
         if feedback_sent:
@@ -190,6 +252,10 @@ def goal_entry(monkeypatch, *, admission_ns=5_000_000_000,
     return movej, client
 
 
+##
+# @brief 真实_send_goal方法配假client，核5s准入不计运行600.1s；短599.9s失败保UUID。
+# @param monkeypatch pytest替换fixture，结束自动恢复模块/时钟/环境。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_real_goal_entry_excludes_admission_delay_from_elapsed_time(monkeypatch):
     movej, client = goal_entry(monkeypatch)
     path = long_goal.build_path((0.0,) * 6, limits())
@@ -205,6 +271,11 @@ def test_real_goal_entry_excludes_admission_delay_from_elapsed_time(monkeypatch)
     assert error.value.goal_report["goal_id"] == "ef" * 16
 
 
+##
+# @brief ABORTED/错误码/坏反馈/无反馈均GoalAttemptError，保UUID且device_qualification未声称。
+# @param monkeypatch pytest替换fixture，结束自动恢复模块/时钟/环境。
+# @param case 参数化故障选项字典/路径场景名，按本用例说明。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 @pytest.mark.parametrize("case", [
     {"status": 6}, {"error_code": 1},
     {"feedback_valid": False}, {"feedback_sent": False},
@@ -219,6 +290,11 @@ def test_real_goal_entry_fails_closed_on_result_or_feedback(monkeypatch, case):
     assert error.value.goal_report["goal_id"] == "ef" * 16
 
 
+##
+# @brief fresh start失败时仍Release/destroy/shutdown，是否确认决定ConfirmedStopError或UnconfirmedStop，保原原因。
+# @param monkeypatch pytest替换fixture，结束自动恢复模块/时钟/环境。
+# @param release_confirmed 清理释放确认开关，决定异常类型。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 @pytest.mark.parametrize("release_confirmed", [True, False])
 def test_capture_failure_requires_confirmed_release(monkeypatch, release_confirmed):
     events = []
@@ -238,6 +314,12 @@ def test_capture_failure_requires_confirmed_release(monkeypatch, release_confirm
     monkeypatch.setattr(long_goal, "_fresh_start", lambda *args: (_ for _ in ()).throw(
         RuntimeError("joint state unavailable")))
 
+    ##
+    # @par 内部回调 release
+    # 记录release；开关false抛UnconfirmedStop，true返回空活跃/未知列表，未调用服务。
+    # 参数 adapter：生命周期/服务替身，具体事件和状态由用例注入。
+    # 参数 owned：本次启动的组件清单，仅其有撤活责任。
+    # 返回：人工清理结果或抛UnconfirmedStopError，不发Release。
     def release(adapter, owned):
         events.append("release")
         if not release_confirmed:
@@ -251,6 +333,10 @@ def test_capture_failure_requires_confirmed_release(monkeypatch, release_confirm
     assert events == ["init", "bind", "stack", "release", "destroy", "shutdown"]
 
 
+##
+# @brief 即bound对象伪装650s permit，真实旧policy仍在long timing门拒绝，不能靠上层声明绕过。
+# @param monkeypatch pytest替换fixture，结束自动恢复模块/时钟/环境。
+# @return None；以assert/pytest.raises/unittest报告本例结论，不生成设备执行资格。
 def test_old_ten_second_bundle_rejected_by_real_candidate_loader(monkeypatch):
     old_policy = CANDIDATE / "policy/application_hold_no_load.json"
     converter = long_goal._load_neighbor("convert_application_ros_limits")

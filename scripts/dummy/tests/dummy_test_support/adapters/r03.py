@@ -1,4 +1,9 @@
 """R03 wire and RPC adapter using the compiled probes."""
+##
+# @file r03.py
+# @brief R03 codec/目标门/RPC case到验收目标的映射。
+#
+# 经run_unittest_case启动真实Python目标；目标有g++临时编译/组件执行、跨进程dp_comm与插件加载，不全是静态检查。sut_kind默认document_utility是标签默认值，不能把它当实际执行层级保证。
 
 from __future__ import annotations
 
@@ -24,6 +29,11 @@ SOURCES = (
 )
 
 
+##
+# @brief 查映射后运行选定验收方法；多个case可能复用同一方法，不能把映射条数当独立探针次数。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r03_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     try:
         target = TARGETS[case_id]

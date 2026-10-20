@@ -1,4 +1,9 @@
 """离线拼接 Gate CSV 与同一 DeviceTransport 的 DPRAW01 记录。"""
+##
+# @file test_join_real_6dof_evidence.py
+# @brief 合成Gate CSV、DPRAW01、ROS Action报告和context的离线join/拒绝矩阵。
+#
+# 所有wire页、反馈/回执/身份及时间均由夹具生成，无ROS/USB/CAN采集或实体动作。位置/误差rad，Host记录when与Source生产/发送字段均µs但属于各自时钟域；索引加速/页链SHA/文件pin各证不同层，不能替代可信采集、二进制来源或硬件资格。repin可补管理记录/重写State，负例必须据实际输入和首断言解读。
 
 import copy
 import csv
@@ -24,6 +29,11 @@ APP_SPEC.loader.exec_module(application_e2e)
 LAYOUT = json.loads((ROOT.parents[1] / "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
 
 
+##
+# @brief 按当前wire_layout offset小端打包合成payload，默认schema2.4，其余未给字段为零，不调设备codec发送。
+# @param name LAYOUT payload消息类型名。
+# @param values 字段名到值映射；数组hex转bytes，数值按字段类型小端写。
+# @return 固定encoded_size的合成payload bytes。
 def wire(name, **values):
     spec = LAYOUT["payloads"][name]
     raw = bytearray(spec["encoded_size"])
@@ -45,11 +55,24 @@ def wire(name, **values):
     return bytes(raw)
 
 
+##
+# @brief 拼39字节DPRAW header与payload，不含文件magic；外层boot/session/run/seq与内层字段需另核一致。
+# @param kind DPRAW kind：1 Evidence、2 State、3 Status、4 Manage请求、5响应。
+# @param when Host接收/事件单调时间µs，不是Source生产时钟。
+# @param boot 设备boot epoch整数；夹具通常2。
+# @param session owner session ID，0表示已释放。
+# @param run 设备RUN/attempt ID，和ROS目标UUID不同。
+# @param seq 本页/DPRAW外层序号，具体见helper约定。
+# @param payload 原wire bytes，不含DPRAW文件magic。
+# @return header+payload bytes。
 def record(kind, when, boot, session, run, seq, payload):
     return struct.pack("<B H Q Q Q Q I", kind, len(payload), when, boot, session,
                        run, seq) + payload
 
 
+##
+# @brief 20000个State建索引后查询499次，核准确prior与总耗时<0.12s；是本机回归阈值，不是实时WCET。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_large_raw_state_lookups_remain_bounded():
     payload = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
                    reference_epoch=1, motion_epoch=2)
@@ -63,6 +86,9 @@ def test_large_raw_state_lookups_remain_bounded():
     assert time.perf_counter() - start < 0.12
 
 
+##
+# @brief 解析列表/record元数据不可变，输入dict后改也不影响索引拷贝，避免查询水位被改坏。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_indexed_raw_record_metadata_cannot_change_after_parsing():
     payload = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
                    reference_epoch=1, motion_epoch=2)
@@ -79,6 +105,9 @@ def test_indexed_raw_record_metadata_cannot_change_after_parsing():
     assert joiner._prior(indexed, 2, 100, (2, 3, 1, 2), 10)["when"] == 100
 
 
+##
+# @brief 同100µs后一个State为另一session时必须报歧义，不能倒退选较早匹配记录。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_equal_time_latest_state_with_wrong_identity_fails_closed():
     first = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
                  reference_epoch=1, motion_epoch=2)
@@ -91,6 +120,9 @@ def test_equal_time_latest_state_with_wrong_identity_fails_closed():
         joiner._prior(records, 2, 100, (2, 3, 1, 2), 10)
 
 
+##
+# @brief 500期望样本上查询30000次核插值总和与<0.12s，不是轨迹设备执行或严格渐近复杂度证明。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_large_desired_path_interpolation_remains_bounded():
     samples = [(index * 400, [float(index)] * 6) for index in range(500)]
     start = time.perf_counter()
@@ -100,6 +132,23 @@ def test_large_desired_path_interpolation_remains_bounded():
     assert elapsed < 0.12
 
 
+##
+# @brief 生成单个372字节Evidence页，seq0从192字节零补seed起链，seq==group_count为终页，并按类别/场景设置终态位。
+# @param identity 合成client及contract/model/profile/firmware摘要字典。
+# @param run 设备RUN/attempt ID，和ROS目标UUID不同。
+# @param boot 设备boot epoch整数；夹具通常2。
+# @param seq 本页/DPRAW外层序号，具体见helper约定。
+# @param previous 前页SHA bytes；seq0时被从seed重算的值替代。
+# @param release true生成专用Release attempt_kind3；false普通1。
+# @param epoch 当前页motion epoch；终页可取birth而组页取当前阶段。
+# @param parent 专用Release父RUN，默认4；普通attempt写0。
+# @param sent_mask 组页SENT六轴位掩码，默认63。
+# @param group_count 该helper预期组总数，seq等于它时生成终页。
+# @param group_id 组页ID，None用释放8/普通7；0也触发默认值。
+# @param active_release true生成普通attempt的活动取消释放final2。
+# @param canceled true生成普通取消final7，和Release场景互斥由调用者负责。
+# @param category 非终页类别，默认1，2 Safety、3 Disable；终页固定4。
+# @return 单页原wire bytes，含合成SHA链。
 def page(identity, run, boot, seq, previous, *, release=False, epoch=2,
          parent=4, sent_mask=63, group_count=1, group_id=None,
          active_release=False, canceled=False, category=1):
@@ -126,6 +175,10 @@ def page(identity, run, boot, seq, previous, *, release=False, epoch=2,
     return bytes(raw)
 
 
+##
+# @brief 构造一目标RUN4及Release子RUN5的CSV/raw/Action/context临时文件，末调用repin补合成管理与递增State。
+# @param tmp_path pytest临时目录Path，所有合成文件/报告只写此处。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 @pytest.fixture
 def inputs(tmp_path):
     identity = {"client_id": "11" * 16, **{key: "11" * 32 for key in
@@ -222,6 +275,14 @@ def inputs(tmp_path):
     return timeline, raw, action_path, context_path, records
 
 
+##
+# @brief 重算三输入SHA；无任何管理记录时按终页补Complete/Release强回执及Idle op，默认按文件顺序重写State seq/produced=Host when。
+# @param timeline Gate CSV临时路径。
+# @param raw DPRAW01临时路径。
+# @param action ROS Action诊断JSON临时路径，不是可信原始设备日志。
+# @param context 输入pin/容差/时钟预算的JSON临时路径。
+# @param preserve_state_sequence true保留raw State seq/produced，false按文件顺序重写以免非目标负例受旧序号干扰。
+# @return None；可能改写raw并覆盖context三输入SHA，不是只读校验器。
 def repin(timeline, raw, action, context, *, preserve_state_sequence=False):
     timeline_rows = list(csv.DictReader(timeline.open(newline="")))
     release_epochs = {int(row["run_id"]): int(row["motion_epoch"])
@@ -317,6 +378,10 @@ def repin(timeline, raw, action, context, *, preserve_state_sequence=False):
     context.write_text(json.dumps(value))
 
 
+##
+# @brief 把基础成功改Cancel RUN4/新安全epoch3、Gate取消键1/1及显式Release RUN5/epoch4，手工管理与SHA完整链同步。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def canceled_inputs(inputs):
     timeline, raw, action_path, context, original = inputs
     identity = {"client_id": "11" * 16, **{key: "11" * 32 for key in
@@ -360,6 +425,15 @@ def canceled_inputs(inputs):
     idle["evidence_chain_sha256"] = release_last[339:371].hex()
     idle_state = joiner._decode("DummyJointStateV2", original[10][39:])
     idle_state["motion_epoch"] = 4
+    ##
+    # @par 内部回调 management
+    # 按operation9/10生成Cancel/Release请求或Committed结果，合成session清零与motion角色，不访问服务。
+    # 参数 operation：管理操作码，8 Complete、9 Cancel、10 Release等。
+    # 参数 request_id：管理原请求64位ID；本夹具小值也复用作request_seq/op。
+    # 参数 when：Host接收/事件单调时间µs，不是Source生产时钟。
+    # 参数 run：设备RUN/attempt ID，和ROS目标UUID不同。
+    # 参数 response：true生成管理响应record，false请求。
+    # 返回：一条合成管理DPRAW记录bytes。
     def management(operation, request_id, when, run, *, response=False):
         if response:
             payload = wire("DummyManageV2Response", device_id="22" * 16,
@@ -395,6 +469,10 @@ def canceled_inputs(inputs):
     return timeline, raw, action_path, context, records
 
 
+##
+# @brief 将Action报告改为UNCONFIRMED_STOP与NOT_QUALIFIED诊断，保留CANCELED观察并明确raw join另需提供。
+# @param action ROS Action诊断JSON临时路径，不是可信原始设备日志。
+# @return 已写入action路径的未资格化诊断字典。
 def unconfirmed_cancel_report(action):
     report = json.loads(action.read_text())
     report.update(status="UNCONFIRMED_STOP", stop_confirmation="UNCONFIRMED_STOP",
@@ -409,6 +487,10 @@ def unconfirmed_cancel_report(action):
     return report
 
 
+##
+# @brief 完整合成Cancel/Release链应join出CANCELED、取消request1及独立RELEASED，不靠Action取消状态单独通过。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_canceled_goal_joins_cancel_and_release_raw_chain(inputs):
     timeline, raw, action, context, _ = canceled_inputs(inputs)
     joined = joiner.join_evidence(timeline, raw, action, context)
@@ -417,6 +499,12 @@ def test_canceled_goal_joins_cancel_and_release_raw_chain(inputs):
     assert joined["release"]["terminal"] == "RELEASED"
 
 
+##
+# @brief Gate terminal4400早于Safety SENT4500、4600早于强回执4800分别拒绝，对准具体时序断言。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param terminal_time 要注入的Gate取消终态Hostµs。
+# @param match 期望ValueError消息的正则片段。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("terminal_time,match", [
     (4400, "Safety Stop CAN SENT follows Gate terminal"),
     (4600, "cancel committed receipt follows Gate terminal"),
@@ -433,6 +521,10 @@ def test_canceled_goal_rejects_raw_stop_after_gate_terminal(
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Action诊断仍UNCONFIRMED时，独立完整raw/回执/Idle证明可使join确认释放，不升级硬件资格。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_raw_join_confirms_cli_unconfirmed_cancel_only_after_full_chain(inputs):
     timeline, raw, action, context, _ = canceled_inputs(inputs)
     unconfirmed_cancel_report(action)
@@ -444,6 +536,10 @@ def test_raw_join_confirms_cli_unconfirmed_cancel_only_after_full_chain(inputs):
     assert joined["release"]["confirmed"] is True
 
 
+##
+# @brief 构造A取消/B重叠拒绝/C未提交的诊断报告，并给A唯一Begin及Query Committed；不生成B或C实际执行。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def preempt_inputs(inputs):
     timeline, raw, action_path, context, records = canceled_inputs(inputs)
     report = unconfirmed_cancel_report(action_path)
@@ -483,6 +579,10 @@ def preempt_inputs(inputs):
     return timeline, raw, action_path, context, records
 
 
+##
+# @brief 核单A取消、B REJECTED、C NOT_SUBMITTED、Begin request3和Release RUN5的相互绑定。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_probe_joins_one_canceled_motion_and_rejected_overlap(inputs):
     timeline, raw, action, context, _ = preempt_inputs(inputs)
     joined = joiner.join_evidence(timeline, raw, action, context)
@@ -493,6 +593,10 @@ def test_preempt_probe_joins_one_canceled_motion_and_rejected_overlap(inputs):
     assert joined["release"]["run_id"] == 5
 
 
+##
+# @brief 构造A取消后新permit、C Begin4→Complete5、最后Release6的两目标链；B仅重叠拒绝声明，全部记录人工。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def recovery_inputs(inputs):
     timeline, raw, action_path, context, records = canceled_inputs(inputs)
     rows = list(csv.reader(timeline.open(newline="")))
@@ -560,6 +664,17 @@ def recovery_inputs(inputs):
     release_last = page(identity, 6, 2, 1, release_first[339:371],
                         release=True, epoch=5, parent=5)
 
+    ##
+    # @par 内部回调 management
+    # 生成成对请求/强响应，明确expected_epoch与response_epoch、Complete/Release终态位及两个Host时间。
+    # 参数 operation：管理操作码，8 Complete、9 Cancel、10 Release等。
+    # 参数 request_id：管理原请求64位ID；本夹具小值也复用作request_seq/op。
+    # 参数 when：Host接收/事件单调时间µs，不是Source生产时钟。
+    # 参数 response_time：强响应Hostµs。
+    # 参数 run：设备RUN/attempt ID，和ROS目标UUID不同。
+    # 参数 expected_epoch：请求expected_motion_epoch原锚。
+    # 参数 response_epoch：强响应当前motion epoch，默认0。
+    # 返回：(请求record bytes, 强响应record bytes)。
     def management(operation, request_id, when, response_time, run,
                    expected_epoch, response_epoch=0):
         request = wire("DummyManageV2Request", device_id="22" * 16,
@@ -614,6 +729,10 @@ def recovery_inputs(inputs):
     return timeline, raw, action_path, context, records
 
 
+##
+# @brief 完整恢复应join A CANCELED、C SUCCEEDED及各自Begin，最后释放RUN6。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_recovery_joins_canceled_a_and_successful_c(inputs):
     timeline, raw, action, context, _ = recovery_inputs(inputs)
     joined = joiner.join_evidence(timeline, raw, action, context)
@@ -622,6 +741,10 @@ def test_preempt_recovery_joins_canceled_a_and_successful_c(inputs):
     assert joined["release"]["run_id"] == 6
 
 
+##
+# @brief A前的初始permit不干扰A→C窗口中唯一新permit，不能把所有历史permit都当多余恢复操作。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_recovery_allows_initial_a_permit_before_fresh_c_permit(inputs):
     timeline, raw, action, context, records = recovery_inputs(inputs)
     request = next(item for item in records if item[0] == 4 and
@@ -644,6 +767,10 @@ def test_preempt_recovery_allows_initial_a_permit_before_fresh_c_permit(inputs):
                 "CANCELED", "SUCCEEDED"]
 
 
+##
+# @brief 恢复窗口再插一次SetPermit请求会造成多余管理操作，拒绝歧义。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_recovery_rejects_second_permit_in_a_to_c_window(inputs):
     timeline, raw, action, context, records = recovery_inputs(inputs)
     request = next(item for item in records if item[0] == 4 and
@@ -659,6 +786,10 @@ def test_preempt_recovery_rejects_second_permit_in_a_to_c_window(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief C Begin的Query字节相同重试两次后单Committed可关联原request6/op6，不重发Begin变更。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_recovery_accepts_bounded_get_operation_retry_for_c_begin(inputs):
     timeline, raw, action, context, records = recovery_inputs(inputs)
     query = wire("DummyManageV2Request", device_id="22" * 16,
@@ -687,6 +818,10 @@ def test_preempt_recovery_accepts_bounded_get_operation_retry_for_c_begin(inputs
     assert joined["begin_motion"][1]["operation_id"] == 6
 
 
+##
+# @brief SetPermit/Begin先Queued Pending op0再强结果合法，Queued本身仍不是Committed。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_recovery_accepts_queued_then_committed_receipts(inputs):
     timeline, raw, action, context, records = recovery_inputs(inputs)
     additions = []
@@ -709,6 +844,10 @@ def test_preempt_recovery_accepts_queued_then_committed_receipts(inputs):
     assert len(joiner.join_evidence(timeline, raw, action, context)["begin_motion"]) == 2
 
 
+##
+# @brief 即使中间Queued不是最终结果，boot99也必须在interim身份门拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_recovery_rejects_wrong_boot_queued_receipt(inputs):
     timeline, raw, action, context, records = recovery_inputs(inputs)
     response = wire("DummyManageV2Response", device_id="22" * 16,
@@ -724,6 +863,10 @@ def test_preempt_recovery_rejects_wrong_boot_queued_receipt(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief C Begin请求及响应一起换device也不能借原目标身份通过，明确断言Begin request绑定错误。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_recovery_rejects_other_device_begin_request(inputs):
     timeline, raw, action, context, records = recovery_inputs(inputs)
     changed = []
@@ -747,6 +890,11 @@ def test_preempt_recovery_rejects_other_device_begin_request(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 十三种C/permit/Begin/Complete/Release缺失、多余、旧epoch或状态冲突逐项ValueError，不宣称每分支走相同首门。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation", [
     "b_accepted", "missing_c", "duplicate_uuid", "wrong_c_status",
     "stale_c_epoch", "missing_permit", "early_permit", "pending_permit",
@@ -826,6 +974,11 @@ def test_preempt_recovery_rejects_unproven_second_motion(inputs, mutation):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief A/B/C UUID/重叠声明、唯一Begin/强结果、额外RUN/Status等十三类歧义均拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation", [
     "same_uuid", "b_accepted", "c_submitted", "overlap_mismatch",
     "missing_begin", "extra_begin", "pending_begin", "wrong_begin_epoch",
@@ -889,6 +1042,10 @@ def test_preempt_probe_fails_closed_on_ambiguous_overlap_or_motion(inputs, mutat
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief UNCONFIRMED取消诊断不能包两目标成功会话伪装最终释放，须报unconfirmed final ROS release。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_unconfirmed_cancel_claim_cannot_wrap_two_successful_goals(inputs):
     timeline, raw, action, context, _ = two_goal_inputs(inputs)
     report = unconfirmed_cancel_report(action)
@@ -900,6 +1057,10 @@ def test_unconfirmed_cancel_claim_cannot_wrap_two_successful_goals(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 独立取消后Release Idle链hash清零必须拒绝，不能只凭Idle状态确认终页。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_cancel_release_idle_must_bind_raw_terminal_chain(inputs):
     timeline, raw, action, context, records = canceled_inputs(inputs)
     unconfirmed_cancel_report(action)
@@ -914,6 +1075,10 @@ def test_cancel_release_idle_must_bind_raw_terminal_chain(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 同时去强Release回执和清Idle hash，明确先报缺Committed receipt，不将它计成单独链hash门覆盖。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_zero_idle_chain_does_not_replace_release_committed_receipt(inputs):
     timeline, raw, action, context, records = canceled_inputs(inputs)
     unconfirmed_cancel_report(action)
@@ -928,6 +1093,12 @@ def test_zero_idle_chain_does_not_replace_release_committed_receipt(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 诊断若自称SUCCEEDED/CONFIRMED/QUALIFIED或未观察到Idle，不能借完整raw洗白其越界声明。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param field 要替换的字段名，来自参数化表。
+# @param value 对应替换值，可能是摘要/ID/状态或字典。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("field,value", [
     ("action_observation", "SUCCEEDED"),
     ("stop_confirmation", "CONFIRMED_RELEASED_IDLE"),
@@ -948,6 +1119,10 @@ def test_unconfirmed_cancel_diagnostic_claim_must_stay_unqualified(
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 将Cancel强结果改Query RID3→原request1/op7，并把Gate cancel_operation7同步，保持其余取消链。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def canceled_query_inputs(inputs):
     timeline, raw, action, context, records = canceled_inputs(inputs)
     rows = list(csv.reader(timeline.open(newline="")))
@@ -968,6 +1143,10 @@ def canceled_query_inputs(inputs):
     return timeline, raw, action, context, records
 
 
+##
+# @brief Query返回op7应join出原取消request1/op7，不能误把Query RID当原变更键。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_canceled_goal_accepts_strict_get_operation_commit(inputs):
     timeline, raw, action, context, _ = canceled_query_inputs(inputs)
     joined = joiner.join_evidence(timeline, raw, action, context)
@@ -975,6 +1154,10 @@ def test_canceled_goal_accepts_strict_get_operation_commit(inputs):
     assert joined["goals"][0]["cancel_operation_id"] == 7
 
 
+##
+# @brief Gate期望op7而Query结果op1，拒绝当前RUN强回执关联。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_canceled_query_rejects_wrong_committed_operation_id(inputs):
     timeline, raw, action, context, records = canceled_query_inputs(inputs)
     response = joiner._decode("DummyManageV2Response", records[8][39:])
@@ -987,6 +1170,12 @@ def test_canceled_query_rejects_wrong_committed_operation_id(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Query指错原request、motion、boot或client逐项拒绝，不重置原请求锚。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param field 要替换的字段名，来自参数化表。
+# @param value 对应替换值，可能是摘要/ID/状态或字典。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("field,value", [
     ("queried_operation_id", 2), ("expected_motion_epoch", 99),
     ("expected_boot_epoch", 3), ("client_instance_id", "33" * 16),
@@ -1004,6 +1193,10 @@ def test_canceled_query_rejects_wrong_original_binding(inputs, field, value):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Release强响应额外motion_complete1与释放语义冲突，必须拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_joiner_release_rejects_motion_complete_on_release_receipt(inputs):
     timeline, raw, action, context, records = canceled_inputs(inputs)
     response = joiner._decode("DummyManageV2Response", records[13][39:])
@@ -1016,6 +1209,11 @@ def test_joiner_release_rejects_motion_complete_on_release_receipt(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 二十四类取消请求/强回执/安全页/释放页/Action观察/Gate键缺失或错值均拒绝，仍以实际ValueError为范围。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation", [
     "pending_cancel", "wrong_cancel_run", "old_cancel_receipt",
     "cancel_motion_complete", "cancel_release_committed",
@@ -1110,6 +1308,10 @@ def test_canceled_goal_rejects_incomplete_or_stale_raw_chain(inputs, mutation):
         joiner.join_evidence(timeline, raw, action_path, context)
 
 
+##
+# @brief 把基本场景扩为同session两个UUID/RUN4/5，只最后Release子RUN6，repin补对应管理记录。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def two_goal_inputs(inputs):
     timeline, raw, action_path, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1180,6 +1382,11 @@ def two_goal_inputs(inputs):
     return timeline, raw, action_path, context, all_records
 
 
+##
+# @brief 人工复制50组目标与每目标可选密集State，RUN4..53最后Release54；固定UUID/digest为夹具值，非50轮设备证据。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param states_per_goal 每合成目标额外State数，默认830，用于规模回归。
+# @return 四文件路径元组，不返回密集record列表。
 def fifty_goal_inputs(inputs, *, states_per_goal=830):
     timeline, raw, action_path, context, original = inputs
     source_rows = list(csv.reader(timeline.open(newline="")))
@@ -1273,6 +1480,10 @@ def fifty_goal_inputs(inputs, *, states_per_goal=830):
     return timeline, raw, action_path, context
 
 
+##
+# @brief 50目标/默认每目标830额外State，核join数量/parent53及耗时<30s；是离线规模回归。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_synthetic_fifty_goal_capture_joins_with_bounded_runtime(inputs):
     timeline, raw, action, context = fifty_goal_inputs(inputs)
     started = time.perf_counter()
@@ -1283,6 +1494,10 @@ def test_synthetic_fifty_goal_capture_joins_with_bounded_runtime(inputs):
     assert elapsed < 30.0
 
 
+##
+# @brief 50目标无额外State时删末目标RUN53终页，仍须明确terminal拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_synthetic_fifty_goal_capture_rejects_missing_final_terminal(inputs):
     timeline, raw, action, context = fifty_goal_inputs(inputs, states_per_goal=0)
     source = raw.read_bytes()
@@ -1301,6 +1516,10 @@ def test_synthetic_fifty_goal_capture_rejects_missing_final_terminal(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 同RUN保birth Hold1→目标2→Complete Hold3全页链，子Release Disable4而终页保birth3，timeline同步。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def mixed_epoch_inputs(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1358,6 +1577,10 @@ def mixed_epoch_inputs(inputs):
     return timeline, raw, action, context, records
 
 
+##
+# @brief 构造RUN5活动Hold2→Disable3→终态birth2，attempt_kind1/final2，加明确Complete与Release成对强回执。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def active_release_inputs(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1377,6 +1600,15 @@ def active_release_inputs(inputs):
                 evidence_chain_sha256=terminal[339:371].hex())
     idle_state = joiner._decode("DummyJointStateV2", records[10][39:])
     idle_state["motion_epoch"] = 3
+    ##
+    # @par 内部回调 manage_pair
+    # 打包Complete8/Release10请求和Committed结果，区别原session3与释放session0及motion_complete/release位。
+    # 参数 operation：管理操作码，8 Complete、9 Cancel、10 Release等。
+    # 参数 request_id：管理原请求64位ID；本夹具小值也复用作request_seq/op。
+    # 参数 request_time：原请求Hostµs。
+    # 参数 response_time：强响应Hostµs。
+    # 参数 run：设备RUN/attempt ID，和ROS目标UUID不同。
+    # 返回：(请求record bytes, 强响应record bytes)。
     def manage_pair(operation, request_id, request_time, response_time, run):
         request = wire("DummyManageV2Request", device_id="22" * 16,
             client_instance_id=identity["client_id"], request_id=request_id,
@@ -1409,6 +1641,10 @@ def active_release_inputs(inputs):
     return timeline, raw, action, context, changed
 
 
+##
+# @brief 活动Hold刷新释放可join CANCELED_AND_RELEASED，核RUN5及管理kind4/5两对，非普通专用Release路径。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_active_hold_refresh_release_joins_raw_management_and_can(inputs):
     timeline, raw, action, context, _ = active_release_inputs(inputs)
     result = joiner.join_evidence(timeline, raw, action, context)
@@ -1417,6 +1653,11 @@ def test_active_hold_refresh_release_joins_raw_management_and_can(inputs):
     assert [item["kind"] for item in result["management_records"]] == [4, 5, 4, 5]
 
 
+##
+# @brief 错client/boot/session、过旧请求或多强结果op冲突均不提供本次Release确认。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ("wrong_client", "wrong_boot", "wrong_session",
                                    "old_request", "conflicting_receipt"))
 def test_release_requires_current_request_and_unambiguous_final_receipt(inputs, change):
@@ -1448,6 +1689,10 @@ def test_release_requires_current_request_and_unambiguous_final_receipt(inputs, 
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 完整Hold→Safety→Disable→终页四类别允许，组phase新epoch3而终页仍birth2。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_active_release_joins_safety_deceleration_before_disable(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     identity = {"client_id": "11" * 16, **{key: "11" * 32 for key in
@@ -1488,6 +1733,10 @@ def test_active_release_joins_safety_deceleration_before_disable(inputs):
     assert result["release"]["terminal"] == "CANCELED_AND_RELEASED"
 
 
+##
+# @brief 仅活动释放场景将Idle Status链清零，其余强回执/原raw终链/身份保持完整；不修改普通独立Release规则。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (timeline, raw, action, context, records)夹具，文件可能原地重写；records是该helper保存的合成列表。
 def zero_active_idle_chain(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     status = joiner._decode("DummyDeviceStatusV2", records[14][39:])
@@ -1499,11 +1748,21 @@ def zero_active_idle_chain(inputs):
     return timeline, raw, action, context, records
 
 
+##
+# @brief 活动释放Idle可清链，但必须靠既有强结果与完整raw终链闭合。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_active_release_accepts_cleared_idle_status_chain_with_raw_terminal(inputs):
     timeline, raw, action, context, _ = zero_active_idle_chain(inputs)
     assert joiner.join_evidence(timeline, raw, action, context)["release"]["run_id"] == 5
 
 
+##
+# @brief 零Idle例外仍拒错非零链、Hold零链、坏/缺终页、Pending回执或身份摘要漂移。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @param match 期望ValueError消息的正则片段。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation,match", [
     ("wrong_nonzero", "terminal chain"),
     ("zero_holding", "HOLD terminal chain"),
@@ -1542,6 +1801,10 @@ def test_zero_idle_chain_keeps_other_release_proofs_mandatory(inputs, mutation, 
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 普通独立Release Idle hash0仍拒绝，不能套用活动刷新释放例外。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_independent_release_still_requires_status_chain_hash(inputs):
     timeline, raw, action, context, records = inputs
     status = joiner._decode("DummyDeviceStatusV2", records[9][39:])
@@ -1554,6 +1817,10 @@ def test_independent_release_still_requires_status_chain_hash(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Disable组epoch3/终页birth2/强结果与Idle3相干可通过，不用末页birth替代当前Idle epoch。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_release_idle_preserves_only_committed_response_motion_epoch(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     identity = {"client_id": "11" * 16, **{key: "11" * 32 for key in
@@ -1585,6 +1852,10 @@ def test_release_idle_preserves_only_committed_response_motion_epoch(inputs):
     assert joiner.join_evidence(timeline, raw, action, context)["release"]["run_id"] == 5
 
 
+##
+# @brief 普通活动Hold组可在用户Release前出现，真正Disable仍须在请求后。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_active_hold_page_may_precede_user_release_request(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     hold = records.pop(10)
@@ -1594,6 +1865,9 @@ def test_active_hold_page_may_precede_user_release_request(inputs):
     assert joiner.join_evidence(timeline, raw, action, context)["release"]["run_id"] == 5
 
 
+##
+# @brief 纯字典helper核忽略请求前Hold、请求后Hold/Disable须在预算，且缺Disable不成立。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_release_dispatch_budget_ignores_prior_hold_but_bounds_late_pages():
     page = lambda when, category: {"when": when, "fields": {"category": category}}
     prior = page(100, 1)
@@ -1609,6 +1883,10 @@ def test_release_dispatch_budget_ignores_prior_hold_but_bounds_late_pages():
         [prior, near_hold], 200, 20)
 
 
+##
+# @brief 刷新Hold可早于Gate pre_release_hold回调，不能误将异步日志接收顺序当发送因果。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_active_hold_page_may_precede_gate_pre_release_hold(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     hold = records.pop(10)
@@ -1619,6 +1897,10 @@ def test_active_hold_page_may_precede_gate_pre_release_hold(inputs):
     assert result["release"]["terminal"] == "CANCELED_AND_RELEASED"
 
 
+##
+# @brief 用户请求6400晚于Disable6300，不可事后认领已发失能组。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_release_request_after_disable_sent_is_rejected(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     request = joiner._decode("DummyManageV2Request", records[9][39:])
@@ -1631,6 +1913,10 @@ def test_release_request_after_disable_sent_is_rejected(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 仅把Gate/双Idle改epoch4而强回执仍3，拒绝Idle身份漂移。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_idle_epoch_without_same_release_receipt_epoch_is_rejected(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1648,6 +1934,10 @@ def test_idle_epoch_without_same_release_receipt_epoch_is_rejected(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief after_begin前的prime反馈不纳目标path误差，仍需后续有效ROS反馈。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_prime_ros_feedback_before_after_begin_is_not_path_evidence(inputs):
     timeline, raw, action, context, _ = inputs
     report = json.loads(action.read_text())
@@ -1660,6 +1950,10 @@ def test_prime_ros_feedback_before_after_begin_is_not_path_evidence(inputs):
     assert result["goals"][0]["path_error_max_rad"] == [0.0] * 6
 
 
+##
+# @brief 只有prime期ROS反馈时拒绝缺post-Begin证据，不能靠raw终点成功代替。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_prime_only_ros_feedback_cannot_prove_motion_path(inputs):
     timeline, raw, action, context, _ = inputs
     report = json.loads(action.read_text())
@@ -1670,6 +1964,10 @@ def test_prime_only_ros_feedback_cannot_prove_motion_path(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief ROS末反馈后Gate延续seq2及邻近raw可覆盖尾隙，仍保持六轴新鲜年龄。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_later_gate_raw_feedback_covers_ros_feedback_tail_gap(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1692,6 +1990,11 @@ def test_later_gate_raw_feedback_covers_ros_feedback_tail_gap(inputs):
     assert result["goals"][0]["feedback_age_us"] == [1000] * 6
 
 
+##
+# @brief 正例由新鲜Run raw接续ROS至Gate；缺/迟raw、错身份/replay、五轴过期/局部seq、错phase/迟Gate均拒。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", (None, "missing_raw", "late_raw", "wrong_identity",
                                    "replayed_seq", "no_gate_continuation",
                                    "delayed_gate", "five_stale_axes", "partial_seq",
@@ -1754,6 +2057,10 @@ def test_ros_handoff_uses_fresh_raw_state_then_gate_feedback(inputs, change):
             joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 有中间与末尾连续raw/Gate反馈时可支持较长终态尾部，不要求持续ROS回调。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_long_terminal_tail_uses_nearby_ros_gate_handoff_and_fresh_raw(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1790,6 +2097,10 @@ def test_long_terminal_tail_uses_nearby_ros_gate_handoff_and_fresh_raw(inputs):
     assert result["goals"][0]["timeline"][-4]["steady_us"] == 505000
 
 
+##
+# @brief 只有两端raw而中间无覆盖的长尾必须报unobserved gap，放宽年龄不补观测。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_long_terminal_tail_without_continuous_gate_raw_path_is_rejected(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1819,6 +2130,10 @@ def test_long_terminal_tail_without_continuous_gate_raw_path_is_rejected(inputs)
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 强Release响应可晚于最终Status回调，但最终完整同事务输入齐备才join。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_release_receipt_may_follow_final_status_callback(inputs):
     timeline, raw, action, context, records = active_release_inputs(inputs)
     response = joiner._decode("DummyManageV2Response", records[13][39:])
@@ -1830,6 +2145,12 @@ def test_release_receipt_may_follow_final_status_callback(inputs):
     assert joiner.join_evidence(timeline, raw, action, context)["release"]["run_id"] == 5
 
 
+##
+# @brief Idle仍有real permit、剩余租约或ref1均拒绝，不仅要求session0。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param field 要替换的字段名，来自参数化表。
+# @param value 对应替换值，可能是摘要/ID/状态或字典。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("field,value", [
     ("real_motion_permitted", 1), ("permit_remaining_us", 1000),
     ("reference_epoch", 1),
@@ -1846,6 +2167,10 @@ def test_active_release_requires_cleared_idle_authority(inputs, field, value):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 旧CSV缺Release request/op列不能被raw自动猜出成功键，必须拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_old_timeline_without_release_key_cannot_join_positive_capture(inputs):
     timeline, raw, action, context, _ = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1858,6 +2183,12 @@ def test_old_timeline_without_release_key_cannot_join_positive_capture(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 缺/Prepared/错请求/RUN、重终页、错Gate键及重签缺轴Disable各有失败，不能因raw SHA自洽放行。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @param match 期望ValueError消息的正则片段。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation,match", [
     ("missing_receipt", "receipt"),
     ("pending_receipt", "receipt"),
@@ -1910,6 +2241,10 @@ def test_active_release_raw_failures_are_not_positive(inputs, mutation, match):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief birth和目标组跨Gate回调接收允许，join保组epoch1/2/3及最终Hold3。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_mixed_epoch_raw_chain_preserves_hold_prefix_and_goal_group(inputs):
     timeline, raw, action, context, records = mixed_epoch_inputs(inputs)
     assert struct.unpack_from("<Q", records[1], 3)[0] < 2000
@@ -1919,6 +2254,10 @@ def test_mixed_epoch_raw_chain_preserves_hold_prefix_and_goal_group(inputs):
     assert result["pre_release_hold"]["motion_epoch"] == 3
 
 
+##
+# @brief 目标epoch页Host收到时间早于before_begin时明确拒绝，不把birth Hold前缀例外扩到运动组。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_goal_epoch_raw_page_cannot_precede_before_begin(inputs):
     timeline, raw, action, context, records = mixed_epoch_inputs(inputs)
     early_goal = record(1, 1990, 2, 3, 4, 1, records[4][39:])
@@ -1929,6 +2268,10 @@ def test_goal_epoch_raw_page_cannot_precede_before_begin(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 晚ROS/Gate反馈可用已进入Complete新Hold3的raw，按对应阶段绑定而非强迫旧运动2。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_late_ros_feedback_binds_complete_hold_raw_state(inputs):
     timeline, raw, action, context, records = mixed_epoch_inputs(inputs)
     rows = list(csv.reader(timeline.open(newline="")))
@@ -1951,6 +2294,10 @@ def test_late_ros_feedback_binds_complete_hold_raw_state(inputs):
     assert result["goals"][0]["timeline"][-4]["motion_epoch"] == 3
 
 
+##
+# @brief 两UUID分别RUN4/5，第一timeline止于Hold，最终Release只链接第二RUN5。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_joins_two_goals_one_session_and_final_release(inputs):
     timeline, raw, action, context, _ = two_goal_inputs(inputs)
     result = joiner.join_evidence(timeline, raw, action, context)
@@ -1960,6 +2307,12 @@ def test_joins_two_goals_one_session_and_final_release(inputs):
     assert result["release"]["parent_run_id"] == 5
 
 
+##
+# @brief 第二终页/session/RUN/hash/轴/Action结果、提前Release及footer计数十类破坏逐项拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @param match 期望ValueError消息的正则片段。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation,match", [
     ("missing_second_terminal", "terminal"),
     ("second_cross_session", "session"),
@@ -2031,6 +2384,10 @@ def test_two_goal_capture_fails_closed(inputs, mutation, match):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 合成wire布局的页/全SENT/Release parent及provenance pin一致可join；名称real wire不等于真实采集。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_joins_real_wire_pages_and_validates(inputs):
     timeline, raw, action, context, _ = inputs
     result = joiner.join_evidence(timeline, raw, action, context)
@@ -2040,6 +2397,10 @@ def test_joins_real_wire_pages_and_validates(inputs):
     assert result["provenance"]["raw_sha256"] == json.loads(context.read_text())["raw_sha256"]
 
 
+##
+# @brief context仅自声明v2方法和统计值而未从raw重核时拒绝，不能靠版本号升级证据。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_joiner_rejects_unverified_window_version(inputs):
     timeline, raw, action, context, _ = inputs
     metadata = json.loads(context.read_text())
@@ -2056,6 +2417,10 @@ def test_joiner_rejects_unverified_window_version(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 重建raw偏移并正确pin/计算v2窗口仍超250ms时直接verify拒绝，文件摘要有效不消除lag。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_joiner_rejects_sha_pinned_over_budget_window(inputs):
     timeline, raw, action, context, _ = inputs
     records = joiner._raw_records(raw.read_bytes())
@@ -2087,6 +2452,11 @@ def test_joiner_rejects_sha_pinned_over_budget_window(inputs):
         joiner._verify_window_context(metadata, timeline.read_bytes(), records)
 
 
+##
+# @brief builder真实离线重算v2后join/application validator皆通过；session文本3/03按数值等价，不表示字符串身份任意规范化。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param session_text CSV session写法3或03，应解析为相同整数。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("session_text", ["3", "03"])
 def test_window_context_joins_valid_raw_capture(inputs, session_text):
     timeline, raw, action, context, _ = inputs
@@ -2110,6 +2480,11 @@ def test_window_context_joins_valid_raw_capture(inputs, session_text):
     assert joined["environment"]["producer_lag_us"] == metadata["producer_lag_us"]
 
 
+##
+# @brief 直接或Query取消强结果的离线窗口重建均可join CANCELED且lag相同。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param queried true用Cancel Query关联，否则直接强响应。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("queried", [False, True])
 def test_canceled_window_context_joins_valid_raw_capture(inputs, queried):
     timeline, raw, action, context, _ = (
@@ -2127,6 +2502,10 @@ def test_canceled_window_context_joins_valid_raw_capture(inputs, queried):
     assert joined["environment"]["producer_lag_us"] == metadata["producer_lag_us"]
 
 
+##
+# @brief CSV非数字session在builder阶段ValueError且不创建context，不让内部解析异常泄漏。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_window_context_rejects_nonnumeric_session(inputs):
     timeline, raw, action, context, _ = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2144,6 +2523,10 @@ def test_window_context_rejects_nonnumeric_session(inputs):
     assert not output.exists()
 
 
+##
+# @brief Status/State及CSV都用wire Hold4可确认，避免旧枚举误映射。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_accepts_real_hold_wire_state_four(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2161,6 +2544,11 @@ def test_accepts_real_hold_wire_state_four(inputs):
     assert joiner.join_evidence(timeline, raw, action, context)["goals"][0]["hold_confirmed"]
 
 
+##
+# @brief Hold hash/attempt/final/lost/run任一错都不提供已验证目标终态。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", [
     {"evidence_chain_sha256": "00" * 32}, {"attempt_kind": 3},
     {"final_state": 7}, {"evidence_lost": 1}, {"run_id": 9},
@@ -2176,6 +2564,11 @@ def test_hold_status_must_bind_verified_terminal_chain(inputs, change):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 独立Release Idle需链hash/attempt3/final8/无lost，不只看core1。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", [
     {"evidence_chain_sha256": "00" * 32},
     {"attempt_kind": 1},
@@ -2193,6 +2586,10 @@ def test_release_idle_status_must_bind_verified_terminal(inputs, change):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 普通独立Release Idle过早且缺适用例外时拒绝，不能假定所有Idle先到皆合法。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_release_idle_status_cannot_precede_terminal_page(inputs):
     timeline, raw, action, context, records = inputs
     early_idle = record(3, 6300, 2, 0, 0, 0, records[9][39:])
@@ -2203,6 +2600,12 @@ def test_release_idle_status_cannot_precede_terminal_page(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 仅joined JSON验证仍UNQUALIFIED；给齐四输入重join后可标ROS_BENCH_E2E_POSITIVE但硬件NOT_ASSERTED，伪provenance拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param tmp_path pytest临时目录Path，所有合成文件/报告只写此处。
+# @param monkeypatch pytest替换fixture，作用域结束恢复属性/环境。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_positive_cli_requires_rejoined_sha_pinned_capture(inputs, tmp_path, monkeypatch):
     timeline, raw, action, context, _ = inputs
     evidence = tmp_path / "joined.json"
@@ -2227,6 +2630,12 @@ def test_positive_cli_requires_rejoined_sha_pinned_capture(inputs, tmp_path, mon
     assert json.loads(report.read_text())["status"] == "FAIL"
 
 
+##
+# @brief 只给raw或context lag超预算均main返回1/FAIL，不能部分补证升级positive。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param tmp_path pytest临时目录Path，所有合成文件/报告只写此处。
+# @param monkeypatch pytest替换fixture，作用域结束恢复属性/环境。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_positive_cli_rejects_partial_capture_and_environment_mismatch(
         inputs, tmp_path, monkeypatch):
     timeline, raw, action, context, _ = inputs
@@ -2246,6 +2655,10 @@ def test_positive_cli_rejects_partial_capture_and_environment_mismatch(
     assert json.loads(report.read_text())["status"] == "FAIL"
 
 
+##
+# @brief 新增第二Gate反馈合法，输出保两行而非只取首尾。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_accepts_multiple_gate_feedback_rows(inputs):
     timeline, raw, action, context, _ = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2259,6 +2672,10 @@ def test_accepts_multiple_gate_feedback_rows(inputs):
     assert [row["event"] for row in result["goals"][0]["timeline"]].count("feedback") == 2
 
 
+##
+# @brief raw中间位置0.08rad越期望路径时拒绝，即使ROS反馈仍0.01rad正常。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_rejects_intermediate_raw_position_off_planned_path(inputs):
     timeline, raw, action, context, records = inputs
     intermediate = joiner._decode("DummyJointStateV2", records[3][39:])
@@ -2274,6 +2691,10 @@ def test_rejects_intermediate_raw_position_off_planned_path(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief State seq10→11→10、Source生产仍增也拒replay；repin显式保留seq避免夹具重写掩盖。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_replayed_raw_state_between_feedback_rows_is_rejected(inputs):
     timeline, raw, action, context, records = inputs
     first = joiner._decode("DummyJointStateV2", records[1][39:])
@@ -2291,6 +2712,10 @@ def test_replayed_raw_state_between_feedback_rows_is_rejected(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Complete3后重新出现birth/旧运动State，拒绝越目标授权阶段。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_old_raw_state_epoch_cannot_reappear_after_complete_phase(inputs):
     timeline, raw, action, context, records = mixed_epoch_inputs(inputs)
     old = joiner._decode("DummyJointStateV2", records[2][39:])
@@ -2302,6 +2727,10 @@ def test_old_raw_state_epoch_cannot_reappear_after_complete_phase(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Source生产时间可相等，明确State seq递增仍接受，不要求误用严格生产时间增长。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_equal_producer_timestamps_with_increasing_state_sequence_are_valid(inputs):
     timeline, raw, action, context, records = inputs
     for index, sequence, produced in ((1, 10, 100), (3, 11, 100), (6, 12, 200)):
@@ -2314,6 +2743,10 @@ def test_equal_producer_timestamps_with_increasing_state_sequence_are_valid(inpu
     assert joiner.join_evidence(timeline, raw, action, context)["goals"][0]["run_id"] == 4
 
 
+##
+# @brief State seq增但Source时间200→100回退仍拒绝，接收顺序不能修复源时钟回退。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_regressing_producer_timestamp_is_rejected(inputs):
     timeline, raw, action, context, records = inputs
     for index, sequence, produced in ((1, 10, 200), (3, 11, 100), (6, 12, 300)):
@@ -2327,6 +2760,10 @@ def test_regressing_producer_timestamp_is_rejected(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 最后Gate反馈后raw短暂偏到0.08又回目标也必须纳path检查，不能只看Gate采样点。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_raw_state_excursion_after_last_gate_feedback_is_rejected(inputs):
     timeline, raw, action, context, records = inputs
     state = joiner._decode("DummyJointStateV2", records[3][39:])
@@ -2341,6 +2778,10 @@ def test_raw_state_excursion_after_last_gate_feedback_is_rejected(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Gate末反馈到终态/Hold间无连续State覆盖，500ms年龄设置也不能跨大空洞。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_unobserved_final_gate_to_terminal_state_gap_is_rejected(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2366,6 +2807,10 @@ def test_unobserved_final_gate_to_terminal_state_gap_is_rejected(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Gate对应raw偏移也计入最大path误差，不能只采用正常ROS actual。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_gate_feedback_raw_position_contributes_to_path_error(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2388,6 +2833,10 @@ def test_gate_feedback_raw_position_contributes_to_path_error(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Gate时间处按ROS desired线性插值核raw位置，正例最大误差0.0025rad而非只对固定终点。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_gate_feedback_uses_interpolated_ros_desired_position(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2421,6 +2870,10 @@ def test_gate_feedback_uses_interpolated_ros_desired_position(inputs):
     assert result["goals"][0]["path_error_max_rad"] == pytest.approx([0.0025] * 6)
 
 
+##
+# @brief 后续Hold raw0.015与目标0.01差0.005rad超goal0.003，ROS样本较近也不能成功。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_final_raw_position_must_reach_target_within_goal_tolerance(inputs):
     timeline, raw, action, context, records = inputs
     report = json.loads(action.read_text())
@@ -2437,6 +2890,11 @@ def test_final_raw_position_must_reach_target_within_goal_tolerance(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 末ROS附近raw和稍后Hold各按自己时间位置核；缺/旧/错身份/过期/样本不符、Hold超界或中途偏移分别拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", (None, "missing_near", "stale_near",
                                    "wrong_identity", "stale_axes",
                                    "sample_mismatch", "hold_outside",
@@ -2507,6 +2965,10 @@ def test_final_ros_sample_and_later_hold_use_their_own_raw_positions(inputs, cha
             joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 同goal反馈CSV ref9不能借原ref1 raw绑定。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_rejects_reference_epoch_drift_in_gate_timeline(inputs):
     timeline, raw, action, context, _ = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2518,6 +2980,10 @@ def test_rejects_reference_epoch_drift_in_gate_timeline(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Hold前Status摘要原字节翻转须身份拒绝，输入文件重新pin不消除语义漂移。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_rejects_status_hash_drift_before_hold(inputs):
     timeline, raw, action, context, records = inputs
     changed = bytearray(records[5])
@@ -2529,6 +2995,12 @@ def test_rejects_status_hash_drift_before_hold(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 缺终页、跨session、prior歧义、raw截断、错文件SHA或无COMPLETE逐项按原消息拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @param match 期望ValueError消息的正则片段。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation,match", [
     ("missing_terminal", "terminal"),
     ("cross_session", "session"),
@@ -2564,6 +3036,10 @@ def test_rejects_unbound_or_incomplete_capture(inputs, mutation, match):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief context缺client_id须MISSING_INPUT，不从raw自行猜出操作者owner。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_missing_external_metadata_fails_closed(inputs):
     timeline, raw, action, context, _ = inputs
     value = json.loads(context.read_text())
@@ -2573,6 +3049,10 @@ def test_missing_external_metadata_fails_closed(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Action轨迹digest改c但CSV仍b，pin同步后也因跨输入绑定不符拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_trajectory_digest_must_bind_to_gate(inputs):
     timeline, raw, action, context, _ = inputs
     value = json.loads(action.read_text())
@@ -2583,6 +3063,10 @@ def test_trajectory_digest_must_bind_to_gate(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Action反馈elapsed1s超本窗口，即使终态raw存在仍报ROS feedback time。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_rejects_stale_ros_feedback_elapsed_time(inputs):
     timeline, raw, action, context, _ = inputs
     value = json.loads(action.read_text())
@@ -2593,6 +3077,10 @@ def test_rejects_stale_ros_feedback_elapsed_time(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 缺action_started_steady_us不能将elapsed映射Host域，必须MISSING_INPUT。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_missing_action_clock_anchor_fails_closed(inputs):
     timeline, raw, action, context, _ = inputs
     value = json.loads(action.read_text())
@@ -2603,6 +3091,10 @@ def test_missing_action_clock_anchor_fails_closed(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Release首组早于前目标终页，不能在目标未闭合时提前释放。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_release_page_before_motion_terminal_is_rejected(inputs):
     timeline, raw, action, context, records = inputs
     early_release = record(1, 4100, 2, 3, 5, 0, records[7][39:])
@@ -2613,6 +3105,10 @@ def test_release_page_before_motion_terminal_is_rejected(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief ROS actual0.0101与raw0.01可在预算包络内不同；输出feedback_rad仍取后续已确认Hold，而非改原ROS值。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_ros_feedback_and_raw_state_need_only_bounded_agreement(inputs):
     timeline, raw, action, context, _ = inputs
     report = json.loads(action.read_text())
@@ -2623,6 +3119,10 @@ def test_ros_feedback_and_raw_state_need_only_bounded_agreement(inputs):
     assert result["goals"][0]["feedback_rad"] == [0.01] * 6  # 终态字段取已确认 Hold；ROS 回调仍按原界限核验。
 
 
+##
+# @brief 同周期反馈先于after_begin50µs，存在对应prior State且预算允许时可join。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_same_cycle_feedback_receive_time_can_precede_after_begin(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2637,6 +3137,10 @@ def test_same_cycle_feedback_receive_time_can_precede_after_begin(inputs):
     assert result["goals"][0]["timeline"][3]["steady_us"] == 2950
 
 
+##
+# @brief raw首/终页可跨after_begin/terminal回调接收，仍按wire身份/页链与有限顺序规则绑定。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_async_raw_pages_can_straddle_gate_callbacks(inputs):
     timeline, raw, action, context, records = inputs
     first = record(1, 2950, 2, 3, 4, 0, records[2][39:])
@@ -2648,6 +3152,10 @@ def test_async_raw_pages_can_straddle_gate_callbacks(inputs):
     assert result["goals"][0]["evidence_pages"][0]["raw_hex"] == records[2][39:].hex()
 
 
+##
+# @brief 末ROS与Gate反馈超明确500µs交接预算时拒绝，不能只靠最终Hold补齐。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_final_ros_feedback_requires_nearby_gate_handoff(inputs):
     timeline, raw, action, context, _ = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2667,6 +3175,10 @@ def test_final_ros_feedback_requires_nearby_gate_handoff(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Gate使用回调前已收到的缓存Status/State，只要各自预算合法，不要求采样时间恰好相同。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_gate_uses_prior_cached_state_and_status(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2691,6 +3203,10 @@ def test_gate_uses_prior_cached_state_and_status(inputs):
     assert result["goals"][0]["run_id"] == 4
 
 
+##
+# @brief 看到后继RUN5 Status却无严格首页证明时，旧观测尚新也不能确认旧Hold。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_hold_rejects_unverified_later_run_despite_fresh_old_observations(inputs):
     timeline, raw, action, context, records = inputs
     rows = list(csv.reader(timeline.open(newline="")))
@@ -2711,6 +3227,11 @@ def test_hold_rejects_unverified_later_run_despite_fresh_old_observations(inputs
             json.loads(context.read_text()))
 
 
+##
+# @brief 旧status/state缺失/失鲜，后继页/身份/哈希不全等不能借新RUN Status挽救旧Hold。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ("stale", "missing_old_status", "missing_later_page",
                                    "wrong_hash", "wrong_session", "wrong_run",
                                    "early_state"))
@@ -2749,6 +3270,10 @@ def test_later_run_status_cannot_rescue_unverified_hold(inputs, change):
                                   51909182709 if change == "stale" else 4500)
 
 
+##
+# @brief 构造旧RUN4终态/Hold、RUN5严格首SENT页及较晚新Status/State；首页sent_at6200用于先后证明，元数据可按例改造。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return 合成已解析record字典列表；局部helper测试可额外覆写字段，不是真实索引容器的新采集。
 def refresh_hold_records(inputs):
     _, _, _, _, raw_records = inputs
     records = joiner._raw_records(b"DPRAW01\0" + b"".join(raw_records))
@@ -2779,6 +3304,10 @@ def refresh_hold_records(inputs):
             next_status, next_state]
 
 
+##
+# @brief 旧Cancel final7完整链+State+严格后继首组可替代缺旧Status，返回proof_source而非伪称收到旧Status。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_canceled_hold_terminal_and_successor_can_prove_missing_old_status(inputs):
     _, _, _, _, raw_records = inputs
     original = joiner._raw_records(b"DPRAW01\0" + b"".join(raw_records))
@@ -2798,6 +3327,10 @@ def test_canceled_hold_terminal_and_successor_can_prove_missing_old_status(input
     assert state["when"] == 6000
 
 
+##
+# @brief 删旧Hold Status但保目标完整页链、旧State和后继首页/双流，供严格替代路径。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return 合成已解析record字典列表；局部helper测试可额外覆写字段，不是真实索引容器的新采集。
 def completed_hold_without_old_status(inputs):
     _, _, _, _, raw_records = inputs
     original = joiner._raw_records(b"DPRAW01\0" + b"".join(raw_records))
@@ -2805,6 +3338,10 @@ def completed_hold_without_old_status(inputs):
     return [original[2], records[0], records[2], *records[3:]]
 
 
+##
+# @brief 构造三组count领先平台2/2/3及后继count2并重签，核异步计数报告可领先但不倒退/少总数。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return 合成已解析record字典列表；局部helper测试可额外覆写字段，不是真实索引容器的新采集。
 def completed_hold_with_leading_group_counts(inputs):
     records = completed_hold_without_old_status(inputs)
     identity = {"client_id": "11" * 16, **{key: "11" * 32 for key in
@@ -2831,6 +3368,10 @@ def completed_hold_with_leading_group_counts(inputs):
     return [*motion, records[2], successor, *records[4:]]
 
 
+##
+# @brief 完整连续页序与总数一致时，领先平台count和后继count2不误拒，返回terminal_state_successor。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_completed_hold_accepts_leading_plateau_groups_and_successor_count_two(inputs):
     status, state = joiner._hold_observations(
         completed_hold_with_leading_group_counts(inputs), 400020,
@@ -2839,6 +3380,11 @@ def test_completed_hold_accepts_leading_plateau_groups_and_successor_count_two(i
     assert state["when"] == 6000
 
 
+##
+# @brief 缺/乱页、计数倒退或错误终总数即使部分字段形状正常仍拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ("missing_page", "reordered_page",
                                    "decreasing_count", "wrong_terminal_total"))
 def test_completed_hold_leading_groups_rejects_broken_sequence(inputs, change):
@@ -2858,6 +3404,10 @@ def test_completed_hold_leading_groups_rejects_broken_sequence(inputs, change):
                                   4, 250000, 4500, "11" * 16)
 
 
+##
+# @brief 完整旧Complete final6及新首页可证明缺旧Status的Hold，保run4/motion_complete声明来源。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_completed_hold_terminal_and_successor_can_prove_missing_old_status(inputs):
     status, state = joiner._hold_observations(
         completed_hold_without_old_status(inputs), 400020,
@@ -2868,6 +3418,10 @@ def test_completed_hold_terminal_and_successor_can_prove_missing_old_status(inpu
     assert state["when"] == 6000
 
 
+##
+# @brief 旧中间State缺失可用严格后继新State；再缺新State则拒绝，不允许凭页链独立猜姿态。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_completed_hold_successor_state_can_prove_missing_intermediate_state(inputs):
     records = completed_hold_without_old_status(inputs)
     records.pop(2)
@@ -2881,6 +3435,10 @@ def test_completed_hold_successor_state_can_prove_missing_intermediate_state(inp
             records, 400020, (2, 3, 1, 2), 4, 250000, 4500, "11" * 16)
 
 
+##
+# @brief Host晚收但Source产生早于继任SENT的State不能冒充继任后Hold位置。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_completed_hold_rejects_delayed_pre_successor_state(inputs):
     records = completed_hold_without_old_status(inputs)
     records.pop(2)
@@ -2891,6 +3449,12 @@ def test_completed_hold_rejects_delayed_pre_successor_state(inputs):
             records, 400020, (2, 3, 1, 2), 4, 250000, 4500, "11" * 16)
 
 
+##
+# @brief 修改failure_source/axis/reason并重签有效SHA仍拒绝，证明不是只查密码摘要形状。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param field 要替换的字段名，来自参数化表。
+# @param value 对应替换值，可能是摘要/ID/状态或字典。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("field,value", (("first_failure_source", 1),
                                          ("first_failure_axis_mask", 1),
                                          ("terminal_reason", 1)))
@@ -2910,6 +3474,11 @@ def test_completed_hold_rejects_rehashed_failure_terminal(inputs, field, value):
                                   4, 250000, 4500, "11" * 16)
 
 
+##
+# @brief 十三类旧链/末页/新页/State/Status身份新鲜度缺失使替代路径关闭，不能任意从新RUN推旧成功。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ("missing_state", "foreign_state", "partial_state",
                                    "stale_state", "broken_terminal_chain",
                                    "partial_terminal", "wrong_group_count",
@@ -2961,6 +3530,10 @@ def test_completed_hold_without_old_status_rejects_incomplete_proof(inputs, chan
                                   4, 250000, 4500, "11" * 16)
 
 
+##
+# @brief 后继Status换device即拒绝，不因同session/run连续就跨设备补证。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_canceled_hold_without_old_status_rejects_other_device_successor(inputs):
     _, _, _, _, raw_records = inputs
     original = joiner._raw_records(b"DPRAW01\0" + b"".join(raw_records))
@@ -2979,6 +3552,10 @@ def test_canceled_hold_without_old_status_rejects_other_device_successor(inputs)
             records, 400020, (2, 3, 1, 2), 4, 250000, 4500, "11" * 16, 7)
 
 
+##
+# @brief Begin prior Status是另一device，即使raw页来自正确设备也拒绝混合。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_goal_rejects_other_device_begin_status(inputs):
     timeline, raw, action, context, records = inputs
     status = joiner._decode("DummyDeviceStatusV2", records[0][39:])
@@ -2990,6 +3567,11 @@ def test_goal_rejects_other_device_begin_status(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief Cancel替代路径仍要State、旧终链、同session后继及首页，缺任一拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ("missing_state", "broken_terminal_chain",
                                    "wrong_successor_session", "missing_successor_page"))
 def test_canceled_hold_without_old_status_rejects_incomplete_raw_proof(inputs, change):
@@ -3019,6 +3601,10 @@ def test_canceled_hold_without_old_status_rejects_incomplete_raw_proof(inputs, c
             records, 400020, (2, 3, 1, 2), 4, 250000, 4500, "11" * 16, 7)
 
 
+##
+# @brief 旧Status已老但严格新首页/双流证明连续固定Hold时允许有限替代，不一般豁免Status失鲜。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_stale_old_status_can_close_verified_fresh_refresh_hold(inputs):
     records = refresh_hold_records(inputs)
     status, state = joiner._hold_observations(
@@ -3026,6 +3612,11 @@ def test_stale_old_status_can_close_verified_fresh_refresh_hold(inputs):
     assert (status["fields"]["run_id"], state["when"]) == (4, 6000)
 
 
+##
+# @brief 旧Hold尚新也必须验证已可见后继链/全轴/attempt/motion，不能直接忽略不可信新RUN。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ("valid", "broken_chain", "missing_axis",
                                    "wrong_attempt_run", "wrong_epoch"))
 def test_fresh_old_hold_still_verifies_visible_successor(inputs, change):
@@ -3051,6 +3642,11 @@ def test_fresh_old_hold_still_verifies_visible_successor(inputs, change):
                                       4, 250000, 4500, "11" * 16)
 
 
+##
+# @brief 后继parent/epoch/链、旧新观测年龄、mask/failed/final等十二类错值拒绝连续Hold证明。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ("wrong_parent", "wrong_epoch", "wrong_chain",
                                    "stale_old_status", "invalid_next_run",
                                    "stale_next_status", "invalid_next_state",
@@ -3090,6 +3686,10 @@ def test_refresh_hold_rejects_unlinked_or_stale_successor(inputs, change):
                                   4, 250000, 4500, "11" * 16)
 
 
+##
+# @brief 唯一Status在after_begin之后，不能倒用未来观测作prior Begin确认。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_future_only_raw_status_cannot_confirm_begin(inputs):
     timeline, raw, action, context, records = inputs
     late_status = record(3, 3100, 2, 3, 0, 0, records[0][39:])
@@ -3099,6 +3699,10 @@ def test_future_only_raw_status_cannot_confirm_begin(inputs):
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 活动释放且Idle清链时，可先到Status后到raw末页，但强请求/op/身份仍绑定。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_active_release_idle_status_before_terminal_page_is_bound_to_request(inputs):
     timeline, raw, action, context, records = zero_active_idle_chain(inputs)
     fields = joiner._decode("DummyDeviceStatusV2", records[14][39:])
@@ -3109,6 +3713,11 @@ def test_active_release_idle_status_before_terminal_page_is_bound_to_request(inp
     assert joiner.join_evidence(timeline, raw, action, context)["release"]["run_id"] == 5
 
 
+##
+# @brief 请求前Idle、错op或错非零链不能套用提前Idle例外。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param mutation 本参数化用例的故障分支名，实际范围见分支与首断言。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("mutation", ["before_request", "wrong_operation", "wrong_chain"])
 def test_early_release_idle_never_substitutes_old_or_unlinked_status(inputs, mutation):
     timeline, raw, action, context, records = zero_active_idle_chain(inputs)
@@ -3124,6 +3733,10 @@ def test_early_release_idle_never_substitutes_old_or_unlinked_status(inputs, mut
         joiner.join_evidence(timeline, raw, action, context)
 
 
+##
+# @brief 先join原A取消证据，再构造严格RUN5活动Hold3/Disable4末页birth3及新鲜双流，供_preempt_probe局部helper。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return (Action字典, 原goal timeline, 已解析records, 原goal, 原release, context路径)。
 def preempt_verified_active_refresh(inputs):
     timeline, raw, action, context, packed = preempt_inputs(inputs)
     original=joiner.join_evidence(timeline,raw,action,context)
@@ -3133,6 +3746,13 @@ def preempt_verified_active_refresh(inputs):
     hold=page(identity,5,2,0,b"",active_release=True,epoch=3,group_count=2,group_id=9)
     disable=page(identity,5,2,1,hold[339:371],active_release=True,epoch=4,group_count=2,group_id=10,category=3)
     last=page(identity,5,2,2,disable[339:371],active_release=True,epoch=3,group_count=2)
+    ##
+    # @par 内部回调 evidence
+    # 把合成Evidence payload包成已解析样式record字典，不进行设备采集或文件SHA校验。
+    # 参数 payload：原wire bytes，不含DPRAW文件magic。
+    # 参数 when：Host接收/事件单调时间µs，不是Source生产时钟。
+    # 参数 seq：本页/DPRAW外层序号，具体见helper约定。
+    # 返回：含kind/when/身份/raw/decoded fields的普通dict。
     def evidence(payload,when,seq):
         return {"kind":1,"when":when,"boot":2,"session":3,"run":5,"seq":seq,
                 "raw":payload,"fields":joiner._decode("DummyAttemptEvidenceV2",payload)}
@@ -3148,6 +3768,10 @@ def preempt_verified_active_refresh(inputs):
             original["goals"][0],original["release"],context)
 
 
+##
+# @brief 局部preempt helper接受已验证活动Hold刷新，仍识别原A goal/run，不证明第二目标执行。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_preempt_probe_accepts_verified_active_hold_refresh_before_disable(inputs):
     action,rows,records,goal,release,context=preempt_verified_active_refresh(inputs)
     actual=joiner._preempt_probe(action,rows,records,goal,release,"11"*16,
@@ -3155,6 +3779,11 @@ def test_preempt_probe_accepts_verified_active_hold_refresh_before_disable(input
     assert actual["run_id"]==4 and actual["goal_id"]==goal["goal_id"]
 
 
+##
+# @brief boot/session/ref/motion/非Hold、坏/缺首页、错client/第二Begin及失鲜十类破坏均拒绝。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @param change 参数化变异名/字段字典或None正例，按本用例实际分支解释。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 @pytest.mark.parametrize("change", ["boot", "session", "reference", "epoch", "not_hold",
     "bad_chain", "missing_successor", "wrong_client", "second_begin", "stale_state"])
 def test_preempt_active_hold_refresh_still_rejects_unverified_context(inputs, change):
@@ -3186,6 +3815,10 @@ def test_preempt_active_hold_refresh_still_rejects_unverified_context(inputs, ch
                              json.loads(context.read_text())["gate_state_max_age_us"])
 
 
+##
+# @brief 末ROS尚0.006rad而后Gate/Hold到0.01，终feedback取确认Hold，path最大误差仍0.004，不能相互覆盖。
+# @param inputs inputs fixture的(timeline, raw, action, context, 原始record列表)；全部人工，不是设备采集。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_success_uses_verified_terminal_hold_not_earlier_ros_path_sample(inputs):
     timeline, raw, action, context, records = inputs
     for index in (1,3):

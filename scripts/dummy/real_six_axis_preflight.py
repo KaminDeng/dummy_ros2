@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+##
+# @file real_six_axis_preflight.py
+# @brief 核历史v2.4六轴bundle的离线自洽，始终拒绝运动资格。
+#
+# CLI只验证端点/ID文本与文件，不调用verify_live_stm32_usb、不打开串口；总是motion_eligible=false且退出1。
+# 文件内另有显式live USB属性helper，会查询udev和设备节点，不能因为CLI离线就把所有函数都称纯内存。
+# 只接受历史dummy-wire-v2.4，后续schema/release不能因相似名字自动通过；自洽manifest不等于外部可信签名。
 """只读检查真实六轴 bundle；当前没有最终许可时一律不签发运动资格。"""
 
 import argparse
@@ -12,6 +19,9 @@ import subprocess
 import yaml
 
 
+##
+# @brief 固定六轴顺序、模型/profile payload路径以及STM32 by-id端点正则。
+# 设备短序列号须与调用者期望精确相同；正则只约束名称，不能单独证明当前USB设备身份。
 JOINTS = [f"Joint{axis}" for axis in range(1, 7)]
 PROFILE = "profiles/f405_6dof_bench.yaml"
 MODEL = "model/model.yaml"
@@ -21,6 +31,11 @@ STM32_BY_ID = re.compile(
 )
 
 
+##
+# @brief 拒绝默认ttyACM0及非显式串行端点形状。
+# @param endpoint 115200串行端点字符串，允许ttyACM正整数或指定STM32 by-id名称。
+# @return 原文本；不符ValueError。
+# ttyACM分支不能以0开头；这里只核字符串，不stat、不udev、不连接设备。
 def validate_endpoint(endpoint):
     pattern = (r"serial//dev/(?:ttyACM[1-9][0-9]*|"
                r"serial/by-id/usb-Dummy_Robotics_STM32_Virtual_ComPort_in_FS_Mode_[A-Za-z0-9]+-if00)"
@@ -30,6 +45,11 @@ def validate_endpoint(endpoint):
     return endpoint
 
 
+##
+# @brief 要求指定STM32 by-id端点并绑定短序列号。
+# @param endpoint 必须匹配STM32_BY_ID的完整文本。
+# @param expected_serial 期望短序列号，精确比较捕获字段。
+# @return 去serial/及波特后缀后的/dev/serial/by-id Path；未检查存在。
 def stm32_by_id_path(endpoint, expected_serial):
     match = STM32_BY_ID.fullmatch(endpoint)
     if match is None or match.group(1) != expected_serial:
@@ -37,6 +57,13 @@ def stm32_by_id_path(endpoint, expected_serial):
     return Path(endpoint.split("#", 1)[0].removeprefix("serial/"))
 
 
+##
+# @brief 核调用方提供的udev属性与指定USB身份。
+# @param endpoint STM32 by-id端点。
+# @param expected_serial 期望ID_SERIAL_SHORT。
+# @param properties 已解析属性映射，需usb/1209/7461/interface00/cdc_acm及ttyACM DEVNAME。
+# @return 全部字段相符True，否则ValueError；本函数本身不运行udevadm。
+# 匹配描述符不是固件镜像SHA/会话许可认证。
 def validate_live_usb_properties(endpoint, expected_serial, properties):
     stm32_by_id_path(endpoint, expected_serial)
     required = {
@@ -51,6 +78,12 @@ def validate_live_usb_properties(endpoint, expected_serial, properties):
     return True
 
 
+##
+# @brief 显式查询当前by-id节点与udev属性，核前后目标未改变。
+# @param endpoint 仅支持指定STM32 by-id端点。
+# @param expected_serial 期望设备短序列号。
+# @return 解析后的字符设备Path；缺symlink、属性不符、目标变化、3s命令超时或I/O错误失败。
+# 运行udevadm info但不open串口收发。检查与后续使用非原子，不能概括为抵御所有并发设备替换；main没有调用此helper。
 def verify_live_stm32_usb(endpoint, expected_serial):
     by_id = stm32_by_id_path(endpoint, expected_serial)
     if not by_id.is_symlink():
@@ -75,6 +108,12 @@ def verify_live_stm32_usb(endpoint, expected_serial):
     return target
 
 
+##
+# @brief 按清单逐文件重算SHA并核历史六轴角色。
+# @param root 存在的bundle目录，含manifest/model/profile。
+# @return bundle_verified=true的报告，但motion_eligible恒false；文件/形状/身份错误抛异常。
+# 拒绝绝对/..路径、越根、重复payload和未排序清单，重算path:hash无尾换行的聚合SHA。
+# 模型只核关节名称顺序，profile核名称/id201/mask63/活动轴/test_only；不做完整真实机械模型校准/策略验证，也不要求目录无额外文件。
 def inspect_bundle(root):
     root = Path(root).resolve(strict=True)
     manifest = json.loads((root / "manifest.json").read_text())
@@ -117,6 +156,11 @@ def inspect_bundle(root):
             "profile_sha256": verified[PROFILE], "motion_eligible": False, "reason": reason}
 
 
+##
+# @brief 离线整理端点、ID和bundle检查报告。
+# @return 无论检查成功失败都返回1，表示没有最终运动资格；报告写失败可另抛异常。
+# device/client必须为32个小写十六进制字符（128bit）、且非全零，serial形状允许下划线/短横；此入口不核其与by-id捕获序列号一致，不调用live USB helper。
+# 成功reason按design_seed_default_deny或final_release_identity_not_integrated区分，不能把bundle_verified=true当允许launch/激活。
 def main():
     parser = argparse.ArgumentParser(description="离线检查真实六轴 bundle，不打开串口或运动授权")
     parser.add_argument("--bundle", type=Path, required=True)

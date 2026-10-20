@@ -1,0 +1,1150 @@
+/**
+ * @struct dp_protocol_lite_capability_bitmap_v1_t
+ * @brief 41字节Lite能力分页声明，16字节catalog/16字节能力页及页号、codec/QoS支持位。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_lite_heartbeat_v1_t
+ * @brief 8字节Lite启动时间/健康标志声明，不实施超时检测或续租。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_lite_key_rotate_v1_t
+ * @brief 13字节Lite密钥轮换阶段声明，不包含密钥，不写安全存储或安排激活。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_lite_link_hello_v1_t
+ * @brief 45字节Lite初始握手声明，包含版本、产品、启动计数、设备ID、catalog、安全profile和最大payload。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_lite_link_reset_v1_t
+ * @brief 6字节Lite链路reset命令声明；世代/原因/模式搬运不触发reset或安全动作。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_lite_route_t
+ * @brief 静态interface到capability/access/尺寸/codec/QoS绑定行，不提供运行授权或注册连接。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_qos_profile_descriptor_t
+ * @brief 静态QoS能力描述行，包含可靠性/历史/depth/优先级/背压/毫秒deadline，不实现这些运行策略。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_tiny_device_status_t
+ * @brief 7字节历史packed设备状态，uptime4/voltage2/flags1；memcpy accessor沿宿主端序。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_tiny_device_status_view_t
+ * @brief 按字段记录present/valid/value的拥有式解析视图，允许部分字段缺失/非法。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_u16_field_view_t
+ * @brief 按字段记录present/valid/value的拥有式解析视图，允许部分字段缺失/非法。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_u32_field_view_t
+ * @brief 按字段记录present/valid/value的拥有式解析视图，允许部分字段缺失/非法。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp_protocol_u8_field_view_t
+ * @brief 按字段记录present/valid/value的拥有式解析视图，允许部分字段缺失/非法。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_PROTOCOL_MAJOR
+ * @brief Lite链路协议声明版本2.0；raw decoder只搬字段，不自动核相等。
+ *
+ * 原宏展开文本：2u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_PROTOCOL_MINOR
+ * @brief Lite链路协议声明版本2.0；raw decoder只搬字段，不自动核相等。
+ *
+ * 原宏展开文本：0u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CATALOG_FINGERPRINT_SIZE
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：16u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_PAGE_BYTES
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：16u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_MAX_CAPABILITY_PAGES
+ * @brief Lite能力分页生成上限8页；raw decoder不单独核该上限或收齐页面。
+ *
+ * 原宏展开文本：8u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp_protocol_lite_catalog_fingerprint
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：const uint8_t；初始化表达式：。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_LOG_STREAM_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：1u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_LOG_REMOTE_LEVEL_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：2u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_CRASH_DUMP_PUBLISH_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：3u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_CRASH_FILE_TRANSFER_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：4u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_CRASH_ANNOUNCE_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：5u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_OFFLINE_LOG_FILE_TRANSFER_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：6u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_OFFLINE_LOG_FILE_TRANSFER_V2_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：7u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_OFFLINE_LOG_MANIFEST_V2_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：8u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_OFFLINE_LOG_PREVIEW_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：9u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_OFFLINE_LOG_COMMAND_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：10u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_OFFLINE_LOG_COMMAND_V2_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：11u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_FILE_TRANSFER_SERVER_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：12u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_DEVICE_STATUS_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：13u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_DP_PROTOCOL_CAPABILITY_ANNOUNCE_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：14u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_DP_PROTOCOL_CAPABILITY_QUERY_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：15u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_CONTROL_JOINT_STATE_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：16u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_CONTROL_JOINT_COMMAND_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：17u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_LOG_STREAM_TINY_V1_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：18u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_PRODUCT_DP_STM32F746_DISC_OFFLINE_LOG_SERVER_USB_ECM_ID
+ * @brief 产品catalog数值ID，不是设备唯一身份或当前激活profile。
+ *
+ * 原宏展开文本：1u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CODEC_RAW_FIXED_BIT
+ * @brief codec/QoS profile位；两类位集属于不同语义，不自动协商或创建可靠通道。
+ *
+ * 原宏展开文本：(1u &lt;&lt; 0u)。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CODEC_BOUNDED_TLV_BIT
+ * @brief codec/QoS profile位；两类位集属于不同语义，不自动协商或创建可靠通道。
+ *
+ * 原宏展开文本：(1u &lt;&lt; 1u)。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_QOS_BEST_EFFORT_SENSOR_BIT
+ * @brief codec/QoS profile位；两类位集属于不同语义，不自动协商或创建可靠通道。
+ *
+ * 原宏展开文本：(1u &lt;&lt; 0u)。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_QOS_RELIABLE_CONTROL_BIT
+ * @brief codec/QoS profile位；两类位集属于不同语义，不自动协商或创建可靠通道。
+ *
+ * 原宏展开文本：(1u &lt;&lt; 1u)。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @typedef dp_protocol_qos_reliability_t
+ * @brief QoS声明的best-effort/reliable可靠性分类；枚举不提供ACK或重传。
+ *
+ * 实际值：DP_PROTOCOL_QOS_RELIABILITY_BEST_EFFORT = 0；DP_PROTOCOL_QOS_RELIABILITY_RELIABLE = 1。不同结果枚举/codec profile/Lite位集不可按名字或数值混用；取值本身不代表消息已认证、动作成功或运行策略已生效。
+ */
+
+/**
+ * @typedef dp_protocol_qos_history_t
+ * @brief QoS历史策略枚举，当前仅keep-last，实际队列管理在运行层。
+ *
+ * 实际值：DP_PROTOCOL_QOS_HISTORY_KEEP_LAST = 0。不同结果枚举/codec profile/Lite位集不可按名字或数值混用；取值本身不代表消息已认证、动作成功或运行策略已生效。
+ */
+
+/**
+ * @typedef dp_protocol_qos_durability_t
+ * @brief QoS持久性枚举，当前仅volatile，不表示消息已存盘。
+ *
+ * 实际值：DP_PROTOCOL_QOS_DURABILITY_VOLATILE = 0。不同结果枚举/codec profile/Lite位集不可按名字或数值混用；取值本身不代表消息已认证、动作成功或运行策略已生效。
+ */
+
+/**
+ * @typedef dp_protocol_qos_backpressure_t
+ * @brief QoS背压drop/block声明，codec不会因此阻塞等待资源。
+ *
+ * 实际值：DP_PROTOCOL_QOS_BACKPRESSURE_DROP = 0；DP_PROTOCOL_QOS_BACKPRESSURE_BLOCK = 1。不同结果枚举/codec profile/Lite位集不可按名字或数值混用；取值本身不代表消息已认证、动作成功或运行策略已生效。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::name
+ * @brief offline log请求附带名字节；catalog/route结构中则为静态名称借用指针。
+ *
+ * 实际声明类型：const char *。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::profile_bit
+ * @brief QoS profile位；与codec profile位属于不同集合。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::reliability
+ * @brief QoS可靠性声明，非传输成功确认。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::history
+ * @brief QoS历史策略声明，当前keep_last。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::depth
+ * @brief QoS历史深度条数，当前1；不自动分配队列。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::durability
+ * @brief QoS持久性声明，当前volatile。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::priority
+ * @brief QoS优先级声明，非OS线程priority保证。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::backpressure
+ * @brief 丢弃/阻塞策略声明；codec不阻塞等待队列。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_qos_profile_descriptor_t::deadline_ms
+ * @brief QoS时限毫秒声明，当前可靠控制20；不自行测超时或停止设备。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_qos_profiles
+ * @brief best_effort_sensor/reliable_control两行QoS描述。
+ *
+ * 分别depth1/volatile、priority0/drop/deadline0与priority10/block/deadline20ms；声明不自动实现OS调度/可靠传输。
+原声明类型：const ；初始化表达式：。
+ */
+
+/**
+ * @var dp_protocol_lite_qos_compatibility_matrix
+ * @brief 以offered profile行为索引的requested profile可兼容位集。
+ *
+ * best effort仅满足best effort；reliable行可满足两者；表不会自动协商或建立传输。
+原声明类型：const uint16_t；初始化表达式：。
+ */
+
+/**
+ * @typedef dp_protocol_lite_route_access_t
+ * @brief Lite路由访问类别telemetry/diagnostic/control/bulk；分类本身不执行身份/权限门。
+ *
+ * 实际值：DP_PROTOCOL_LITE_ROUTE_TELEMETRY = 1；DP_PROTOCOL_LITE_ROUTE_DIAGNOSTIC = 2；DP_PROTOCOL_LITE_ROUTE_CONTROL = 3；DP_PROTOCOL_LITE_ROUTE_BULK = 4。不同结果枚举/codec profile/Lite位集不可按名字或数值混用；取值本身不代表消息已认证、动作成功或运行策略已生效。
+ */
+
+/**
+ * @var dp_protocol_lite_route_t::interface_id
+ * @brief 锁定接口数值ID；不同codec可共用接口ID，必须结合profile/layout解释。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_route_t::capability_id
+ * @brief 锁定能力ID，从1开始映射bit(id-1)，不等运动权限。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_route_t::access
+ * @brief telemetry/diagnostic/control/bulk路由分类声明；表不完成授权检查。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_route_t::encoded_size
+ * @brief 路由表声明字节预算；bounded TLV可变长，不能把表值当每包精确长度。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_route_t::codec_profile_bit
+ * @brief 路由期望codec profile位，非自动encoder选择。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_route_t::qos_bit
+ * @brief 路由期望QoS位，不自行提供可靠/阻塞实现。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_routes
+ * @brief 生成静态路由行数组，分别按其结构定义保存schema/hash或接口/能力/access/codec/QoS。
+ *
+ * 描述表不建立连接、不执行授权或转换；lookup借用静态行；表encoded_size只是预算，与实际TLV上限可能不同。
+原声明类型：const ；初始化表达式：。
+ */
+
+/**
+ * @fn static const dp_protocol_lite_route_t * dp_protocol_lite_find_route(uint32_t interface_id)
+ * @brief 按interface ID查静态Lite路由。
+ *
+ * 线性扫描13行，返回内部只读行；不会协商codec/QoS或启用控制。
+ * @param interface_id 待查锁定接口数值ID，无单位。
+ * @return 找到的静态行借用指针；无匹配NULL。
+ */
+
+/**
+ * @fn static void dp_protocol_lite_put_le16(uint16_t value, uint8_t *output)
+ * @brief 写入低字节在先的16位整数。
+ *
+ * 调用方保证指针有效和至少2字节范围；helper自身不做空指针/容量/语义检查，也不发送数据。
+ * @param value 待存标量或视图，单位/身份含义与对应字段一致。
+ * @param output 借用可写缓冲或结果对象；具体角色由函数签名/本段流程说明，返回后不保留。
+ * @return 无返回值。
+ */
+
+/**
+ * @fn static uint16_t dp_protocol_lite_get_le16(const uint8_t *input)
+ * @brief 读取低字节在先的16位整数。
+ *
+ * 调用方保证指针有效和至少2字节范围；helper自身不做空指针/容量/语义检查，也不发送数据。
+ * @param input 借用只读输入缓冲，调用期间须覆盖声明的字节范围；不保留指针。
+ * @return 还原无符号整数位值。
+ */
+
+/**
+ * @fn static void dp_protocol_lite_put_le32(uint32_t value, uint8_t *output)
+ * @brief 写入低字节在先的32位整数。
+ *
+ * 调用方保证指针有效和至少4字节范围；helper自身不做空指针/容量/语义检查，也不发送数据。
+ * @param value 待存标量或视图，单位/身份含义与对应字段一致。
+ * @param output 借用可写缓冲或结果对象；具体角色由函数签名/本段流程说明，返回后不保留。
+ * @return 无返回值。
+ */
+
+/**
+ * @fn static uint32_t dp_protocol_lite_get_le32(const uint8_t *input)
+ * @brief 读取低字节在先的32位整数。
+ *
+ * 调用方保证指针有效和至少4字节范围；helper自身不做空指针/容量/语义检查，也不发送数据。
+ * @param input 借用只读输入缓冲，调用期间须覆盖声明的字节范围；不保留指针。
+ * @return 还原无符号整数位值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_LINK_HELLO_V1_INTERFACE_ID
+ * @brief Lite链路控制消息锁定接口ID；不执行控制/密钥/设备动作。
+ *
+ * 原宏展开文本：61441u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_LINK_HELLO_V1_ENCODED_SIZE
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：45u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::protocol_major
+ * @brief Lite链路声明主版本数值，生成常量2但raw解码不强制相等。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::protocol_minor
+ * @brief Lite链路声明次版本数值，生成常量0但raw解码不强制相等。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::product_id
+ * @brief catalog产品ID数值，无单位；不是设备唯一身份。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::boot_counter
+ * @brief Lite启动计数32位；不等Dummy boot_epoch64位，也不提供持久化保证。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::device_id
+ * @brief 设备标识原字节；Dummy/LinkHello固定16字节，Capability查询/公告为最多16字节，RemoteLevel为最多64字节文本；结构容量不是真实性认证。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::catalog_fingerprint
+ * @brief 锁定catalog的16字节指纹，用于一致性比较，非签名/HMAC/防重放凭据。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::security_profile
+ * @brief 声明的安全profile数值；本头不验证认证状态、密钥或权限。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_hello_v1_t::max_payload_size
+ * @brief 对端声明最大payload字节数；不是已经分配的内存或自动限流。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_link_hello_v1_encode(const dp_protocol_lite_link_hello_v1_t *message, uint8_t *output, size_t output_size)
+ * @brief 编码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param output 借用可写缓冲或结果对象；具体角色由函数签名/本段流程说明，返回后不保留。
+ * @param output_size 根据签名传入精确固定wire字节数，或输出成功使用字节数的指针；见本函数流程。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_link_hello_v1_decode(const uint8_t *input, size_t input_size, dp_protocol_lite_link_hello_v1_t *message)
+ * @brief 解码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param input 借用只读输入缓冲，调用期间须覆盖声明的字节范围；不保留指针。
+ * @param input_size 输入有效字节数，caller须保证与真实可读范围一致。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_BITMAP_V1_INTERFACE_ID
+ * @brief 锁定能力ID，从1起映射位图bit(ID-1)，不是运动许可或CAN节点。
+ *
+ * 原宏展开文本：61442u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_CAPABILITY_BITMAP_V1_ENCODED_SIZE
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：41u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp_protocol_lite_capability_bitmap_v1_t::catalog_fingerprint
+ * @brief 锁定catalog的16字节指纹，用于一致性比较，非签名/HMAC/防重放凭据。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_capability_bitmap_v1_t::page_index
+ * @brief 能力分页索引，无单位；codec不核它小于page_count。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_capability_bitmap_v1_t::page_count
+ * @brief 能力页总数，无单位；本层不强制最多8或完整收齐。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_capability_bitmap_v1_t::valid_bytes
+ * @brief 本页声明有效字节数，本层不核<=16或清理无效尾字节。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_capability_bitmap_v1_t::capability_bits
+ * @brief 当前页16字节能力位图；bit编号由catalog决定，不是运动permit。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_capability_bitmap_v1_t::codec_profile_bits
+ * @brief 支持codec的位集；声明RAW_FIXED/BOUNDED_TLV不自动选择或启用encoder。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_capability_bitmap_v1_t::qos_bits
+ * @brief 支持QoS profile位集；不自行实现可靠传输、20ms deadline或阻塞策略。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_capability_bitmap_v1_encode(const dp_protocol_lite_capability_bitmap_v1_t *message, uint8_t *output, size_t output_size)
+ * @brief 编码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param output 借用可写缓冲或结果对象；具体角色由函数签名/本段流程说明，返回后不保留。
+ * @param output_size 根据签名传入精确固定wire字节数，或输出成功使用字节数的指针；见本函数流程。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_capability_bitmap_v1_decode(const uint8_t *input, size_t input_size, dp_protocol_lite_capability_bitmap_v1_t *message)
+ * @brief 解码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param input 借用只读输入缓冲，调用期间须覆盖声明的字节范围；不保留指针。
+ * @param input_size 输入有效字节数，caller须保证与真实可读范围一致。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_LINK_RESET_V1_INTERFACE_ID
+ * @brief Lite链路控制消息锁定接口ID；不执行控制/密钥/设备动作。
+ *
+ * 原宏展开文本：61443u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_LINK_RESET_V1_ENCODED_SIZE
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：6u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp_protocol_lite_link_reset_v1_t::reset_generation
+ * @brief 链路reset世代数；编码该消息不会实际reset设备。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_reset_v1_t::reason
+ * @brief 链路reset原因原码，无单位；本层不检查状态机合法性。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_link_reset_v1_t::mode
+ * @brief 链路reset模式原码，本层仅序列化，不执行reset。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_link_reset_v1_encode(const dp_protocol_lite_link_reset_v1_t *message, uint8_t *output, size_t output_size)
+ * @brief 编码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param output 借用可写缓冲或结果对象；具体角色由函数签名/本段流程说明，返回后不保留。
+ * @param output_size 根据签名传入精确固定wire字节数，或输出成功使用字节数的指针；见本函数流程。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_link_reset_v1_decode(const uint8_t *input, size_t input_size, dp_protocol_lite_link_reset_v1_t *message)
+ * @brief 解码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param input 借用只读输入缓冲，调用期间须覆盖声明的字节范围；不保留指针。
+ * @param input_size 输入有效字节数，caller须保证与真实可读范围一致。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_HEARTBEAT_V1_INTERFACE_ID
+ * @brief Lite链路控制消息锁定接口ID；不执行控制/密钥/设备动作。
+ *
+ * 原宏展开文本：61444u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_HEARTBEAT_V1_ENCODED_SIZE
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：8u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp_protocol_lite_heartbeat_v1_t::uptime_ms
+ * @brief Source设备启动至今的毫秒计数，可回绕；不是Host接收时刻或授权到期证据。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_heartbeat_v1_t::health_flags
+ * @brief 健康诊断位声明，不代表独立故障诊断或实时保证。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_heartbeat_v1_encode(const dp_protocol_lite_heartbeat_v1_t *message, uint8_t *output, size_t output_size)
+ * @brief 编码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param output 借用可写缓冲或结果对象；具体角色由函数签名/本段流程说明，返回后不保留。
+ * @param output_size 根据签名传入精确固定wire字节数，或输出成功使用字节数的指针；见本函数流程。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_heartbeat_v1_decode(const uint8_t *input, size_t input_size, dp_protocol_lite_heartbeat_v1_t *message)
+ * @brief 解码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param input 借用只读输入缓冲，调用期间须覆盖声明的字节范围；不保留指针。
+ * @param input_size 输入有效字节数，caller须保证与真实可读范围一致。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_KEY_ROTATE_V1_INTERFACE_ID
+ * @brief Lite链路控制消息锁定接口ID；不执行控制/密钥/设备动作。
+ *
+ * 原宏展开文本：61445u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_KEY_ROTATE_V1_ENCODED_SIZE
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：13u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp_protocol_lite_key_rotate_v1_t::key_epoch
+ * @brief 密钥轮换世代，无单位；本层无密钥存储/验签/回滚防护。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_key_rotate_v1_t::current_key_id
+ * @brief 当前密钥槽标识原码，不是密钥字节。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_key_rotate_v1_t::next_key_id
+ * @brief 下个密钥标识原码，不自行生成或激活密钥。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_key_rotate_v1_t::phase
+ * @brief 密钥轮换阶段数值，不等Dummy管理事务phase；codec不推进状态机。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_key_rotate_v1_t::key_slot_id
+ * @brief 目标密钥槽数值；codec不会写安全存储。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_lite_key_rotate_v1_t::activate_after_ms
+ * @brief 轮换声明的毫秒延时/时间字段；本头不读时钟或安排激活，时间基准须调用层约定。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_key_rotate_v1_encode(const dp_protocol_lite_key_rotate_v1_t *message, uint8_t *output, size_t output_size)
+ * @brief 编码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param output 借用可写缓冲或结果对象；具体角色由函数签名/本段流程说明，返回后不保留。
+ * @param output_size 根据签名传入精确固定wire字节数，或输出成功使用字节数的指针；见本函数流程。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @fn static int dp_protocol_lite_key_rotate_v1_decode(const uint8_t *input, size_t input_size, dp_protocol_lite_key_rotate_v1_t *message)
+ * @brief 解码Lite链路固定布局声明。
+ *
+ * 要求非空指针且wire长度恰为本消息ENCODED_SIZE；多字节显式小端，数组按固定大小复制。decode先清局部decoded、字段读完后提交；不核protocol版本、fingerprint、valid_bytes/page_count、security_profile、reason/phase枚举或时间语义，不执行reset、密钥轮换或心跳调度。
+ * @param input 借用只读输入缓冲，调用期间须覆盖声明的字节范围；不保留指针。
+ * @param input_size 输入有效字节数，caller须保证与真实可读范围一致。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 0表示完成字节转换，参数/尺寸错误-1；不表示管理动作完成。
+ */
+
+/**
+ * @def DP_PROTOCOL_PACKED_BEGIN
+ * @brief 对应生成头的静态编译配置/布局需求；宏本身不执行IO或发放运行许可。
+ *
+ * 原宏展开文本：。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_PACKED_END
+ * @brief 固定raw字段字节偏移或最小可读取结束位置；不是C++对象ABI通用偏移。
+ *
+ * 原宏展开文本：。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_PACKED
+ * @brief 对应生成头的静态编译配置/布局需求；宏本身不执行IO或发放运行许可。
+ *
+ * 原宏展开文本：。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp_protocol_tiny_device_status_t::uptime_ms
+ * @brief Source设备启动至今的毫秒计数，可回绕；不是Host接收时刻或授权到期证据。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_tiny_device_status_t::voltage_mv
+ * @brief 电压mV；tiny try_get另查1800..3600，其它通用容器/TLV/桥不自动继承该范围。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_tiny_device_status_t::flags
+ * @brief 设备状态原始8位标志；搬运不验证每位业务含义。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @def DP_PROTOCOL_TINY_DEVICE_STATUS_SIZE
+ * @brief 静态布局尺寸/容量预算，单位字节；不是已经分配的运行内存或已校验数据长度。
+ *
+ * 原宏展开文本：7u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @typedef dp_protocol_field_status_t
+ * @brief tiny单字段状态，区分OK、未完整出现、非法值和非法参数。
+ *
+ * 实际值：DP_PROTOCOL_FIELD_OK = 0；DP_PROTOCOL_FIELD_NOT_PRESENT = 1；DP_PROTOCOL_FIELD_INVALID_VALUE = 2；DP_PROTOCOL_FIELD_INVALID_ARGUMENT = 3。不同结果枚举/codec profile/Lite位集不可按名字或数值混用；取值本身不代表消息已认证、动作成功或运行策略已生效。
+ */
+
+/**
+ * @typedef dp_protocol_decode_status_t
+ * @brief tiny视图聚合状态；OK只表示至少一个字段出现，不能替代逐字段valid。
+ *
+ * 实际值：DP_PROTOCOL_DECODE_OK = 0；DP_PROTOCOL_DECODE_NO_KNOWN_FIELDS = 1；DP_PROTOCOL_DECODE_INVALID_ARGUMENT = 2。不同结果枚举/codec profile/Lite位集不可按名字或数值混用；取值本身不代表消息已认证、动作成功或运行策略已生效。
+ */
+
+/**
+ * @def DP_PROTOCOL_TINY_DEVICE_STATUS_UPTIME_MS_OFFSET
+ * @brief 固定raw字段字节偏移或最小可读取结束位置；不是C++对象ABI通用偏移。
+ *
+ * 原宏展开文本：0u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_TINY_DEVICE_STATUS_UPTIME_MS_END
+ * @brief 固定raw字段字节偏移或最小可读取结束位置；不是C++对象ABI通用偏移。
+ *
+ * 原宏展开文本：(DP_PROTOCOL_TINY_DEVICE_STATUS_UPTIME_MS_OFFSET + 4u)。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @fn static uint32_t dp_protocol_tiny_device_status_get_uptime_ms(const dp_protocol_tiny_device_status_t *message)
+ * @brief 按packed偏移访问tiny字段：Source设备启动至今的毫秒计数，可回绕；不是Host接收时刻或授权到期证据。
+ *
+ * memcpy避免非对齐标量访问，但采用宿主位模式/端序；不核message空/长度，也不作电压约束。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 字段值拷贝。
+ */
+
+/**
+ * @fn static void dp_protocol_tiny_device_status_set_uptime_ms(dp_protocol_tiny_device_status_t *message, uint32_t value)
+ * @brief 按packed偏移访问tiny字段：Source设备启动至今的毫秒计数，可回绕；不是Host接收时刻或授权到期证据。
+ *
+ * memcpy避免非对齐标量访问，但采用宿主位模式/端序；不核message空/长度，也不作电压约束。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param value 待存标量或视图，单位/身份含义与对应字段一致。
+ * @return 无返回值。
+ */
+
+/**
+ * @fn static dp_protocol_field_status_t dp_protocol_tiny_device_status_try_get_uptime_ms(const void *payload, size_t payload_size, uint32_t *out_value)
+ * @brief 有界读取tiny字段：Source设备启动至今的毫秒计数，可回绕；不是Host接收时刻或授权到期证据。
+ *
+ * 先查payload/out_value非空及payload_size>=字段END；电压额外核1800..3600mV，失败不写输出。底层memcpy沿宿主端序，无显式LE转换。
+ * @param payload 借用tiny原始缓冲，不保留；caller保证payload_size字节可读。
+ * @param payload_size 输入可读字节数；允许短包，由字段END门分别判断。
+ * @param out_value 非空标量输出指针；只有字段OK才写入，单位见字段。
+ * @return FIELD_OK、NOT_PRESENT、INVALID_VALUE或INVALID_ARGUMENT；非电压无数值范围拒绝。
+ */
+
+/**
+ * @var dp_protocol_u32_field_view_t::present
+ * @brief 已收到该字段所需完整字节，不等字段值合法。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_u32_field_view_t::valid
+ * @brief 字段通过自身try_get检查；不代表其它字段齐全、消息认证或设备资格。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_u32_field_view_t::value
+ * @brief 视图复制的标量；仅valid为true时按对应字段单位解释，非法值可保留默认0。
+ *
+ * 实际声明类型：uint32_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @def DP_PROTOCOL_TINY_DEVICE_STATUS_VOLTAGE_MV_OFFSET
+ * @brief 固定raw字段字节偏移或最小可读取结束位置；不是C++对象ABI通用偏移。
+ *
+ * 原宏展开文本：4u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_TINY_DEVICE_STATUS_VOLTAGE_MV_END
+ * @brief 固定raw字段字节偏移或最小可读取结束位置；不是C++对象ABI通用偏移。
+ *
+ * 原宏展开文本：(DP_PROTOCOL_TINY_DEVICE_STATUS_VOLTAGE_MV_OFFSET + 2u)。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @fn static uint16_t dp_protocol_tiny_device_status_get_voltage_mv(const dp_protocol_tiny_device_status_t *message)
+ * @brief 按packed偏移访问tiny字段：电压mV；tiny try_get另查1800..3600，其它通用容器/TLV/桥不自动继承该范围。
+ *
+ * memcpy避免非对齐标量访问，但采用宿主位模式/端序；不核message空/长度，也不作电压约束。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 字段值拷贝。
+ */
+
+/**
+ * @fn static void dp_protocol_tiny_device_status_set_voltage_mv(dp_protocol_tiny_device_status_t *message, uint16_t value)
+ * @brief 按packed偏移访问tiny字段：电压mV；tiny try_get另查1800..3600，其它通用容器/TLV/桥不自动继承该范围。
+ *
+ * memcpy避免非对齐标量访问，但采用宿主位模式/端序；不核message空/长度，也不作电压约束。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param value 待存标量或视图，单位/身份含义与对应字段一致。
+ * @return 无返回值。
+ */
+
+/**
+ * @fn static dp_protocol_field_status_t dp_protocol_tiny_device_status_try_get_voltage_mv(const void *payload, size_t payload_size, uint16_t *out_value)
+ * @brief 有界读取tiny字段：电压mV；tiny try_get另查1800..3600，其它通用容器/TLV/桥不自动继承该范围。
+ *
+ * 先查payload/out_value非空及payload_size>=字段END；电压额外核1800..3600mV，失败不写输出。底层memcpy沿宿主端序，无显式LE转换。
+ * @param payload 借用tiny原始缓冲，不保留；caller保证payload_size字节可读。
+ * @param payload_size 输入可读字节数；允许短包，由字段END门分别判断。
+ * @param out_value 非空标量输出指针；只有字段OK才写入，单位见字段。
+ * @return FIELD_OK、NOT_PRESENT、INVALID_VALUE或INVALID_ARGUMENT；非电压无数值范围拒绝。
+ */
+
+/**
+ * @var dp_protocol_u16_field_view_t::present
+ * @brief 已收到该字段所需完整字节，不等字段值合法。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_u16_field_view_t::valid
+ * @brief 字段通过自身try_get检查；不代表其它字段齐全、消息认证或设备资格。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_u16_field_view_t::value
+ * @brief 视图复制的标量；仅valid为true时按对应字段单位解释，非法值可保留默认0。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @def DP_PROTOCOL_TINY_DEVICE_STATUS_FLAGS_OFFSET
+ * @brief 固定raw字段字节偏移或最小可读取结束位置；不是C++对象ABI通用偏移。
+ *
+ * 原宏展开文本：6u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @def DP_PROTOCOL_TINY_DEVICE_STATUS_FLAGS_END
+ * @brief 固定raw字段字节偏移或最小可读取结束位置；不是C++对象ABI通用偏移。
+ *
+ * 原宏展开文本：(DP_PROTOCOL_TINY_DEVICE_STATUS_FLAGS_OFFSET + 1u)。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @fn static uint8_t dp_protocol_tiny_device_status_get_flags(const dp_protocol_tiny_device_status_t *message)
+ * @brief 按packed偏移访问tiny字段：设备状态原始8位标志；搬运不验证每位业务含义。
+ *
+ * memcpy避免非对齐标量访问，但采用宿主位模式/端序；不核message空/长度，也不作电压约束。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @return 字段值拷贝。
+ */
+
+/**
+ * @fn static void dp_protocol_tiny_device_status_set_flags(dp_protocol_tiny_device_status_t *message, uint8_t value)
+ * @brief 按packed偏移访问tiny字段：设备状态原始8位标志；搬运不验证每位业务含义。
+ *
+ * memcpy避免非对齐标量访问，但采用宿主位模式/端序；不核message空/长度，也不作电压约束。
+ * @param message 借用消息值对象；const为读入，非const为写入；caller保证正确类型和完整内存。
+ * @param value 待存标量或视图，单位/身份含义与对应字段一致。
+ * @return 无返回值。
+ */
+
+/**
+ * @fn static dp_protocol_field_status_t dp_protocol_tiny_device_status_try_get_flags(const void *payload, size_t payload_size, uint8_t *out_value)
+ * @brief 有界读取tiny字段：设备状态原始8位标志；搬运不验证每位业务含义。
+ *
+ * 先查payload/out_value非空及payload_size>=字段END；电压额外核1800..3600mV，失败不写输出。底层memcpy沿宿主端序，无显式LE转换。
+ * @param payload 借用tiny原始缓冲，不保留；caller保证payload_size字节可读。
+ * @param payload_size 输入可读字节数；允许短包，由字段END门分别判断。
+ * @param out_value 非空标量输出指针；只有字段OK才写入，单位见字段。
+ * @return FIELD_OK、NOT_PRESENT、INVALID_VALUE或INVALID_ARGUMENT；非电压无数值范围拒绝。
+ */
+
+/**
+ * @var dp_protocol_u8_field_view_t::present
+ * @brief 已收到该字段所需完整字节，不等字段值合法。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_u8_field_view_t::valid
+ * @brief 字段通过自身try_get检查；不代表其它字段齐全、消息认证或设备资格。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_u8_field_view_t::value
+ * @brief 视图复制的标量；仅valid为true时按对应字段单位解释，非法值可保留默认0。
+ *
+ * 实际声明类型：uint8_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_tiny_device_status_view_t::uptime_ms
+ * @brief Source设备启动至今的毫秒计数，可回绕；不是Host接收时刻或授权到期证据。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_tiny_device_status_view_t::voltage_mv
+ * @brief 电压mV；tiny try_get另查1800..3600，其它通用容器/TLV/桥不自动继承该范围。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp_protocol_tiny_device_status_view_t::flags
+ * @brief 设备状态原始8位标志；搬运不验证每位业务含义。
+ *
+ * 实际声明类型：。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @fn static dp_protocol_decode_status_t dp_protocol_tiny_device_status_decode_view(const void *payload, size_t payload_size, dp_protocol_tiny_device_status_view_t *out_view)
+ * @brief 逐字段形成可部分有效的tiny视图。
+ *
+ * 非空后先清view；按4/6/7字节门分别标present，电压另核1800..3600。可缺后字段，payload可长于7；返回OK只表示至少一个完整已知字段，甚至电压非法仍可OK。
+ * @param payload 借用tiny原始缓冲，不保留；caller保证payload_size字节可读。
+ * @param payload_size 输入可读字节数；允许短包，由字段END门分别判断。
+ * @param out_view 非空拥有式解析视图输出，成功参数门后先清零再逐字段写。
+ * @return INVALID_ARGUMENT或NO_KNOWN_FIELDS或OK，仍须逐字段核valid。
+ */

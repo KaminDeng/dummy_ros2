@@ -1,8 +1,19 @@
+/**
+ * @file bench_permit_tests.cpp
+ * @brief 核可信BENCH permit摘要黄金值和拒绝输入。
+ *
+ * 纯宿主内存摘要测试；assert须在验证构建中启用。固定hash/boot/ref/client/session/seq仅为夹具，不签发运行许可或验证现场批准来源。
+ */
 #include "dummy_motion_client/bench_permit.hpp"
 
 #include <cassert>
 #include <string>
 
+/**
+ * @brief 计算固定绑定的permit SHA并逐字节对黄金向量。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * boot7/ref3/profile101及四hash绑定client0x55/session9/请求seq11；拒绝seq0和全零固件hash。摘要正确不代表真实固件或机械资格。
+ */
 int main() {
   using namespace dummy_motion_client;
   PermitBinding binding{};

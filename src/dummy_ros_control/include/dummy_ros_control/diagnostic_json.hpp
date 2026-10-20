@@ -1,9 +1,20 @@
+/**
+ * @file diagnostic_json.hpp
+ * @brief 在非控制线程把固定诊断记录格式化为JSON。
+ * 此层使用ostream/字符串分配，不应从实时update/read/write或通信回调调用。JSON标识OBJECT_LIFETIME和HOST_TRANSPORT_STEADY_US，首blob另标LOCAL_PUBLISH_ARGUMENT，防止将宿主诊断混作设备wire/总线原始证据。
+ */
 #pragma once
 // 仅非控制读取端调用；worker/control只能发布DiagnosticJournal固定记录。
 #include "dummy_ros_control/diagnostic_journal.hpp"
 #include <sstream>
 #include <string>
 namespace dummy_ros_control {
+/**
+ * @brief 输出带引号的逐字节JSON文本。
+ * 引号/反斜杠转义，非ASCII及控制字节写成逐字节JSON Unicode转义；不按UTF-8码点转换Unicode。
+ * @param out 非实时输出流。
+ * @param text 可空C文本。
+ */
 inline void diagnostic_json_text(std::ostream& out,const char* text) {
     out << '"';
     if(text)for(const auto* p=text;*p;++p) {
@@ -16,12 +27,24 @@ inline void diagnostic_json_text(std::ostream& out,const char* text) {
     }
     out << '"';
 }
+/**
+ * @brief 输出身份字段及valid标志。
+ * 字段ID/epoch不带角度或时间单位，valid不等同运动授权。
+ * @param out 非实时输出流。
+ * @param id 宿主观测或预期身份。
+ */
 inline void diagnostic_json_identity(std::ostream& out,const DiagnosticIdentity& id) {
     out << "{\"valid\":" << (id.valid?"true":"false") << ",\"boot\":" << id.boot
         << ",\"session\":" << id.session << ",\"reference_epoch\":" << id.reference
         << ",\"motion_epoch\":" << id.motion << ",\"sequence\":" << id.sequence
         << ",\"management_epoch\":" << id.management << '}';
 }
+/**
+ * @brief 按reason为固定fields命名并输出拒绝现场。
+ * 已知原因输出各自具名字段；未列举原因fields为空对象，保留数值reason、detail和observed/expected。
+ * @param out 输出流。
+ * @param record 已发布拒绝值副本。
+ */
 inline void diagnostic_json_rejection(std::ostream& out,const DiagnosticRejection& record) {
     out << "{\"reason\":" << static_cast<unsigned>(record.reason) << ",\"host_us\":" << record.host_us
         << ",\"detail_code\":" << record.detail_code << ",\"detail\":";
@@ -54,6 +77,12 @@ inline void diagnostic_json_rejection(std::ostream& out,const DiagnosticRejectio
     for(unsigned i=0U;i<12U && names[i];++i) {if(i)out << ',';diagnostic_json_text(out,names[i]);out << ':' << record.fields[i];}
     out << "}}";
 }
+/**
+ * @brief 读取journal已发布槽并生成宿主诊断文档。
+ * 输出总首拒、两个身份域各reason首条、计数、首停止策略、释放Idle再验证和首blob；optional detail槽由其他接口单独读取。
+ * @param journal 寿命覆盖本次读取的只读journal引用。
+ * @return JSON字符串，不含实时磁盘写入。
+ */
 inline std::string diagnostic_journal_json(const DiagnosticJournal& journal) {
     const auto snapshot=journal.snapshot(); std::ostringstream out;
     out << "{\"schema\":\"DUMMY_ROS_DIAGNOSTICS_V1\",\"scope\":\"OBJECT_LIFETIME\",\"first\":";

@@ -1,3 +1,10 @@
+/**
+ * @file action_gate.cpp
+ * @brief 把管理事务、可信State与真实控制update合成单目标Action阶段。
+ * 本对象借用client/port，由外层控制executor串行推进；now/deadline是宿主steady微秒，
+ * 轨迹时间是相对秒、位置rad、速度rad/s、加速度rad/s²。Ready/本地入队/内部JTC成功
+ * 均不等于设备使能、CAN SENT或机械到位；源设备时钟和State新鲜度须由上层transport先验证。
+ */
 #include "dummy_motion_client/action_gate.hpp"
 #include "dummy_motion_client/deadline.hpp"
 #include "dummy_ros_control/diagnostic_scope.hpp"
@@ -7,17 +14,43 @@
 #include <unordered_set>
 namespace dummy_motion_client {
 namespace {
+/**
+ * @brief 显式终点速度的零容差1e-9 rad/s；未提供速度的纯位置路径另按分段差分检查。
+ */
 constexpr double kTerminalVelocityZeroToleranceRadS=1e-9;
+/**
+ * @brief 按32位串行算术判断严格后继。
+ * @param candidate 候选线序号。
+ * @param current 已接纳序号。
+ * @return 模差非零且小于2³¹为true；不用于宿主64位generation。
+ */
 bool sequence_newer(std::uint32_t candidate,std::uint32_t current) {
   const auto distance=static_cast<std::uint32_t>(candidate-current);
   return distance!=0U && distance<0x80000000U;
 }
+/**
+ * @brief 检查同一或后继线序号，允许相等。
+ * @param candidate 当前观测commit。
+ * @param current 需要覆盖的水位。
+ * @return 模差小于2³¹时true，要求比较跨度在半周期内。
+ */
 bool sequence_at_or_after(std::uint32_t candidate,std::uint32_t current) {
   return static_cast<std::uint32_t>(candidate-current)<0x80000000U;
 }
+/**
+ * @brief 检查一个浮点向量的所有现有元素有限，空向量按all_of语义为true。
+ * @param values 位置/速度/加速度或容差，单位由调用处决定。
+ * @return 无NaN/Inf时true；不在此检查长度或数值范围。
+ */
 bool finite(const std::vector<double> &values) {
   return std::all_of(values.begin(),values.end(),[](double v) { return std::isfinite(v); });
 }
+/**
+ * @brief 校验用户容差形状和最大值，零值后续映射到profile默认。
+ * @param values 可为空的用户容差向量。
+ * @param limits 同轴序profile容差上限。
+ * @return 空向量或有限非负且不宽于上限时true；并非零值意味着零误差要求。
+ */
 bool tolerance(const std::vector<double> &values, const std::vector<double> &limits) {
   if (values.empty()) return true;
   if (values.size()!=limits.size() || !finite(values)) return false;
@@ -26,6 +59,14 @@ bool tolerance(const std::vector<double> &values, const std::vector<double> &lim
   return true;
 }
 }
+/**
+ * @brief 复制、按profile轴序重排并检查全部路点和容差。
+ * @param input 用户轨迹，路点时间为相对秒，位置rad、速度rad/s、加速度rad/s²。
+ * @param profile 1..6轴完整范围/动态/默认容差，轴名必须与输入唯一集合一致。
+ * @param measured_start 可空六轴实测起点，非空时将纯位置轨迹的首段也纳入差分校验。
+ * @return 规范化副本或nullopt，不修改输入；分配失败仍可能抛异常。
+ * @note 校验路点及纯位置段差分，不做避碰，也不证明JTC完整插值曲线所有时刻满足动态上限。
+ */
 std::optional<Trajectory> validate_trajectory(const Trajectory &input, const JointProfile &profile,
                                               const Position *measured_start) {
   const auto count=profile.joints.size();
@@ -42,6 +83,11 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
   std::vector<std::size_t> order;
   for (const auto &name:profile.joints)
     order.push_back(std::find(input.joints.begin(),input.joints.end(),name)-input.joints.begin());
+  /**
+   * @brief 将一个已检查维度的输入向量按关节名映射到profile轴序。
+   * @param values 输入轴序的数值向量。
+   * @return 重排后的独立向量，发生在非实时目标准入路径。
+   */
   auto reorder=[&order](const std::vector<double> &values) {
     std::vector<double> result; for (auto index:order) result.push_back(values[index]); return result;
   };
@@ -57,6 +103,9 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
     if (output.path_tolerance[i]==0) output.path_tolerance[i]=profile.path_tolerance[i];
     if (output.goal_tolerance[i]==0) output.goal_tolerance[i]=profile.goal_tolerance[i];
   }
+  /**
+   * @brief 首点允许t=0，后续时间必须严格递增；每点先重排再核本轴位置及显式速度/加速度。
+   */
   double previous=-1;
   for (auto &point:output.points) {
     if (point.positions.size()!=count || (!point.velocities.empty() && point.velocities.size()!=count) ||
@@ -76,6 +125,9 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
   }
   for (double velocity:output.points.back().velocities)
     if (std::abs(velocity)>kTerminalVelocityZeroToleranceRadS) return {};
+  /**
+   * @brief 只有所有点都未提供速度和加速度才走纯位置差分门；混合显式字段不在此做同样的整段差分证明。
+   */
   const bool position_only=std::all_of(output.points.begin(),output.points.end(),[](const auto &point) {
     return point.velocities.empty() && point.accelerations.empty();
   });
@@ -89,6 +141,10 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
         if (!std::isfinite(previous_position[i]) || previous_position[i]<profile.lower[i] ||
             previous_position[i]>profile.upper[i]) return {};
     }
+    /**
+     * @brief 有实测起点时从t=0到第0点也须有正时长且起点在profile内；无起点时以第0点为已知锚。
+     * 相邻段加速度按速度差/两段较短时长检查，第一段没有虚构的前一段速度。
+     */
     const std::size_t first_segment=measured_start ? 0 : 1;
     if (!measured_start) {
       previous_position=output.points.front().positions;
@@ -112,8 +168,23 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
   }
   return output;
 }
+/**
+ * @brief 保存借用依赖、profile值副本与握手预算，不创建会话或控制线程。
+ * @param client 串行管理端口，寿命覆盖gate。
+ * @param port 实际JTC/控制update适配器，寿命覆盖gate。
+ * @param profile 已绑定的轴序/范围/动态/容差。
+ * @param timeout 单次管理/prime/排空预算，宿主µs。
+ */
 ActionGate::ActionGate(ManagementClient &client, ActionPort &port, JointProfile profile, std::uint64_t timeout)
     : client_(client),port_(port),profile_(std::move(profile)),timeout_(timeout) {}
+/**
+ * @brief 构造当前授权下的管理根，固定或复用总截止后提交一次。
+ * @param operation Enable/Begin/Complete/Cancel等操作，Complete附冻结终seq和rad终点。
+ * @param now 宿主steady µs提交时刻。
+ * @param existing_deadline 非零复用原截止，0才计算now+timeout的饱和值。
+ * @return 成功取得request或可因精确同身份Renew暂延时true，否则转失败并false。
+ * @note 仅Complete和无错误的正常用户Cancel可等待占槽续租；不是任意Busy请求都可延期。
+ */
 bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t existing_deadline) {
   auto request=authorization_.identity; request.set_expected_motion_epoch(epoch_);
   request.set_operation(static_cast<std::uint16_t>(operation));
@@ -128,6 +199,9 @@ bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t
   request_=client_.submit(request,now);
   management_evidence_={}; state_evidence_={};
   cancel_request_id_=(operation==ManageOperation::kCancel && cancel_terminal_) ? request_ : 0U;
+  /**
+   * @brief 尚未提交的Complete可保留原根等待同tuple续租；不重启deadline，不把返回true当设备已经收到。
+   */
   if (!request_ && operation==ManageOperation::kComplete) {
     completing_after_renewal_=client_.matching_inflight_renewal(request);
     if(completing_after_renewal_!=0U) { deferred_complete_request_=request; return true; }
@@ -139,6 +213,11 @@ bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t
   if (!request_) { fail(operation==ManageOperation::kCancel ? "STOP_FAILED" : "TRANSPORT_UNAVAILABLE"); return false; }
   return true;
 }
+/**
+ * @brief 导出已COMMITTED并回到Hold的正常用户取消ID对。
+ * @return 所有终态、operation、request/operation ID、成功阶段和身份/epoch均匹配时有值。
+ * @note 此取消凭据不是D10释放凭据，raw终页和当前保持验收仍由集成层负责。
+ */
 std::optional<CancelReceipt> ActionGate::confirmed_cancel_receipt() const noexcept {
   const auto &reply=management_evidence_;
   if(terminal_!=Terminal::kCanceled || phase_!=Phase::kHold || request_!=0U ||
@@ -152,6 +231,12 @@ std::optional<CancelReceipt> ActionGate::confirmed_cancel_receipt() const noexce
     return std::nullopt;
   return CancelReceipt{cancel_request_id_,reply.operation_id};
 }
+/**
+ * @brief 仅从Idle且session/reference/permit三个本地资格齐备时请求PrepareHold。
+ * @param authorization 上层按真实观测建立的身份/资格快照。
+ * @param now 宿主µs。
+ * @return 已提交本地管理根时true；进入Hold还需结果、State和prime控制更新合证。
+ */
 bool ActionGate::enable(const Authorization &authorization,std::uint64_t now) {
   if (phase_!=Phase::kIdle || request_ || !authorization.session || !authorization.reference ||
       !authorization.permit || authorization.identity.expected_session_id()==0) return false;
@@ -159,6 +244,11 @@ bool ActionGate::enable(const Authorization &authorization,std::uint64_t now) {
   epoch_=authorization.identity.expected_motion_epoch();
   return issue(ManageOperation::kEnable,now);
 }
+/**
+ * @brief 空闲Hold中替换同设备/会话/参考的已验证permit快照。
+ * @param authorization 外部刚完成许可流程的身份和三资格。
+ * @return 本地绑定检查通过时true，不发送SetPermit，也不续session租期。
+ */
 bool ActionGate::renew_permit(const Authorization &authorization) {
   const auto &current=authorization_.identity;
   const auto &next=authorization.identity;
@@ -175,10 +265,19 @@ bool ActionGate::renew_permit(const Authorization &authorization) {
   authorization_=authorization;
   return true;
 }
+/**
+ * @brief 接纳已验证轨迹，并请求Begin或先冻结Hold等待worker排空。
+ * @param trajectory 完整用户路径，不只检查末点。
+ * @param now 宿主µs，排空与随后Begin共用同一截止。
+ * @return 本地受理时true；设备Running和内部轨迹启动均尚需后继握手。
+ */
 bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
   if (!ready() || !authorization_.session || !authorization_.reference || !authorization_.permit) return false;
   const auto validated=validate_trajectory(trajectory,profile_); if (!validated) return false;
   trajectory_=*validated; terminal_=Terminal::kNone; error_.clear(); frozen_=false; frozen_seq_=0;
+  /**
+   * @brief 端口不提供冻结时直接提交Begin；支持冻结则保存宿主代/线序号，等待worker处理水位和新State的提交/SENT水位。
+   */
   if (!port_.freeze_hold()) return issue(ManageOperation::kBegin,now);
   frozen_seq_=last_seq_; frozen_generation_=last_producer_generation_;
   drained_generation_=0; drained_committed_seq_=0;
@@ -195,6 +294,13 @@ bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
   deadline_=saturating_deadline(now,timeout_);
   return true;
 }
+/**
+ * @brief 切换内部generation/motion epoch并要求端口产生真实保持采样。
+ * @param reply 已合并的设备接受/实测或保持目标证据。
+ * @param phase 本次PrimeHold/Motion/CompletionHold/StopHold阶段。
+ * @param now 宿主µs，运动首段重验证失败时用于受控取消。
+ * @return prime请求已发给port为true；不表示已经有update、网络publish或SENT。
+ */
 bool ActionGate::prime(const ManageReply &reply,Phase phase,std::uint64_t now) {
   port_.disable(); ++generation_; epoch_=reply.motion_epoch; phase_=phase;
   sampled_=false; last_seq_=0; last_producer_generation_=0;
@@ -202,6 +308,9 @@ bool ActionGate::prime(const ManageReply &reply,Phase phase,std::uint64_t now) {
   prime_producer_generation_=0; hold_state_observed_us_=0;
   hold_committed_seq_=0; hold_submitted_mask_=hold_sent_mask_=0;
   prime_q_=phase==Phase::kPrimeMotion ? reply.position : reply.hold_position;
+  /**
+   * @brief 进入运动时用刚取得的实测rad起点重验纯位置首段，防止初始验证后实际起点变化造成动态越限。
+   */
   if (phase==Phase::kPrimeMotion) {
     const auto validated=validate_trajectory(trajectory_,profile_,&prime_q_);
     if (!validated) { stop(false,"TRAJECTORY_LIMIT_VIOLATION",now); return false; }
@@ -217,11 +326,22 @@ bool ActionGate::prime(const ManageReply &reply,Phase phase,std::uint64_t now) {
   port_.prime(prime_q_,epoch_,generation_);
   return true;
 }
+/**
+ * @brief 检查管理成功、同epoch实际快照及真实prime更新的设备commit覆盖。
+ * @param reply State与管理结果的合成证据。
+ * @return snapshot_valid、sampled、非零commit覆盖prime_seq且result成功时true；不是独立六轴原始SENT证明。
+ */
 bool ActionGate::handshake(const ManageReply &reply) const {
   return reply.snapshot_valid && reply.motion_epoch==epoch_ && sampled_ &&
       reply.accepted_seq!=0U && sequence_at_or_after(reply.accepted_seq,prime_seq_) &&
       reply.result_valid && reply.succeeded;
 }
+/**
+ * @brief 合并当前request的管理结果和已到State，再推进阶段。
+ * @param reply 解码后的分层管理证据；普通wire RPC不带实际位置快照。
+ * @param now 宿主µs。
+ * @note 管理先到或State先到均可缓存；不能只因queued或accepted就启动轨迹。
+ */
 void ActionGate::observe(const ManageReply &reply,std::uint64_t now) {
   if (reply.request_id!=request_) return;
   management_evidence_=reply;
@@ -233,6 +353,14 @@ void ActionGate::observe(const ManageReply &reply,std::uint64_t now) {
   } else advance(reply,now);
   try_completion_hold(now);
 }
+/**
+ * @brief 解码并检查基本身份、严格序号和配置轴有限位置后消费可信State。
+ * @param bytes 调用期有效的wire State字节。
+ * @param size 固定codec载荷长度，由decode核对。
+ * @param now 上层提供的宿主新鲜接收/观察µs。
+ * @return false拒帧；true表示消费，可能引发故障或停止。
+ * @note 本层不估算设备produced时钟或原始年龄；调用方须先保证流的新鲜性/源时序，不能把此返回值当全部transport校验。
+ */
 bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::uint64_t now) {
   namespace wire=dp::protocol::dummy_robot_v2;
   wire::DummyJointStateV2 state;
@@ -257,6 +385,9 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
   }
   state_seq_=state.state_seq(); state_seen_=true;
   hold_state_observed_us_=0;
+  /**
+   * @brief 接纳帧后更新票据及管理epoch；hold证据只在当前motion且core Hold/位置有效时记录，不把任意State当排空确认。
+   */
   authorization_.identity.set_expected_management_epoch(state.management_epoch());
   authorization_.identity.set_freshness_ticket(state.freshness_ticket());
   if (state.motion_epoch()==epoch_ &&
@@ -275,6 +406,9 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
     stop(false,"HOLD_DRAIN_TIMEOUT",now);
     return true;
   }
+  /**
+   * @brief Begin排空同时要求worker水位和新到Hold State完整submitted/sent掩码及commit覆盖；复用原截止提交Begin，不能因等待结束续预算。
+   */
   if (hold_drain_pending_ && drain_worker_ready_ && drain_state_fresh_ &&
       state.motion_epoch()==epoch_ &&
       state.core_state()==wire_value(WireCoreState::kHold) && hold_valid &&
@@ -289,6 +423,9 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
   }
   if (!request_) return true;
   if (state.core_state()==wire_value(WireCoreState::kFault)) { fail("DEVICE_FAULT"); return true; }
+  /**
+   * @brief State提供实测位置与core接受现场，RPC提供result_valid/succeeded；两来源保留独立性，Queued本身不提供实际状态。
+   */
   ManageReply evidence; evidence.request_id=request_; evidence.snapshot_valid=true;
   evidence.motion_epoch=state.motion_epoch(); evidence.accepted_seq=state.committed_producer_seq();
   const bool enabling_hold=state.core_state()==wire_value(WireCoreState::kEnablingHold);
@@ -312,6 +449,12 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
   }
   try_completion_hold(now); return true;
 }
+/**
+ * @brief 记录worker排空快照，并在同身份/代数覆盖时建立Begin排空水位。
+ * @param evidence 宿主processed_generation、线commit和实际Hold位置/容差。
+ * @param now 宿主µs，原截止内才推进。
+ * @note Complete后保持使用更严格try_completion_hold；这里的Begin排空标志仍要后继State核全轴SENT。
+ */
 void ActionGate::observe_hold_drain(const HoldDrainEvidence &evidence,std::uint64_t now) {
   completion_worker_=evidence;
   try_completion_hold(now);
@@ -337,6 +480,12 @@ void ActionGate::observe_hold_drain(const HoldDrainEvidence &evidence,std::uint6
   drained_committed_seq_=evidence.committed_seq;
   drain_worker_ready_=true;
 }
+/**
+ * @brief 严格核管理Complete、worker排空和双新鲜实际Hold，再发布外部Succeeded。
+ * @param now 宿主µs，核worker/State原接收锚及原截止。
+ * @note 要求worker quiescent/合法disposition、代号覆盖、State全轴submitted/sent和commit覆盖；
+ * 逐轴rad值须在worker容差内。该分支不代替raw首/终页或机械资格验收。
+ */
 void ActionGate::try_completion_hold(std::uint64_t now) {
   const auto &worker=completion_worker_;
   const auto mask=authorization_.identity.configured_mask();
@@ -366,6 +515,12 @@ void ActionGate::try_completion_hold(std::uint64_t now) {
   }
   terminal_=Terminal::kSucceeded; phase_=Phase::kHold; request_=0; deadline_=0;
 }
+/**
+ * @brief 根据当前管理根、State快照与prime更新推进Enable/Begin/Complete/Cancel。
+ * @param reply 已合并分层证据，request必须匹配。
+ * @param now 宿主µs，失败时决定取消或Fault。
+ * @note PrimeMotion握手后才调用port.start；普通首样本握手和特殊Complete排空路径各自保留当前实现，不把内部结果直接当外部终态。
+ */
 void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
   if (!request_ || reply.request_id!=request_ || phase_==Phase::kFault) return;
   if (reply.rejected || (reply.result_valid && !reply.succeeded)) {
@@ -398,6 +553,10 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
     phase_=Phase::kHold; request_=0; deadline_=0;
   }
 }
+/**
+ * @brief 核延期Complete与当前授权的完整根绑定，ticket稍后可更新。
+ * @return session/reference可用且device/client/boot/session/ref/motion/management/profile/mask一致时true。
+ */
 bool ActionGate::deferred_complete_matches_authority() const noexcept {
   const auto &r=deferred_complete_request_; const auto &a=authorization_.identity;
   return authorization_.session && authorization_.reference &&
@@ -409,6 +568,14 @@ bool ActionGate::deferred_complete_matches_authority() const noexcept {
       std::equal(std::begin(r.device_id()),std::end(r.device_id()),std::begin(a.device_id())) &&
       std::equal(std::begin(r.client_instance_id()),std::end(r.client_instance_id()),std::begin(a.client_instance_id()));
 }
+/**
+ * @brief 识别本目标已冻结且设备commit覆盖终序号的有限完成意图。
+ * @param live 当前完整管理身份，不能跨设备/会话/参考/epoch复用。
+ * @param committed_seq 当前设备commit，按32位串行水位比较。
+ * @param now 宿主µs，须严格早于原deadline。
+ * @return 冻结目标等于最后真实采样且在轨迹终容差内、阶段及身份均满足时true。
+ * @note 仅支持撤回未发的RUN续租预约，不授权新采样或延长许可。
+ */
 bool ActionGate::bounded_completion_intent(const ManageRequest &live, std::uint32_t committed_seq,
                                           std::uint64_t now) const noexcept {
   // 只证明本goal已冻结且设备确认的完成意图，不授权新采样或续租。
@@ -442,6 +609,12 @@ bool ActionGate::bounded_completion_intent(const ManageRequest &live, std::uint3
   }
   return true;
 }
+/**
+ * @brief 识别当前已提交且仍在期限内的正常用户Cancel。
+ * @param live 外层当前Cancel意图身份。
+ * @param now 宿主µs。
+ * @return 同根已提交取消且身份不漂移时true，供协调撤回未发送续租；不包括异常中止或仅延期未发取消。
+ */
 bool ActionGate::bounded_cancel_intent(const ManageRequest &live, std::uint64_t now) const noexcept {
   // 只识别当前已提交、仍在原期限内的取消事务，供撤回尚未发送的
   // RUN续租预约；不授权新的续租或延长停止期限。
@@ -464,6 +637,11 @@ bool ActionGate::bounded_cancel_intent(const ManageRequest &live, std::uint64_t 
       std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(identity.device_id())) &&
       std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(identity.client_instance_id()));
 }
+/**
+ * @brief 查询尚未提交的冻结Complete是否被精确同根在途Renew暂占槽。
+ * @param now 宿主µs。
+ * @return 原截止内、延期根仍匹配且client报告同续租在途时true，不恢复目标生产。
+ */
 bool ActionGate::completion_waiting_for_renewal(std::uint64_t now) const noexcept {
   return phase_==Phase::kCompleting && terminal_==Terminal::kNone &&
       operation_==ManageOperation::kComplete && request_==0U && frozen_ && frozen_seq_!=0U &&
@@ -471,6 +649,10 @@ bool ActionGate::completion_waiting_for_renewal(std::uint64_t now) const noexcep
       deferred_complete_matches_authority() &&
       client_.matching_inflight_renewal(deferred_complete_request_)==completing_after_renewal_;
 }
+/**
+ * @brief 核延期Cancel操作号与当前完整session/reference授权根。
+ * @return 身份和epoch全部一致时true，ticket允许提交前单独刷新。
+ */
 bool ActionGate::deferred_cancel_matches_authority() const noexcept {
   const auto &r=deferred_cancel_request_; const auto &a=authorization_.identity;
   return r.operation()==wire_value(ManageOperation::kCancel) && authorization_.session && authorization_.reference &&
@@ -482,6 +664,12 @@ bool ActionGate::deferred_cancel_matches_authority() const noexcept {
       std::equal(std::begin(r.device_id()),std::end(r.device_id()),std::begin(a.device_id())) &&
       std::equal(std::begin(r.client_instance_id()),std::end(r.client_instance_id()),std::begin(a.client_instance_id()));
 }
+/**
+ * @brief 核正常用户Cancel尚未发出且仅等待同身份Renew。
+ * @param live 当前外层Cancel根。
+ * @param now 宿主µs，须在原deadline内。
+ * @return 冻结/无错误/未建取消ID且延期请求及client占槽根均一致时true。
+ */
 bool ActionGate::cancel_waiting_for_renewal(const ManageRequest &live, std::uint64_t now) const noexcept {
   return phase_==Phase::kStopping && terminal_==Terminal::kNone && frozen_ &&
       cancel_terminal_ && error_.empty() && operation_==ManageOperation::kCancel &&
@@ -500,7 +688,16 @@ bool ActionGate::cancel_waiting_for_renewal(const ManageRequest &live, std::uint
       std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(deferred_cancel_request_.client_instance_id())) &&
       client_.matching_inflight_renewal(deferred_cancel_request_)==canceling_after_renewal_;
 }
+/**
+ * @brief 推进有界续租延期、管理轮询、prime及Hold排空监督。
+ * @param now 同一宿主steady µs。
+ * @note 到截止即失败；续租延期只等同tuple COMMITTED，随后刷新ticket并提交原意图，不重发已发送mutation。
+ * 超时根据阶段转STOP_FAILED、FIRST_SAMPLE_TIMEOUT或受控取消；无诊断scope时错误路径会同步fprintf，不是所有用法都无I/O。
+ */
 void ActionGate::tick(std::uint64_t now) {
+  /**
+   * @brief 正常取消的延期必须仍冻结、未结束、无错误且根身份不变；续租失败/超时直接STOP_FAILED，不能无限等待抢占单槽。
+   */
   if(canceling_after_renewal_!=0U) {
     if(phase_!=Phase::kStopping || terminal_!=Terminal::kNone || !frozen_ || !cancel_terminal_ ||
        !error_.empty() || operation_!=ManageOperation::kCancel || request_!=0U || cancel_request_id_!=0U ||
@@ -517,6 +714,9 @@ void ActionGate::tick(std::uint64_t now) {
     request_=client_.submit(deferred_cancel_request_,now);cancel_request_id_=request_;
     if(!request_) { fail("STOP_FAILED"); return; }
   }
+  /**
+   * @brief Complete等待续租时原deadline仍运行；失败先转取消，成功只刷新原请求票据，不改变冻结终点/终seq。
+   */
   if(completing_after_renewal_!=0U) {
     if(deadline_ && now>=deadline_) {
       completing_after_renewal_=0U; stop(false,"RESULT_UNCONFIRMED",now); return;
@@ -570,6 +770,16 @@ void ActionGate::tick(std::uint64_t now) {
     else fail("RESULT_UNCONFIRMED");
   }
 }
+/**
+ * @brief 登记真实update产生的本代目标，并绑定宿主generation和32位producer序号。
+ * @param generation 必须等gate内部执行代。
+ * @param epoch 必须等设备motion epoch。
+ * @param seq 非零且严格较last_seq新的线序号。
+ * @param q 六轴容器，配置轴位置rad。
+ * @param producer_generation 非零时为真实宿主控制代；0兼容回退为seq。
+ * @return 通过阶段/身份/数值门并保存时true。只有Running检查profile上下限；其他阶段每个样本及Running首样本须在1e-9 rad内等prime_q。
+ * @note 登记不证明队列、网络、设备commit或CAN SENT。
+ */
 bool ActionGate::record_update(std::uint64_t generation,std::uint32_t epoch,std::uint32_t seq,
                                const Position &q,std::uint64_t producer_generation) {
   if (generation!=generation_ || epoch!=epoch_ || !seq ||
@@ -589,6 +799,14 @@ bool ActionGate::record_update(std::uint64_t generation,std::uint32_t epoch,std:
   last_producer_generation_=producer_generation ? producer_generation : seq;
   sampled_=true; return true;
 }
+/**
+ * @brief 接收当前Running代的内部轨迹结果，成功也先冻结终采样。
+ * @param generation 当前内部执行代，迟到旧代忽略。
+ * @param result 内部Terminal，非Succeeded转异常取消。
+ * @param error 内部错误文本，空时使用默认原因。
+ * @param now 宿主µs。
+ * @note 最后真实update须在目标终容差内；随后关闭sink并进入Completing，仍未报外部Succeeded。
+ */
 void ActionGate::inner_result(std::uint64_t generation,Terminal result,const std::string &error,std::uint64_t now) {
   if (generation!=generation_ || phase_!=Phase::kRunning || terminal_!=Terminal::kNone) return;
   if (result!=Terminal::kSucceeded) { stop(false,error.empty()?"INNER_ABORT":error,now); return; }
@@ -600,6 +818,13 @@ void ActionGate::inner_result(std::uint64_t generation,Terminal result,const std
   port_.disable(); frozen_=true; frozen_seq_=last_seq_; frozen_q_=last_q_;
   phase_=Phase::kCompleting; deadline_=saturating_deadline(now,timeout_);
 }
+/**
+ * @brief 冻结旧采样、停内部执行并请求设备Cancel，区分正常取消与异常中止。
+ * @param canceled true为用户正常取消，后继Hold可给Canceled；false为异常，后继Hold给Aborted。
+ * @param error 原因文本，正常取消可空。
+ * @param now 宿主µs，建立本次停止管理预算。
+ * @note port.disable/cancel只控制宿主生产与JTC，不是设备失能；失败仍须外部Stop/释放监督。
+ */
 void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) {
   canceling_after_renewal_=0U; deferred_cancel_request_={};
   completing_after_renewal_=0U;
@@ -620,11 +845,25 @@ void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) 
   error_=error; phase_=Phase::kStopping; frozen_=true; hold_drain_pending_=false;
   issue(ManageOperation::kCancel,now);
 }
+/**
+ * @brief 对当前管理/排空/延期完成请求发正常用户取消，已在停止态不重启流程。
+ * @param now 宿主µs。
+ */
 void ActionGate::cancel(std::uint64_t now) { if (request_ || hold_drain_pending_ || completing_after_renewal_!=0U) stop(true,"",now); }
+/**
+ * @brief 因异常取消或故障收尾，延期未发Cancel时直接Fault而不继续等续租。
+ * @param error 异常原因，可空。
+ * @param now 宿主µs。
+ */
 void ActionGate::abort(const std::string &error,std::uint64_t now) {
   if(canceling_after_renewal_!=0U && request_==0U && cancel_request_id_==0U && phase_==Phase::kStopping) { fail(error.empty()?"RESULT_UNCONFIRMED":error); return; }
   if (request_ || hold_drain_pending_ || completing_after_renewal_!=0U) stop(false,error,now);
 }
+/**
+ * @brief 撤销session本地资格、淘汰旧generation并停止生产。
+ * @param now 宿主µs；存在活动等待时先尝试取消，随后Fault。
+ * @note 本地失效不等于设备会话已释放。
+ */
 void ActionGate::invalidate_authorization(std::uint64_t now) {
   canceling_after_renewal_=0U; deferred_cancel_request_={};
   if (phase_==Phase::kFault && !authorization_.session) return;
@@ -632,6 +871,11 @@ void ActionGate::invalidate_authorization(std::uint64_t now) {
   authorization_.session=false; port_.disable(); ++generation_;
   fail("SESSION_CHANGED");
 }
+/**
+ * @brief 清待办、关闭sink/取消内部轨迹并锁Fault/Aborted。
+ * @param error 失败原因；通常保留首错，STOP_FAILED可覆盖旧原因。
+ * @note 不在此新建网络Stop或D10；未确认设备停止仍由外部生命周期监督处理。
+ */
 void ActionGate::fail(const std::string &error) {
   canceling_after_renewal_=0U; deferred_cancel_request_={};
   completing_after_renewal_=0U;

@@ -1,3 +1,7 @@
+##
+# @file manual_moveit_continuous.py
+# @brief 把完整规划轨迹准备为固定 20 ms 的设备命令序列。
+# 保留实际要发送的插值曲线，检查离散速度/加速度并在需要时延长时间。准备、拼接和文件散列都不执行运动；调用方须对返回的实际命令折线重做碰撞检查。
 """固定控制周期的完整轨迹准备；碰撞检查必须针对返回的实际命令折线。"""
 import bisect
 import hashlib
@@ -8,6 +12,10 @@ from pathlib import Path
 from manual_moveit_execution import checked_points
 
 
+##
+# @class PreparedPath
+# @brief 封装不可重新绑定字段的已准备路径及运动参数。
+# points 为六轴 rad 路点元组；speed 为 °/s；acceleration 为 rad/s²；period 为秒，常规准备固定为 0.02。frozen 约束字段赋值，调用方仍应传入不可变点序列。
 @dataclass(frozen=True)
 class PreparedPath:
     points: tuple
@@ -15,11 +23,21 @@ class PreparedPath:
     acceleration: float
     period: float = .02
 
+    ##
+    # @brief 计算首末采样之间的总时长。
+    # @return float：秒，等于 (路点数-1)×采样周期。
     @property
     def duration(self):
         return (len(self.points)-1)*self.period
 
 
+##
+# @brief 将 MoveIt 速度数组重排为面板指定的六轴顺序。
+# 关节名称缺失会由 index 查找报错；此函数不做完整轨迹验证，调用方先使用 validate_trajectory。
+# @param trajectory JointTrajectory；速度字段单位 rad/s。
+# @param names 面板指定的六个关节名称，决定返回列顺序。
+# @param required True 时缺失完整六轴速度必须报错。
+# @return tuple[tuple]：重排速度，或可选模式下缺数据时返回 None。
 def trajectory_velocities(trajectory,names,required=False):
     order=[list(trajectory.joint_names).index(name) for name in names]
     values=[getattr(point,'velocities',()) for point in trajectory.points]
@@ -30,6 +48,17 @@ def trajectory_velocities(trajectory,names,required=False):
     return tuple(tuple(value[index] for index in order) for value in values)
 
 
+##
+# @brief 按限速限加速度重采样完整规划并加入首末静止样本。
+# 输入时间先减去首时刻；提供速度时容许首末 0.02 rad/s 内的数值残速，随后归零。逐步扩大时间尺度，最多尝试 32 次；轨迹须落在 630 s 和样本数预算内。
+# @exception ValueError 输入非法或不能在预算内满足离散动态限制。
+# @note Hermite 曲线可能偏离原路点折线；必须对返回 points 做限位及碰撞检查。
+# @param points 至少两个完整六轴路点，单位 rad。
+# @param times 与路点一一对应的严格递增有限时刻，单位秒，可有非零起点。
+# @param speed 各关节速度上限 °/s，范围 (0,63]。
+# @param acceleration 各关节加速度上限 rad/s²，范围 (0,4]。
+# @param velocities 可选六轴 rad/s 速度；提供时用三次 Hermite 插值，否则逐段线性插值。
+# @return PreparedPath：固定 0.02 s 周期的实际命令序列。
 def prepare_path(points,times,speed,acceleration,velocities=None):
     points=checked_points(points)
     times=tuple(times)
@@ -47,6 +76,8 @@ def prepare_path(points,times,speed,acceleration,velocities=None):
         # TOTG起点存在数值差分残速；实际入口是Hold，首末命令速度必须为零。
         # 调整后的完整序列仍逐点检查速度/加速度及碰撞，不把残速直接交给设备。
         velocities=((0.,)*6,)+velocities[1:-1]+((0.,)*6,)
+    ##
+    # speed 从 °/s 转为 rad/s 后与离散导数比较；1e-4 相对余量为数值留边，不改变传给设备的公开上限。
     vmax=math.radians(speed)*(1.-1e-4);amax=acceleration*(1.-1e-4)
     original_peak=max(abs(b-a)/(tb-ta) for p,q,ta,tb in zip(points,points[1:],times,times[1:]) for a,b in zip(p,q))
     scale=1.001 if velocities is not None else max(.001,original_peak/vmax)
@@ -56,6 +87,8 @@ def prepare_path(points,times,speed,acceleration,velocities=None):
         count=max(1,math.ceil(duration/dt))
         if (count+3)*dt>630. or count+4>40000:
             raise ValueError('连续轨迹超过原630秒运动预算')
+        ##
+        # 重复首点和末点生成一个周期的零位移，使设备命令首末速度为零；因此总时长还包含这些静止采样。
         sampled=[points[0],points[0]]
         for index in range(1,count):
             at=index*dt/scale
@@ -83,7 +116,16 @@ def prepare_path(points,times,speed,acceleration,velocities=None):
     raise ValueError('连续轨迹未能在原速度/加速度约束内重新定时')
 
 
+##
+# @brief 写入携带设备身份和 SHA-256 的二进制路径文件。
+# 40 字节小端头之后每点 6 个 double，共 48 字节；文件名采用摘要前 16 位。函数不删除文件、不发送 MOVE_PATH，也不校验碰撞。
+# @param path PreparedPath，命令点单位 rad；格式固定编码 20000 µs 周期。
+# @param directory 调用方提供的已存在输出目录，常用 /tmp。
+# @param identity 依次为 boot、reference、session 的三个无符号 64 位整数。
+# @return tuple[Path,str]：实际写入文件路径与完整 SHA-256 十六进制摘要。
 def write_path(path,directory,identity):
+    ##
+    # 二进制头依次为 magic[8]、点数 uint32、周期微秒 uint32、boot/reference/session uint64；不是 JSON 或 ROS 消息。
     header=struct.pack('<8sIIQQQ',b'DMYPTH1\0',len(path.points),20000,*identity)
     payload=header+b''.join(struct.pack('<6d',*point) for point in path.points)
     digest=hashlib.sha256(payload).hexdigest()
@@ -92,6 +134,14 @@ def write_path(path,directory,identity):
     return filename,digest
 
 
+##
+# @brief 在不改已保留前缀的前提下用五次曲线衔接两段。
+# 两段速度、加速度、周期必须相同；从较宽窗口向窄窗口搜索，并只延长新连接区时间。只核对离散动态限制，不验证身份、关节限位或碰撞。
+# @exception ValueError 参数/端点不匹配或找不到满足原动态上限的连接。
+# @param first 前段 PreparedPath；其尾部可被连接区替换。
+# @param second 后段 PreparedPath；首点须与前段末点在 1e-9 rad 内一致。
+# @param window 优先尝试替换的时间窗口，秒，默认 0.5。
+# @return tuple[PreparedPath,int]：拼接路径及最后保留的前缀样本索引 cut。
 def blend_paths(first, second, window=.5):
     """以五次曲线替换首段停车尾部和次段起步头部；调用方须重检返回曲线碰撞。
 
@@ -109,6 +159,13 @@ def blend_paths(first, second, window=.5):
         cut=len(first.points)-2-width;end=width+1
         if cut<2 or end+1>=len(second.points):continue
         p0=first.points[cut];p1=second.points[end]
+        ##
+        # @par 内部辅助函数 blend_paths.derivatives
+        # 用中心差分估算连接边界速度和加速度。
+        # 采样周期 dt 从 blend_paths 外层作用域取得。
+        # 参数 points：六轴 rad 采样序列。
+        # 参数 index：有前后邻居的样本索引。
+        # 返回：tuple：六轴速度 rad/s 与加速度 rad/s²。
         def derivatives(points,index):
             v=tuple((b-a)/(2*dt) for a,b in zip(points[index-1],points[index+1]))
             a=tuple((r-2*q+p)/dt**2 for p,q,r in zip(points[index-1],points[index],points[index+1]))
@@ -117,6 +174,8 @@ def blend_paths(first, second, window=.5):
         # 保留原有时间尺度；轻微延长只作用于新建连接区。
         for count in range(width,2*width+21,2):
             duration=count*dt
+            ##
+            # 每轴的六个系数匹配连接区两端的位置、一阶和二阶导数；u 为无量纲归一化时间。
             coefficients=[]
             for x,y,v,w,a,b in zip(p0,p1,v0,v1,a0,a1):
                 c0=x;c1=v*duration;c2=.5*a*duration**2

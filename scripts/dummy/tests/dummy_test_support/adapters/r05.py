@@ -1,4 +1,9 @@
 """R05 MoveIt/action adapter which only runs against a live action server."""
+##
+# @file r05.py
+# @brief MoveIt/公开Action实际探针与模型组件混合的R05适配器。
+#
+# MOD06运行离线mesh目标；ROS02/03/11复用R02；ROS04/05/06先核公开Action唯一server再运行规划或Action脚本。规划探针要求未执行轨迹，Action探针会提交/取消目标；hardware=none不等于无ROS请求。
 
 from __future__ import annotations
 
@@ -22,6 +27,11 @@ SOURCES = (
 )
 
 
+##
+# @brief 选对应probe/validator；ROS04核场景与障碍，ROS05核部分笛卡尔且未执行，ROS06核忙拒绝/取消/恢复及J1运动。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r05_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     if case_id == "MOD06":
         return run_unittest_case(

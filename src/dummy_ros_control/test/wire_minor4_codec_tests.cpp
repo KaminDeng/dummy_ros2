@@ -1,3 +1,9 @@
+/**
+ * @file wire_minor4_codec_tests.cpp
+ * @brief 检查当前schema minor编码与旧minor解码拒绝。
+ *
+ * 文件名保留历史minor4称呼；实际构造使用kSchemaMinor，并篡改为当前minor-1。此测试不更改合同或生成协议文件。
+ */
 #include <array>
 #include <cstdint>
 
@@ -5,6 +11,12 @@
 
 namespace wire = dp::protocol::dummy_robot_v2;
 
+/**
+ * @brief 为指定消息/codec建立当前minor夹具后篡改minor字节。
+ * @tparam Message 具有schema setter的当前wire消息。
+ * @tparam Codec 对应固定长度编码器。
+ * @return 当前消息编码成功且旧minor被decode拒绝为true。
+ */
 template <typename Message, typename Codec>
 bool rejects_old_minor() {
   Message message;
@@ -17,6 +29,12 @@ bool rejects_old_minor() {
   return Codec::decode(bytes.data(), bytes.size(), &message) != wire::CodecResult::kOk;
 }
 
+/**
+ * @brief 覆盖命令、状态、管理请求/响应及Evidence的minor门槛。
+ *
+ * Evidence额外检查category、final_state、terminal_reason和固定偏移304/305；这仅证明字节布局/解码门槛，不提供业务授权或设备状态证明。
+ * @return 0 表示本文件全部检查通过；非零定位失败检查。
+ */
 int main() {
   if (!rejects_old_minor<wire::DummyJointCommandV2, wire::DummyJointCommandV2Codec>() ||
       !rejects_old_minor<wire::DummyDeviceStatusV2, wire::DummyDeviceStatusV2Codec>() ||

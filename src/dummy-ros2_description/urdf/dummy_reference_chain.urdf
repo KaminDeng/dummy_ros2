@@ -1,6 +1,14 @@
 <?xml version="1.0"?>
+<!--
+@file dummy_reference_chain.urdf
+@brief 旧FK公式的数学参考链；每轴采用Rz(q+offset)·Tz(d)·Tx(a)·Rx(alpha)。
+@details 无visual/collision；与完整CAD链的用途分开，不能据它验证实体安装、碰撞或机械标定。
+-->
 <!-- Mathematical FK reference only. Visual and collision meshes remain in dummy-ros2.xacro. -->
 <robot name="dummy_reference_chain">
+<!--
+每轴拆成一个绕局部Z的可动joint与后继固定DH变换；辅助link不含质量、视觉或碰撞，存在只为形成可核对的齐次变换链。
+-->
   <link name="reference_base"/>
   <link name="reference_joint1"/>
   <link name="reference_link1"/>
@@ -15,6 +23,9 @@
   <link name="reference_joint6"/>
   <link name="reference_tool"/>
 
+<!--
+第1轴的Rz(q+offset)部分，offset=0rad；origin中的固定Z旋转先于q，axis为局部正Z。角度/速度单位rad与rad/s，effort=1只是本数学对照模型的限额元数据。
+-->
   <joint name="Joint1" type="revolute">
     <parent link="reference_base"/>
     <child link="reference_joint1"/>
@@ -22,12 +33,18 @@
     <axis xyz="0 0 1"/>
     <limit lower="-2.9670597283903604" upper="2.9670597283903604" effort="1" velocity="0.25"/>
   </joint>
+<!--
+该轴后继Tz(d)·Tx(a)·Rx(alpha)固定变换：d=0.109m、a=0.035m、alpha=−π/2。它不增加可动轴，不是额外电机；本参数来自旧FK数学等价模型，并非当前实物测量。
+-->
   <joint name="Joint1_dh" type="fixed">
     <parent link="reference_joint1"/>
     <child link="reference_link1"/>
     <origin xyz="0.035 0 0.109" rpy="-1.5707963267948966 0 0"/>
   </joint>
 
+<!--
+第2轴的Rz(q+offset)部分，offset=−π/2rad；origin中的固定Z旋转先于q，axis为局部正Z。角度/速度单位rad与rad/s，effort=1只是本数学对照模型的限额元数据。
+-->
   <joint name="Joint2" type="revolute">
     <parent link="reference_link1"/>
     <child link="reference_joint2"/>
@@ -35,12 +52,18 @@
     <axis xyz="0 0 1"/>
     <limit lower="-1.2740903539558606" upper="1.5707963267948966" effort="1" velocity="0.25"/>
   </joint>
+<!--
+该轴后继Tz(d)·Tx(a)·Rx(alpha)固定变换：d=0、a=0.146m、alpha=0。它不增加可动轴，不是额外电机；本参数来自旧FK数学等价模型，并非当前实物测量。
+-->
   <joint name="Joint2_dh" type="fixed">
     <parent link="reference_joint2"/>
     <child link="reference_link2"/>
     <origin xyz="0.146 0 0" rpy="0 0 0"/>
   </joint>
 
+<!--
+第3轴的Rz(q+offset)部分，offset=+π/2rad；origin中的固定Z旋转先于q，axis为局部正Z。角度/速度单位rad与rad/s，effort=1只是本数学对照模型的限额元数据。
+-->
   <joint name="Joint3" type="revolute">
     <parent link="reference_link2"/>
     <child link="reference_joint3"/>
@@ -48,12 +71,18 @@
     <axis xyz="0 0 1"/>
     <limit lower="0.6108652381980153" upper="3.141592653589793" effort="1" velocity="0.25"/>
   </joint>
+<!--
+该轴后继Tz(d)·Tx(a)·Rx(alpha)固定变换：d=0、a=−0.052m、alpha=+π/2。它不增加可动轴，不是额外电机；本参数来自旧FK数学等价模型，并非当前实物测量。
+-->
   <joint name="Joint3_dh" type="fixed">
     <parent link="reference_joint3"/>
     <child link="reference_link3"/>
     <origin xyz="-0.052 0 0" rpy="1.5707963267948966 0 0"/>
   </joint>
 
+<!--
+第4轴的Rz(q+offset)部分，offset=0rad；origin中的固定Z旋转先于q，axis为局部正Z。角度/速度单位rad与rad/s，effort=1只是本数学对照模型的限额元数据。
+-->
   <joint name="Joint4" type="revolute">
     <parent link="reference_link3"/>
     <child link="reference_joint4"/>
@@ -61,12 +90,18 @@
     <axis xyz="0 0 1"/>
     <limit lower="-3.141592653589793" upper="3.141592653589793" effort="1" velocity="0.25"/>
   </joint>
+<!--
+该轴后继Tz(d)·Tx(a)·Rx(alpha)固定变换：d=0.115m、a=0、alpha=−π/2。它不增加可动轴，不是额外电机；本参数来自旧FK数学等价模型，并非当前实物测量。
+-->
   <joint name="Joint4_dh" type="fixed">
     <parent link="reference_joint4"/>
     <child link="reference_link4"/>
     <origin xyz="0 0 0.115" rpy="-1.5707963267948966 0 0"/>
   </joint>
 
+<!--
+第5轴的Rz(q+offset)部分，offset=0rad；origin中的固定Z旋转先于q，axis为局部正Z。角度/速度单位rad与rad/s，effort=1只是本数学对照模型的限额元数据。
+-->
   <joint name="Joint5" type="revolute">
     <parent link="reference_link4"/>
     <child link="reference_joint5"/>
@@ -74,12 +109,18 @@
     <axis xyz="0 0 1"/>
     <limit lower="-1.7453292519943295" upper="1.7453292519943295" effort="1" velocity="0.25"/>
   </joint>
+<!--
+该轴后继Tz(d)·Tx(a)·Rx(alpha)固定变换：d=0、a=0、alpha=+π/2。它不增加可动轴，不是额外电机；本参数来自旧FK数学等价模型，并非当前实物测量。
+-->
   <joint name="Joint5_dh" type="fixed">
     <parent link="reference_joint5"/>
     <child link="reference_link5"/>
     <origin xyz="0 0 0" rpy="1.5707963267948966 0 0"/>
   </joint>
 
+<!--
+第6轴的Rz(q+offset)部分，offset=0rad；origin中的固定Z旋转先于q，axis为局部正Z。角度/速度单位rad与rad/s，effort=1只是本数学对照模型的限额元数据。
+-->
   <joint name="Joint6" type="revolute">
     <parent link="reference_link5"/>
     <child link="reference_joint6"/>
@@ -87,6 +128,9 @@
     <axis xyz="0 0 1"/>
     <limit lower="-12.566370614359172" upper="12.566370614359172" effort="1" velocity="0.25"/>
   </joint>
+<!--
+该轴后继Tz(d)·Tx(a)·Rx(alpha)固定变换：d=0.072m、a=0、alpha=0。它不增加可动轴，不是额外电机；本参数来自旧FK数学等价模型，并非当前实物测量。
+-->
   <joint name="Joint6_dh" type="fixed">
     <parent link="reference_joint6"/>
     <child link="reference_tool"/>

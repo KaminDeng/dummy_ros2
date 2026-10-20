@@ -12,12 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+##
+# @file test_copyright.py
+# @brief 描述包版权头检查的ament入口。
+#
+# 实际调用ament_copyright扫描指定描述包/test范围，仅代码版权格式，不构建或运行ROS。原Apache许可文本完整保留。
 from pathlib import Path
 
 from ament_copyright.main import main
 import pytest
 
 
+##
+# @brief 向ament main传包根与test两个路径参数，返回非零即断言失败。
+# @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 @pytest.mark.copyright
 @pytest.mark.linter
 def test_copyright():

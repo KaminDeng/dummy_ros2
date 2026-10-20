@@ -1,3 +1,9 @@
+/**
+ * @file trajectory_digest_tests.cpp
+ * @brief 检查轨迹规范摘要的黄金向量、字段敏感性与非法输入。
+ *
+ * 只验证JointTrajectory规范化/哈希，不检查机器人限位、时间可执行性、碰撞、轨迹执行或硬件到位。
+ */
 #include "dummy_ros_control/guarded_joint_trajectory_controller.hpp"
 
 #include <array>
@@ -6,6 +12,11 @@
 #include <stdexcept>
 
 namespace {
+/**
+ * @brief 构造固定双轴黄金向量，包含header、位置/速度/effort及点时间，初始加速度数组为空。
+ * @return 独立轨迹消息副本；stamp为42s+123ns，点time_from_start为2s+500ns。
+ * @note JointTrajectory中的角位置/角速度等沿用rad/rad/s约定；effort单位由接口类型定义。
+ */
 trajectory_msgs::msg::JointTrajectory vector() {
   trajectory_msgs::msg::JointTrajectory trajectory;
   trajectory.header.stamp.sec = 42;
@@ -22,6 +33,11 @@ trajectory_msgs::msg::JointTrajectory vector() {
   return trajectory;
 }
 
+/**
+ * @brief 比较输入的规范SHA-256与预置32字节黄金摘要。
+ * @param trajectory 待序列化轨迹，不在此函数中做物理可执行性验证。
+ * @return 摘要逐字节相同为true；非法数值异常由调用层负例捕获。
+ */
 bool matches_golden(const trajectory_msgs::msg::JointTrajectory &trajectory) {
   constexpr std::array<std::uint8_t, 32> golden = {
       0xca, 0x08, 0x3d, 0x6d, 0x43, 0x41, 0xd3, 0xde,
@@ -32,6 +48,12 @@ bool matches_golden(const trajectory_msgs::msg::JointTrajectory &trajectory) {
 }
 }  // namespace
 
+/**
+ * @brief 核对-0规范化、各字段变化和NaN/纳秒越界异常。
+ *
+ * 每次从新黄金向量改一项，避免前一变更影响后一结论；关节名顺序、header和可选数组均进入摘要。
+ * @return 0 表示本文件全部检查通过；非零定位失败检查。
+ */
 int main() {
   auto trajectory = vector();
   if (!matches_golden(trajectory)) return 1;
@@ -71,6 +93,10 @@ int main() {
   trajectory.points[0].time_from_start.nanosec++;
   if (matches_golden(trajectory)) return 13;
   trajectory = vector();
+  /**
+   * @brief 非有限浮点数必须抛invalid_argument；不能把NaN字节平台差异写进规范摘要。
+   * 后一个负例独立检查nanosec必须小于10^9。
+   */
   trajectory.points[0].effort[0] = NAN;
   try { (void)dummy_ros_control::trajectory_digest(trajectory); return 14; }
   catch (const std::invalid_argument &) {}

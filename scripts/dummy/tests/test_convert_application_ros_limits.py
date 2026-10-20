@@ -1,4 +1,9 @@
 import copy
+##
+# @file test_convert_application_ros_limits.py
+# @brief 候选/限制快照绑定及开发态MoveIt/JTC配置转换回归。
+#
+# 在tmp_path创建合成model/policy/profile/manifest；SHA自洽与freeze不代表真实机械模型或实机批准。关节模型绝对界、设备能力界和BENCH相对±0.6rad规划界分开；acceleration ADVISORY、jerk UNQUALIFIED保留。仅写临时YAML/JSON，不运行ROS/控制器。
 import hashlib
 import importlib.util
 import json
@@ -14,6 +19,11 @@ converter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(converter)
 
 
+##
+# @brief 生成六轴合成候选与limits：J3绝对35..180°、planning±0.6rad、设备速度0.5rad/s，绑定原文件/规范policy/聚合摘要。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @param timing_override 要并入合成policy timing的覆盖字段；None用短时默认。
+# @return (manifest路径, limits路径, 原limits字典)，文件均为合成输入。
 def source(tmp_path, timing_override=None):
     manifest = tmp_path / "manifest.json"
     model_path = tmp_path / "model/model.yaml"
@@ -97,6 +107,10 @@ def source(tmp_path, timing_override=None):
     return manifest, input_path, limits
 
 
+##
+# @brief 转换保BENCH J3±0.6/设备绝对界分离、无jerk强限/默认不改update_rate、GuardedJTC+inactive hardware+公开Action映射及容差。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_generates_dev_only_moveit_and_jtc_without_cadence_override(tmp_path):
     manifest, input_path, _ = source(tmp_path)
     output = tmp_path / "dev_limits"
@@ -132,6 +146,10 @@ def test_generates_dev_only_moveit_and_jtc_without_cadence_override(tmp_path):
     assert "UNQUALIFIED" in (output / "joint_limits.yaml").read_text()
 
 
+##
+# @brief 显式dev_cadence_1to1才由20000µs周期生成50Hz，不把默认配置暗改。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_explicit_one_to_one_cadence_generates_50hz(tmp_path):
     manifest, input_path, _ = source(tmp_path)
     output = tmp_path / "dev_limits"
@@ -140,6 +158,10 @@ def test_explicit_one_to_one_cadence_generates_50hz(tmp_path):
     assert jtc["controller_manager"]["ros__parameters"]["update_rate"] == 50
 
 
+##
+# @brief 已验证短policy默认permit20s、session lease30s，单位µs；只核参数不申请许可。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_short_policy_uses_default_gate_timing(tmp_path):
     manifest, input_path, _ = source(tmp_path)
     result = converter.validate_bound(input_path, manifest)
@@ -147,6 +169,10 @@ def test_short_policy_uses_default_gate_timing(tmp_path):
     assert result.gate_lease.requested_session_lease_us == 30000000
 
 
+##
+# @brief 630s目标/650s permit来自已hash policy，session仍30s；Bound值与深层limits均禁止改写，不代表运行中续租已成功。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_hashed_long_policy_provides_goal_sized_gate_timing(tmp_path):
     manifest, input_path, _ = source(tmp_path, {
         "max_goal_duration_us": 630000000, "motion_permit_us": 650000000})
@@ -159,6 +185,11 @@ def test_hashed_long_policy_provides_goal_sized_gate_timing(tmp_path):
         result.limits["joints"][0]["name"] = "ForgedJoint"
 
 
+##
+# @brief permit不足/超trial/bool或session20s等即便hash自洽仍因时序策略拒绝。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @param timing_override 要并入合成policy timing的覆盖字段；None用短时默认。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 @pytest.mark.parametrize("timing_override", [
     {"max_goal_duration_us": 630000000, "motion_permit_us": 639000000},
     {"max_goal_duration_us": 630000000, "motion_permit_us": 660000001},
@@ -172,6 +203,10 @@ def test_rejects_invalid_hashed_long_gate_timing(tmp_path, timing_override):
         converter.validate_bound(input_path, manifest)
 
 
+##
+# @brief 只在limits外层塞650s permit，未绑定policy来源，不能放大授权预算。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_rejects_unhashed_limits_permit_override(tmp_path):
     manifest, input_path, limits = source(tmp_path)
     input_path.write_text(json.dumps({**limits, "motion_permit_us": 650000000}))
@@ -179,6 +214,10 @@ def test_rejects_unhashed_limits_permit_override(tmp_path):
         converter.validate_bound(input_path, manifest)
 
 
+##
+# @brief 改policy timing却不更新manifest payload SHA，必须拒绝文件漂移。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_rejects_policy_hash_mismatch_for_long_permit(tmp_path):
     manifest, input_path, _ = source(tmp_path)
     policy_path = tmp_path / "policy/application_hold_no_load.json"
@@ -189,6 +228,11 @@ def test_rejects_policy_hash_mismatch_for_long_permit(tmp_path):
         converter.validate_bound(input_path, manifest)
 
 
+##
+# @brief schema/资格/参考系/轴顺序/三类边界/速度/jerk/ADVISORY破坏均在输出目录创建前拒绝。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @param mutation 参数化变异函数或分支名，逐例只制造指定错误。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 @pytest.mark.parametrize("mutation", [
     lambda data: data.update(schema="wrong"),
     lambda data: data.update(qualification="QUALIFIED"),
@@ -213,6 +257,10 @@ def test_rejects_invalid_limits_without_output(tmp_path, mutation):
     assert not output.exists()
 
 
+##
+# @brief manifest原字节改变即使是可解析JSON也因pin不符拒绝，不新建输出。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_rejects_changed_candidate_manifest(tmp_path):
     manifest, input_path, _ = source(tmp_path)
     manifest.write_text('{"release_id":"other"}\n')
@@ -220,6 +268,12 @@ def test_rejects_changed_candidate_manifest(tmp_path):
         converter.convert(input_path, manifest, tmp_path / "dev_limits")
 
 
+##
+# @brief 读model/policy/profile后立刻改路径为非法YAML，validate仍解析已核摘要的原快照，避免重读竞争。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @param monkeypatch pytest属性替换fixture，退出作用域自动恢复。
+# @param relative_path 待替换的model/policy/profile相对文件名。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 @pytest.mark.parametrize("relative_path", [
     "model/model.yaml", "policy/application_hold_no_load.json",
     "profiles/f405_6dof_bench.yaml",
@@ -230,6 +284,11 @@ def test_payload_validation_uses_bytes_captured_before_replacement(
     payload_path = tmp_path / relative_path
     original_read_bytes = Path.read_bytes
 
+    ##
+    # @par 内部回调 replace_after_read
+    # 包装read_bytes先取原snapshot，再对目标payload路径写坏文本，返回原字节。
+    # 参数 path：目标文件Path，读取原字节；是否原始被替换见函数职责。
+    # 返回：路径被改写前读取的原snapshot bytes。
     def replace_after_read(path):
         snapshot = original_read_bytes(path)
         if path == payload_path:
@@ -240,17 +299,34 @@ def test_payload_validation_uses_bytes_captured_before_replacement(
     assert converter.validate(input_path, manifest)["scope"] == "NO_LOAD_DEV"
 
 
+##
+# @brief 分别统计manifest/limits read_bytes一次，任何再read_text重开两输入都会pytest.fail。
+# @param tmp_path pytest临时目录Path；raw/context/YAML等夹具只在此处生成。
+# @param monkeypatch pytest属性替换fixture，退出作用域自动恢复。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_manifest_and_limits_are_each_read_once(tmp_path, monkeypatch):
     manifest, input_path, _ = source(tmp_path)
     original_read_bytes = Path.read_bytes
     original_read_text = Path.read_text
     reads = {manifest: 0, input_path: 0}
 
+    ##
+    # @par 内部回调 count_bytes
+    # 只对两入口文件累计read_bytes次数后转原方法，不修改返回内容。
+    # 参数 path：目标文件Path，读取原字节；是否原始被替换见函数职责。
+    # 返回：原read_bytes结果。
     def count_bytes(path):
         if path in reads:
             reads[path] += 1
         return original_read_bytes(path)
 
+    ##
+    # @par 内部回调 reject_second_read
+    # 两入口文件若被read_text再读立即fail，其它路径交原read_text。
+    # 参数 path：目标文件Path，读取原字节；是否原始被替换见函数职责。
+    # 参数 args：其它位置参数，转交原read_text。
+    # 参数 kwargs：其它关键字参数，转交原read_text。
+    # 返回：其它文件原read_text结果；受监控输入重开即pytest.fail。
     def reject_second_read(path, *args, **kwargs):
         if path in reads:
             pytest.fail(f"{path}: input reopened for parsing")

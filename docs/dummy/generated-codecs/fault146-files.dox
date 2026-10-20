@@ -1,0 +1,13 @@
+/**
+ * @file original-once-decoded-146-payloads-fixture.hpp
+ * @brief 冻结原件外部注释映射：src/dummy_motion_client/test/fixtures/ros05_fault146/original-once-decoded-146-payloads-fixture.hpp
+ *
+ * 原SHA-256：e8cdcb29921ab38e09b980828972436c7135459ebcaaf3fc442d0021a2241b12；原行数159。本文件未插注释或重生成；说明来自本family独立sidecar，原始wire/fixture身份保持。旧2.4故障146页与后续Fault观测原始冻结数组；只重放该历史记录，不产生新现场/合格证明。
+ */
+
+/**
+ * @file original-once-decoded-current-fault-observations.hpp
+ * @brief 冻结原件外部注释映射：src/dummy_motion_client/test/fixtures/ros05_fault146/original-once-decoded-current-fault-observations.hpp
+ *
+ * 原SHA-256：3e7c0ff5a3c32cb489039097068446a661e16bc432a15e95c16ee99a045b4a1f；原行数9。本文件未插注释或重生成；说明来自本family独立sidecar，原始wire/fixture身份保持。旧2.4故障146页与后续Fault观测原始冻结数组；只重放该历史记录，不产生新现场/合格证明。
+ */

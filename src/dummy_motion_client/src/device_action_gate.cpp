@@ -1,3 +1,9 @@
+/**
+ * @file device_action_gate.cpp
+ * @brief 公开FJT动作、显式bootstrap管理服务与唯一设备worker/JTC的集成入口。
+ * ROS executor回调负责有限准入和排队，独立控制线程按prepare_update→manager read/update/write→cycle处理真实采样及管理状态机；传输复用dummy_ros_control的DeviceWorker，不另开USB owner。构造节点不等于标定、使能或授权动作。
+ * 位置rad、速度rad/s、加速度rad/s²、轨迹相对秒；管理/接收/证据steady时间为宿主µs，ROS反馈header另用ROS时钟。Queued、Accepted、COMMITTED、实际Hold、Timeline排空与raw终页flush均为不同证据，不能互相冒充物理完成或正式资格。
+ */
 #include "dummy_motion_client/bootstrap_tick_policy.hpp"
 #include <algorithm>
 #include <array>
@@ -37,6 +43,13 @@ using Follow=control_msgs::action::FollowJointTrajectory;
 using GoalHandle=rclcpp_action::ServerGoalHandle<Follow>;
 using Controller=dummy_ros_control::GuardedJointTrajectoryController;
 
+/**
+ * @brief 核writer首原页属于指定同值Hold refresh后继身份且具严格六轴证明。
+ * 只识别后继原页，不单独确认Status/State新鲜、原motion已完成或动作成功。
+ * @param page 已写/刷新首非终原页。
+ * @param identity 预期boot/session/reference/motion/run组合；首页helper使用其中boot/session/motion/run。
+ * @return bool；seq0、根attempt/category1、全六轴expected/submitted/sent且无failed/evidence_lost等须同时满足。
+ */
 bool verified_refresh_successor(const RawFirstPageWritten &page,
                                 const TimelineIdentity &identity) noexcept {
   return page.strict_refresh_successor && page.chain_valid && page.full_six &&
@@ -47,6 +60,13 @@ bool verified_refresh_successor(const RawFirstPageWritten &page,
       page,identity.boot,identity.session,identity.run_id,identity.motion_epoch);
 }
 
+/**
+ * @brief 识别同根run已验链的无故障Cancel终页及后继安全Hold epoch。
+ * 这是干净受控取消，不是成功运动或D10失能释放；时间/实际Hold仍由调用层检查。
+ * @param terminal writer已flush的终页值。
+ * @param run 被取消motion原身份。
+ * @return bool；final7、非motion_complete/非release、零failure且safety_hold=原motion+1。
+ */
 bool clean_cancel_terminal(const RawTerminalIdentity &terminal,
                            const TimelineIdentity &run) noexcept {
   return run.motion_epoch!=UINT32_MAX &&
@@ -60,6 +80,19 @@ bool clean_cancel_terminal(const RawTerminalIdentity &terminal,
     terminal.safety_hold_motion_epoch==run.motion_epoch+1U;
 }
 
+/**
+ * @brief 在原motion完成终页与紧邻refresh首组都写出后确认后继双Hold形状。
+ * 本谓词不独立检查接收年龄，外层read_observation叠加双fresh/coherent；它解释已完成motion后的必要保持refresh，不给新目标授权。
+ * @param status 当前已验证Status。
+ * @param state 当前已验证State。
+ * @param prior 前motion身份。
+ * @param terminal 前run完成原终页flush回执。
+ * @param successor run+1首原页写出回执。
+ * @param raw_capture_enabled 必须启用raw捕获。
+ * @param raw_failure 必须为0。
+ * @param axis_mask 必须63。
+ * @return bool；同boot/session/reference、run及motion恰+1，双Hold、全轴SENT和严格首页成立。
+ */
 bool timeline_completed_refresh_hold_confirmed(
     const wire::DummyDeviceStatusV2 &status,const wire::DummyJointStateV2 &state,
     const TimelineIdentity &prior,const RawTerminalIdentity &terminal,
@@ -93,6 +126,16 @@ bool timeline_completed_refresh_hold_confirmed(
     state.can_failed_mask()==0U && verified_refresh_successor(successor,next);
 }
 
+/**
+ * @brief 核取消同run终页与当前后继Hold状态形状。
+ * 本辅助未单独检查接收年龄/两management相等或raw失败，调用方再合取；不能凭名称认为已覆盖全部取消验收。
+ * @param status 当前Status。
+ * @param state 当前State。
+ * @param run 被取消motion原身份。
+ * @param raw_terminal 干净Cancel终页flush回执。
+ * @param axis_mask 只支持完整63。
+ * @return bool；同run/参考，motion恰+1，final7、双Hold和全配置轴提交/SENT。
+ */
 bool timeline_cancel_hold_confirmed(const wire::DummyDeviceStatusV2 &status,
                                     const wire::DummyJointStateV2 &state,
                                     const TimelineIdentity &run,
@@ -113,6 +156,17 @@ bool timeline_cancel_hold_confirmed(const wire::DummyDeviceStatusV2 &status,
     clean_cancel_terminal(raw_terminal,run);
 }
 
+/**
+ * @brief 仅在gate已有终态时转交Timeline/raw证据封口判定。
+ * @param terminal ActionGate外部终态。
+ * @param timeline_configured 是否配置时间线。
+ * @param timeline_failed 时间线/证据是否失败。
+ * @param hold_recorded 实际Hold事件已登记。
+ * @param writer_drained 时间线writer已排空。
+ * @param raw_failed 原页采集失败。
+ * @param raw_terminal_flushed 相同goal run终页已写出/flush。
+ * @return 无终态始终Wait；其余由timeline_success_decision返回封口层级。
+ */
 TimelineSuccessDecision timeline_terminal_decision(
     Terminal terminal,bool timeline_configured,bool timeline_failed,
     bool hold_recorded,bool writer_drained,bool raw_failed,
@@ -122,12 +176,31 @@ TimelineSuccessDecision timeline_terminal_decision(
     hold_recorded,writer_drained,true,raw_failed,raw_terminal_flushed);
 }
 
+/**
+ * @brief 保留首个动作错误并附加证据不完整。
+ * 不把证据失败改写成动作完成，也不丢失前面的设备/路径首因。
+ * @param first_error 已有错误原因。
+ * @return 空或已为EVIDENCE_INCOMPLETE时返回该标记，否则以分号追加。
+ */
 std::string evidence_incomplete_result_error(const std::string &first_error) {
   if(first_error.empty() || first_error=="EVIDENCE_INCOMPLETE")
     return "EVIDENCE_INCOMPLETE";
   return first_error+";EVIDENCE_INCOMPLETE";
 }
 
+/**
+ * @brief 把已证同值refresh后继映射回原goal的Hold身份用于封口。
+ * 这里motion比较的是已确认后继Hold身份，不是旧Running epoch。仅关闭既有goal时间线，不把refresh当另一个用户目标。
+ * @param observed 当前refresh身份。
+ * @param confirmed_hold 原goal已经确认Hold的身份。
+ * @param prior_hold_confirmed 此前Hold已证。
+ * @param raw_terminal_flushed 原motion终页匹配且已flush。
+ * @param successor_page_written 后继首页已验/写。
+ * @param status_hold Status新鲜Hold。
+ * @param state_hold State新鲜一致Hold。
+ * @param refresh_status 当前是无故障未终结根refresh。
+ * @return 原confirmed_hold或nullopt；run需恰+1，其余boot/session/reference/motion不变。
+ */
 std::optional<TimelineIdentity> timeline_refresh_closure_identity(
     const TimelineIdentity &observed, const TimelineIdentity &confirmed_hold,
     bool prior_hold_confirmed, bool raw_terminal_flushed,
@@ -143,6 +216,18 @@ std::optional<TimelineIdentity> timeline_refresh_closure_identity(
   return confirmed_hold;
 }
 
+/**
+ * @brief 给refresh封口合取返回首个不满足项标签。
+ * @param observed 当前身份。
+ * @param confirmed_hold 原已证Hold身份。
+ * @param prior_hold_confirmed 前Hold证明。
+ * @param raw_terminal_matched 原终页身份匹配。
+ * @param successor_page_verified 严格后继首页通过。
+ * @param status_hold 当前Status条件。
+ * @param state_hold 当前State条件。
+ * @param refresh_status 根refresh形状。
+ * @return 静态C标签或none，只供诊断。
+ */
 const char *refresh_closure_failure(const TimelineIdentity &observed,
     const TimelineIdentity &confirmed_hold,bool prior_hold_confirmed,
     bool raw_terminal_matched,bool successor_page_verified,
@@ -162,6 +247,18 @@ const char *refresh_closure_failure(const TimelineIdentity &observed,
   return "none";
 }
 
+/**
+ * @brief 诊断已知refresh等待State的身份或宿主期限问题。
+ * 此诊断把raw/首页等设为中性true，只定位允许短等的条件，不替代实际最终封口证据。
+ * @param observed 当前候选身份。
+ * @param confirmed_hold 已证原Hold身份。
+ * @param prior_hold_confirmed 前Hold是否确立。
+ * @param refresh_status 明确refresh状态形状。
+ * @param first_seen_us 首次refresh Status原接收µs。
+ * @param now 宿主µs。
+ * @param age_budget_us 有限等待µs。
+ * @return 静态首失败标签；none表示身份和等待窗满足。
+ */
 const char *refresh_wait_failure(const TimelineIdentity &observed,
     const TimelineIdentity &confirmed_hold,bool prior_hold_confirmed,bool refresh_status,
     std::uint64_t first_seen_us,std::uint64_t now,std::uint64_t age_budget_us) noexcept {
@@ -174,6 +271,17 @@ const char *refresh_wait_failure(const TimelineIdentity &observed,
   return "none";
 }
 
+/**
+ * @brief 仅给已知紧邻同值refresh一个等待独立State的有限窗口。
+ * @param observed refresh候选身份。
+ * @param confirmed_hold 已证Hold身份。
+ * @param prior_hold_confirmed 必须已确立。
+ * @param refresh_status 必须明确为refresh。
+ * @param first_seen_us 原Status接收锚µs，非0。
+ * @param now 宿主µs。
+ * @param age_budget_us 等待预算µs。
+ * @return bool：同身份/run+1且now位于[first_seen,first_seen+budget)；不延长原锚。
+ */
 bool timeline_refresh_wait_allowed(const TimelineIdentity &observed,
     const TimelineIdentity &confirmed_hold,bool prior_hold_confirmed,bool refresh_status,
     std::uint64_t first_seen_us,std::uint64_t now,std::uint64_t age_budget_us) noexcept {
@@ -183,6 +291,16 @@ bool timeline_refresh_wait_allowed(const TimelineIdentity &observed,
     now>=first_seen_us && now-first_seen_us<age_budget_us;
 }
 
+/**
+ * @brief 用CAS占一个显式管理请求槽。
+ * 回调只排队，不发送管理或报告设备已执行；控制线程稍后按实际状态复查。
+ * @param request 0为空的原子操作编号槽。
+ * @param busy goal/管理占用标志。
+ * @param renewal_reserved 续租预留标志。
+ * @param operation 待排队wire操作整数。
+ * @param available 调用方读得的准入快照。
+ * @return bool；检查快照后CAS0→operation成功。
+ */
 bool queue_management_request(std::atomic<int> &request, const std::atomic<bool> &busy,
                               const std::atomic<bool> &renewal_reserved,
                               int operation, bool available) noexcept {
@@ -191,22 +309,50 @@ bool queue_management_request(std::atomic<int> &request, const std::atomic<bool>
     request.compare_exchange_strong(expected,operation);
 }
 
+/**
+ * @brief 把一次SetPermit成功传播给ActionGate的本地代次锁存。
+ * generation/applied_generation为宿主调用代，不是设备epoch；boot/session限定只应用当前请求，不拥有许可本体。
+ */
 struct PermitRefreshLatch {
+  /**
+   * @brief 记录新一轮SetPermit预期boot/session并递增请求代。
+   * @param boot 请求时boot。
+   * @param session 请求时session。
+   */
   void begin(std::uint64_t boot, std::uint64_t session) noexcept {
     ++generation;
     request_boot=boot;
     request_session=session;
   }
+  /**
+   * @brief 判断当前身份是否仍可应用尚未传播的permit结果。
+   * @param boot 当前boot。
+   * @param session 当前session。
+   * @return 本代尚未applied且身份相同为true。
+   */
   bool eligible(std::uint64_t boot, std::uint64_t session) const noexcept {
     return generation!=applied_generation && boot==request_boot &&
       session==request_session;
   }
+  /**
+   * @brief 标记本地已把当前代permit快照成功交给gate，不发送设备请求。
+   */
   void applied() noexcept { applied_generation=generation; }
 
   std::uint64_t generation=0, applied_generation=0;
   std::uint64_t request_boot=0, request_session=0;
 };
 
+/**
+ * @brief 撤销未成功续租的本地预约，保留不属于它的goal busy。
+ * 清本地状态不证明设备租期未变化，也不重发原管理；上层Bootstrap对未确认结果Fault。
+ * @param request 管理操作单槽，仅尝试清RenewLease值。
+ * @param busy 宿主占用标志。
+ * @param reserved 预约标志。
+ * @param started 是否已提交续租。
+ * @param explicit_status 显式服务回执状态。
+ * @param owns_busy True仅当此续租独占busy，RUN借用goal busy则false。
+ */
 void clear_failed_lease_renewal(std::atomic<int> &request, std::atomic<bool> &busy,
                                 std::atomic<bool> &reserved, std::atomic<bool> &started,
                                 std::atomic<int> &explicit_status,
@@ -219,24 +365,45 @@ void clear_failed_lease_renewal(std::atomic<int> &request, std::atomic<bool> &bu
   if(owns_busy) busy=false;
 }
 
+/**
+ * @brief Running续租最低合取输入：双Running/同tuple/同goal run/真实且最近producer/transport及许可新鲜性，各由外层实际观察构造。
+ */
 struct RunLeaseEligibility {
   bool status_running=false, state_running=false, status_state_coherent=false;
   bool same_goal_run=false, producer_active=false, producer_recent=false;
   bool transport_ready=false;
 };
 
+/**
+ * @brief 仅当全部Running生产链条件满足时允许新的RUN续租。
+ * @param state 七项资格值。
+ * @return 全部为true；不在此读取硬件或推导单项真实性。
+ */
 bool run_lease_eligible(const RunLeaseEligibility &state) noexcept {
   return state.status_running && state.state_running &&
     state.status_state_coherent && state.same_goal_run &&
     state.producer_active && state.producer_recent && state.transport_ready;
 }
 
+/**
+ * @brief 只为已接纳续租遇到有界完成/取消冻结时保留producer_active。
+ * 其他身份/最近采样/双fresh仍不变；该例外不能用于开启一个新的续租。
+ * @param inputs 原始七项条件。
+ * @param renewal_running 确实已有本RUN续租预约/处理。
+ * @param bounded_completion gate已证明在原deadline内等待同根续租的冻结意图。
+ * @return 复制后的条件，仅可能把producer_active改true。
+ */
 RunLeaseEligibility run_lease_continuation_inputs(RunLeaseEligibility inputs,
     bool renewal_running,bool bounded_completion) noexcept {
   if(renewal_running && bounded_completion) inputs.producer_active=true;
   return inputs;
 }
 
+/**
+ * @brief 返回七项RUN资格的首失败标签用于固定诊断。
+ * @param state 资格输入。
+ * @return 静态标签或none，不更改状态。
+ */
 const char *run_lease_first_failed(const RunLeaseEligibility &state) noexcept {
   if(!state.status_running) return "status_running";
   if(!state.state_running) return "state_running";
@@ -248,16 +415,36 @@ const char *run_lease_first_failed(const RunLeaseEligibility &state) noexcept {
   return "none";
 }
 
+/**
+ * @brief 安全计算宿主年龄供诊断。
+ * @param now 宿主µs。
+ * @param received_us 非零原接收/采样锚µs。
+ * @return 正常差值；缺锚或时间倒退返回UINT64_MAX，不伪装0年龄。
+ */
 std::uint64_t run_lease_age_us(std::uint64_t now,std::uint64_t received_us) noexcept {
   return received_us!=0U && now>=received_us ? now-received_us : UINT64_MAX;
 }
 
+/**
+ * @brief 检查ROS参数permit正数且不超过已验证profile预算。
+ * @param requested_us 有符号输入µs。
+ * @param profile manifest/activation已加载profile。
+ * @return bool；不实际签发permit，也不等于session租期。
+ */
 bool validated_requested_motion_permit(std::int64_t requested_us,
                                        const DeviceProfile &profile) noexcept {
   return requested_us > 0 &&
     static_cast<std::uint64_t>(requested_us) <= profile.motion_permit_max_us;
 }
 
+/**
+ * @brief 原子预留唯一续租操作并按Hold/RUN区分busy所有者。
+ * @param request 管理单槽。
+ * @param busy 当前goal/管理busy。
+ * @param reserved 续租唯一预约门。
+ * @param running True必须已由goal持busy；False自行抢busy。
+ * @return bool；入槽失败回滚本次预约，只归还自己拥有的busy。
+ */
 bool queue_lease_renewal(std::atomic<int> &request, std::atomic<bool> &busy,
                          std::atomic<bool> &reserved, bool running) noexcept {
   bool expected=false;
@@ -277,6 +464,19 @@ bool queue_lease_renewal(std::atomic<int> &request, std::atomic<bool> &busy,
 }
 
 // 调用方持有同一control admission锁；只退尚未提交的RUN预约，不动goal busy。
+/**
+ * @brief 在完成/取消明确意图出现时撤回尚未发出的RUN续租预约。
+ * 不取消已经发送的续租，不赋新续租权限，不延长完成/停止deadline。
+ * @param request 只CAS清RenewLease。
+ * @param reserved 预约标志。
+ * @param running RUN预约类型。
+ * @param started 已开始提交则不可撤。
+ * @param owns_busy 必须false，不能动goal busy。
+ * @param renewal_inflight 已有RPC时不可撤。
+ * @param bounded_intent gate证明的有界完成/取消意图。
+ * @param explicit_status 若显式pending则改-1供只读服务报告。
+ * @return bool；调用方已持同control admission锁。
+ */
 bool withdraw_queued_running_renewal(std::atomic<int> &request,
     std::atomic<bool> &reserved, std::atomic<bool> &running,
     std::atomic<bool> &started, bool owns_busy, bool renewal_inflight,
@@ -291,11 +491,25 @@ bool withdraw_queued_running_renewal(std::atomic<int> &request,
   return true;
 }
 
+/**
+ * @brief 一次性消费显式续租“撤回未发送”状态。
+ * @param status -1表示待报告撤回。
+ * @return CAS-1→0成功为true。
+ */
 bool take_withdrawn_lease_renewal(std::atomic<int> &status) noexcept {
   int withdrawn=-1;
   return status.compare_exchange_strong(withdrawn,0);
 }
 
+/**
+ * @brief 仅在当前允许阶段一次性消费显式续租已确认提示。
+ * @param explicit_status 2表示确认未读。
+ * @param status_available 实际观测/监督允许读取。
+ * @param operation_complete Bootstrap单步已完成。
+ * @param hold 调用方接受的Hold或Running阶段布尔值。
+ * @param last_operation 须RenewLease。
+ * @return CAS2→0成功为true；不执行新的续租。
+ */
 bool take_confirmed_lease_renewal(std::atomic<int> &explicit_status,
                                   bool status_available, bool operation_complete, bool hold,
                                   ManageOperation last_operation) noexcept {
@@ -305,6 +519,16 @@ bool take_confirmed_lease_renewal(std::atomic<int> &explicit_status,
     explicit_status.compare_exchange_strong(confirmed,0);
 }
 
+/**
+ * @brief 按Fault/续租/已EnableHold/单步/等待优先级选服务文字。
+ * @param phase Bootstrap阶段。
+ * @param error Fault时借用非空错误。
+ * @param renewal_complete 本次确认提示可读。
+ * @param enabled 宿主已发使能流程标志。
+ * @param gate_ready gate已握手Hold。
+ * @param operation_complete 显式操作完成。
+ * @return 静态或error借用文本；不是新设备操作。
+ */
 const char *bootstrap_status_message(BootstrapPhase phase, const char *error,
                                      bool renewal_complete, bool enabled,
                                      bool gate_ready, bool operation_complete) noexcept {
@@ -314,11 +538,23 @@ const char *bootstrap_status_message(BootstrapPhase phase, const char *error,
   return operation_complete ? "OPERATION_COMPLETE" : "BOOTSTRAP_PENDING";
 }
 
+/**
+ * @brief 复用接口谓词检查双消息已释放Idle形状。
+ * @param status 已验证Status。
+ * @param state 已验证State。
+ * @return bool；时间、释放根和原页证明仍由外层负责。
+ */
 bool released_idle_observation(const wire::DummyDeviceStatusV2 &status,
                                const wire::DummyJointStateV2 &state) noexcept {
   return released_idle_status_confirmed(status,state);
 }
 
+/**
+ * @brief 比较Status/State的boot/session/reference/motion/management全部水位。
+ * @param status Status值。
+ * @param state State值。
+ * @return bool；不独立检查device/profile/hash或新鲜度。
+ */
 bool bootstrap_authority_coherent(const wire::DummyDeviceStatusV2 &status,
                                   const wire::DummyJointStateV2 &state) noexcept {
   return state.boot_epoch()==status.boot_epoch() &&
@@ -328,11 +564,31 @@ bool bootstrap_authority_coherent(const wire::DummyDeviceStatusV2 &status,
     state.management_epoch()==status.management_epoch();
 }
 
+/**
+ * @brief 复用完整tuple一致性判断refresh双观察。
+ * @param status Status值。
+ * @param state State值。
+ * @return bool，不自动继承旧Hold资格。
+ */
 bool refresh_observation_coherent(const wire::DummyDeviceStatusV2 &status,
                                   const wire::DummyJointStateV2 &state) noexcept {
   return bootstrap_authority_coherent(status,state);
 }
 
+/**
+ * @brief 以正常取消管理receipt、干净终页及紧邻refresh原页确认后继Hold形状。
+ * 只匹配原goal取消后保持刷新，不当成成功运动/失能释放；外层仍核双fresh及目标生命周期。
+ * @param status 当前Status。
+ * @param state 当前State。
+ * @param run 原取消goal run身份。
+ * @param terminal 原run终页flush。
+ * @param successor 后继首页写出。
+ * @param cancel_receipt gate已确认Cancel request/op对。
+ * @param raw_capture_enabled 原页捕获必须开启。
+ * @param raw_failure 必须0。
+ * @param axis_mask 必须63。
+ * @return bool；run/motion恰+1，同boot/session/reference且双Hold一致，首/终证据符合。
+ */
 bool timeline_cancel_refresh_hold_confirmed(
     const wire::DummyDeviceStatusV2 &status,
     const wire::DummyJointStateV2 &state,
@@ -364,6 +620,9 @@ bool timeline_cancel_refresh_hold_confirmed(
     verified_refresh_successor(successor,next);
 }
 
+/**
+ * @brief 显式D10释放服务准入快照，汇总双fresh Hold、功能开发范围、gate与Bootstrap及占槽状态，不是设备释放结果。
+ */
 struct ReleaseAvailability {
   bool releasing=false;
   bool status_fresh=false;
@@ -380,6 +639,11 @@ struct ReleaseAvailability {
   bool transport_ready=false;
 };
 
+/**
+ * @brief 合取受控释放入口所需条件。
+ * @param state 已经从实际观察构造的释放条件。
+ * @return bool；需无release/busy/待管理、已Enable、双Hold/同管理水位、功能开发依据及transport可用。
+ */
 bool release_operation_available(const ReleaseAvailability &state) noexcept {
   return !state.releasing && state.status_fresh && state.management_epoch_matches &&
     state.functional_development_basis && state.enabled &&
@@ -388,6 +652,14 @@ bool release_operation_available(const ReleaseAvailability &state) noexcept {
     state.status_hold && state.state_hold && state.transport_ready;
 }
 
+/**
+ * @brief 用双重available复查和CAS排队一次D10。
+ * @param available 控制线程公布的释放可用性。
+ * @param request 0为空的管理槽。
+ * @param busy 本次释放要独占的宿主标志。
+ * @param stage 0空、1排队的释放阶段。
+ * @return bool；中间任一CAS失败回滚stage/busy，不发送网络。
+ */
 bool queue_disable_and_release(const std::atomic<bool> &available,
                                std::atomic<int> &request, std::atomic<bool> &busy,
                                std::atomic<int> &stage) noexcept {
@@ -406,8 +678,14 @@ bool queue_disable_and_release(const std::atomic<bool> &available,
   return true;
 }
 
+/**
+ * @brief 宿主动作拒绝类别；NotReady可在极窄续租占槽情形提供短期解释，Invalid/Busy不改成可重试成功。
+ */
 enum class GoalRejectionReason { kInvalid, kNotReady, kBusy };
 
+/**
+ * @brief 新goal共同前置快照：Enable/有效观察/gate Hold/真实port/已绑容差/旧motion完成屏障，不能只以transport ready接纳。
+ */
 struct AdmissionPrerequisites {
   bool enabled=false;
   bool observation_ready=false;
@@ -416,16 +694,36 @@ struct AdmissionPrerequisites {
   bool hold_tolerance_bound=false;
   bool transport_begin_ready=false;
 
+  /**
+   * @brief 查询新goal六项准入是否同时具备。
+   * @return bool；额外续租预约/释放/证据/LIMITED预算还在节点ready快照叠加。
+   */
   bool ready() const noexcept {
     return enabled && observation_ready && gate_ready && port_ready &&
       hold_tolerance_bound && transport_begin_ready;
   }
 };
 
+/**
+ * @brief 保留最近一次“仅因续租而NotReady”的目标UUID短期说明。
+ * mutex保护ROS回调与只读服务；最多一个条目、两秒寿命，不排队重试goal，不改变原action拒绝响应。
+ */
 class GoalRejectionReceipt {
  public:
   using Clock=std::chrono::steady_clock;
 
+  /**
+   * @brief 仅在窄续租条件符合时保存拒绝UUID及宿主时间。
+   * 不符合任一条件清旧条目，避免旧续租提示覆盖后来的真实故障或无效目标。
+   * @param uuid 被拒绝goal的16字节ID。
+   * @param reason 真实拒绝分类。
+   * @param renewal_reserved 已有续租预约。
+   * @param admission_prerequisites 其他goal前置全满足。
+   * @param release_stage 须0。
+   * @param evidence_incomplete 须false。
+   * @param fault 须false。
+   * @param now 宿主steady time_point。
+   */
   void record(const rclcpp_action::GoalUUID &uuid,GoalRejectionReason reason,
               bool renewal_reserved,bool admission_prerequisites,int release_stage,
               bool evidence_incomplete,bool fault,
@@ -438,6 +736,11 @@ class GoalRejectionReceipt {
     latest_=Entry{uuid,now};
   }
 
+  /**
+   * @brief 读取尚在两秒窗内的RENEWAL_PENDING:UUID提示。
+   * @param now 宿主steady当前time_point。
+   * @return optional拥有字符串；无条目、时钟倒退或超过两秒为空。
+   */
   std::optional<std::string> message(Clock::time_point now) const {
     std::lock_guard<std::mutex> lock(mutex_);
     if(!latest_ || now<latest_->at || now-latest_->at>std::chrono::seconds(2)) return {};
@@ -452,11 +755,20 @@ class GoalRejectionReceipt {
   }
 
  private:
+  /**
+   * @brief 单个拒绝条目拥有UUID值及steady time_point；不保存用户Goal消息或设备授权。
+   */
   struct Entry { rclcpp_action::GoalUUID uuid; Clock::time_point at; };
   mutable std::mutex mutex_;
   std::optional<Entry> latest_;
 };
 
+/**
+ * @brief 把精确长度十六进制参数解码为定长字节值。
+ * @tparam Size 输出字节数，当前用于16字节设备/客户端ID。
+ * @param text 恰2×Size字符，逐对必须完全解析。
+ * @return 数组，非法抛invalid_argument；本函数本身不拒绝全零，后续transport/start核零ID。
+ */
 template<std::size_t Size> std::array<std::uint8_t,Size> hex_id(const std::string &text) {
   if(text.size()!=Size*2) throw std::invalid_argument("invalid hexadecimal identity length");
   std::array<std::uint8_t,Size> bytes{};
@@ -468,8 +780,17 @@ template<std::size_t Size> std::array<std::uint8_t,Size> hex_id(const std::strin
   return bytes;
 }
 
+/**
+ * @brief ROS取消回调到单控制消费者的固定8槽请求交接。
+ * 每槽0空/1生产中/2ready，CAS占槽后复制shared_ptr并release发布；控制方只消费ready，不无限排队。shared_ptr保持GoalHandle寿命，取消仍绑定当前active对象。
+ */
 template<class Handle,std::size_t Capacity=8U> class PendingGoalCancels {
  public:
+  /**
+   * @brief 在首个空槽保存取消目标句柄。
+   * @param goal 非空且已由准入层核对当前active的共享句柄。
+   * @return bool；满槽拒绝，不覆盖未消费请求。
+   */
   bool request(const std::shared_ptr<Handle> &goal) noexcept {
     if(!goal) return false;
     for(auto &slot:slots_) {
@@ -482,6 +803,11 @@ template<class Handle,std::size_t Capacity=8U> class PendingGoalCancels {
     return false;
   }
 
+  /**
+   * @brief 控制方取走所有ready取消条目并判断是否匹配active。
+   * @param active 当前非空活动目标。
+   * @return 是否至少一个相同对象匹配；其他目标条目也被消费，不保留为未来取消。
+   */
   bool take_for(const std::shared_ptr<Handle> &active) noexcept {
     if(!active) return false;
     bool matched=false;
@@ -495,6 +821,9 @@ template<class Handle,std::size_t Capacity=8U> class PendingGoalCancels {
   }
 
  private:
+  /**
+   * @brief state原子发布shared_ptr值；只有生产者占1时写、消费者见2后move、归0后再复用，单消费者由控制admission保证。
+   */
   struct Slot {
     std::atomic<unsigned> state{0U};
     std::shared_ptr<Handle> goal;
@@ -502,23 +831,58 @@ template<class Handle,std::size_t Capacity=8U> class PendingGoalCancels {
   std::array<Slot,Capacity> slots_{};
 };
 
+/**
+ * @brief 把goal生效/终结与ROS取消准入在同一mutex中串行。
+ * 控制循环只try_lock，竞争则跳过本拍；ROS取消request使用lock_guard可能等待控制方。不能泛称所有取消回调都无锁非阻塞。
+ */
 template<class Handle> class GoalCancelAdmission {
  public:
+  /**
+   * @brief 持有或未取得的控制侧准入RAII锁，使用前必须测试bool。
+   */
   class Control {
    public:
+    /**
+     * @brief 尝试取得控制侧mutex，不等待ROS回调。
+     * @param owner 借用外层admission，须活过本Control。
+     */
     explicit Control(GoalCancelAdmission &owner) noexcept
         :owner_(owner),lock_(owner.mutex_,std::try_to_lock) {}
+    /**
+     * @brief 查询本次try_lock是否拥有准入。
+     * @return bool；false时不得调用open/close改active。
+     */
     explicit operator bool() const noexcept { return lock_.owns_lock(); }
+    /**
+     * @brief 持锁登记当前允许接收取消的GoalHandle。
+     * @param goal 已经控制方受理的共享句柄。
+     */
     void open(const std::shared_ptr<Handle> &goal) noexcept { owner_.active_=goal; }
+    /**
+     * @brief 持锁清当前取消准入对象，终态后迟到取消不得影响下一goal。
+     */
     void close() noexcept { owner_.active_.reset(); }
 
    private:
+    /**
+     * @brief owner借用，unique_lock在Control析构时归还；不得早于owner销毁。
+     */
     GoalCancelAdmission &owner_;
     std::unique_lock<std::mutex> lock_;
   };
 
+  /**
+   * @brief 返回一次控制侧try_lock RAII对象。
+   * @return Control，调用者测试后在同scope更新active准入。
+   */
   Control try_control() noexcept { return Control(*this); }
 
+  /**
+   * @brief ROS取消回调等待准入锁后核目标恰为active并排有限槽。
+   * @param goal 请求取消的对象。
+   * @param pending 固定取消交接槽。
+   * @return bool，空/已终结/另goal或槽满拒绝；不是设备Cancel已执行。
+   */
   template<std::size_t Capacity>
   bool request(const std::shared_ptr<Handle> &goal,
                PendingGoalCancels<Handle,Capacity> &pending) {
@@ -528,22 +892,45 @@ template<class Handle> class GoalCancelAdmission {
 
  private:
   std::mutex mutex_;
+  /**
+   * @brief 仅取消准入对象引用，受mutex保护；与DeviceActionGate控制线程持有的active_通过open/close交接一致。
+   */
   std::shared_ptr<Handle> active_;
 };
 
+/**
+ * @brief 把ActionPort的prime/执行/禁用落到实际JTC或直接Hold生产器。
+ * 本对象在控制线程使用，借用/共享持有已发现Controller；命令始终经ros_control进程内通道和唯一DeviceTransport发送。direct_hold只用于没有active JTC时的保持prime，不具备独立轨迹执行能力。
+ */
 class GuardedPort final : public ActionPort {
  public:
+  /**
+   * @brief 对象生命周期固定诊断账本；controller共享持有插件，identity为设备命令完整tuple，uuid绑定当前goal摘要登记。
+   */
   dummy_ros_control::DiagnosticJournal diagnostics;
   std::shared_ptr<Controller> controller;
   dummy_ros_control::CommandIdentity identity{};
   dummy_ros_control::GoalUuid uuid{};
+  /**
+   * @brief motion_generation是ActionGate代；started_us为宿主steady起步锚。executing/publishing/direct_hold是宿主生产状态，不是设备core或机械完成。
+   */
   std::uint64_t motion_generation=0, started_us=0;
   bool executing=false, failed=false, publishing=false;
   bool direct_hold=false, direct_hold_started=false;
   unsigned refresh_diag_count=0U;
+  /**
+   * @brief active_count为1或6；trajectory存完整规范路径，hold_position为rad目标值，不可把它当实际反馈。
+   */
   std::size_t active_count=0;
   Trajectory trajectory;
   Position hold_position{};
+  /**
+   * @brief 切到指定设备motion并用真实JTC update或直接通道产生首Hold目标。
+   * 先发布当前identity；有controller时先取消旧sink并prime_position，再开启真实update sink。无controller只发进程内一次控制代并开启direct_hold；非零返回只证明本地快照，不是CAN SENT。
+   * @param position 来自可信实际/保持快照的rad位置。
+   * @param epoch 后继设备motion。
+   * @param generation 本gate内部代。
+   */
   void prime(const Position &position,std::uint32_t epoch,std::uint64_t generation) override {
     failed=false; publishing=false;
     executing=false; identity.motion_epoch=epoch; motion_generation=generation; hold_position=position;
@@ -565,6 +952,10 @@ class GuardedPort final : public ActionPort {
     }
     publishing=true;
   }
+  /**
+   * @brief 在JTC缺席时续同值Hold快照，并监督插件生命周期。
+   * Controller不再active且正在执行轨迹则failed；若只是保持可退回direct_hold。刷新只产生本地新代，Complete后的同值吞并/必要刷新仍由worker严格判定，不能自行延设备Hold。
+   */
   void refresh_direct_hold() {
     if(controller && controller->get_lifecycle_state().id()!=lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
       controller->set_update_sink(nullptr,nullptr);
@@ -585,6 +976,11 @@ class GuardedPort final : public ActionPort {
       if(published==0U) failed=true;
     }
   }
+  /**
+   * @brief 在控制拍接管非RT发现的active JTC。
+   * 若原direct_hold，先用同hold_position prime插件再装sink；成功后停止direct生产，避免两个采样源并跑。
+   * @param active 共享插件候选，必须已active且本port尚无controller。
+   */
   void adopt_controller(std::shared_ptr<Controller> active) {
     if(controller || !active ||
        active->get_lifecycle_state().id()!=lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) return;
@@ -596,10 +992,20 @@ class GuardedPort final : public ActionPort {
     direct_hold=false;
     failed=false;
   }
+  /**
+   * @brief 判断本地生产链是否可用。
+   * @return publishing且无failed，direct_hold或有效active controller成立；不等于设备许可或运动完成。
+   */
   bool control_ready() const {
     return publishing && !failed && (direct_hold ||
       (controller && controller->get_lifecycle_state().id()==lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE));
   }
+  /**
+   * @brief 规范编码轨迹摘要并经JTC一次性凭据登记/提交。
+   * 复制所有路点成ROS消息；UUID+全轨迹摘要相符且register/submit都成功才记executing及started_us。调用失败只置failed，由控制监督请求取消，不直接宣称动作已执行。
+   * @param value 完整路径，rad/rad/s/rad/s²与相对秒。
+   * @param generation gate已握手后的执行代。
+   */
   void start(const Trajectory &value,std::uint64_t generation) override {
     auto message=std::make_shared<trajectory_msgs::msg::JointTrajectory>();
     message->joint_names=value.joints;
@@ -614,20 +1020,40 @@ class GuardedPort final : public ActionPort {
     }
     trajectory=value; motion_generation=generation; started_us=management_now_us(); executing=true;
   }
+  /**
+   * @brief 冻结后继update生产，保留已经存在的最后命令代供commit。
+   * 由同一控制线程串行调用；Complete冻结路径位于post-update，失权/显式释放等也可在pre-update调用。解除sink但保留identity供末seq收尾；不是设备失能操作。
+   */
   void disable() override {
     // Keep the last generation publishable while Complete waits for accepted_seq.
-    // Called on the same control loop after update/write, so no new sample can race this freeze.
+    // 同控制线程串行冻结；Complete在update/write后调用，其他释放路径也可在prepare_update内调用。
     if(controller) controller->set_update_sink(nullptr,nullptr);
     publishing=false; executing=false;
     direct_hold=false;
   }
+  /**
+   * @brief 执行disable并要求gate走真实worker排空握手。
+   * @return 始终true；实际排空/commit由后续观测证明。
+   */
   bool freeze_hold() override { disable(); return true; }
+  /**
+   * @brief 撤销进程内命令授权并要求JTC取消/保持。
+   * 不生成设备D10/Cancel成功回执，ActionGate/Bootstrap另行走管理协议。
+   */
   void cancel() override {
     dummy_ros_control::clear_command_identity();
     if(controller) controller->cancel_execution();
   }
 };
 
+/**
+ * @brief 核端口已绑定同boot/session/reference再发gate使能。
+ * @param gate 借用ActionGate。
+ * @param port 借用GuardedPort。
+ * @param authorization Bootstrap真实许可快照。
+ * @param now 宿主µs。
+ * @return bool；gate请求受理后同步port预期motion，仍需后续Hold/prime握手。
+ */
 bool enable_gate_with_port_authority(ActionGate &gate, GuardedPort &port,
                                      const Authorization &authorization,
                                      std::uint64_t now) {
@@ -640,8 +1066,16 @@ bool enable_gate_with_port_authority(ActionGate &gate, GuardedPort &port,
   return true;
 }
 
+/**
+ * @brief 组合ROS公开action、显式管理服务和控制线程状态账本的节点。
+ * executor回调只占有限原子/锁槽；prepare_update/cycle在同控制线程串行推进gate/bootstrap。DeviceWorker模式只借共享通信owner；多数状态由控制线程推进，ROS事件以原子意图、准入锁和goal mutex分别交接，不能把这些局部锁称为整个节点的全局事务。
+ */
 class DeviceActionGate final : public rclcpp::Node {
  public:
+  /**
+   * @brief 读取明确绑定参数/证据，创建共享管理适配、服务与公开action回调。
+   * 参数错误/不可信bundle/activation/LIMITED时间线复用直接抛异常。构造只创建软件图和只读观察能力，不自动使能/采零；明确服务请求及新鲜真实状态才推进后续管理。
+   */
   DeviceActionGate():Node("device_action_gate") {
     parameters_.endpoint=declare_parameter<std::string>("endpoint","");
     const auto device_id=declare_parameter<std::string>("device_id","");
@@ -650,6 +1084,9 @@ class DeviceActionGate final : public rclcpp::Node {
     const auto profile=declare_parameter<std::int64_t>("profile_id",0);
     const auto mask=declare_parameter<std::int64_t>("configured_mask",0);
     const auto session=declare_parameter<std::int64_t>("session_id",0);
+    /**
+     * @brief permit为动作许可µs，renewal为会话租期µs，state_max_age为接收年龄µs；三者互不替代。正数/上限校验在创建管理对象前完成。
+     */
     const auto permit_us=declare_parameter<std::int64_t>("permit_remaining_us",10000000);
     const auto renewal_us=declare_parameter<std::int64_t>("requested_session_lease_us",0);
     const auto state_max_age=declare_parameter<std::int64_t>("state_max_age_us",250000);
@@ -665,6 +1102,9 @@ class DeviceActionGate final : public rclcpp::Node {
     const auto bundle=declare_parameter<std::string>("contract_bundle","");
     const auto profile_name=declare_parameter<std::string>("profile_name","");
     if(bundle.empty() || profile_name.empty()) throw std::invalid_argument("contract bundle and profile_name are required");
+    /**
+     * @brief 实机bench必须显式提供activation pin/产物/回归/HIL/USB端点绑定，且只接受功能开发依据；仍为UNQUALIFIED范围，不因加载成功变成正式发布资格。
+     */
     if(profile_name=="f405_6dof_bench") {
       NoLoadDevActivationRequest activation;
       for(const auto &[name,value] : std::initializer_list<std::pair<const char*,std::string*>>{
@@ -699,6 +1139,9 @@ class DeviceActionGate final : public rclcpp::Node {
     if(!validated_requested_motion_permit(permit_us,device_profile_))
       throw std::invalid_argument("permit duration exceeds verified profile limit");
     profile_=device_profile_.joints;
+    /**
+     * @brief LIMITED把目标数和boot/session固定，并要求一次性timeline路径与activation完全相同；预算消费另在控制线程最终受理目标时完成。
+     */
     if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
        !limited_goal_budget_.configure(device_profile_.goal_limit,
          device_profile_.limited_boot_epoch,static_cast<std::uint64_t>(session)))
@@ -715,6 +1158,9 @@ class DeviceActionGate final : public rclcpp::Node {
         evidence_incomplete_=true;
       }
     }
+    /**
+     * @brief 每秒只读一次证据粘滞失败并记固定诊断，不在ROS回调中把日志成功当作证据修复。
+     */
     evidence_failure_timer_=create_wall_timer(std::chrono::seconds(1),[this] {
       if(evidence_incomplete_.load() && !evidence_failure_logged_.exchange(true)) {
         port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kEvidenceFailure,
@@ -725,6 +1171,9 @@ class DeviceActionGate final : public rclcpp::Node {
       }
     });
     port_.active_count=profile_.joints.size();
+    /**
+     * @brief 显式DeviceWorker复用ros_control通信channel，不创建第二个USB Context；start成功仅本地参数有效，ready/能力/许可随后独立观察。
+     */
     transport_=std::make_unique<DpManagementTransport>(parameters_,DpManagementTransport::Connection::kDeviceWorker);
     if(!transport_->start()) throw std::invalid_argument("invalid device transport parameters");
     std::random_device random;
@@ -737,10 +1186,16 @@ class DeviceActionGate final : public rclcpp::Node {
     std::copy(parameters_.client.begin(),parameters_.client.end(),client_id);
     bootstrap_identity.set_device_id(device); bootstrap_identity.set_client_instance_id(client_id);
     bootstrap_identity.set_expected_session_id(static_cast<std::uint64_t>(session));
+    /**
+     * @brief 功能开发会话使用30秒保守租期模型，动作permit单独给定；gate的2秒握手期限与bootstrap释放5秒、底层Stop预算不是同一计时器。
+     */
     bootstrap_=std::make_unique<BootstrapCoordinator>(
       *client_,bootstrap_identity,device_profile_.policy_hash,permit_us,
       device_profile_.functional_development_basis ? 30000000U : 0U);
     gate_=std::make_unique<ActionGate>(*client_,port_,profile_,2000000);
+    /**
+     * @brief ~/enable回调只排enable_requested并返回“queued”；真正自动bootstrap及EnableHold在控制拍执行，success不代表当前电机已使能。
+     */
     enable_service_=create_service<std_srvs::srv::Trigger>("~/enable",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         response->success=!evidence_incomplete_.load() && release_stage_.load()==0 && enable_available_.load() &&
@@ -751,6 +1206,9 @@ class DeviceActionGate final : public rclcpp::Node {
           " boot="+std::to_string(latest_bootstrap_.boot_epoch)+
           " raw="+(latest_bootstrap_.raw_ready?"ready":"not_ready");
       });
+    /**
+     * @brief ~/bootstrap_status用try admission读一致流程状态，区分RELEASE_PENDING/UNCONFIRMED/RELEASED及证据不完整；显式续租确认/撤回提示一次消费，不冒充动作成功。
+     */
     bootstrap_status_service_=create_service<std_srvs::srv::Trigger>("~/bootstrap_status",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         auto admission=cancel_admission_.try_control();
@@ -798,6 +1256,9 @@ class DeviceActionGate final : public rclcpp::Node {
           false,enabled_,gate_->ready(),operation_complete);
       });
     // 既有bootstrap/2秒receipt消息合同保持；独立只读CB组不占control admission锁。
+    /**
+     * @brief 独立互斥诊断回调组避免格式化JSON占用control admission；只读固定账本，但字符串分配不属于硬实时控制路径。
+     */
     diagnostic_callback_group_=create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     diagnostic_snapshot_service_=create_service<std_srvs::srv::Trigger>("~/diagnostic_snapshot",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -807,6 +1268,9 @@ class DeviceActionGate final : public rclcpp::Node {
           dummy_ros_control::diagnostic_journal_json(port_.diagnostics)+",\"worker\":"+
           (transport_?transport_->diagnostic_json():"null")+"}";
       },rclcpp::ServicesQoS(),diagnostic_callback_group_);
+    /**
+     * @brief 仅查询最近两秒、其他准入满足而被续租挡住的UUID提示；Fault/释放/丢证据不沿用该提示，也不会在服务内重提目标。
+     */
     last_goal_rejection_service_=create_service<std_srvs::srv::Trigger>("~/last_goal_rejection",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -819,6 +1283,12 @@ class DeviceActionGate final : public rclcpp::Node {
         response->success=message.has_value();
         response->message=message.value_or("NO_RECENT_RENEWAL_REJECTION");
       });
+    /**
+     * @brief 装配单步bootstrap操作服务，回调只CAS排管理编号。
+     * 服务返回排队说明，控制线程复核最新观察后才start_operation；不在服务回调直接发送副作用管理请求。
+     * @param name ROS私有服务名。
+     * @param operation Select/Grant/Capture/SetPermit之一。
+     */
     const auto add_operation_service=[this](const char *name,ManageOperation operation) {
       management_services_.push_back(create_service<std_srvs::srv::Trigger>(name,
         [this,operation](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -836,6 +1306,9 @@ class DeviceActionGate final : public rclcpp::Node {
     add_operation_service("~/grant_session",ManageOperation::kGrantSession);
     add_operation_service("~/capture_bench_reference",ManageOperation::kCaptureReference);
     add_operation_service("~/set_bench_permit",ManageOperation::kSetPermit);
+    /**
+     * @brief 续租服务持try admission预留单槽，Hold续租拥有busy、RUN续租借goal busy；queued回应不是session已延长，需bootstrap_status确认。
+     */
     management_services_.push_back(create_service<std_srvs::srv::Trigger>("~/renew_session_lease",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -845,6 +1318,9 @@ class DeviceActionGate final : public rclcpp::Node {
         response->message=response->success ? "Lease renewal queued; poll bootstrap_status" :
           "Lease renewal unavailable or another operation is active";
       }));
+    /**
+     * @brief 仅在显式SetPermit已成功后排单步EnableHold；不会自动代办缺失模式/会话/参考步骤。
+     */
     management_services_.push_back(create_service<std_srvs::srv::Trigger>("~/enable_hold",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -854,6 +1330,9 @@ class DeviceActionGate final : public rclcpp::Node {
         response->message=response->success ? "EnableHold queued; poll bootstrap_status for confirmed HOLD" :
           "EnableHold requires a successfully completed SetBenchPermit";
       }));
+    /**
+     * @brief 释放回调只预留stage1/管理槽并立即关新goal准入，故返回success=false且RELEASE_QUEUED；只有后续COMMITTED+双fresh Idle才能报告释放成功。
+     */
     management_services_.push_back(create_service<std_srvs::srv::Trigger>("~/disable_and_release",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -865,6 +1344,9 @@ class DeviceActionGate final : public rclcpp::Node {
         response->success=false;
         response->message="RELEASE_QUEUED";
       }));
+    /**
+     * @brief 公开FJT入口绑定三个不同回调：目标准入、取消准入、已接受句柄交接。ACCEPT_AND_EXECUTE仅ROS宿主接纳，实际Begin尚待控制拍重验和设备握手。
+     */
     server_=rclcpp_action::create_server<Follow>(this,"/arm_controller/follow_joint_trajectory",
       [this](const rclcpp_action::GoalUUID &uuid,std::shared_ptr<const Follow::Goal> goal) {
         if(!validated_device_trajectory(*goal,profile_)) {
@@ -888,6 +1370,9 @@ class DeviceActionGate final : public rclcpp::Node {
             evidence_incomplete_.load() ? 1U : 0U);
           return rclcpp_action::GoalResponse::REJECT;
         }
+        /**
+         * @brief 原子busy保证最多一个宿主goal/独占管理；LIMITED模式取得busy后还重查ready，防读旧快照越过最后一次预算。
+         */
         if(busy_.exchange(true)) {
           port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGoalBusy,
             management_now_us(),"kBusy");
@@ -898,6 +1383,9 @@ class DeviceActionGate final : public rclcpp::Node {
           return rclcpp_action::GoalResponse::REJECT;
         }
         // 取得唯一busy后复核ready，阻止读旧ready的callback跨最后预算消费。
+        /**
+         * @brief LIMITED预算在唯一busy控制受理后实际消费，且必须raw捕获已启用、boot/session匹配；回调中的ACCEPT不是预算兑现或设备运动保证。
+         */
         if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited && !ready_.load()) {
           port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGoalNotReady,
             management_now_us(),"budget_admission_changed");
@@ -906,13 +1394,28 @@ class DeviceActionGate final : public rclcpp::Node {
         }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
+      /**
+       * @brief 取消回调在admission mutex下核同一active并放8槽，可能等待锁；没有立即调用设备Cancel。
+       */
       [this](std::shared_ptr<GoalHandle> handle) {
         return cancel_admission_.request(handle,cancel_requests_) ? rclcpp_action::CancelResponse::ACCEPT :
           rclcpp_action::CancelResponse::REJECT;
       },
+      /**
+       * @brief accept回调只在goal_mutex下交pending共享句柄，控制线程稍后move并复验，目标对象寿命由shared_ptr保持。
+       */
       [this](std::shared_ptr<GoalHandle> handle) { std::lock_guard<std::mutex> lock(goal_mutex_); pending_=std::move(handle); });
   }
+  /**
+   * @brief 停本地生产/内部执行，停共享管理适配并关闭timeline writer。
+   * 共享transport stop不停止ros_control拥有的设备worker；析构返回不能独立证明设备D10已确认。正常进程退出顺序在main先join控制线程，再按所有权销毁节点和manager。
+   */
   ~DeviceActionGate() override { port_.disable(); port_.cancel(); transport_->stop(); if(timeline_) timeline_->close(); }
+  /**
+   * @brief 在非控制ROS定时回调发现指定名称的active受保护JTC。
+   * 只动态转换到GuardedController后原子发布shared_ptr；真正adopt发生在控制线程，发现不等于动作接纳。
+   * @param manager 借用ControllerManager，get_loaded_controllers会取其非RT锁。
+   */
   void attach(controller_manager::ControllerManager &manager) {
     if(std::atomic_load(&discovered_controller_)) return;
     for(const auto &spec:manager.get_loaded_controllers()) {
@@ -922,6 +1425,10 @@ class DeviceActionGate final : public rclcpp::Node {
         std::atomic_store(&discovered_controller_,std::move(controller));
     }
   }
+  /**
+   * @brief 在manager update/write之后处理真实控制代、目标及结果封口。
+   * 先try admission，忙就跳本拍；安装本线程诊断scope并捕获异常，异常撤准入并请求gate abort。活动goal终态或消失后close取消准入，避免迟到取消进入下一goal。
+   */
   void cycle() noexcept {
     dummy_ros_control::HostDiagnosticScope diagnostic_scope(port_.diagnostics);
     auto admission=cancel_admission_.try_control();
@@ -939,6 +1446,10 @@ class DeviceActionGate final : public rclcpp::Node {
     }
     if(!active_ || gate_->terminal()!=Terminal::kNone) admission.close();
   }
+  /**
+   * @brief 在产生本拍控制采样前刷新真实身份/票据和管理状态。
+   * try admission后消费取消、绑定Hold容差、adopt插件并read_observation。证据失败/持续丢观察/续租失去生产者会封锁并中止；先gate tick及必要bootstrap tick再让manager采样，避免末样本冻结后被后到ticket错误退役。
+   */
   void prepare_update() noexcept {
     dummy_ros_control::HostDiagnosticScope diagnostic_scope(port_.diagnostics);
     auto admission=cancel_admission_.try_control();
@@ -991,10 +1502,23 @@ class DeviceActionGate final : public rclcpp::Node {
     }
     if(!active_ || gate_->terminal()!=Terminal::kNone) admission.close();
   }
+  /**
+   * @brief 复制gate对象生命周期固定诊断首现场与计数。
+   * @return 值快照；不清首错，不格式化或写文件。
+   */
   dummy_ros_control::DiagnosticSnapshot diagnostic_snapshot() const noexcept { return port_.diagnostics.snapshot(); }
+  /**
+   * @brief 读取首份本地publish参数诊断blob。
+   * @return optional值；不是USB TX/CAN SENT原始证据。
+   */
   std::optional<dummy_ros_control::DiagnosticBlob> diagnostic_blob() const noexcept { return port_.diagnostics.blob_record(); }
 
  private:
+  /**
+   * @brief 在已有准入scope下预约一次Hold或RUN续租。
+   * @param explicit_request True保存显式服务的pending提示；自动预约不覆盖未读撤回提示。
+   * @return bool；成功临时清ready并记录busy归属，未实际发送。
+   */
   bool reserve_lease_renewal(bool explicit_request=false) noexcept {
     if(explicit_request && explicit_renewal_status_.load()<0) return false;
     const bool running=run_renew_available_.load();
@@ -1007,10 +1531,23 @@ class DeviceActionGate final : public rclcpp::Node {
     ready_=false;
     return true;
   }
+  /**
+   * @brief 综合解码/身份/hash/时间与流程证据，发布管理和goal准入快照。
+   * 普通观察来自唯一设备worker已源时钟校验缓存；本层再检查部署hash、boot/参考/epoch及宿主年龄，协调释放和refresh乱序。更新gate实际State与worker排空，维护Timeline/run归属、严格RUN续租前置及显式操作单槽。不能把返回true视为动作成功或全证据封口。
+   * @param now 本控制拍宿主steady µs，可能早于刚取得的跨线程接收锚。
+   * @return bool当前观察可用于推进；false可为有界等待或确定lost，分别看observation_lost/release_transition_pending。
+   */
   bool read_observation(std::uint64_t now) {
     observation_lost_=false;
     release_transition_pending_=false;
     const auto observed=transport_->observe();
+    /**
+     * @brief 将暂时空观察/短失鲜与持续丢失分开。
+     * 捕获now为本拍宿主时间，不改缓存接收锚续鲜。
+     * @param value 保留原接收锚的DeviceObservation。
+     * @param coherent 本函数已判断的身份/生命周期一致性。
+     * @return 连续性Ready为true；Wait为false但尚未lost，超过启动2秒/运行0.5秒空档才Lost。
+     */
     const auto wait_for_observation=[this,now](const DeviceObservation &value,bool coherent) {
       const auto result=continuity_.evaluate(value,now,enabled_,coherent);
       observation_lost_=result==ObservationContinuity::Result::kLost;
@@ -1034,6 +1571,9 @@ class DeviceActionGate final : public rclcpp::Node {
       {state.boot_epoch(),state.session_id(),state.reference_epoch(),state.motion_epoch(),state.state_seq(),state.management_epoch(),true},
       {port_.identity.boot,port_.identity.session,port_.identity.reference_epoch,port_.identity.motion_epoch,
        dummy_ros_control::wire_producer_sequence(last_update_),0U,port_.identity.boot!=0U});
+    /**
+     * @brief 只对本goal接受后、同命令身份且更晚的typed reject水位中止，防止前一goal拒绝回执污染当前结果。
+     */
     if (active_ && gate_->terminal()==Terminal::kNone &&
         observed->rejected_ack_received_us>last_typed_reject_seen_us_ &&
         observed->rejected_ack_sequence!=0U &&
@@ -1045,12 +1585,20 @@ class DeviceActionGate final : public rclcpp::Node {
       last_typed_reject_seen_us_=observed->rejected_ack_received_us;
       gate_->abort("DEVICE_COMMAND_REJECTED_DURING_ACK",now);
     }
+    /**
+     * @brief 记录确定观察拒绝并标lost。
+     * @param reason 固定原因文本，如HASH/BOOT/身份漂移。
+     * @return 始终false；调用方随lost撤控制资格。
+     */
     const auto reject=[this,now](const char *reason) {
       port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kBootstrapRejected,now,reason);
       port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_REJECTED_%s",reason);
       observation_lost_=true;
       return false;
     };
+    /**
+     * @brief Status五hash与本地已验证bundle/activation对比，LIMITED另钉boot；不是只凭profile号或设备名字放行。
+     */
     DeviceStatusIdentity status_identity{};
     std::copy(std::begin(status.contract_sha256()),std::end(status.contract_sha256()),status_identity.contract_hash.begin());
     std::copy(std::begin(status.model_sha256()),std::end(status.model_sha256()),status_identity.model_hash.begin());
@@ -1078,10 +1626,16 @@ class DeviceActionGate final : public rclcpp::Node {
        state.configured_mask()!=parameters_.mask ||
        !std::equal(parameters_.device.begin(),parameters_.device.end(),state.device_id()))
       return reject("STATE_IDENTITY");
+    /**
+     * @brief State年龄用原宿主接收µs；now采样早于刚收到消息时按0年龄。源produced偏移/队列年龄已由DeviceTransport核对，本层不拿ROS时间减设备时间。
+     */
     const bool state_fresh=observed->state_received_us!=0U &&
       (now<=observed->state_received_us || now-observed->state_received_us<=state_max_age_us_);
     const bool state_fault=state.core_state()==wire_value(WireCoreState::kFault);
     if(state_fresh && state_fault) return reject("STATE_FAULT");
+    /**
+     * @brief 运行阶段四元组稳定要求随gate状态收紧：已ready/正在执行时motion不可任意+1；过渡仅允许接口定义的单步，不因新epoch就自动授权。
+     */
     if(enabled_ && !releasing && state_fresh &&
        !state_authority_is_valid(
          {state.boot_epoch(),state.session_id(),state.reference_epoch(),state.motion_epoch()},
@@ -1092,6 +1646,9 @@ class DeviceActionGate final : public rclcpp::Node {
     const bool release_status_fresh=observed->status_received_us!=0U &&
       (now<=observed->status_received_us ||
        now-observed->status_received_us<=state_max_age_us_);
+    /**
+     * @brief 显式D10捕获原tuple后，仅接受同operation形状的Stopping Status/Idle State有限过渡；这时返回等待而不当身份失联或已释放。
+     */
     const auto transition=release_transition_origin_.observation(
       {status.boot_epoch(),status.session_id(),status.reference_epoch(),status.motion_epoch()},
       {state.boot_epoch(),state.session_id(),state.reference_epoch(),state.motion_epoch()},
@@ -1108,6 +1665,9 @@ class DeviceActionGate final : public rclcpp::Node {
     const bool unconfirmed_idle=releasing &&
       status.core_state()==wire_value(WireCoreState::kUnreferencedIdle) &&
       state.core_state()==wire_value(WireCoreState::kUnreferencedIdle) && !released_idle;
+    /**
+     * @brief 启动要求双tuple一致；已enabled的持续State由worker/gate核身份，释放则额外要求Status按同state预算fresh及management相同，不借旧Status完成释放。
+     */
     const bool coherent=!unconfirmed_idle && (!releasing || release_status_fresh) &&
       (!releasing || state.management_epoch()==status.management_epoch()) &&
       state.freshness_ticket()!=0U &&
@@ -1126,9 +1686,15 @@ class DeviceActionGate final : public rclcpp::Node {
         port_.identity.ticket=state.freshness_ticket();
         if(port_.publishing) dummy_ros_control::set_command_identity(port_.identity);
       }
+      /**
+       * @brief 实际State与worker排空分别送ActionGate：wire管理成功不含实际位置，两者缺一不能伪造prime/Complete握手。
+       */
       gate_->observe_state(observed->state.data(),observed->state.size(),now);
       if(const auto worker=transport_->hold_drain_snapshot()) gate_->observe_hold_drain(*worker,now);
     }
+    /**
+     * @brief bootstrap快照组合Status的模式/许可/hash与State的motion/管理/ticket；通过上面分阶段门控后发布。enabled过渡不要求两topic每字段同帧，不能将组合值当作跨topic原子事务。
+     */
     latest_bootstrap_={status.boot_epoch(),status.session_id(),status.reference_epoch(),state.motion_epoch(),
       state.management_epoch(),state.freshness_ticket(),parameters_.profile,parameters_.mask,true,
       status.motion_supported(),status.control_mode(),status.reference_kind(),status.real_motion_permitted(),
@@ -1141,6 +1707,9 @@ class DeviceActionGate final : public rclcpp::Node {
     timeline_identity_={status.boot_epoch(),status.session_id(),status.reference_epoch(),
                         state.motion_epoch(),status.run_id()};
     timeline_refresh_closure_.reset();
+    /**
+     * @brief 原run完成需motion_complete/final6、双Hold、下一Begin屏障；启用raw时还核相同终页flush身份。该布尔随后再与双fresh/coherent合取。
+     */
     const bool completed_hold=status.run_id()==timeline_run_id_ &&
       status.attempt_kind()==1U && status.parent_run_id()==0U &&
       status.final_state()==6U && status.motion_complete() &&
@@ -1162,6 +1731,9 @@ class DeviceActionGate final : public rclcpp::Node {
       {goal_boot_,goal_session_,timeline_identity_.reference_epoch,
        timeline_run_motion_epoch_,timeline_run_id_},
       cancel_terminal,parameters_.mask);
+    /**
+     * @brief 取消refresh闭合还要ROS目标确在canceling、gate终态Canceled及原goal run相同，不能将自主故障或别的goal取消当正常取消。
+     */
     const bool cancel_gate_ready=gate_->terminal()==Terminal::kCanceled &&
       active_ && active_->is_canceling() &&
       goal_run_id_!=0U && goal_run_id_==timeline_run_id_;
@@ -1243,6 +1815,9 @@ class DeviceActionGate final : public rclcpp::Node {
         static_cast<unsigned>(gate_->phase()),active_!=nullptr,
         active_ && active_->is_canceling(),cancel_gate_ready,parameters_.mask);
     }
+    /**
+     * @brief 只有目标真正AfterBegin后才根据原run/严格refresh证据登记Hold；下面Timeline原goal身份不因设备同值refresh开新run而被偷换。
+     */
     if(timeline_ && timeline_goal_open_ && timeline_after_ &&
        release_status_fresh && state_fresh &&
        refresh_observation_coherent(status,state) &&
@@ -1270,11 +1845,17 @@ class DeviceActionGate final : public rclcpp::Node {
       const bool refresh_status=status.attempt_kind()==1U &&
         status.parent_run_id()==0U && status.final_state()==0U &&
         !status.evidence_lost();
+      /**
+       * @brief 返回的是原goal已确认Hold身份，后继run只作为封口证人；最终Succeeded/Canceled/Aborted时间线不得凭新refresh run冒充原目标。
+       */
       timeline_refresh_closure_=timeline_refresh_closure_identity(
         timeline_identity_,timeline_goal_hold_identity_,
         timeline_goal_hold_confirmed_,raw_terminal_matched,successor_page_verified,
         status_hold,state_hold,refresh_status);
       if(!timeline_refresh_closure_) {
+        /**
+         * @brief refresh短等锚取首次Status真实接收时刻并只赋一次，重复状态不重开窗口；未知run或tuple变化不能走此等待例外。
+         */
         if(timeline_refresh_wait_started_us_==0U)
           timeline_refresh_wait_started_us_=observed->status_received_us;
         const TimelineIdentity candidate{status.boot_epoch(),status.session_id(),
@@ -1282,6 +1863,9 @@ class DeviceActionGate final : public rclcpp::Node {
         const bool refresh_status=status.attempt_kind()==1U && status.parent_run_id()==0U &&
           status.final_state()==0U && !status.evidence_lost() &&
           status.core_state()==wire_value(WireCoreState::kHold);
+        /**
+         * @brief 已知同值refresh等待独立State期间保留旧已证goal身份，清当前Hold观察并返回false；原终页和双coherent Hold仍必须最终到齐。
+         */
         if(timeline_refresh_wait_allowed(candidate,timeline_goal_hold_identity_,
              timeline_goal_hold_confirmed_,refresh_status,timeline_refresh_wait_started_us_,
              now,state_max_age_us_)) {
@@ -1291,6 +1875,9 @@ class DeviceActionGate final : public rclcpp::Node {
           timeline_hold_observed_=false;
           return false;
         }
+        /**
+         * @brief 闭合失败粘滞EVIDENCE_INCOMPLETE并只记首份详细诊断，后续新goal不再准入；日志本身不补证据。
+         */
         if(!evidence_incomplete_.exchange(true)) {
           const auto wait_age=now>=timeline_refresh_wait_started_us_ ?
             now-timeline_refresh_wait_started_us_ : 0U;
@@ -1357,6 +1944,9 @@ class DeviceActionGate final : public rclcpp::Node {
         }
       } else timeline_refresh_wait_started_us_=0U;
     }
+    /**
+     * @brief 以可信Running/gate阶段及前后run身份确认实际Begin；goal_run_id只在这之后固定，不能从ROS Accepted时的旧run猜。
+     */
     const bool begin_observed=trusted_begin_observation(
       goal_before_identity_,timeline_identity_,
       state.core_state()==wire_value(WireCoreState::kRunning),
@@ -1378,6 +1968,9 @@ class DeviceActionGate final : public rclcpp::Node {
         timeline_run_motion_epoch_=timeline_identity_.motion_epoch;
         timeline_after_=true;
       }
+      /**
+       * @brief Feedback时间线每个新State序号一条，保存设备各轴feedback_seq与CAN年龄；事件时间用该State原宿主接收锚，而非处理拍刷新。
+       */
       if(timeline_after_ && !timeline_terminal_ &&
          status.run_id()==timeline_run_id_ &&
          state.state_seq()!=timeline_feedback_state_seq_) {
@@ -1396,6 +1989,9 @@ class DeviceActionGate final : public rclcpp::Node {
         timeline_hold_=true; timeline_goal_open_=false;
       }
     }
+    /**
+     * @brief 时间线Release事件还需双消息已释放Idle与Bootstrap确认request/op对；仅stage3字符串或发出D10不足以填Release证据。
+     */
     if(timeline_ && release_stage_.load()==3 && !timeline_release_recorded_ &&
        released_idle_observation(status,state)) {
       const auto receipt=bootstrap_ ? bootstrap_->confirmed_release() : std::nullopt;
@@ -1413,6 +2009,9 @@ class DeviceActionGate final : public rclcpp::Node {
     const auto gate_terminal=gate_->terminal();
     const bool transport_ready=transport_->ready();
     const bool authority_coherent=bootstrap_authority_coherent(status,state);
+    /**
+     * @brief 新的RUN续租需真实双Running、同goal/run、端口实际执行且生产最近、transport可用、实际permit与双fresh；不是看到已有session就无限续。
+     */
     const RunLeaseEligibility run_lease_inputs{
       enabled_ && status.core_state()==wire_value(WireCoreState::kRunning),
       state.core_state()==wire_value(WireCoreState::kRunning),
@@ -1438,6 +2037,9 @@ class DeviceActionGate final : public rclcpp::Node {
     std::uint8_t completion_client[16]{};
     std::copy(parameters_.client.begin(),parameters_.client.end(),completion_client);
     completion_live.set_client_instance_id(completion_client);
+    /**
+     * @brief 冻结完成想撤尚未发RUN续租时，额外要求双消息六轴提交/SENT/有效位及gate有界末采样完成意图。此处不让Completing开启新续租。
+     */
     const bool completion_ack=run_lease_inputs.status_running && run_lease_inputs.state_running &&
       run_lease_inputs.status_state_coherent && run_lease_inputs.same_goal_run &&
       run_lease_inputs.producer_recent && run_lease_inputs.transport_ready &&
@@ -1453,10 +2055,16 @@ class DeviceActionGate final : public rclcpp::Node {
       run_lease_inputs.status_state_coherent && run_lease_inputs.same_goal_run &&
       run_lease_inputs.producer_recent && run_lease_inputs.transport_ready &&
       gate_->bounded_cancel_intent(cancel_live,now);
+    /**
+     * @brief 只撤尚未提交且不拥有goal busy的RUN预约；已有RPC必须在原完成/取消deadline里等匹配COMMITTED，不能声称撤销了远端续租。
+     */
     (void)withdraw_queued_running_renewal(management_request_,renewal_reserved_,renewal_running_,
       renewal_started_,renewal_owns_busy_.load(),bootstrap_->renewal_request_inflight(),
       completion_ack || cancel_intent,explicit_renewal_status_);
     // 已接纳续租期间，冻结末样本可有界替代producer_active，其他新鲜度/身份条件不变。
+    /**
+     * @brief 既有续租遇到冻结末样本，可有界替代producer_active，其他fresh/身份仍全保留；run_renew_available随后仍取未放宽的原条件。
+     */
     const auto renewal_continuation_inputs=run_lease_continuation_inputs(run_lease_inputs,
         renewal_running_.load(),gate_->completion_waiting_for_renewal(now) ||
           gate_->cancel_waiting_for_renewal(cancel_live,now));
@@ -1512,6 +2120,9 @@ class DeviceActionGate final : public rclcpp::Node {
       }
       bootstrap_->invalidate("RUN_LEASE_PRODUCER_LOST");
     }
+    /**
+     * @brief 控制线程消费一次ROS服务排队编号，再按当前真实快照提交；回调时的available只是旧快照，不能代替这里复核。
+     */
     const int requested=management_request_.exchange(0);
     if(requested!=0) {
       explicit_operation_available_=false;
@@ -1523,6 +2134,9 @@ class DeviceActionGate final : public rclcpp::Node {
           port_.disable(); port_.cancel();
         }
         const bool renewal_binding_ready=!renewal_running_.load() || run_lease_active;
+        /**
+         * @brief 显式D10/续租/普通bootstrap操作分开进入对应状态机；失败清各自预约并封锁，SetPermit成功受理另建立一次性传播latch。
+         */
         const bool started=operation==ManageOperation::kDisableAndRelease ?
           begin_release(now) :
           operation==ManageOperation::kRenewLease ?
@@ -1567,6 +2181,9 @@ class DeviceActionGate final : public rclcpp::Node {
       status.reference_epoch()==state.reference_epoch() &&
       status.motion_epoch()==state.motion_epoch() &&
       status.management_epoch()==state.management_epoch();
+    /**
+     * @brief Hold续租要求下一Begin屏障及空闲；RUN续租必须原始生产资格，并都处在Bootstrap有限lead/reserve窗口。预约本身先关ready，防goal与续租抢单槽。
+     */
     renew_available_=!releasing && !evidence_incomplete_.load() &&
       requested_lease_us_!=0U &&
       ((lease_hold && release_status_fresh &&
@@ -1575,6 +2192,9 @@ class DeviceActionGate final : public rclcpp::Node {
        run_lease_eligible(run_lease_inputs)) && management_request_.load()==0 &&
       bootstrap_ && bootstrap_->renewal_due(now,requested_lease_us_) && transport_->ready();
     if(renew_available_.load() && reserve_lease_renewal()) renew_available_=false;
+    /**
+     * @brief 释放可用快照仅发布给ROS服务准入，不发D10；功能开发范围、双Hold、无busy/管理和同epoch等要同时满足。
+     */
     release_available_=release_operation_available({
       releasing,release_status_fresh,state.management_epoch()==status.management_epoch(),
       device_profile_.functional_development_basis,enabled_,gate_->ready(),
@@ -1584,6 +2204,12 @@ class DeviceActionGate final : public rclcpp::Node {
       state.core_state()==wire_value(WireCoreState::kHold),transport_->ready()});
     return true;
   }
+  /**
+   * @brief 发起Bootstrap D10并固定释放过渡原身份。
+   * 后续观察只用此固定根解释Status/State乱序，不能随到达帧移动原身份。
+   * @param now 宿主µs。
+   * @return bool；start_release受理后capture原boot/session/reference/motion/management。
+   */
   bool begin_release(std::uint64_t now) {
     const auto snapshot=latest_bootstrap_;
     if(!bootstrap_->start_release(snapshot,now)) return false;
@@ -1592,8 +2218,16 @@ class DeviceActionGate final : public rclcpp::Node {
       snapshot.management_epoch);
     return true;
   }
+  /**
+   * @brief 推进显式释放、续租、permit传播及EnableHold集成。
+   * 释放stage2仅在Bootstrap管理+Idle完成转3；Fault转4。续租清预约时只归还其自己busy；SetPermit在同boot/session latch下传gate。Enable先允许inactive prime并核port根身份，请求成功只置宿主enabled，仍需真实Hold握手。
+   * @param now 宿主µs。
+   */
   void bootstrap_tick(std::uint64_t now) {
     if(!bootstrap_) return;
+    /**
+     * @brief 一旦进入显式/证据驱动释放，不再走普通自动Enable；stage3后关闭inactive prime，stage4保未确认失败。
+     */
     if(release_stage_.load()!=0) {
       if(bootstrap_->phase()!=BootstrapPhase::kFault) bootstrap_->tick(now);
       if(bootstrap_->released()) {
@@ -1620,6 +2254,9 @@ class DeviceActionGate final : public rclcpp::Node {
     }
     if(bootstrap_->phase()==BootstrapPhase::kIdle) return;
     bootstrap_->tick(now);
+    /**
+     * @brief 结束续租预约时RUN不清goal busy；显式服务状态1→2供只读服务一次确认，失败则清状态，不假装租期已延长。
+     */
     if(renewal_reserved_ && renewal_started_ &&
        (bootstrap_->operation_complete() || bootstrap_->phase()==BootstrapPhase::kFault)) {
       if(bootstrap_->operation_complete()) {
@@ -1638,6 +2275,9 @@ class DeviceActionGate final : public rclcpp::Node {
       if(enabled_) gate_->invalidate_authorization(now);
       return;
     }
+    /**
+     * @brief 重新SetPermit结果只传播一次且必须同boot/session；不能每拍把旧许可重新置有效，也不因此续session。
+     */
     if(enabled_ && permit_refresh_latch_.eligible(latest_bootstrap_.boot_epoch,
                                                  latest_bootstrap_.session_id) &&
        bootstrap_->operation_complete() &&
@@ -1646,6 +2286,9 @@ class DeviceActionGate final : public rclcpp::Node {
         if(gate_->renew_permit(*authorization))
           permit_refresh_latch_.applied();
     }
+    /**
+     * @brief 显式单Enable和自动bootstrap Ready均须真实Authorization、worker inactive-prime准入和port同根；任一失败关临时prime并留不可ready。
+     */
     if(!enabled_ && !evidence_incomplete_.load() && single_enable_requested_.exchange(false)) {
       const auto authorization=bootstrap_->authorization();
       if(!authorization || !transport_->allow_inactive_prime(true) ||
@@ -1665,6 +2308,11 @@ class DeviceActionGate final : public rclcpp::Node {
     if(enabled_ && port_.direct_hold_started && !port_.direct_hold)
       transport_->allow_inactive_prime(false);
   }
+  /**
+   * @brief 仅一次保存Bootstrap首故障详细现场。
+   * 固定journal首拒与可选详情分开，不在控制线程同步格式化输出stderr。
+   * @param now 宿主µs。
+   */
   void report_bootstrap_fault(std::uint64_t now) {
     if(bootstrap_fault_reported_) return;
     bootstrap_fault_reported_=true;
@@ -1676,9 +2324,17 @@ class DeviceActionGate final : public rclcpp::Node {
       static_cast<unsigned long long>(latest_bootstrap_.session_id),
       observation_lost_,renewal_reserved_.load(),static_cast<unsigned>(gate_->phase()));
   }
+  /**
+   * @brief 从一致JTC实际/期望样本发ROS反馈并判断内部轨迹终态。
+   * 反馈header使用ROS时钟；actual/desired/error位置为rad。每拍查path容差，末时刻后actual在goal容差且desired等末点才innerSucceeded；超过goal_time_tolerance+0.25秒还不到则内部Aborted。最终设备Complete/原页/Timeline仍在后续，不以此立即succeed外部Action。
+   * @param now 宿主µs，用于elapsed相对秒。
+   */
   void check_execution(std::uint64_t now) {
     if(!port_.executing || !port_.controller) return;
     const auto sample=port_.controller->execution_sample(); if(!sample) return;
+    /**
+     * @brief elapsed由宿主steady起步锚转秒；反馈的ROS header是另一个时钟域，不作票据/状态新鲜判断。
+     */
     const auto elapsed=(now>port_.started_us ? now-port_.started_us : 0)*1e-6;
     if(active_ && active_->is_active()) {
       auto feedback=std::make_shared<Follow::Feedback>();
@@ -1707,6 +2363,11 @@ class DeviceActionGate final : public rclcpp::Node {
     else if(elapsed>trajectory.points.back().time+trajectory.goal_time_tolerance+0.25)
       gate_->inner_result(port_.motion_generation,Terminal::kAborted,"GOAL_TOLERANCE_VIOLATED",now);
   }
+  /**
+   * @brief 在持准入锁的后update阶段交接goal、采样、Timeline及ROS结果。
+   * 先消费真实发布的JTC update或直接同值Hold代/排空，再取pending目标并复验profile/LIMITED预算，之后刷新direct Hold和检测执行。gate有终态还要核对已配置的原页/时间线封口，可有限等两秒；异常证据永不报Succeeded。
+   * @param admission 已成功取得控制mutex的RAII对象，负责open/close当前取消目标。
+   */
   void cycle_impl(GoalCancelAdmission<GoalHandle>::Control &admission) {
     static unsigned cycle_diag_count=0U;
     if(port_.direct_hold_started && cycle_diag_count++<3U)
@@ -1724,6 +2385,9 @@ class DeviceActionGate final : public rclcpp::Node {
       if(active_ && gate_->terminal()==Terminal::kNone)
         gate_->abort("EVIDENCE_INCOMPLETE",now);
     }
+    /**
+     * @brief 登记JTC update或direct_hold真实发布的当前本地授权代（均不证明设备SENT），线序号由64位generation投影；record_update拒绝则中止，last_control_update_us只在成功时推进。
+     */
     if(const auto update=dummy_ros_control::consume_control_update(last_update_)) {
       last_update_=update->generation;
       if(!gate_->record_update(port_.motion_generation,update->identity.motion_epoch,
@@ -1734,6 +2398,9 @@ class DeviceActionGate final : public rclcpp::Node {
     }
     if(const auto drain=transport_->hold_drain_snapshot())
       gate_->observe_hold_drain(*drain,now);
+    /**
+     * @brief 控制方不等待accept回调的goal_mutex；取得pending后才固定goal接受时间、前身份及LIMITED消费，尚未假定设备已Begin。
+     */
     { std::unique_lock<std::mutex> lock(goal_mutex_,std::try_to_lock);
       if(lock && pending_) {
         active_=std::move(pending_); port_.uuid=active_->get_goal_id();
@@ -1766,6 +2433,9 @@ class DeviceActionGate final : public rclcpp::Node {
           timeline_refresh_closure_.reset();
           record_timeline(TimelineEvent::Kind::kAccepted,now);
         }
+        /**
+         * @brief 控制方在ROS准入之后再次按当前profile转换并submit；失败直接abort本goal并清busy，不偷偷改成末点普通运动。
+         */
         const auto trajectory=validated_device_trajectory(*active_->get_goal(),profile_);
         if(evidence_incomplete_.load() || !trajectory || !gate_->submit(*trajectory,now)) {
           auto result=std::make_shared<Follow::Result>(); result->error_code=Follow::Result::INVALID_GOAL;
@@ -1781,6 +2451,9 @@ class DeviceActionGate final : public rclcpp::Node {
     port_.refresh_direct_hold();
     if(port_.failed) gate_->abort("GUARDED_REGISTRATION_FAILED",now);
     check_execution(now);
+    /**
+     * @brief gate终态只进入结果封口阶段，先记录终态/可信Hold，再核writer与原run终页；不能因为内部JTC或管理Ok就立即返回ROS成功。
+     */
     if(active_ && gate_->terminal()!=Terminal::kNone) {
       auto result=std::make_shared<Follow::Result>(); result->error_string=gate_->error();
       if(timeline_ && !timeline_terminal_) {
@@ -1797,6 +2470,9 @@ class DeviceActionGate final : public rclcpp::Node {
         }
       }
       // 自治fault清理只读专属原raw快照；不把Fault授权清零当可运行/可续租状态。
+      /**
+       * @brief 自主Fault清理只读专属writer原始快照，要求四hash、首/终完整fault组及新鲜clear-authority Fault形状；确认清理仍保Aborted，不恢复正常控制/续租。
+       */
       if(gate_->terminal()==Terminal::kAborted && !fault_cleanup_confirmed_.load() && timeline_after_) {
         const auto receipt=transport_->raw_terminal_flushed();
         const auto cleanup=transport_->raw_cleanup_observation();
@@ -1833,6 +2509,9 @@ class DeviceActionGate final : public rclcpp::Node {
       const auto raw_terminal=transport_->raw_terminal_flushed();
       const bool raw_terminal_ready=raw_terminal_matches(
         raw_terminal,goal_boot_,goal_session_,goal_run_id_);
+      /**
+       * @brief 普通目标在配置Timeline时须Hold/排空，启用raw时另须对应终页；两者均未配置时不额外等待它们。FaultCleanup专用闭合走不同条件，但仍要求writer无错和终页身份，不混作运动Succeeded。
+       */
       const auto decision=fault_cleanup_confirmed_.load() && timeline_fault_cleanup_ && gate_->terminal()==Terminal::kAborted && (!timeline_ || timeline_->drained())
         ? timeline_success_decision(false,evidence_incomplete_.load() || (timeline_ && timeline_->failed()),
             false,!timeline_ || timeline_->drained(),true,transport_->raw_evidence_failure()!=0U,raw_terminal_ready)
@@ -1844,6 +2523,9 @@ class DeviceActionGate final : public rclcpp::Node {
         timeline_success_decision(timeline_!=nullptr,
           evidence_incomplete_.load() || (timeline_ && timeline_->failed()),
           timeline_hold_,!timeline_ || timeline_->drained());
+      /**
+       * @brief 终态后的异步证据从首次等待起使用2秒预算，期间关ready；超时粘滞不完整。明确设备typed命令拒绝不靠等日志掩盖首因。
+       */
       if(decision==TimelineSuccessDecision::kWait &&
          result->error_string!="DEVICE_COMMAND_REJECTED_DURING_ACK") {
         if(timeline_terminal_started_us_==0U) timeline_terminal_started_us_=now;
@@ -1862,6 +2544,9 @@ class DeviceActionGate final : public rclcpp::Node {
         result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED;
         result->error_string=evidence_incomplete_result_error(result->error_string);
         active_->abort(result);
+      /**
+       * @brief 回ROS FaultCleanup说明前再次复核原清理快照/终页；仍用abort且PATH_TOLERANCE_VIOLATED，不把已释放故障状态宣称动作通过。
+       */
       } else if(fault_cleanup_confirmed_.load() && gate_->terminal()==Terminal::kAborted) {
         const auto final_cleanup=transport_->raw_cleanup_observation();
         if(transport_->raw_evidence_failure()!=0U || !raw_fault_cleanup_matches(
@@ -1875,6 +2560,9 @@ class DeviceActionGate final : public rclcpp::Node {
         result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED;
         result->error_string=result->error_string.empty()?"FAULT_CLEANUP_CONFIRMED":result->error_string+";FAULT_CLEANUP_CONFIRMED";
         active_->abort(result);
+      /**
+       * @brief 紧贴ROS succeed边界再次读取异步writer状态和原run终页；两次之间可能出现I/O失败，故不能复用旧成功快照。
+       */
       } else if(gate_->terminal()==Terminal::kSucceeded) {
         // Recheck the asynchronous writer immediately at the ROS result boundary.
         const auto final_raw_terminal=transport_->raw_terminal_flushed();
@@ -1902,6 +2590,9 @@ class DeviceActionGate final : public rclcpp::Node {
       active_.reset(); busy_=false;
     }
     if(!fault_cleanup_confirmed_.load()) request_evidence_release(now);
+    /**
+     * @brief 下一goal ready重新合成真实Gate/Port/观察/容差/Complete屏障，再扣除续租/释放/证据及LIMITED预算；不是单个长期锁存enable布尔值。
+     */
     const AdmissionPrerequisites prerequisites{
       enabled_,observation_ready_.load(),gate_->ready(),port_.control_ready(),
       hold_tolerance_bound_,transport_->post_complete_begin_ready()};
@@ -1912,6 +2603,11 @@ class DeviceActionGate final : public rclcpp::Node {
       release_stage_.load()==0 && !evidence_incomplete_.load() &&
       (device_profile_.no_load_basis!=NoLoadBasis::kFunctionalLimited || (limited_goal_budget_.available() && transport_->raw_evidence_capture_enabled()));
   }
+  /**
+   * @brief 证据不完整且已在可信Hold、无active时请求开发态D10收尾。
+   * 仅功能开发依据、无旧STOP_FAILED、Bootstrap可释放等条件成立才关闭生产并begin_release；未确认时stage4。不能在未知运动/失联状态把本地证据失败直接说成已安全释放。
+   * @param now 宿主µs。
+   */
   void request_evidence_release(std::uint64_t now) noexcept {
     if(!evidence_incomplete_.load() || !device_profile_.functional_development_basis || active_ ||
        release_stage_.load()!=0 || !enabled_ || !observation_ready_.load() ||
@@ -1924,6 +2620,13 @@ class DeviceActionGate final : public rclcpp::Node {
     port_.disable(); port_.cancel();
     if(!begin_release(now)) release_stage_=4;
   }
+  /**
+   * @brief 从当前goal账本构造带明确身份/时钟的时间线事件。
+   * 终态/Hold遇已验证refresh闭合时仍用原goal身份；正常Canceled另附已确认管理request/op对。ROS UUID、全轨迹摘要与设备run是独立标识。
+   * @param kind 事件类别。
+   * @param now 该事件宿主steady µs；Feedback可传原State接收锚。
+   * @return 值对象，不执行写盘。
+   */
   TimelineEvent timeline_event(TimelineEvent::Kind kind,std::uint64_t now) const noexcept {
     TimelineEvent event{};
     event.kind=kind; event.uuid=timeline_uuid_; event.trajectory_sha256=timeline_digest_;
@@ -1947,12 +2650,22 @@ class DeviceActionGate final : public rclcpp::Node {
     }
     return event;
   }
+  /**
+   * @brief 把值事件交有界Timeline，失败锁证据不完整。
+   * true只表示记录入口接纳，不是writer排空、fsync或物理动作完成，结果边界还要drained/failed。
+   * @param kind 事件类型。
+   * @param now 宿主µs。
+   * @return 未配置timeline兼容true，已配置时入队成功true，否则false。
+   */
   bool record_timeline(TimelineEvent::Kind kind,std::uint64_t now) noexcept {
     if(!timeline_) return true;
     if(timeline_->record(timeline_event(kind,now))) return true;
     evidence_incomplete_=true;
     return false;
   }
+  /**
+   * @brief 冻结连接身份/profile值与已验证DeviceProfile；Controller发现共享指针原子交接，transport/client/bootstrap/gate按unique_ptr拥有且析构顺序需依赖仍存活。
+   */
   DpManagementParameters parameters_;
   JointProfile profile_;
   DeviceProfile device_profile_;
@@ -1963,6 +2676,9 @@ class DeviceActionGate final : public rclcpp::Node {
   std::unique_ptr<WireManagementClient> client_;
   std::unique_ptr<BootstrapCoordinator> bootstrap_;
   std::unique_ptr<ActionGate> gate_;
+  /**
+   * @brief ROS实体归Node持有；诊断组独立互斥以免JSON阻塞control admission。普通服务写原子意图，不直接改多数控制线程私有状态。
+   */
   rclcpp_action::Server<Follow>::SharedPtr server_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr enable_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bootstrap_status_service_;
@@ -1970,6 +2686,9 @@ class DeviceActionGate final : public rclcpp::Node {
   rclcpp::CallbackGroup::SharedPtr diagnostic_callback_group_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr diagnostic_snapshot_service_;
   std::vector<rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr> management_services_;
+  /**
+   * @brief ready是当前goal准入快照，busy是唯一goal或独占管理占槽；cancel队列有8槽，admission锁把目标生效/取消/终态串行。
+   */
   std::atomic<bool> ready_{false}, busy_{false};
   PendingGoalCancels<GoalHandle> cancel_requests_;
   GoalCancelAdmission<GoalHandle> cancel_admission_;
@@ -1978,14 +2697,26 @@ class DeviceActionGate final : public rclcpp::Node {
   std::atomic<bool> single_enable_requested_{false}, single_enable_available_{false};
   std::atomic<bool> explicit_operation_available_{false};
   std::atomic<bool> permit_operation_available_{false};
+  /**
+   * @brief 续租reserved/started/running与owns_busy分开：RUN借goal busy、Hold自己拥有busy；失败/完成只能清自己的占用。
+   */
   std::atomic<bool> renew_available_{false}, renewal_reserved_{false}, renewal_started_{false};
   std::atomic<bool> run_renew_available_{false}, renewal_running_{false};
   std::atomic<bool> renewal_owns_busy_{true};
   PermitRefreshLatch permit_refresh_latch_;
+  /**
+   * @brief 显式续租提示0无待报、1排队/等待、2已确认未读、-1撤回未发送未读；只读服务一次消费，不改变设备租约。
+   */
   std::atomic<int> explicit_renewal_status_{0};
   std::atomic<bool> release_available_{false};
+  /**
+   * @brief 释放stage：0无、1回调排队、2控制线程已发/等待、3管理+Idle已证、4未确认；management_request是wire操作编号单槽，非request_id。
+   */
   std::atomic<int> release_stage_{0};
   std::atomic<int> management_request_{0};
+  /**
+   * @brief State年龄为宿主接收µs；continuity启动空档2秒/运行0.5秒是等待监督，绝不延长单帧实际年龄或设备票据。
+   */
   std::uint64_t state_max_age_us_=250000U;
   ObservationContinuity continuity_{250000U,2000000U,500000U};
   bool observation_lost_=false;
@@ -1997,15 +2728,24 @@ class DeviceActionGate final : public rclcpp::Node {
   std::uint64_t requested_lease_us_=0U;
   std::mutex goal_mutex_;
   GoalRejectionReceipt goal_rejection_receipt_;
+  /**
+   * @brief pending由accept回调在goal_mutex下交接，active只由control处理；last_update为宿主控制代，last_control_update_us为最近真实采样宿主锚。
+   */
   std::shared_ptr<GoalHandle> pending_, active_;
   std::uint64_t last_update_=0;
   std::uint64_t last_control_update_us_=0;
   std::uint64_t last_typed_reject_seen_us_=0;
+  /**
+   * @brief LIMITED预算绑定特定boot/session和次数；enabled是宿主已启动使能流程，不等同gate ready/设备Hold。hold_tolerance_bound是worker实际接受容差设置。
+   */
   LimitedGoalBudget limited_goal_budget_;
   std::uint64_t goal_accepted_us_=0;
   bool enabled_=false;
   bool hold_tolerance_bound_=false;
   BootstrapSnapshot latest_bootstrap_{};
+  /**
+   * @brief timeline拥有异步writer；evidence_incomplete粘滞，首错只报一次。timeline_identity与goal_before/confirmedHold/refreshClosure分别保存观测、原goal和闭合证人，不互相覆盖假造run。
+   */
   std::unique_ptr<GoalTimeline> timeline_;
   std::atomic<bool> evidence_incomplete_{false};
   rclcpp::TimerBase::SharedPtr evidence_failure_timer_;
@@ -2016,6 +2756,9 @@ class DeviceActionGate final : public rclcpp::Node {
   TimelineIdentity goal_before_identity_{};
   dummy_ros_control::GoalUuid timeline_uuid_{};
   dummy_ros_control::TrajectoryDigest timeline_digest_{};
+  /**
+   * @brief goal_boot/session/run固定实际Begin归属；terminal_started和refresh_wait_started为宿主µs总窗锚，后续消息不续窗。motion/core/State序号是设备水位。
+   */
   std::uint64_t goal_boot_=0, goal_session_=0, goal_run_id_=0;
   std::uint64_t timeline_terminal_started_us_=0;
   std::uint64_t timeline_refresh_wait_started_us_=0;
@@ -2023,6 +2766,9 @@ class DeviceActionGate final : public rclcpp::Node {
   std::uint32_t timeline_run_motion_epoch_=0;
   std::uint16_t timeline_status_core_state_=0, timeline_state_core_state_=0;
   std::uint32_t timeline_feedback_state_seq_=0;
+  /**
+   * @brief 时间线open/AfterBegin/Terminal/Hold/Release分开，FaultCleanup独立闭合但保Aborted；有终态事件不表示writer已排空。
+   */
   bool timeline_goal_open_=false, timeline_after_=false, timeline_terminal_=false;
   bool timeline_goal_hold_confirmed_=false;
   bool cancel_refresh_diagnostic_logged_=false;
@@ -2033,6 +2779,13 @@ class DeviceActionGate final : public rclcpp::Node {
 }  // namespace dummy_motion_client
 
 #ifndef DUMMY_ACTION_GATE_TEST
+/**
+ * @brief 创建ROS gate和ControllerManager，按真实控制拍顺序运行并正常join退出。
+ * 20ms发现回调在非控制executor拿manager列表锁。控制线程按manager更新率用宿主steady sleep_until；每拍先刷新授权，再read/update/write，最后cycle冻结末采样/验收。正常shutdown后join控制线程再销毁gate/manager；控制与ROS时间域分别使用。
+ * @param argc 进程参数数目。
+ * @param argv ROS/硬件/控制器参数，转传manager选项。
+ * @return 正常0，捕获初始化/运行异常返回1；不在此宣称设备释放已确认。
+ */
 int main(int argc,char **argv) {
   rclcpp::init(argc,argv);
   try {
@@ -2044,7 +2797,13 @@ int main(int argc,char **argv) {
     executor->add_node(manager); executor->add_node(gate);
     // Controller list discovery takes the manager's non-RT lock. Keep it off
     // the update thread: loading waits for that thread to adopt the new list.
+    /**
+     * @brief 发现Controller的manager非RT锁只在executor回调中取得，避免加载/切换锁阻塞控制更新；active插件再原子交给control adopt。
+     */
     auto discovery=gate->create_wall_timer(std::chrono::milliseconds(20),[&]{gate->attach(*manager);});
+    /**
+     * @brief 该独立线程为大多数gate状态唯一writer，不由MultiThreadedExecutor并发修改；回调交接通过原子/有限槽/准入锁。period取manager Hz，sleep_until使用宿主steady。
+     */
     std::thread control([&] {
       const auto period=std::chrono::nanoseconds(1000000000ULL/std::max(1U,manager->get_update_rate()));
       auto next=std::chrono::steady_clock::now();
@@ -2052,15 +2811,24 @@ int main(int argc,char **argv) {
         next+=period;
         // Refresh authority before producing a sample. Once the post-update
         // terminal check freezes that sample, a later ticket cannot retire it.
+        /**
+         * @brief 先接纳新鲜身份/ticket再生产本拍真实目标；后update cycle一旦冻结terminal样本，本拍之后的票据刷新不应退役该冻结代。
+         */
         gate->prepare_update();
         if(manager->is_resource_manager_initialized()) {
           const auto time=manager->now(); const rclcpp::Duration duration(period);
+          /**
+           * @brief ROS time只供ControllerManager/JTC插值和消息时间；传输新鲜度、管理期限和证据监督仍用host steady µs，不跨域直接相减。
+           */
           manager->read(time,duration); manager->update(time,duration); manager->write(time,duration);
         }
         gate->cycle();
         std::this_thread::sleep_until(next);
       }
     });
+    /**
+     * @brief 正常退出先停executor/ROS并join控制线程，再释放发现timer和Node/manager；节点析构清本地生产，实际Stop是否已确认必须看协议诊断/证据。
+     */
     executor->spin(); rclcpp::shutdown(); control.join();
     discovery.reset();
     executor->remove_node(gate); gate.reset(); manager.reset();

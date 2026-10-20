@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file verify_rest_planning.py
+# @brief 通过只读MoveIt服务核精确Home/REST、负例和双向离散轨迹。
+#
+# 执行时会创建ROS节点、查询服务端模型参数、调用规划/有效性服务并写报告，不创建执行Action客户端或串口。
+# 只读指不发运动命令/不改全局规划场景；服务请求仍执行实际规划计算。所有原始TOTG路点及插值样本有效不等于连续全路径严格碰撞证明或实机资格。
 """@file verify_rest_planning.py
 @brief 使用真实 MoveIt 服务只读验证精确 REST 的双向规划及整条插值路径。
 
@@ -19,9 +25,16 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+##
+# @brief 已复核的六轴自碰撞负例角度（度）；run转换为rad并要求同时出现自接触及地面接触。
+# 它是回归负例，不是可执行目标或安全姿态推荐。
 SELF_COLLISION_DEG = (-47.496, 18.324, 176.762, -87.374, 12.443, 22.388)
 
 
+##
+# @brief 解析有限超时与独立ROS域。
+# @return Namespace；域必须0..232，各层等待预算为有限正秒数。
+# 发现/请求/完整规划/全程四层期限相互独立，后续都受总monotonic截止约束；未在此连接ROS。
 def arguments():
     """@brief 解析配置、ROS 域、输出及各层有限等待预算。
     @return argparse 命名空间；所有超时须为有限正秒数。
@@ -43,6 +56,15 @@ def arguments():
     return result
 
 
+##
+# @brief 等待一个只读服务或组合future，受单请求及全程双重期限限制。
+# @param node 用于spin_once推进回调的ROS节点。
+# @param future planner组合或普通异步future。
+# @param timeout 本请求最多等待秒数。
+# @param deadline 全程monotonic绝对秒截止。
+# @param label 超时/无响应的证据阶段标签。
+# @return 实际非None响应；未完成时cancel本地future并抛TimeoutError。
+# future.cancel不证明远端服务计算已撤销，也不把它当设备停止；此脚本没有运动执行请求。rclpy提前结束也会走未完成失败路径。
 def wait_result(node, future, timeout, deadline, label):
     """@brief 有界 spin 并取得 ROS/生产组合 future 的实际响应。
     @param node 仅用于只读规划和有效性服务的 ROS 节点。
@@ -65,6 +87,16 @@ def wait_result(node, future, timeout, deadline, label):
     return response
 
 
+##
+# @brief 保留生产规划器地面保护并记录状态有效性响应。
+# @param node 服务回调spin节点。
+# @param planner 生产MoveItPlanner。
+# @param positions 六轴位置rad，顺序与planner.names一致。
+# @param args 含request_timeout的CLI配置。
+# @param deadline 全程monotonic绝对截止秒数。
+# @param label 该采样点的证据标签。
+# @return 可JSON序列化的label/positions_rad/valid/contacts映射；调用者必须检查valid。
+# contact.depth以m记录；单个状态有效不推导相邻未采样区间必然无碰撞。
 def validity(node, planner, positions, args, deadline, label):
     """@brief 保留原地面保护请求状态有效性，并完整记录 contacts。
     @param positions 按生产 joint_names 顺序的六轴弧度。
@@ -79,6 +111,14 @@ def validity(node, planner, positions, args, deadline, label):
     }
 
 
+##
+# @brief 读取共同服务提供者实际URDF/SRDF并绑定当前安装网格文件。
+# @param node 独立域只读ROS节点。
+# @param args 服务发现/请求超时配置。
+# @param deadline 全程绝对monotonic秒截止。
+# @return provider、模型全文/规范SHA及包内资源原字节SHA；不符当前源码/两份修复清单时失败。
+# 参数源固定/manual_move_group，要求它同时提供plan/validity服务；GetParameters client在finally销毁。
+# URDF/SRDF用XML canonicalize(strip_text=True)比较，网格SHA取当前安装路径文件，不能单独证明旧进程缓存BVH已更新；后续行为正负例仍必须过。
 def runtime_identity(node, args, deadline):
     """@brief 绑定服务提供者的实际 URDF/SRDF 及当前安装包内引用的网格摘要。
     @details 参数只记录服务端模型；网格摘要来自其 URI 对应的当前安装文件，
@@ -105,6 +145,9 @@ def runtime_identity(node, args, deadline):
         urdf, srdf = (v.string_value for v in response.values)
         source = xacro.process_file(str(ROOT/'src/dummy-ros2_description/urdf/dummy-ros2.xacro')).toxml()
         semantic = (ROOT/'src/dummy_moveit_config/config/dummy-ros2.srdf').read_text()
+        ##
+        # @par 内部canonical回调
+        # 输入XML文本，返回去文本边缘空白的规范XML；摘要是规范文本SHA，与源xacro/原网格文件SHA不同。
         canonical = lambda text: ET.canonicalize(text, strip_text=True)
         if canonical(urdf) != canonical(source) or canonical(srdf) != canonical(semantic):
             raise RuntimeError('实际服务端 URDF/SRDF 与本次修复源码不一致')
@@ -131,6 +174,18 @@ def runtime_identity(node, args, deadline):
         node.destroy_client(client)
 
 
+##
+# @brief 核生产完整规划的所有原始路点及插值样本。
+# @param node 只读ROS节点。
+# @param planner 生产规划器及其限位。
+# @param start 指定六轴起点rad。
+# @param goal 精确六轴终点rad，不用邻近REST替代。
+# @param args 规划/有效性超时配置。
+# @param deadline 全程绝对monotonic秒截止。
+# @param record 可变方向证据对象，逐步写入，失败保留已完成部分。
+# @return None；任一路点/采样/端点或服务错误抛异常。
+# validate_trajectory检查结构/时间/限位，碰撞由后续validity逐样本检查，两者职责分开。
+# 代码端点阈值实际为0.000101rad（在规划约束0.0001rad旁留数值余量）；采样最大步0.01rad，默认生产采样0.5°。
 def verify_plan(node, planner, start, goal, args, deadline, record):
     """@brief 检查生产规划成功、完整 TOTG 路点和逐段插值均有效。
     @param start 起点六轴弧度。
@@ -166,6 +221,9 @@ def verify_plan(node, planner, start, goal, args, deadline, record):
     if max_step > 0.01 + 1e-12:
         raise RuntimeError('生产碰撞采样超过 0.01 rad 步长')
     # 顺序匹配以证明所有 TOTG 路点都保留，避免只验证简化路径或首末点。
+    ##
+    # @brief 按顺序在样本中寻找全部原始TOTG路点，容差1e-12rad，避免只验证压缩轨迹。
+    # 即使全部采样有效，仍没有对两样本间连续体积做严格扫掠碰撞证明。
     cursor = 0
     for point in points:
         while cursor < len(samples) and max(abs(a - b) for a, b in zip(point, samples[cursor])) > 1e-12:
@@ -181,6 +239,13 @@ def verify_plan(node, planner, start, goal, args, deadline, record):
     record['all_samples_valid'] = True
 
 
+##
+# @brief 在独立域创建规划/状态检查客户端并执行双向回归。
+# @param args 配置路径、域及超时参数。
+# @param evidence 逐步填入模型/状态/负例/轨迹的可变报告。
+# @return None；任何配置、服务、正负例或路径失败抛异常，finally销毁节点并shutdown ROS。
+# 读取配置中的名称、角限位/Home/REST，角度配置转换rad；仅核长度/唯一名称等当前代码前提。
+# 每服务要求恰好一个提供者；检查随请求附带的manual_base_floor且负例同时存在自碰撞和地面contact，防止通过删保护或放宽豁免制造假正例。
 def run(args, evidence):
     """@brief 在指定独立域创建只读客户端，验证正例、干涉负例及双向全轨迹。
     @param args 命令行配置和有界超时。
@@ -208,6 +273,10 @@ def run(args, evidence):
     try:
         node = rclpy.create_node('verify_rest_planning_readonly')
         planner = MoveItPlanner(node, names, limits)
+        ##
+        # @par 内部motion_parameters回调
+        # 无参数，返回默认速度deg/s、默认加速度rad/s²、最大速度deg/s、最大加速度rad/s²四元组，给生产规划器统一使用。
+        # 此替换只提供当前配置数值，不授予实际执行速度许可。
         planner.motion_parameters = lambda: (
             config['motion_speed_default_deg_s'], config['motion_acceleration_default_rad_s2'],
             config['motion_speed_max_deg_s'], config['motion_acceleration_max_rad_s2'])
@@ -261,6 +330,11 @@ def run(args, evidence):
         rclpy.shutdown()
 
 
+##
+# @brief 归档本次只读回归成功或已捕获失败。
+# @return run全部通过0，否则1；参数解析和报告写入本身的错误仍可能在捕获范围之外退出。
+# 只捕获run中的Exception后写error type/message；allow_nan=False拒绝报告非有限数。
+# 输出success只覆盖本脚本实际检查的服务模型/正负例/离散样本；executed=false表示没有执行运动，而非没有调用规划服务。
 def main():
     """@brief 无论回归成功或失败都保存 JSON，并用退出码表达判定。
     @return 完整回归成功为 0；任何配置、服务、轨迹或负例错误为 1。

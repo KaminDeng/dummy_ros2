@@ -1,8 +1,19 @@
 <?xml version='1.0' encoding='utf-8'?>
+<!--
+@file dummy-ros2.srdf
+@brief MoveIt规划组、命名姿态、虚拟根与明确的允许碰撞对。
+@details SRDF不定义几何或驱动许可；几何/关节轴来自共享Xacro。reason只是豁免说明，实际效果是该link对不参与碰撞拒绝。
+-->
 <robot name="dummy-ros2">
+<!--
+从base_link到输出法兰link6_1_1的运动链作为dummy_arm；中间包含固定减速器安装，但可动轴仍为Joint1至Joint6。
+-->
   <group name="dummy_arm">
     <chain base_link="base_link" tip_link="link6_1_1" />
   </group>
+<!--
+规划层Home命名姿态，值为rad；Joint3=π/2。选中命名姿态只是设置目标，不能代替设备人工Home确认/采集参考。
+-->
   <group_state name="home" group="dummy_arm">
     <joint name="Joint1" value="0" />
     <joint name="Joint2" value="0" />
@@ -11,6 +22,9 @@
     <joint name="Joint5" value="0" />
     <joint name="Joint6" value="0" />
   </group_state>
+<!--
+历史reset命名姿态保留原值。它不是面板当前工作REST；面板REST来自部署配置，不能因名称相近把两组角度混用。
+-->
   <group_state name="reset" group="dummy_arm">
     <joint name="Joint1" value="0" />
     <joint name="Joint2" value="-1.1276" />
@@ -19,7 +33,13 @@
     <joint name="Joint5" value="0" />
     <joint name="Joint6" value="0" />
   </group_state>
+<!--
+规划场景中的world到base_link固定关系；不创建机器人实际传感器或允许移动基座。
+-->
   <virtual_joint name="virtual_joints" type="fixed" parent_frame="world" child_link="base_link" />
+<!--
+相邻/固定装配的明确碰撞豁免。电机用独立固定子link保留对远端的检查，不能对全部电机/腕部一概豁免。
+-->
   <disable_collisions link1="base_link" link2="link1_1_1" reason="Adjacent" />
   <disable_collisions link1="link1_1_1" link2="link2_1_1" reason="Adjacent" />
   <disable_collisions link1="link2_1_1" link2="link3_1_1" reason="Adjacent" />
@@ -36,6 +56,9 @@
   <disable_collisions link1="step_link5_motor_1" link2="j6_reducer_housing" reason="Adjacent" />
 
   <!-- 近端到远端的5mm碰撞间隙保护；无视觉，不改变关节链。 -->
+<!--
+以下ClearanceGuardScope只去除保护体与自身/近端装配的接触检查，保留规定近端对远端腕部的5mm保护；不是关闭全部保护体碰撞。
+-->
 <disable_collisions link1="base_link" link2="clearance_base_link" reason="ClearanceGuardScope" />
 <disable_collisions link1="base_link" link2="clearance_link1_1_1" reason="ClearanceGuardScope" />
 <disable_collisions link1="base_link" link2="clearance_link2_1_1" reason="ClearanceGuardScope" />

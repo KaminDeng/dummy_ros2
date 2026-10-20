@@ -1,14 +1,30 @@
 <?xml version="1.0"?>
+<!--
+@file dummy-ros2.urdf.xacro
+@brief 假硬件规划/控制的装配入口，复用描述包几何并添加ros2_control声明。
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dummy-ros2">
+<!--
+初始位置YAML路径传入下方控制宏；这些位置只初始化mock状态，不采集实机编码器或建立Home参考。
+-->
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
 
     <!-- Import dummy-ros2 urdf file -->
+<!--
+共享几何从已安装描述包解析，避免在MoveIt包复制另一套运动学/碰撞模型。
+-->
     <xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.xacro" />
 
     <!-- Import control_xacro -->
+<!--
+载入控制宏定义，本条本身不创建硬件组件；后面的宏调用才展开接口。
+-->
     <xacro:include filename="dummy-ros2.ros2_control.xacro" />
 
 
+<!--
+使用宏默认mock_components/GenericSystem，FakeSystem是组件名；不能用此入口代替真机身份/许可守卫链。
+-->
     <xacro:dummy-ros2_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
 
 </robot>

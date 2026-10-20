@@ -1,6 +1,14 @@
 <?xml version="1.0" ?>
+<!--
+@file dummy-ros2.trans
+@brief 历史六轴transmission片段；当前共享Xacro已包含同类声明，此文件并不由其include。
+@details 保留原件用于旧导出模型对照；真实ROS2接口以所选ros2_control硬件插件与部署合同为准。
+-->
 <robot name="dummy-ros2" xmlns:xacro="http://www.ros.org/wiki/xacro" >
 
+<!--
+Joint1的旧SimpleTransmission元数据；joint与actuator分别描述关节侧和执行器侧的EffortJointInterface。reduction=1不代表真实驱动减速比，也不会为当前ROS2创建位置命令接口。
+-->
 <transmission name="Joint1_tran">
   <type>transmission_interface/SimpleTransmission</type>
   <joint name="Joint1">
@@ -12,6 +20,9 @@
   </actuator>
 </transmission>
 
+<!--
+Joint2的旧SimpleTransmission元数据；joint与actuator分别描述关节侧和执行器侧的EffortJointInterface。reduction=1不代表真实驱动减速比，也不会为当前ROS2创建位置命令接口。
+-->
 <transmission name="Joint2_tran">
   <type>transmission_interface/SimpleTransmission</type>
   <joint name="Joint2">
@@ -23,6 +34,9 @@
   </actuator>
 </transmission>
 
+<!--
+Joint3的旧SimpleTransmission元数据；joint与actuator分别描述关节侧和执行器侧的EffortJointInterface。reduction=1不代表真实驱动减速比，也不会为当前ROS2创建位置命令接口。
+-->
 <transmission name="Joint3_tran">
   <type>transmission_interface/SimpleTransmission</type>
   <joint name="Joint3">
@@ -34,6 +48,9 @@
   </actuator>
 </transmission>
 
+<!--
+Joint4的旧SimpleTransmission元数据；joint与actuator分别描述关节侧和执行器侧的EffortJointInterface。reduction=1不代表真实驱动减速比，也不会为当前ROS2创建位置命令接口。
+-->
 <transmission name="Joint4_tran">
   <type>transmission_interface/SimpleTransmission</type>
   <joint name="Joint4">
@@ -45,6 +62,9 @@
   </actuator>
 </transmission>
 
+<!--
+Joint5的旧SimpleTransmission元数据；joint与actuator分别描述关节侧和执行器侧的EffortJointInterface。reduction=1不代表真实驱动减速比，也不会为当前ROS2创建位置命令接口。
+-->
 <transmission name="Joint5_tran">
   <type>transmission_interface/SimpleTransmission</type>
   <joint name="Joint5">
@@ -56,6 +76,9 @@
   </actuator>
 </transmission>
 
+<!--
+Joint6的旧SimpleTransmission元数据；joint与actuator分别描述关节侧和执行器侧的EffortJointInterface。reduction=1不代表真实驱动减速比，也不会为当前ROS2创建位置命令接口。
+-->
 <transmission name="Joint6_tran">
   <type>transmission_interface/SimpleTransmission</type>
   <joint name="Joint6">

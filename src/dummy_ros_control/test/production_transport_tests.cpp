@@ -1,3 +1,10 @@
+/**
+ * @file production_transport_tests.cpp
+ * @brief 以外部指定peer验证生产transport的未授权负向路径。
+ *
+ * 运行需要argv[1]端点，configure会启动生产通信worker；本轮只静态维护，不运行peer/真机。
+ * 收到State/Status不等于被准入为可执行反馈；最终检查没有发布控制命令。Stop发送计数也不等于设备Idle确认、release committed或物理停止。
+ */
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -6,12 +13,24 @@
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
+/**
+ * @brief 先验证参数解析，再检查未授权State/命令被拒绝和cleanup发Stop。
+ *
+ * argv[1]是通信端点；等待反馈最多5s，等待已转移命令被拒最多2s（steady_clock）。配置仅J1，未使用位置以NaN填充。
+ * @param argc 命令行参数个数（含程序名）。
+ * @param argv 命令行字符串数组，具体位置见上述调用约定。
+ * @return 0 表示本文件全部检查通过；非零定位失败检查。
+ */
 int main(int argc, char **argv) {
   if (argc != 2) return 10;
   using namespace dummy_ros_control;
   if (saturating_state_deadline(UINT64_MAX - 1U, 10U) != UINT64_MAX ||
       saturating_state_deadline(100U, 10U) != 110U) return 14;
   TransportParameters parameters{};
+  /**
+   * @brief 固定J1画像：位置rad、速度rad/s、加速度rad/s²，控制/State周期10,000µs。
+   * 解析负例覆盖轴数与mask矛盾、缺端点、带尾缀数字和全零device_id。hash仅测试夹具。
+   */
   const std::unordered_map<std::string, std::string> valid{
       {"endpoint", argv[1]},
       {"device_id", "01000000000000000000000000000000"},
@@ -60,6 +79,10 @@ int main(int argc, char **argv) {
   auto statistics = [&] { return system.transport_statistics(); };
   if (statistics().state_messages != 0U) return 6;
   if (system.on_configure(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 7;
+  /**
+   * @brief 接收计数至少各3条且出现拒绝记录，但copy_state必须仍失败。
+   * 这条负向路径没有合法会话/授权，原始收到消息不能绕过反馈准入。
+   */
   const auto feedback_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while ((statistics().state_messages < 3U || statistics().status_messages < 3U) &&
          std::chrono::steady_clock::now() < feedback_deadline) std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -69,12 +92,20 @@ int main(int argc, char **argv) {
   if (system.copy_state(&snapshot)) return 8;
   if (system.read(rclcpp::Time(), rclcpp::Duration::from_nanoseconds(1000000)) !=
       hardware_interface::return_type::OK) return 16;
+  /**
+   * @brief 以任意本地身份尝试J1目标：即使成功转入worker队列，也必须在授权检查中被拒绝。
+   * 这不是给真实设备的允许运动测试。
+   */
   system.submit_control_update({1U, 2U, 3U, 4U, 5U}, {0.25, NAN, NAN, NAN, NAN, NAN});
   const bool transferred = system.transfer_control_update();
   const auto command_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (transferred && statistics().rejected_commands == 0U &&
          std::chrono::steady_clock::now() < command_deadline) std::this_thread::yield();
   if (transferred && statistics().rejected_commands == 0U) return 13;
+  /**
+   * @brief 错误生命周期置停机请求，cleanup等待worker收尾。
+   * 只断言stop_requests_sent=1、发送失败=0、commands_published=0；不把发送成功升级为远端Stop完成。
+   */
   system.on_error(rclcpp_lifecycle::State());
   system.on_cleanup(rclcpp_lifecycle::State());
   std::fprintf(stderr, "stop sent=%llu failed=%llu commands=%llu\n",

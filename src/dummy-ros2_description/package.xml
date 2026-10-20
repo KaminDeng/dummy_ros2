@@ -1,23 +1,39 @@
 <?xml version="1.0"?>
+<!--
+@file package.xml
+@brief 描述资源包的ROS格式3元数据；ament_python安装入口在setup.py。
+-->
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
+<!--
+包名必须与ament资源marker及share目录一致；version是包版本，不是Dummy线协议版本。
+-->
 <name>dummy-ros2_description</name>
   <version>0.0.0</version>
 <description>The dummy-ros2_description package</description>
   <maintainer email="xin.li@switchpi.com">Muzixiaowen</maintainer>
   <license>TODO: License declaration</license>
 
+<!--
+Xacro展开模型，RSP读取关节状态发布TF；joint_state_publisher及GUI用于软件显示，均不是DPSDK真机控制端口。
+-->
   <depend>xacro</depend>
   <depend>rviz2</depend>
   <depend>robot_state_publisher</depend>
   <depend>joint_state_publisher</depend>
   <depend>joint_state_publisher_gui</depend>
 
+<!--
+代码风格/版权/Python测试依赖，只声明依赖而不等于已运行全部测试。
+-->
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
+<!--
+导出ament_python构建类型；实际资源/包安装列表见setup.py。
+-->
   <export>
     <build_type>ament_python</build_type>
   </export>

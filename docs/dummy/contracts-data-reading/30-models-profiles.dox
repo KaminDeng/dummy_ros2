@@ -1,0 +1,652 @@
+/**
+@page ros_contract_models_profiles 模型坐标、profile 与限制
+
+
+@section model_coordinate_contract 坐标与缩放先读
+
+关节模型角 `q` 用rad，电机圈 `m` 用motor rev。带独立锚 `(q0,m0)` 的数学映射为 `m=m0+direction×gear_ratio×(q-q0)/(2π)`，反向为 `q=q0+direction×(m-m0)×2π/gear_ratio`。这里只解释坐标量纲；人工显示锚不能安装设备reference/session，不能自动授权运动。
+
+`slot=0`对应Joint1、`can_node=1`与mask bit0；旧node-index completion位图是另一编码。`legacy_init_deg`不是当前设备零位。当前GUI/bench Home常用J3=π/2，而旧FK固定病例名home是六个0；名称不能代坐标值。
+
+@section model_snapshot_differences 原件间不可混合的差异
+
+| 内容分支 | J2方向 | 六轴gear ratio | J5模型限位 | 范围 |
+| --- | --- | --- | --- | --- |
+| v1 model `b1ebe5…` | +1 | 50,30,30,24,30,50 | ±120deg | 旧设计种子，物理标定false |
+| 当前v2 base `bbbfbf…` | -1 | 全50 | ±100deg | 当前base contract原身份 |
+| APP/application/trusted模型 `5f222c…` | -1 | 全50 | ±120deg | 冻结软件/候选身份，非当前base模型等价物 |
+| legacy2.4 base/candidate `a2ed01…` | +1 | 全50 | ±120deg | 历史原件，不借用当前方向/限位 |
+
+legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct drive 1:1；其manifest的capability中J6也曾写1。原件存在这些来源层差异，本页全部保留，不替它们“修成一致”或据旧note选当前缩放。当前base/provenance也有±100/±120的J5差异；必须使用同bundle/hash的整体数据。
+
+当前base Rest `[0,-π/3,2.8618618,0,0,0]`沿旧Home→边界Rest内收；legacy Rest `[0,-73deg,π,0,0,0]`在边界。`.1deg`反馈margin只管已声明低速无负载反馈，不修改目标限位、碰撞场景或物理资格。
+
+名义速度`.5rad/s`还受电机cap `1.2rev/s×2π/50≈.150796rad/s`约束。历史J6 direct的数学更高上界不等已批准速度；CAN golden的3rev/s也仅离线示例。所有physical flags及实体motion许可按原件仍false。
+
+
+@section raw_4bf97f5ba919e7aa contracts/dummy_robot_v1/model/geometry_reference.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`4bf97f5ba919e7aac4599b8066423f825c6052df225257445f13fc679cf9133d`；805 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `kind` | `derived_math_reference_not_original_DH_table` | geometry派生类别，derived_math_reference明确不是原始DH实测表。 |
+| `convention` | `Rz(q+offset) Tz(d) Tx(a) Rx(alpha)` | Rz(q+offset) Tz(d) Tx(a) Rx(alpha)变换顺序；不能交换乘法次序。 |
+| `source` | `S24 actual FK vector expression` | 记录数学/历史源码来源，路径或名字本身不认证当前设备。 |
+| `verification_task` | `C02/R01` | 历史数学对齐任务编号，不代表当前重新运行。 |
+| `rows` | 6 项对象 | 派生几何参数行，仍需遵循convention与m/rad单位。 |
+| `rows[0].axis` | `1` | 此几何行的1-based轴编号，区别0-based slot。 |
+| `rows[0].offset_rad` | `0.0` | 几何关节角偏移rad，不等电机绝对圈数锚。 |
+| `rows[0].d_m` | `0.109` | 几何沿z平移m，来自数学表达式推导，不是此文档实测。 |
+| `rows[0].a_m` | `0.035` | 几何沿x平移m，可为负；Axis3 -0.052不能擅改成旧tmp_DH表。 |
+| `rows[0].alpha_rad` | `-1.5707963267948966` | 几何绕x扭角rad，和q/offset合用，不是关节位置限位。 |
+| `rows[1].axis` | `2` | 此几何行的1-based轴编号，区别0-based slot。 |
+| `rows[1].offset_rad` | `-1.5707963267948966` | 几何关节角偏移rad，不等电机绝对圈数锚。 |
+| `rows[1].d_m` | `0` | 几何沿z平移m，来自数学表达式推导，不是此文档实测。 |
+| `rows[1].a_m` | `0.146` | 几何沿x平移m，可为负；Axis3 -0.052不能擅改成旧tmp_DH表。 |
+| `rows[1].alpha_rad` | `0.0` | 几何绕x扭角rad，和q/offset合用，不是关节位置限位。 |
+| `rows[2].axis` | `3` | 此几何行的1-based轴编号，区别0-based slot。 |
+| `rows[2].offset_rad` | `1.5707963267948966` | 几何关节角偏移rad，不等电机绝对圈数锚。 |
+| `rows[2].d_m` | `0` | 几何沿z平移m，来自数学表达式推导，不是此文档实测。 |
+| `rows[2].a_m` | `-0.052` | 几何沿x平移m，可为负；Axis3 -0.052不能擅改成旧tmp_DH表。 |
+| `rows[2].alpha_rad` | `1.5707963267948966` | 几何绕x扭角rad，和q/offset合用，不是关节位置限位。 |
+| `rows[3].axis` | `4` | 此几何行的1-based轴编号，区别0-based slot。 |
+| `rows[3].offset_rad` | `0.0` | 几何关节角偏移rad，不等电机绝对圈数锚。 |
+| `rows[3].d_m` | `0.115` | 几何沿z平移m，来自数学表达式推导，不是此文档实测。 |
+| `rows[3].a_m` | `0` | 几何沿x平移m，可为负；Axis3 -0.052不能擅改成旧tmp_DH表。 |
+| `rows[3].alpha_rad` | `-1.5707963267948966` | 几何绕x扭角rad，和q/offset合用，不是关节位置限位。 |
+| `rows[4].axis` | `5` | 此几何行的1-based轴编号，区别0-based slot。 |
+| `rows[4].offset_rad` | `0.0` | 几何关节角偏移rad，不等电机绝对圈数锚。 |
+| `rows[4].d_m` | `0` | 几何沿z平移m，来自数学表达式推导，不是此文档实测。 |
+| `rows[4].a_m` | `0` | 几何沿x平移m，可为负；Axis3 -0.052不能擅改成旧tmp_DH表。 |
+| `rows[4].alpha_rad` | `1.5707963267948966` | 几何绕x扭角rad，和q/offset合用，不是关节位置限位。 |
+| `rows[5].axis` | `6` | 此几何行的1-based轴编号，区别0-based slot。 |
+| `rows[5].offset_rad` | `0.0` | 几何关节角偏移rad，不等电机绝对圈数锚。 |
+| `rows[5].d_m` | `0.072` | 几何沿z平移m，来自数学表达式推导，不是此文档实测。 |
+| `rows[5].a_m` | `0` | 几何沿x平移m，可为负；Axis3 -0.052不能擅改成旧tmp_DH表。 |
+| `rows[5].alpha_rad` | `0.0` | 几何绕x扭角rad，和q/offset合用，不是关节位置限位。 |
+| `warning` | `Axis3 d=0,a=-0.052 is derived from actual FK, not a literal copy of legacy tmp_DH_matrix. Do not present as measured geometry.` | 原件明示的范围/反例说明，属于历史证据，不转成当前授权。 |
+
+@section raw_b1ebe5560acc25ae contracts/dummy_robot_v1/model/model.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`b1ebe5560acc25ae9d02ecdbef37cf4c81bf8bb05f1e174e041faf8cde07e0f5`；1737 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键 | 原值 | 意义/边界 |
+| --- | --- | --- |
+| `contract_version` | `dummy_robot_v1` | 模型文档历史版本字符串；v2目录仍可写dummy_robot_v1，不能仅凭此字段或路径代替原SHA选择模型。 |
+| `artifact_kind` | `design_seed_not_runtime_config` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source` | `dummy_code.zip / DummyRobot constructor / S21,S23` | 记录数学/历史源码来源，路径或名字本身不认证当前设备。 |
+| `joint_names` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 六轴固定顺序Joint1..Joint6，数组/slot/bit必须同序，不能按CAN node旧位图混用。 |
+| `axis_mask_definition` | `bit0=Joint1; differs from legacy node-index completion bitmap` | bit0=Joint1；明确区别旧node-index completion bitmap。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+
+| 轴 | slot | CAN node | 方向 | 减速比 | 旧限位deg | 模型限位rad | 旧init deg | 物理方向已核 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Joint1 | 0 | 1 | -1 | 50 | [-170,170] | [-2.9670597283903604,2.9670597283903604] | 0 | False |
+| Joint2 | 1 | 2 | 1 | 30 | [-73,90] | [-1.2740903539558606,1.5707963267948966] | -73 | False |
+| Joint3 | 2 | 3 | -1 | 30 | [35,180] | [0.6108652381980153,3.141592653589793] | 180 | False |
+| Joint4 | 3 | 4 | 1 | 24 | [-180,180] | [-3.141592653589793,3.141592653589793] | 0 | False |
+| Joint5 | 4 | 5 | -1 | 30 | [-120,120] | [-2.0943951023931953,2.0943951023931953] | 0 | False |
+| Joint6 | 5 | 6 | -1 | 50 | [-720,720] | [-12.566370614359172,12.566370614359172] | 0 | False |
+
+每列作用：`name`：明确关节名字，不按列表外部重排自动修正。；`slot`：0-based模型数组下标，0..5对应Joint1..6，不是CAN node号。；`can_node`：CAN节点编号；当前六轴列1..6，和slot/bit起点不同。；`direction`：关节角增量与motor圈增量符号，±1无单位；不能从旧模型跨版本借用。；`gear_ratio`：motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。；`legacy_limits_deg`：历史角度限位，单位deg，用作来源说明而不是当前原生rad指令。；`model_limits_rad`：模型关节rad范围；不是motor圈数、参考锚或已测物理安全极限。；`legacy_init_deg`：旧软件数学初值deg，不是当前设备零位/可自动发送Home命令。；`physical_direction_verified`：该轴物理正方向是否已核；false时direction只是设计/历史映射声明。。
+
+@section raw_facc243a92779d6f contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac`；637 B；5 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `profile_name` | `f405_j1_bench` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `source_seed_sha256` | `6cb0db199ba9341b513153c0662078bbf4e16ab433c0f555556a8a8f435bcfe0` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `artifact_kind` | `design_seed_default_deny` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `active_axes` | `["Joint1"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `configured_mask` | `1` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
+| `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_supported` | `false` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
+| `motion_permitted` | `false` | 本原件是否允许运动，v1模板false；结构验证也不替设备授权。 |
+| `reference_kind` | `INVALID` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `compiled_policy_template` | `../f405_j1_policy.template.json` | 未填安全数值/身份的policy模板引用，不能直接当可编译的已批准策略。 |
+| `activation_template` | `../f405_j1_activation.template.json` | 待独立审核绑定设备/固件/时间/证据的模板引用，不能由profile自动激活。 |
+| `note` | `No safety numbers inferred. Passive communications/read-only allowed; candidate policy compilation and current manual permit required for any motion.` | 人读说明/限制；部分policy canonical hash明确排除顶层note，原文件SHA仍包含它。 |
+| `profile_id` | `101` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_6553078601365a93 contracts/dummy_robot_v1/profiles/f405_j1_passive.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`6553078601365a93cba86ab8a2a7f0b4a244cf7b196dccae759df834690df98c`；639 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `profile_name` | `f405_j1_passive` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `source_seed_sha256` | `671dc9349df010a26845348bf816953765b8702ac8560e2737459596f2091695` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `artifact_kind` | `design_seed_default_deny` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `active_axes` | `["Joint1"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `configured_mask` | `1` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
+| `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_supported` | `false` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
+| `motion_permitted` | `false` | 本原件是否允许运动，v1模板false；结构验证也不替设备授权。 |
+| `reference_kind` | `INVALID` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `compiled_policy_template` | `../f405_j1_policy.template.json` | 未填安全数值/身份的policy模板引用，不能直接当可编译的已批准策略。 |
+| `activation_template` | `../f405_j1_activation.template.json` | 待独立审核绑定设备/固件/时间/证据的模板引用，不能由profile自动激活。 |
+| `note` | `No safety numbers inferred. Passive communications/read-only allowed; candidate policy compilation and current manual permit required for any motion.` | 人读说明/限制；部分policy canonical hash明确排除顶层note，原文件SHA仍包含它。 |
+| `profile_id` | `100` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_699f78969aee4696 contracts/dummy_robot_v1/profiles/gazebo_6dof.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`699f78969aee46961e353459a0d360f733a3c55d85eb420a13d48a8481f9ba7f`；2030 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_seed_sha256` | `1f655ef12e9251790459cca8ffebf43d640ab0374e34e7d11ee6b842e7c79368` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
+| `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
+| `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.command_timeout_us` | `100000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.freshness_ticket_window_us` | `50000` | 新鲜票据可用窗口µs，重复同票不重置首次接收锚。 |
+| `timing.can_feedback_timeout_us` | `100000` | 逐轴反馈超时预算µs，不代表实际反馈样本数。 |
+| `timing.stationary_window_us` | `200000` | 静止判断采样窗µs，必须真实不同样本并同时满足容差。 |
+| `timing.stop_max_duration_us` | `1500000` | Stop预算µs；不是仅看最终Idle或放宽成应用总时长。 |
+| `timing.trial_max_duration_us` | `10000000` | 试用总预算µs，与单goal、session lease、permit预算不同。 |
+| `timing.first_sample_timeout_us` | `100000` | 开始/保持首样本屏障超时µs，接纳请求后仍需验证首拍。 |
+| `timing.max_can_tx_residence_us` | `10000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `timing.tracking_error_window_us` | `200000` | 跟踪误差监督窗µs，不是轨迹总时长。 |
+| `timing.max_control_dt_us` | `20000` | 允许控制步长/间隔上限µs，Host wall与设备时钟不直接混算。 |
+| `timing.state_publish_period_us` | `10000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.state_query_refresh_us` | `20000` | 只读State查询刷新周期µs，不等可重发管理mutation。 |
+| `timing.completion_max_duration_us` | `2000000` | v1/SIL完成屏障预算µs，和profile completion_timeout_us别名须按读者合同分清。 |
+| `capacity` | 对象 | 固定槽位/保留期/最小样本约束，数量不等资源测量或运行期无耗尽。 |
+| `capacity.ticket_ring_slots` | `64` | 票据环槽位数，要和发布周期及活票窗口交叉检查防覆盖。 |
+| `capacity.management_client_slots` | `4` | 并发管理client槽数，不是系统允许所有Host数。 |
+| `capacity.operation_result_slots` | `16` | 可缓存操作结果槽数，缓存有保留期/容量，不能永久Query。 |
+| `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
+| `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
+| `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
+| `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
+| `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
+| `simulation.tracking_time_constant_s` | `0.04` | 一阶软件跟踪时间常数s，不是实测电机惯性/闭环带宽。 |
+| `simulation.max_tracking_error_rad` | `0.15` | 模型位置跟踪误差阈rad，需有效反馈/窗口，不能靠mask外轴零值通过。 |
+| `simulation.max_feedback_step_rad` | `0.1` | 相邻反馈允许最大关节rad跳变，独立于trajectory目标单步界限。 |
+| `simulation.seed` | `20260914` | 确定性随机seed，用于复现软件数据，不是硬件随机性/多次独立实机运行证明。 |
+| `simulation.first_sample_position_tolerance_rad` | `0.02` | 首样本相对当前保持/参考位置容差rad，接纳不替首拍一致性。 |
+| `simulation.hold_position_tolerance_rad` | `0.001` | 保持位置容差rad，APP候选.003，不能用无速度有效位证明静止。 |
+| `simulation.tracking_uncertainty_margin_rad` | `0.05` | 停止包络附加不确定性rad余量，不是碰撞几何膨胀量。 |
+| `simulation.stop_max_distance_rad` | `0.2` | 允许数学Stop总行程rad，需比较延迟+制动距离+不确定性，不等已测机械停车距离。 |
+| `simulation.max_trial_travel_rad` | `0.3` | 单次试用累计关节行程限制rad，区别模型位置上下界。 |
+| `simulation.stationary_position_tolerance_rad` | `0.003` | 静止窗位置漂移容差rad，需窗口内不同有效样本。 |
+| `simulation.stationary_velocity_tolerance_rad_s` | `0.01` | 静止估计速度容差rad/s，缺有效速度不应填0通过。 |
+| `simulation.can_velocity_cap_rev_s` | `[1.5,1.5,1.5,1.2,1.5,2.5]` | 历史policy motor速度cap rev/s，必须经gear ratio转关节rad/s，非同名关节速度。 |
+| `remark` | `CI values only. Use model limits per active joint. This is not a real activation artifact and is rejected by the real validator.` | 人读CI/设计范围说明，不能凭PASS标签抹去未测限制。 |
+| `clock_policy` | `virtual monotonic in unit tests; real steady in interprocess SIL; never ROS /clock for device watchdog` | 单位测试可虚拟monotonic，跨进程SIL可steady；设备watchdog不能用ROS /clock。 |
+| `initial_model_position_rad` | `[0,0,1.5707963267948966,0,0,0]` | 软件初始模型关节rad数组，当前Home J3=π/2；不是旧legacy_init_deg或实机读回。 |
+| `seed_schema_status` | `DESIGN_ONLY: map into existing SDK profile generator during C01/C02; not an existing runtime format` | 明确设计种子并非既有runtime格式，不把YAML能解析等同设备可直接消费。 |
+| `profile_name` | `gazebo_6dof` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `uses_dpsdk_device` | `false` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `reference_kind` | `SIM_FIXED` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `profile_id` | `null` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_59e7a8cc580c9541 contracts/dummy_robot_v1/profiles/sil_6dof.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2`；2023 B；3 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_seed_sha256` | `ff1768b5bdc36dfad0d73ed25ae56862ea78bbd014af5fe7808eb7b274907f5c` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
+| `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
+| `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.command_timeout_us` | `100000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.freshness_ticket_window_us` | `50000` | 新鲜票据可用窗口µs，重复同票不重置首次接收锚。 |
+| `timing.can_feedback_timeout_us` | `100000` | 逐轴反馈超时预算µs，不代表实际反馈样本数。 |
+| `timing.stationary_window_us` | `200000` | 静止判断采样窗µs，必须真实不同样本并同时满足容差。 |
+| `timing.stop_max_duration_us` | `1500000` | Stop预算µs；不是仅看最终Idle或放宽成应用总时长。 |
+| `timing.trial_max_duration_us` | `10000000` | 试用总预算µs，与单goal、session lease、permit预算不同。 |
+| `timing.first_sample_timeout_us` | `100000` | 开始/保持首样本屏障超时µs，接纳请求后仍需验证首拍。 |
+| `timing.max_can_tx_residence_us` | `10000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `timing.tracking_error_window_us` | `200000` | 跟踪误差监督窗µs，不是轨迹总时长。 |
+| `timing.max_control_dt_us` | `20000` | 允许控制步长/间隔上限µs，Host wall与设备时钟不直接混算。 |
+| `timing.state_publish_period_us` | `10000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.state_query_refresh_us` | `20000` | 只读State查询刷新周期µs，不等可重发管理mutation。 |
+| `timing.completion_max_duration_us` | `2000000` | v1/SIL完成屏障预算µs，和profile completion_timeout_us别名须按读者合同分清。 |
+| `capacity` | 对象 | 固定槽位/保留期/最小样本约束，数量不等资源测量或运行期无耗尽。 |
+| `capacity.ticket_ring_slots` | `64` | 票据环槽位数，要和发布周期及活票窗口交叉检查防覆盖。 |
+| `capacity.management_client_slots` | `4` | 并发管理client槽数，不是系统允许所有Host数。 |
+| `capacity.operation_result_slots` | `16` | 可缓存操作结果槽数，缓存有保留期/容量，不能永久Query。 |
+| `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
+| `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
+| `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
+| `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
+| `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
+| `simulation.tracking_time_constant_s` | `0.04` | 一阶软件跟踪时间常数s，不是实测电机惯性/闭环带宽。 |
+| `simulation.max_tracking_error_rad` | `0.15` | 模型位置跟踪误差阈rad，需有效反馈/窗口，不能靠mask外轴零值通过。 |
+| `simulation.max_feedback_step_rad` | `0.1` | 相邻反馈允许最大关节rad跳变，独立于trajectory目标单步界限。 |
+| `simulation.seed` | `20260914` | 确定性随机seed，用于复现软件数据，不是硬件随机性/多次独立实机运行证明。 |
+| `simulation.first_sample_position_tolerance_rad` | `0.02` | 首样本相对当前保持/参考位置容差rad，接纳不替首拍一致性。 |
+| `simulation.hold_position_tolerance_rad` | `0.001` | 保持位置容差rad，APP候选.003，不能用无速度有效位证明静止。 |
+| `simulation.tracking_uncertainty_margin_rad` | `0.05` | 停止包络附加不确定性rad余量，不是碰撞几何膨胀量。 |
+| `simulation.stop_max_distance_rad` | `0.2` | 允许数学Stop总行程rad，需比较延迟+制动距离+不确定性，不等已测机械停车距离。 |
+| `simulation.max_trial_travel_rad` | `0.3` | 单次试用累计关节行程限制rad，区别模型位置上下界。 |
+| `simulation.stationary_position_tolerance_rad` | `0.003` | 静止窗位置漂移容差rad，需窗口内不同有效样本。 |
+| `simulation.stationary_velocity_tolerance_rad_s` | `0.01` | 静止估计速度容差rad/s，缺有效速度不应填0通过。 |
+| `simulation.can_velocity_cap_rev_s` | `[1.5,1.5,1.5,1.2,1.5,2.5]` | 历史policy motor速度cap rev/s，必须经gear ratio转关节rad/s，非同名关节速度。 |
+| `remark` | `CI values only. Use model limits per active joint. This is not a real activation artifact and is rejected by the real validator.` | 人读CI/设计范围说明，不能凭PASS标签抹去未测限制。 |
+| `clock_policy` | `virtual monotonic in unit tests; real steady in interprocess SIL; never ROS /clock for device watchdog` | 单位测试可虚拟monotonic，跨进程SIL可steady；设备watchdog不能用ROS /clock。 |
+| `initial_model_position_rad` | `[0,0,1.5707963267948966,0,0,0]` | 软件初始模型关节rad数组，当前Home J3=π/2；不是旧legacy_init_deg或实机读回。 |
+| `seed_schema_status` | `DESIGN_ONLY: map into existing SDK profile generator during C01/C02; not an existing runtime format` | 明确设计种子并非既有runtime格式，不把YAML能解析等同设备可直接消费。 |
+| `profile_name` | `sil_6dof` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `reference_kind` | `SIM_FIXED` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `profile_id` | `1` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_765311d93bfdeddb contracts/dummy_robot_v1/profiles/sil_j1.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c`；1982 B；5 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_seed_sha256` | `56ff12aa200887712241ad71e6f394962ff5f8d8420385f55579c9df76927e34` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
+| `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `active_axes` | `["Joint1"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
+| `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.command_timeout_us` | `100000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.freshness_ticket_window_us` | `50000` | 新鲜票据可用窗口µs，重复同票不重置首次接收锚。 |
+| `timing.can_feedback_timeout_us` | `100000` | 逐轴反馈超时预算µs，不代表实际反馈样本数。 |
+| `timing.stationary_window_us` | `200000` | 静止判断采样窗µs，必须真实不同样本并同时满足容差。 |
+| `timing.stop_max_duration_us` | `1500000` | Stop预算µs；不是仅看最终Idle或放宽成应用总时长。 |
+| `timing.trial_max_duration_us` | `10000000` | 试用总预算µs，与单goal、session lease、permit预算不同。 |
+| `timing.first_sample_timeout_us` | `100000` | 开始/保持首样本屏障超时µs，接纳请求后仍需验证首拍。 |
+| `timing.max_can_tx_residence_us` | `10000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `timing.tracking_error_window_us` | `200000` | 跟踪误差监督窗µs，不是轨迹总时长。 |
+| `timing.max_control_dt_us` | `20000` | 允许控制步长/间隔上限µs，Host wall与设备时钟不直接混算。 |
+| `timing.state_publish_period_us` | `10000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.state_query_refresh_us` | `20000` | 只读State查询刷新周期µs，不等可重发管理mutation。 |
+| `timing.completion_max_duration_us` | `2000000` | v1/SIL完成屏障预算µs，和profile completion_timeout_us别名须按读者合同分清。 |
+| `capacity` | 对象 | 固定槽位/保留期/最小样本约束，数量不等资源测量或运行期无耗尽。 |
+| `capacity.ticket_ring_slots` | `64` | 票据环槽位数，要和发布周期及活票窗口交叉检查防覆盖。 |
+| `capacity.management_client_slots` | `4` | 并发管理client槽数，不是系统允许所有Host数。 |
+| `capacity.operation_result_slots` | `16` | 可缓存操作结果槽数，缓存有保留期/容量，不能永久Query。 |
+| `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
+| `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
+| `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
+| `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
+| `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
+| `simulation.tracking_time_constant_s` | `0.04` | 一阶软件跟踪时间常数s，不是实测电机惯性/闭环带宽。 |
+| `simulation.max_tracking_error_rad` | `0.15` | 模型位置跟踪误差阈rad，需有效反馈/窗口，不能靠mask外轴零值通过。 |
+| `simulation.max_feedback_step_rad` | `0.1` | 相邻反馈允许最大关节rad跳变，独立于trajectory目标单步界限。 |
+| `simulation.seed` | `20260914` | 确定性随机seed，用于复现软件数据，不是硬件随机性/多次独立实机运行证明。 |
+| `simulation.first_sample_position_tolerance_rad` | `0.02` | 首样本相对当前保持/参考位置容差rad，接纳不替首拍一致性。 |
+| `simulation.hold_position_tolerance_rad` | `0.001` | 保持位置容差rad，APP候选.003，不能用无速度有效位证明静止。 |
+| `simulation.tracking_uncertainty_margin_rad` | `0.05` | 停止包络附加不确定性rad余量，不是碰撞几何膨胀量。 |
+| `simulation.stop_max_distance_rad` | `0.2` | 允许数学Stop总行程rad，需比较延迟+制动距离+不确定性，不等已测机械停车距离。 |
+| `simulation.max_trial_travel_rad` | `0.3` | 单次试用累计关节行程限制rad，区别模型位置上下界。 |
+| `simulation.stationary_position_tolerance_rad` | `0.003` | 静止窗位置漂移容差rad，需窗口内不同有效样本。 |
+| `simulation.stationary_velocity_tolerance_rad_s` | `0.01` | 静止估计速度容差rad/s，缺有效速度不应填0通过。 |
+| `simulation.can_velocity_cap_rev_s` | `[1.5,1.5,1.5,1.2,1.5,2.5]` | 历史policy motor速度cap rev/s，必须经gear ratio转关节rad/s，非同名关节速度。 |
+| `remark` | `CI values only. Use model limits per active joint. This is not a real activation artifact and is rejected by the real validator.` | 人读CI/设计范围说明，不能凭PASS标签抹去未测限制。 |
+| `clock_policy` | `virtual monotonic in unit tests; real steady in interprocess SIL; never ROS /clock for device watchdog` | 单位测试可虚拟monotonic，跨进程SIL可steady；设备watchdog不能用ROS /clock。 |
+| `initial_model_position_rad` | `[0]` | 软件初始模型关节rad数组，当前Home J3=π/2；不是旧legacy_init_deg或实机读回。 |
+| `seed_schema_status` | `DESIGN_ONLY: map into existing SDK profile generator during C01/C02; not an existing runtime format` | 明确设计种子并非既有runtime格式，不把YAML能解析等同设备可直接消费。 |
+| `profile_name` | `sil_j1` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `reference_kind` | `BENCH_SESSION` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `bench_position_range_rad` | `[-0.5,0.5]` | SIL台架相对范围rad，仅该profile软件行为边界，不替整机模型限位。 |
+| `profile_id` | `2` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_bbbfbf070281a2e6 contracts/dummy_robot_v2/model/model.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`bbbfbf070281a2e63a09061830d6dc79a9e1d7206e1e4754c53a0fc8545bdfb0`；1738 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键 | 原值 | 意义/边界 |
+| --- | --- | --- |
+| `contract_version` | `dummy_robot_v1` | 模型文档历史版本字符串；v2目录仍可写dummy_robot_v1，不能仅凭此字段或路径代替原SHA选择模型。 |
+| `artifact_kind` | `design_seed_not_runtime_config` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source` | `dummy_code.zip / DummyRobot constructor / S21,S23` | 记录数学/历史源码来源，路径或名字本身不认证当前设备。 |
+| `joint_names` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 六轴固定顺序Joint1..Joint6，数组/slot/bit必须同序，不能按CAN node旧位图混用。 |
+| `axis_mask_definition` | `bit0=Joint1; differs from legacy node-index completion bitmap` | bit0=Joint1；明确区别旧node-index completion bitmap。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+
+| 轴 | slot | CAN node | 方向 | 减速比 | 旧限位deg | 模型限位rad | 旧init deg | 物理方向已核 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Joint1 | 0 | 1 | -1 | 50 | [-170,170] | [-2.9670597283903604,2.9670597283903604] | 0 | False |
+| Joint2 | 1 | 2 | -1 | 50 | [-73,90] | [-1.2740903539558606,1.5707963267948966] | -73 | False |
+| Joint3 | 2 | 3 | -1 | 50 | [35,180] | [0.6108652381980153,3.141592653589793] | 180 | False |
+| Joint4 | 3 | 4 | 1 | 50 | [-180,180] | [-3.141592653589793,3.141592653589793] | 0 | False |
+| Joint5 | 4 | 5 | -1 | 50 | [-100,100] | [-1.7453292519943295,1.7453292519943295] | 0 | False |
+| Joint6 | 5 | 6 | -1 | 50 | [-720,720] | [-12.566370614359172,12.566370614359172] | 0 | False |
+
+每列作用：`name`：明确关节名字，不按列表外部重排自动修正。；`slot`：0-based模型数组下标，0..5对应Joint1..6，不是CAN node号。；`can_node`：CAN节点编号；当前六轴列1..6，和slot/bit起点不同。；`direction`：关节角增量与motor圈增量符号，±1无单位；不能从旧模型跨版本借用。；`gear_ratio`：motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。；`legacy_limits_deg`：历史角度限位，单位deg，用作来源说明而不是当前原生rad指令。；`model_limits_rad`：模型关节rad范围；不是motor圈数、参考锚或已测物理安全极限。；`legacy_init_deg`：旧软件数学初值deg，不是当前设备零位/可自动发送Home命令。；`physical_direction_verified`：该轴物理正方向是否已核；false时direction只是设计/历史映射声明。。
+
+@section raw_4079ab9a8ef2bcec contracts/dummy_robot_v2/profiles/f405_6dof_bench.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`4079ab9a8ef2bcecfc0bd06d9de7a6f6cd503cb6a00458b7b129e3ff2a0ecb51`；2087 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `profile_name` | `f405_6dof_bench` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `artifact_kind` | `design_seed_default_deny` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_seed` | `dummy_robot_v2/model/model.yaml` | 来源路径字符串；相对解析基准仍需对应loader合同，不在此自动修链接。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+| `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
+| `can_nodes` | `[1,2,3,4,5,6]` | 六轴CAN节点顺序，须同joint_names/slots，不能只核集合忽略映射。 |
+| `gear_ratio` | `50` | motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。 |
+| `gear_ratios` | `[50,50,50,50,50,50]` | 六个逐轴减速比，和model逐轴交叉核，旧uniform alias不得覆盖。 |
+| `home_joint_positions_rad` | `[0.0,0.0,1.5707963267948966,0.0,0.0,0.0]` | 该profile命名Home的模型rad数组，软件/人工确认语义，不能自动下发。 |
+| `rest_joint_positions_rad` | `[0.0,-1.0471975511965976,2.861861800872894,0.0,0.0,0.0]` | 该profileRest模型rad数组；当前内收Rest和legacy边界Rest不同，不能共用历史规划信用。 |
+| `feedback_soft_limit_margin_deg` | `0.1` | 当前低速无负载反馈软边界带deg=.1，仅反馈判断余量，不放宽目标模型限位。 |
+| `reference_kind` | `BENCH_SESSION` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.state_publish_period_us` | `50000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.command_timeout_us` | `1000000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.completion_timeout_us` | `3000000` | bench profile完成收尾超时µs，旧顶层timing别名保留，不自动当新字段缺省值。 |
+| `timing.max_can_tx_residence_us` | `250000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `state_publish_period_us` | `50000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `command_timeout_us` | `1000000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `completion_timeout_us` | `3000000` | bench profile完成收尾超时µs，旧顶层timing别名保留，不自动当新字段缺省值。 |
+| `max_can_tx_residence_us` | `250000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `limits` | 对象 | 位置/速度/加速度/停止等候选数值，必须和逐轴model及policy合取，不是全局安全证书。 |
+| `limits.velocity_max_rad_s` | `[0.5,0.5,0.5,0.5,0.5,0.5]` | 声明关节速度rad/s，和motor cap换算后的effective上限一起取约束。 |
+| `limits.acceleration_max_rad_s2` | `[1.0,1.0,1.0,1.0,1.0,1.0]` | 声明加速度rad/s²；APP标明advisory only，不能写成设备已实际强制。 |
+| `limits.position_min_rad` | `[-2.9670597,-1.2740904,0.6108652,-3.1415927,-1.7453293,-12.5663706]` | 模型/策略关节位置下限rad，区别relative trial范围、电机圈锚及反馈margin。 |
+| `limits.position_max_rad` | `[2.9670597,1.5707963,3.1415927,3.1415927,1.7453293,12.5663706]` | 模型/策略关节位置上限rad，有限/shape正确不证明避碰。 |
+| `limits.can_velocity_cap_motor_rev_s` | `1.2` | profile的motor rev/s cap；1.2rev/s与1:50数学上界约.1508rad/s，仍非硬件资格。 |
+| `limits.effective_joint_velocity_cap_rad_s` | `0.15079644737231007` | 经motor cap/gear ratio算出的保守关节上界rad/s，不是所有轴已测安全速度。 |
+| `note` | `First-stage six-axis bench profile. All six axes use the installed 1:50 reducers. The selected joint velocity cap remains 0.1508 rad/s on all axes; The selected cap and all physical qualification flags remain unchanged. Human Home confirmation remains a final experience check; no EEPROM writes are performed.` | 人读说明/限制；部分policy canonical hash明确排除顶层note，原文件SHA仍包含它。 |
+| `profile_id` | `201` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_5f222ca6d5bb46e4 contracts/dummy_robot_v2_application_hold_no_load_candidate/model/model.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14`；1738 B；3 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键 | 原值 | 意义/边界 |
+| --- | --- | --- |
+| `contract_version` | `dummy_robot_v1` | 模型文档历史版本字符串；v2目录仍可写dummy_robot_v1，不能仅凭此字段或路径代替原SHA选择模型。 |
+| `artifact_kind` | `design_seed_not_runtime_config` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source` | `dummy_code.zip / DummyRobot constructor / S21,S23` | 记录数学/历史源码来源，路径或名字本身不认证当前设备。 |
+| `joint_names` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 六轴固定顺序Joint1..Joint6，数组/slot/bit必须同序，不能按CAN node旧位图混用。 |
+| `axis_mask_definition` | `bit0=Joint1; differs from legacy node-index completion bitmap` | bit0=Joint1；明确区别旧node-index completion bitmap。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+
+| 轴 | slot | CAN node | 方向 | 减速比 | 旧限位deg | 模型限位rad | 旧init deg | 物理方向已核 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Joint1 | 0 | 1 | -1 | 50 | [-170,170] | [-2.9670597283903604,2.9670597283903604] | 0 | False |
+| Joint2 | 1 | 2 | -1 | 50 | [-73,90] | [-1.2740903539558606,1.5707963267948966] | -73 | False |
+| Joint3 | 2 | 3 | -1 | 50 | [35,180] | [0.6108652381980153,3.141592653589793] | 180 | False |
+| Joint4 | 3 | 4 | 1 | 50 | [-180,180] | [-3.141592653589793,3.141592653589793] | 0 | False |
+| Joint5 | 4 | 5 | -1 | 50 | [-120,120] | [-2.0943951023931953,2.0943951023931953] | 0 | False |
+| Joint6 | 5 | 6 | -1 | 50 | [-720,720] | [-12.566370614359172,12.566370614359172] | 0 | False |
+
+每列作用：`name`：明确关节名字，不按列表外部重排自动修正。；`slot`：0-based模型数组下标，0..5对应Joint1..6，不是CAN node号。；`can_node`：CAN节点编号；当前六轴列1..6，和slot/bit起点不同。；`direction`：关节角增量与motor圈增量符号，±1无单位；不能从旧模型跨版本借用。；`gear_ratio`：motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。；`legacy_limits_deg`：历史角度限位，单位deg，用作来源说明而不是当前原生rad指令。；`model_limits_rad`：模型关节rad范围；不是motor圈数、参考锚或已测物理安全极限。；`legacy_init_deg`：旧软件数学初值deg，不是当前设备零位/可自动发送Home命令。；`physical_direction_verified`：该轴物理正方向是否已核；false时direction只是设计/历史映射声明。。
+
+@section raw_90e5a970cd213a2c contracts/dummy_robot_v2_application_hold_no_load_candidate/profiles/f405_6dof_bench.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`90e5a970cd213a2c40cc92242b512d4b608657912a19f02189c524e74a67b0a4`；1103 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `profile_name` | `f405_6dof_bench` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `artifact_kind` | `application_hold_no_load_candidate` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_policy` | `policy/application_hold_no_load.json` | 来源策略路径/角色，绝对开发路径是冻结provenance，不保证当前机器仍可加载。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+| `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
+| `can_nodes` | `[1,2,3,4,5,6]` | 六轴CAN节点顺序，须同joint_names/slots，不能只核集合忽略映射。 |
+| `gear_ratio` | `50` | motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。 |
+| `reference_kind` | `BENCH_SESSION` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `deployment_stop_policy` | `APPLICATION_HOLD` | APPLICATION_HOLD表示运动完成可保Hold，后续独立release；不能当所有终态都Disarmed。 |
+| `no_load_bench` | `true` | 仅无负载台架声明，true不证明实际负载不存在，需独立操作/设备门。 |
+| `gravity_loaded` | `false` | 是否重力负载类别，候选false，不允许把无负载release规则用于承重机械臂。 |
+| `safe_terminal_action` | `DisableAndReleaseNoLoadBench` | 此candidate指定DisableAndReleaseNoLoadBench，限no-load上下文，不是普适机械安全动作。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `20000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.state_publish_period_us` | `20000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.command_timeout_us` | `5000000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.max_can_tx_residence_us` | `100000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `timing.session_lease_us` | `30000000` | 会话租期µs，APP候选30000000=30s；需独立续租与原提交锚，非660s总试用许可。 |
+| `timing.max_goal_duration_us` | `10000000` | 单goal上限µs；候选10000000=10s，不能因trial660s就声称可跑600s单goal。 |
+| `timing.local_hold_budget_us` | `5000000` | 本地Hold阶段预算µs，候选5000000=5s，不自动覆盖重力负载或长时物理保持。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation.velocity_limit_rad_s` | `0.15079644737231007` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
+| `simulation.acceleration_limit_rad_s2` | `1.0` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
+| `simulation.max_tracking_error_rad` | `0.05` | 模型位置跟踪误差阈rad，需有效反馈/窗口，不能靠mask外轴零值通过。 |
+| `simulation.hold_position_tolerance_rad` | `0.003` | 保持位置容差rad，APP候选.003，不能用无速度有效位证明静止。 |
+| `profile_id` | `201` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+| `gear_ratios` | `[50,50,50,50,50,50]` | 六个逐轴减速比，和model逐轴交叉核，旧uniform alias不得覆盖。 |
+
+@section raw_a2ed010f4a5e3d49 contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713`；1737 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键 | 原值 | 意义/边界 |
+| --- | --- | --- |
+| `contract_version` | `dummy_robot_v1` | 模型文档历史版本字符串；v2目录仍可写dummy_robot_v1，不能仅凭此字段或路径代替原SHA选择模型。 |
+| `artifact_kind` | `design_seed_not_runtime_config` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source` | `dummy_code.zip / DummyRobot constructor / S21,S23` | 记录数学/历史源码来源，路径或名字本身不认证当前设备。 |
+| `joint_names` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 六轴固定顺序Joint1..Joint6，数组/slot/bit必须同序，不能按CAN node旧位图混用。 |
+| `axis_mask_definition` | `bit0=Joint1; differs from legacy node-index completion bitmap` | bit0=Joint1；明确区别旧node-index completion bitmap。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+
+| 轴 | slot | CAN node | 方向 | 减速比 | 旧限位deg | 模型限位rad | 旧init deg | 物理方向已核 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Joint1 | 0 | 1 | -1 | 50 | [-170,170] | [-2.9670597283903604,2.9670597283903604] | 0 | False |
+| Joint2 | 1 | 2 | 1 | 50 | [-73,90] | [-1.2740903539558606,1.5707963267948966] | -73 | False |
+| Joint3 | 2 | 3 | -1 | 50 | [35,180] | [0.6108652381980153,3.141592653589793] | 180 | False |
+| Joint4 | 3 | 4 | 1 | 50 | [-180,180] | [-3.141592653589793,3.141592653589793] | 0 | False |
+| Joint5 | 4 | 5 | -1 | 50 | [-120,120] | [-2.0943951023931953,2.0943951023931953] | 0 | False |
+| Joint6 | 5 | 6 | -1 | 50 | [-720,720] | [-12.566370614359172,12.566370614359172] | 0 | False |
+
+每列作用：`name`：明确关节名字，不按列表外部重排自动修正。；`slot`：0-based模型数组下标，0..5对应Joint1..6，不是CAN node号。；`can_node`：CAN节点编号；当前六轴列1..6，和slot/bit起点不同。；`direction`：关节角增量与motor圈增量符号，±1无单位；不能从旧模型跨版本借用。；`gear_ratio`：motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。；`legacy_limits_deg`：历史角度限位，单位deg，用作来源说明而不是当前原生rad指令。；`model_limits_rad`：模型关节rad范围；不是motor圈数、参考锚或已测物理安全极限。；`legacy_init_deg`：旧软件数学初值deg，不是当前设备零位/可自动发送Home命令。；`physical_direction_verified`：该轴物理正方向是否已核；false时direction只是设计/历史映射声明。。
+
+@section raw_9087f1b68042b72e contracts/dummy_robot_v2_legacy_2_4/profiles/f405_6dof_bench.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`9087f1b68042b72e9706d143ecfb2055ed28cddd16755a4f92dc508943194af7`；1857 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `profile_name` | `f405_6dof_bench` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `artifact_kind` | `design_seed_default_deny` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_seed` | `dummy_robot_v2/model/model.yaml` | 来源路径字符串；相对解析基准仍需对应loader合同，不在此自动修链接。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+| `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
+| `can_nodes` | `[1,2,3,4,5,6]` | 六轴CAN节点顺序，须同joint_names/slots，不能只核集合忽略映射。 |
+| `gear_ratio` | `50` | motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。 |
+| `gear_ratios` | `[50,50,50,50,50,50]` | 六个逐轴减速比，和model逐轴交叉核，旧uniform alias不得覆盖。 |
+| `home_joint_positions_rad` | `[0.0,0.0,1.5707963267948966,0.0,0.0,0.0]` | 该profile命名Home的模型rad数组，软件/人工确认语义，不能自动下发。 |
+| `rest_joint_positions_rad` | `[0.0,-1.2740903539558606,3.141592653589793,0.0,0.0,0.0]` | 该profileRest模型rad数组；当前内收Rest和legacy边界Rest不同，不能共用历史规划信用。 |
+| `reference_kind` | `BENCH_SESSION` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.state_publish_period_us` | `50000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.command_timeout_us` | `1000000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.completion_timeout_us` | `3000000` | bench profile完成收尾超时µs，旧顶层timing别名保留，不自动当新字段缺省值。 |
+| `timing.max_can_tx_residence_us` | `250000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `state_publish_period_us` | `50000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `command_timeout_us` | `1000000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `completion_timeout_us` | `3000000` | bench profile完成收尾超时µs，旧顶层timing别名保留，不自动当新字段缺省值。 |
+| `max_can_tx_residence_us` | `250000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `limits` | 对象 | 位置/速度/加速度/停止等候选数值，必须和逐轴model及policy合取，不是全局安全证书。 |
+| `limits.velocity_max_rad_s` | `[0.5,0.5,0.5,0.5,0.5,0.5]` | 声明关节速度rad/s，和motor cap换算后的effective上限一起取约束。 |
+| `limits.acceleration_max_rad_s2` | `[1.0,1.0,1.0,1.0,1.0,1.0]` | 声明加速度rad/s²；APP标明advisory only，不能写成设备已实际强制。 |
+| `limits.position_min_rad` | `[-2.9670597,-1.2740904,0.6108652,-3.1415927,-2.0943952,-12.5663706]` | 模型/策略关节位置下限rad，区别relative trial范围、电机圈锚及反馈margin。 |
+| `limits.position_max_rad` | `[2.9670597,1.5707963,3.1415927,3.1415927,2.0943952,12.5663706]` | 模型/策略关节位置上限rad，有限/shape正确不证明避碰。 |
+| `limits.can_velocity_cap_motor_rev_s` | `1.2` | profile的motor rev/s cap；1.2rev/s与1:50数学上界约.1508rad/s，仍非硬件资格。 |
+| `limits.effective_joint_velocity_cap_rad_s` | `0.15079644737231007` | 经motor cap/gear ratio算出的保守关节上界rad/s，不是所有轴已测安全速度。 |
+| `note` | `First-stage six-axis bench profile. J1-J5 retain 1:50 and J6 is direct drive 1:1. The selected joint velocity cap remains 0.1508 rad/s on all axes; J6's higher mathematical CAN upper bound is not qualified speed. Human Home confirmation remains a final experience check; no EEPROM writes are performed.` | 人读说明/限制；部分policy canonical hash明确排除顶层note，原文件SHA仍包含它。 |
+| `profile_id` | `201` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_08f7b2a5e475c9a3 contracts/dummy_robot_v2_legacy_2_4/profiles/sil_6dof.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb`；2066 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `artifact_kind` | `ci_only_design_seed` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_seed_sha256` | `ff1768b5bdc36dfad0d73ed25ae56862ea78bbd014af5fe7808eb7b274907f5c` | 历史设计seed来源SHA，不是当前运行固件或编译policy SHA。 |
+| `test_only` | `true` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `control_rate_hz` | `100` | 控制名义频率Hz，100Hz对应10ms；不是本记录实测调度频率。 |
+| `state_rate_hz` | `100` | 状态名义发布Hz；不能用Host到达速率证明设备周期。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.command_timeout_us` | `100000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.freshness_ticket_window_us` | `50000` | 新鲜票据可用窗口µs，重复同票不重置首次接收锚。 |
+| `timing.can_feedback_timeout_us` | `100000` | 逐轴反馈超时预算µs，不代表实际反馈样本数。 |
+| `timing.stationary_window_us` | `200000` | 静止判断采样窗µs，必须真实不同样本并同时满足容差。 |
+| `timing.stop_max_duration_us` | `1500000` | Stop预算µs；不是仅看最终Idle或放宽成应用总时长。 |
+| `timing.trial_max_duration_us` | `10000000` | 试用总预算µs，与单goal、session lease、permit预算不同。 |
+| `timing.first_sample_timeout_us` | `100000` | 开始/保持首样本屏障超时µs，接纳请求后仍需验证首拍。 |
+| `timing.max_can_tx_residence_us` | `10000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `timing.tracking_error_window_us` | `200000` | 跟踪误差监督窗µs，不是轨迹总时长。 |
+| `timing.max_control_dt_us` | `20000` | 允许控制步长/间隔上限µs，Host wall与设备时钟不直接混算。 |
+| `timing.state_publish_period_us` | `10000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.state_query_refresh_us` | `20000` | 只读State查询刷新周期µs，不等可重发管理mutation。 |
+| `timing.completion_max_duration_us` | `2000000` | v1/SIL完成屏障预算µs，和profile completion_timeout_us别名须按读者合同分清。 |
+| `capacity` | 对象 | 固定槽位/保留期/最小样本约束，数量不等资源测量或运行期无耗尽。 |
+| `capacity.ticket_ring_slots` | `64` | 票据环槽位数，要和发布周期及活票窗口交叉检查防覆盖。 |
+| `capacity.management_client_slots` | `4` | 并发管理client槽数，不是系统允许所有Host数。 |
+| `capacity.operation_result_slots` | `16` | 可缓存操作结果槽数，缓存有保留期/容量，不能永久Query。 |
+| `capacity.operation_retention_us` | `5000000` | 管理结果保留期µs，过期不得以NOT_FOUND补成功。 |
+| `capacity.permit_ledger_slots` | `8` | 已用permit去重ledger容量，64或8均不是无限防重放存储。 |
+| `capacity.minimum_stationary_samples` | `3` | 静止窗至少不同反馈样本数，重复读同seq不能凑数。 |
+| `simulation` | 对象 | 仅软件plant/限幅/跟踪参数，本批CI种子不作真实电机动态模型。 |
+| `simulation.velocity_limit_rad_s` | `0.25` | 仿真关节速度限幅rad/s，非motor rev/s或硬件批准速度。 |
+| `simulation.acceleration_limit_rad_s2` | `0.5` | 仿真加速度限幅rad/s²，不能当实机已强制验证。 |
+| `simulation.stop_deceleration_rad_s2` | `0.5` | Stop减速度候选rad/s²，用于数学停止包络，不是机械制动能力实测。 |
+| `simulation.tracking_time_constant_s` | `0.04` | 一阶软件跟踪时间常数s，不是实测电机惯性/闭环带宽。 |
+| `simulation.max_tracking_error_rad` | `0.15` | 模型位置跟踪误差阈rad，需有效反馈/窗口，不能靠mask外轴零值通过。 |
+| `simulation.max_feedback_step_rad` | `0.1` | 相邻反馈允许最大关节rad跳变，独立于trajectory目标单步界限。 |
+| `simulation.seed` | `20260914` | 确定性随机seed，用于复现软件数据，不是硬件随机性/多次独立实机运行证明。 |
+| `simulation.first_sample_position_tolerance_rad` | `0.02` | 首样本相对当前保持/参考位置容差rad，接纳不替首拍一致性。 |
+| `simulation.hold_position_tolerance_rad` | `0.001` | 保持位置容差rad，APP候选.003，不能用无速度有效位证明静止。 |
+| `simulation.tracking_uncertainty_margin_rad` | `0.05` | 停止包络附加不确定性rad余量，不是碰撞几何膨胀量。 |
+| `simulation.stop_max_distance_rad` | `0.2` | 允许数学Stop总行程rad，需比较延迟+制动距离+不确定性，不等已测机械停车距离。 |
+| `simulation.max_trial_travel_rad` | `0.3` | 单次试用累计关节行程限制rad，区别模型位置上下界。 |
+| `simulation.stationary_position_tolerance_rad` | `0.003` | 静止窗位置漂移容差rad，需窗口内不同有效样本。 |
+| `simulation.stationary_velocity_tolerance_rad_s` | `0.01` | 静止估计速度容差rad/s，缺有效速度不应填0通过。 |
+| `simulation.can_velocity_cap_rev_s` | `[1.5,1.5,1.5,1.2,1.5,2.5]` | 历史policy motor速度cap rev/s，必须经gear ratio转关节rad/s，非同名关节速度。 |
+| `remark` | `CI values only. Use model limits per active joint. This is not a real activation artifact and is rejected by the real validator.` | 人读CI/设计范围说明，不能凭PASS标签抹去未测限制。 |
+| `clock_policy` | `virtual monotonic in unit tests; real steady in interprocess SIL; never ROS /clock for device watchdog` | 单位测试可虚拟monotonic，跨进程SIL可steady；设备watchdog不能用ROS /clock。 |
+| `initial_model_position_rad` | `[0,0,1.5707963267948966,0,0,0]` | 软件初始模型关节rad数组，当前Home J3=π/2；不是旧legacy_init_deg或实机读回。 |
+| `seed_schema_status` | `DESIGN_ONLY: map into existing SDK profile generator during C01/C02; not an existing runtime format` | 明确设计种子并非既有runtime格式，不把YAML能解析等同设备可直接消费。 |
+| `profile_name` | `sil_6dof` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `reference_kind` | `BENCH_SESSION` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `bench_position_range_rad` | `[-0.3,0.3]` | SIL台架相对范围rad，仅该profile软件行为边界，不替整机模型限位。 |
+| `profile_id` | `1` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+@section raw_d6f55e42a41c4dea src/dummy_motion_client/test/fixtures/application_wire_source/profiles/f405_6dof_bench.yaml
+
+逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
+
+原文 SHA256：`d6f55e42a41c4dea0c4dbe4f460030adbb3e11722629f0c3add37f8af44ca819`；2087 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+| 关键键/路径 | 原值 | 意义/单位/边界 |
+| --- | --- | --- |
+| `profile_name` | `f405_6dof_bench` | profile逻辑名；相同名及profile_id仍可能不同原文SHA/参考策略。 |
+| `artifact_kind` | `design_seed_default_deny` | 设计种子、CI-only或未资格candidate类别；不是运行时允许标志。 |
+| `source_seed` | `dummy_robot_v2/model/model.yaml` | 来源路径字符串；相对解析基准仍需对应loader合同，不在此自动修链接。 |
+| `uses_dpsdk_device` | `true` | 是否走DPSDK设备接口路径；true不等实体硬件、可试动或已授权。 |
+| `test_only` | `false` | CI/测试profile类别；false也不等已获生产/机械臂资格。 |
+| `motion_supported` | `true` | 声明实现可支持运动，和motion_permitted/实体许可分列。 |
+| `motion_permitted_on_real_hardware` | `false` | 实体运动许可声明；本批profiles均false，仿真/seed参数不能改写为硬件通过。 |
+| `physical_calibration_verified` | `false` | 物理几何/坐标标定验证标志；这些种子为false，不由FK吻合改为true。 |
+| `active_axes` | `["Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"]` | 显式活跃轴列表；非配置轴不得伪造测量/命令，和mask必须一致。 |
+| `configured_mask` | `63` | 1是J1、63是六轴，bit0起；不能用轴列表长度替任意位图。 |
+| `can_nodes` | `[1,2,3,4,5,6]` | 六轴CAN节点顺序，须同joint_names/slots，不能只核集合忽略映射。 |
+| `gear_ratio` | `50` | motor转数/关节转数的无量纲比例；profile uniform字段是旧alias，逐轴值以model/gear_ratios交叉核。 |
+| `gear_ratios` | `[50,50,50,50,50,50]` | 六个逐轴减速比，和model逐轴交叉核，旧uniform alias不得覆盖。 |
+| `home_joint_positions_rad` | `[0.0,0.0,1.5707963267948966,0.0,0.0,0.0]` | 该profile命名Home的模型rad数组，软件/人工确认语义，不能自动下发。 |
+| `rest_joint_positions_rad` | `[0.0,-1.0471975511965976,2.861861800872894,0.0,0.0,0.0]` | 该profileRest模型rad数组；当前内收Rest和legacy边界Rest不同，不能共用历史规划信用。 |
+| `feedback_soft_limit_margin_deg` | `0.1` | 当前低速无负载反馈软边界带deg=.1，仅反馈判断余量，不放宽目标模型限位。 |
+| `reference_kind` | `BENCH_SESSION` | INVALID默认拒；BENCH_SESSION是RAM台架参考，SIM_FIXED仅软件固定参考。 |
+| `timing` | 对象 | 各µs周期/超时/租期声明；与Clock域、控制/发布/生产阶段分别解释。 |
+| `timing.control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `timing.state_publish_period_us` | `50000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `timing.command_timeout_us` | `1000000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `timing.completion_timeout_us` | `3000000` | bench profile完成收尾超时µs，旧顶层timing别名保留，不自动当新字段缺省值。 |
+| `timing.max_can_tx_residence_us` | `250000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `control_period_us` | `10000` | 控制周期µs，旧SIL/bench10000，APP候选20000；不同profile不混用。 |
+| `state_publish_period_us` | `50000` | 名义State发布周期µs；bench可50000，APP候选20000，不等producer周期。 |
+| `command_timeout_us` | `1000000` | 有效命令看门超时µs，区别管理收据/操作deadline与Host watchdog。 |
+| `completion_timeout_us` | `3000000` | bench profile完成收尾超时µs，旧顶层timing别名保留，不自动当新字段缺省值。 |
+| `max_can_tx_residence_us` | `250000` | CAN队列/提交驻留上限µs，实际SENT时戳和来源另核，非物理停车时间。 |
+| `limits` | 对象 | 位置/速度/加速度/停止等候选数值，必须和逐轴model及policy合取，不是全局安全证书。 |
+| `limits.velocity_max_rad_s` | `[0.5,0.5,0.5,0.5,0.5,0.5]` | 声明关节速度rad/s，和motor cap换算后的effective上限一起取约束。 |
+| `limits.acceleration_max_rad_s2` | `[1.0,1.0,1.0,1.0,1.0,1.0]` | 声明加速度rad/s²；APP标明advisory only，不能写成设备已实际强制。 |
+| `limits.position_min_rad` | `[-2.9670597,-1.2740904,0.6108652,-3.1415927,-2.0943952,-12.5663706]` | 模型/策略关节位置下限rad，区别relative trial范围、电机圈锚及反馈margin。 |
+| `limits.position_max_rad` | `[2.9670597,1.5707963,3.1415927,3.1415927,2.0943952,12.5663706]` | 模型/策略关节位置上限rad，有限/shape正确不证明避碰。 |
+| `limits.can_velocity_cap_motor_rev_s` | `1.2` | profile的motor rev/s cap；1.2rev/s与1:50数学上界约.1508rad/s，仍非硬件资格。 |
+| `limits.effective_joint_velocity_cap_rad_s` | `0.15079644737231007` | 经motor cap/gear ratio算出的保守关节上界rad/s，不是所有轴已测安全速度。 |
+| `note` | `First-stage six-axis bench profile. All six axes use the installed 1:50 reducers. The selected joint velocity cap remains 0.1508 rad/s on all axes; The selected cap and all physical qualification flags remain unchanged. Human Home confirmation remains a final experience check; no EEPROM writes are performed.` | 人读说明/限制；部分policy canonical hash明确排除顶层note，原文件SHA仍包含它。 |
+| `profile_id` | `201` | 数值目录ID：100/101为J1 passive/bench，201六轴bench；不是原文或策略摘要。 |
+
+*/

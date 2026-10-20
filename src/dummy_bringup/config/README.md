@@ -1,8 +1,10 @@
 # 手动面板配置
 
 2026-10-20起共享描述已更新为完整STEP彩色模型及逐零件碰撞包络。
-减速器采用完整模型的支架安装面定位；当前版本与Rest碰撞保留问题见
-`docs/dummy/full-step-model.md`，转换经验见`.agents/skills/step-to-ros-model/SKILL.md`。
+减速器采用完整模型的支架安装面定位；当前版本见
+[完整STEP模型](../../../docs/dummy/full-step-model.md)，REST双向规划修复见
+[REST规划说明](../../../docs/dummy/rest-planning.md)，转换经验见
+[STEP转换技能](../../../.agents/skills/step-to-ros-model/SKILL.md)。
 
 J6 的 MINIF08 减速器已补入共享描述模型，原输出法兰向外延伸28mm，
 控制减速比保持50:1；显示、FK/IK和碰撞检查使用同一模型。
@@ -51,6 +53,63 @@ ros2 run dummy_bringup deploy_manual_panel.py \
 
 自动测试的包络在开始时固定，以防多次随机步进把J6逐渐累积到多圈。小／中／大档的前三轴半径分别为45°／80°／160°，腕部为90°／120°／240°，与实际工作范围内收2°相交；已经换腕到包络外时只允许向内收回，偏好解超出包络时采用同一末端姿态的已知包络内解。腕部偏好相反且当前转角大于单步幅度时，允许分步接近该构型。
 
-地面与基座底面齐平；每次IK、规划和路径校验的RobotState都包含固定在base_link上的地面碰撞体，只豁免基座安装接触。模型基座底面约z=0.004684m，规划保护体顶面z=0.055m，留约5cm间隙覆盖线缆外形、回差及模型误差；不依赖服务启动后另一个场景节点及时发布。实际位置与目标分别通过joint_states/target_joint_states在RViz显示，测试中仍可立即中断。
+地面与基座底面齐平；每次IK、规划和路径校验的RobotState都包含固定在base_link上的地面碰撞体，只豁免基座安装接触。当前模型已将根几何平移，基座底面为z=0；规划保护体顶面z=0.055m，留55mm高度覆盖线缆外形、回差及模型误差。它不依赖服务启动后另一个场景节点及时发布。实际位置与目标分别通过joint_states/target_joint_states在RViz显示，测试中仍可立即中断。
 
 长测面板的Native将每次运动的完整证据页持续写入原始文件，内存仅保留近期128次的摘要。只有最旧摘要对应的页面已由正常writer写完，才允许滚动淘汰；writer丢页、写入失败、身份、页序或链错误仍会保护退出。发生滚动后不能使用近期缓存宣称整个会话资格完整，完整测试须核验磁盘原件。正常记录SHA在writer写入时增量计算，关闭仍使用原100ms预算，不因长测文件增大而重新读全文件。
+
+## 配置目录怎样阅读
+
+| 文件 | 作用与生效边界 |
+| --- | --- |
+| [manual_joint_panel.json](manual_joint_panel.json) | 面板源码模板。严格JSON保留原字节，字段说明见下表；真机使用部署副本。 |
+| [manual_joint_panel.rviz](manual_joint_panel.rviz) | 实际反馈、目标虚影、标记与GUI布局；不会执行目标。 |
+| [dummy_ref_real_6dof.urdf.xacro](dummy_ref_real_6dof.urdf.xacro) | 共享几何加受控ros2_control硬件参数；空身份使展开失败，后续插件仍需校验内容。 |
+| [backends.yaml](backends.yaml) | 后端合同/测试用的轴、时钟、身份占位与自动授权默认表；不是通用launch分派器。 |
+| [scene.yaml](scene.yaml) | Gazebo SDF与MoveIt场景发布器的共同box障碍输入，位置m、姿态rad。 |
+| [sensor_consumer.yaml](sensor_consumer.yaml) | 默认关闭的RGB-D只读参数种子；当前相机示例launch未将此文件作为参数传入，不能据此声称TTL已生效。 |
+
+实际模型订阅 `/measured_robot_description`，目标模型订阅
+`/target_preview/colored_robot_description` 并使用独立TF前缀。
+RViz的 `Collision Enabled: false` 只是不显示碰撞几何，不关闭MoveIt碰撞检测。
+旧wheel/motor的Links属性及 `QMainWindow State` 是GUI缓存，不创建机械模型或设备状态。
+
+## JSON字段、单位与默认值
+
+`manual_joint_panel.json` 内没有注释，以下表格逐字段解释；这些模板值不会自动证明设备身份或签发许可。
+
+| 字段 | 含义 |
+| --- | --- |
+| `native_binary` | Native可执行文件路径；源码为空，部署时写为所选release副本。 |
+| `native_arguments` | 原argv字符串数组，不是shell命令。包含home-rest/execute角色、显式串行端点、device/client、profile201、mask63、scope与四类摘要。模板的固件/合同/模型/profile摘要为空，部署器依据同次构建身份填写。`--execute`是传给Native的能力入口参数，加载JSON本身不会执行运动。 |
+| `decoder_directory` | 证据解码脚本目录；源码为空，部署副本固定到release资源。 |
+| `state_interface_id` | 当前State协议接口号4139，供原始反馈筛选；不是CAN节点号。 |
+| `joints` | 按Joint1..6排序的六个关节记录，不得按任意字典顺序重排。 |
+| `joints[].name` | 对应URDF/协议使用的关节名。 |
+| `joints[].direction` | 电机位置到模型位置的符号；当前为[-1,-1,-1,+1,-1,-1]。 |
+| `joints[].gear_ratio` | 电机转数/关节转数，当前六轴均50，J6也有减速器。 |
+| `joints[].nominal_limits_deg` | 名义机械范围，用度表示；J6为±720°，不折回一圈。 |
+| `joints[].limits_deg` | 面板工作范围，按名义范围每端内收0.55°；不用于修改模型合同。 |
+| `working_margin_deg` | 上述工作域内收量0.55°。 |
+| `home_deg` | Home六轴度数[0,0,90,0,0,0]，不是全零关节姿态。 |
+| `rest_deg` | 工作REST度数[0,-60,163.97260273972603,0,0,0]，保留边界停车余量。 |
+| `description_xacro` | 同版几何描述路径；源码为空，部署器解析并固定所选资源。 |
+| `motion_speed_max_deg_s` / `motion_speed_default_deg_s` | 面板最大/初始关节速度63/60°每秒；不能和末端mm/s混用。 |
+| `motion_acceleration_max_rad_s2` / `motion_acceleration_default_rad_s2` | 最大/初始关节加速度均4rad/s²，不是电机rev/s²寄存器值。 |
+| `inward_recovery_enabled` | 选择向内恢复支持；实际恢复仍受参考、身份、方向及设备状态约束。 |
+| `wire_schema_major` / `wire_schema_minor` | 预期协议2.5，与Native/固件/解码器须相符；不是ROS发行版号。 |
+| `calibration_mode` | 当前manual_limits人工双限位参考流程，不能从字段存在推断已完成标定。 |
+| `calibration_pose_deg` | 人工参考姿态[0,-73,180,0,0,0]度，区别于工作REST。 |
+| `manual_limit_reference_enabled` | 选择人工限位参考能力；启动不会自动写入参考。 |
+| `moveit_jog_speed_default_mm_s` | 末端位置微调初速100mm/s，用于目标编辑。 |
+| `moveit_preview_speed_default` | 轨迹预览动画倍率20×，无量纲，不改变设备速度上限。 |
+| `deployment_required` | 源码模板为true；真机必须完成部署绑定，渲染后的配置移除此模板标记。 |
+| `moveit_segment_timeout_s` | 单段Native宿主等待预算660s，当前渲染器/面板只接受(0,660]的有限数；它不会延长设备permit或30s会话租约。 |
+
+其中 `native_arguments` 的 `--device/--client` 分别为128bit身份（32个十六进制字符），
+`--firmware/--contract/--model/--profile-sha256` 是各32字节SHA身份；profile编号201和profile摘要不是同一字段。
+部署还会添加 `deployment_manifest` 指向该release的清单，启动时校验文件副本；
+源模板硬编码的USB by-id名称并不证明同名设备当前在线。
+
+真实六轴Xacro的 `stop_confirmation_timeout_us` 默认字符串0与当前transport非零解析规则
+存在静态接口差异：模板显式输出0并不能触发“省略参数时”的默认回退。
+不要把launch允许0的输入校验当成下游已接受该配置；现有入口还提供显式300000µs预算。

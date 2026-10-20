@@ -1,3 +1,10 @@
+/**
+ * @file dp_management_transport_tests.cpp
+ * @brief dp_comm管理传输、观测连续性、释放过渡及raw首页快照测试。
+ *
+ * 部分模式是纯内存，默认serial模式会fork SIL peer并启动PTY转发线程，tcp模式会创建本机TCP端点/子进程；它们不是实物USB/CAN，但仍有实际OS与通信副作用。
+ * raw_first_page只核内存快照一致性，不能推导真实raw文件落盘/设备终态。所有超时为Host单调时间；人工观测年龄参数单位µs。
+ */
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
@@ -23,8 +30,21 @@ namespace {
 using Clock = std::chrono::steady_clock;
 std::atomic<unsigned> reply_calls{0};
 
+/**
+ * @brief 向子进程同步管道写单字节标记。
+ * @param fd 可写fd，所有权不转移。
+ * @param value 协议标记。
+ * @return 恰好写1字节；不重试短写/EINTR。
+ */
 bool signal_peer(int fd, char value) { return write(fd, &value, 1) == 1; }
 
+/**
+ * @brief 在有限poll等待后读一字节并比较。
+ * @param fd 可读fd。
+ * @param expected 期望标记。
+ * @param timeout_ms 最大poll等待毫秒。
+ * @return 可读且读值匹配，否则false。
+ */
 bool read_peer_signal(int fd, char expected, int timeout_ms) {
   pollfd ready{fd, POLLIN, 0};
   if (poll(&ready, 1, timeout_ms) != 1 || !(ready.revents & POLLIN)) return false;
@@ -32,28 +52,63 @@ bool read_peer_signal(int fd, char expected, int timeout_ms) {
   return read(fd, &actual, 1) == 1 && actual == expected;
 }
 
+/**
+ * @brief 拥有fork子进程的RAII守卫；禁拷贝以免重复终止。
+ */
 class PeerProcess {
  public:
+  /**
+   * @brief 接管子进程回收责任。
+   * @param pid 父进程保存的子PID，不负责创建。
+   */
   explicit PeerProcess(pid_t pid) : pid_(pid) {}
+  /**
+   * @brief 析构对有效PID发SIGTERM并waitpid回收，EINTR重试。
+   * @return 无；是OS进程清理，不是设备安全停止。
+   */
   ~PeerProcess() {
     if (pid_ <= 0) return;
     kill(pid_, SIGTERM);
     while (waitpid(pid_, nullptr, 0) < 0 && errno == EINTR) {}
   }
+  /**
+   * @brief 禁止复制子进程拥有者，避免两个析构对象同时kill/wait同一PID。
+   * @par 未命名参数
+   * 拷贝来源不会被接受；此声明为delete，没有可执行实现。
+   */
   PeerProcess(const PeerProcess &) = delete;
+  /**
+   * @brief 禁止复制赋值，子进程回收责任不能被隐式转移或共享。
+   * @par 未命名参数
+   * 来源对象不会被接受；delete声明不产生实际返回。
+   */
   PeerProcess &operator=(const PeerProcess &) = delete;
 
  private:
   pid_t pid_;
 };
 
+/**
+ * @brief 拥有同步管道读fd，作用域退出关闭。
+ */
 struct SignalReader {
   int fd;
+  /**
+   * @brief 关闭fd，不终止peer。
+   * @return 无。
+   */
   ~SignalReader() { close(fd); }
 };
 
+/**
+ * @brief 两对PTY的双向字节桥；endpoint串口115200，master由本对象独占。
+ */
 class PtyBridge {
  public:
+  /**
+   * @brief 创建两对PTY、设置master非阻塞并组成serial端点。
+   * @return 是否全部成功；错误由调用方返回失败。
+   */
   bool open_pair() {
     char left_name[128]{};
     char right_name[128]{};
@@ -68,10 +123,18 @@ class PtyBridge {
     return true;
   }
 
+  /**
+   * @brief fork子进程关闭继承的bridge master副本。
+   * @return 无；不改变父进程fd表。
+   */
   void close_child_fds() const {
     close(left_master_); close(right_master_);
   }
 
+  /**
+   * @brief 启动poll20ms的转发线程，暂未打开slave时遇HUP/ERR等待重试。
+   * @return 无；线程捕获this，对象须活到join。
+   */
   void start() {
     running_ = true;
     worker_ = std::thread([this] {
@@ -89,22 +152,44 @@ class PtyBridge {
     });
   }
 
+  /**
+   * @brief 撤running并join，再关闭masters置−1。
+   * @return 无；可重复调用。
+   */
   void stop() {
     running_ = false;
     if (worker_.joinable()) worker_.join();
     if (left_master_ >= 0) { close(left_master_); left_master_ = -1; }
     if (right_master_ >= 0) { close(right_master_); right_master_ = -1; }
   }
+  /**
+   * @brief 先stop再关闭尚存slave fd。
+   * @return 无。
+   */
   ~PtyBridge() {
     stop();
     if (left_slave_ >= 0) close(left_slave_);
     if (right_slave_ >= 0) close(right_slave_);
   }
 
+  /**
+   * @brief 借用左侧PTY serial端点字符串。
+   * @return const引用，生存期不超过PtyBridge。
+   */
   const std::string &left_endpoint() const { return left_endpoint_; }
+  /**
+   * @brief 借用右侧PTY serial端点字符串。
+   * @return const引用，生存期不超过PtyBridge。
+   */
   const std::string &right_endpoint() const { return right_endpoint_; }
 
  private:
+  /**
+   * @brief 搬运最多512字节，处理短写/EINTR/EAGAIN。
+   * @param source 来源master fd。
+   * @param target 目的master fd。
+   * @return 无；受running标志控制，非可靠消息重传器。
+   */
   void forward(int source, int target) {
     std::uint8_t bytes[512];
     const ssize_t size = read(source, bytes, sizeof(bytes));
@@ -120,18 +205,40 @@ class PtyBridge {
     }
   }
 
+  /**
+   * @brief master/slave为本对象持有fd，−1表示已关闭；worker借用本对象且stop必须join后才释放master。
+   */
   int left_master_ = -1, right_master_ = -1;
   int left_slave_ = -1, right_slave_ = -1;
   std::string left_endpoint_, right_endpoint_;
+  /**
+   * @brief 主线程与转发线程间停止标志；join保证转发结束，不提供业务消息完成确认。
+   */
   std::atomic<bool> running_{false};
   std::thread worker_;
 };
 
+/**
+ * @brief 析构顺序守卫：在transport析构前停PTY桥，以解除底层serial读取阻塞。
+ * 只借用bridge，必须在transport后构造以反序析构。
+ */
 struct StopBridgeBeforeTransport {
+  /**
+   * @brief 借用桥，析构守卫只负责提前停止，不删除桥。
+   */
   PtyBridge &bridge;
+  /**
+   * @brief 先停止桥，不接管bridge对象生存期。
+   * @return 无。
+   */
   ~StopBridgeBeforeTransport() { bridge.stop(); }
 };
 
+/**
+ * @brief 以当前schema编码最小管理请求。
+ * @param request_id 64位ID，默认值特意大于32位。
+ * @return 固定wire字节，codec失败返回空；未代表有效设备管理授权。
+ */
 std::vector<std::uint8_t> request_bytes(std::uint64_t request_id = 0x20000000000001ULL) {
   ManageRequest request;
   request.set_schema_major(2); request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
@@ -142,6 +249,11 @@ std::vector<std::uint8_t> request_bytes(std::uint64_t request_id = 0x20000000000
   return bytes;
 }
 
+/**
+ * @brief 每2ms检查standalone传输ready，最多3s。
+ * @param transport 已启动管理传输。
+ * @return 期限内ready；不表示设备身份/permit已建立。
+ */
 bool wait_ready(DpManagementTransport &transport) {
   const auto deadline = Clock::now() + std::chrono::seconds(3);
   while (!transport.ready() && Clock::now() < deadline)
@@ -149,6 +261,10 @@ bool wait_ready(DpManagementTransport &transport) {
   return transport.ready();
 }
 
+/**
+ * @brief 用人工时间覆盖短缺流Wait后恢复、长期缺流Lost及活跃运动时Status节流例外；冷启动仍要求Status。还核State authority只允许当前/特定下一motion而不能任意跨代。
+ * @return 0所述检查通过，非零是具体失败检查码。
+ */
 int observation_continuity_tests() {
   DeviceObservation observation;
   observation.state_received_us = 1000000U;
@@ -203,6 +319,10 @@ int observation_continuity_tests() {
   return 0;
 }
 
+/**
+ * @brief 以原ReleaseTransitionOrigin163/253核Stopping→UnreferencedIdle164/254过渡；stage2可容许较旧Stopping Status，但不改写原锚，最终released仍需两流Idle。
+ * @return 0所述检查通过，非零是具体失败检查码。
+ */
 int release_transition_tests() {
   DeviceObservation observation;
   observation.state_received_us = 1500000U;
@@ -282,6 +402,10 @@ int release_transition_tests() {
   return 0;
 }
 
+/**
+ * @brief 无channel/standalone读取应为空；实际channel中人工发布首页receipt，再用10000次并发写核快照字段整体相干。不会写raw文件或校验页链。
+ * @return 0所述检查通过，非零是具体失败检查码。
+ */
 int raw_first_page_snapshot_tests() {
   const DpManagementParameters facade_parameters{"tcp/127.0.0.1:29998", {1}, {2}, 2, 63};
   DpManagementTransport no_channel(facade_parameters,
@@ -353,6 +477,15 @@ int raw_first_page_snapshot_tests() {
 }
 }  // namespace
 
+/**
+ * @brief 测试服务直接回显身份并返回Queued+Committed成功、固定operation88。
+ * @param request 借用管理请求。
+ * @param output 输出响应。
+ * @param context 可选管道fd指针；特殊prime RID时发P。
+ * @par 未命名参数
+ * RequestInfo不参与本fixture业务判断。
+ * @return kOk；此人为响应不等于生产事务实现。
+ */
 dp::comm::Result reply(const Service::Request &request, Service::Response *output,
            const dp::comm::RequestInfo &, void *context) {
   reply_calls.fetch_add(1, std::memory_order_relaxed);
@@ -369,6 +502,13 @@ dp::comm::Result reply(const Service::Request &request, Service::Response *outpu
     signal_peer(*static_cast<int *>(context), 'P');
   return dp::comm::Result::kOk;
 }
+/**
+ * @brief 运行测试服务executor并通过管道同步父进程。
+ * @param endpoint TCP或PTY serial地址。
+ * @param signal_fd 写同步标记的fd。
+ * @param expect_rejection true时观察drop/服务调用并发D或A。
+ * @return 初始化/spin/同步失败非零；普通成功peer持续运行至父RAII终止。
+ */
 int peer(const std::string &endpoint, int signal_fd, bool expect_rejection) {
   dp::comm::StaticStorage storage({1,0,0,0,8,wire::DummyDeviceStatusV2Codec::kEncodedSize,96,1,0,0,1});
   dp::comm::TransportConfig config{"peer","",endpoint.c_str(),"management_test"};
@@ -397,6 +537,10 @@ int peer(const std::string &endpoint, int signal_fd, bool expect_rejection) {
   }
   return 0;
 }
+/**
+ * @brief fork本机TCP peer，发未认证管理wire请求；要求协议drop且服务回调零次，不能仅凭peer已启动计通过。
+ * @return 0所述检查通过，非零是具体失败检查码。
+ */
 int tcp_rejects_unauthenticated_request() {
   const std::string endpoint="tcp/127.0.0.1:"+std::to_string(24000+getpid()%10000);
   int signals[2];
@@ -424,6 +568,10 @@ int tcp_rejects_unauthenticated_request() {
   return rejected ? 0 : 25;
 }
 
+/**
+ * @brief fork PTY peer并建转发线程，先prime再发大ID请求，核operation88、单端点第二owner kBusy及句柄取消/关停顺序；poll≤20ms只为本次样本约束，不是WCET证明。
+ * @return 0所述检查通过，非零是具体失败检查码。
+ */
 int serial_roundtrip() {
   PtyBridge bridge;
   if (!bridge.open_pair()) return 30;
@@ -494,6 +642,13 @@ int serial_roundtrip() {
   return 0;
 }
 
+/**
+ * @brief 选择纯helper、TCP拒绝或默认PTY往返模式。
+ * @param argc 进程参数数量。
+ * @param argv 模式/输入路径见下述说明。
+ * @return 0表示所选断言通过；非零、assert或检查异常表示失败。
+ * raw_first_page、continuity、release_transition是内存模式；tcp会fork并开本机端口；无参数运行serial_roundtrip，未知模式返回40。
+ */
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "raw_first_page")
     return raw_first_page_snapshot_tests();

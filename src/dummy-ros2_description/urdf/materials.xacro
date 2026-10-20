@@ -1,6 +1,13 @@
 <?xml version="1.0" ?>
+<!--
+@file materials.xacro
+@brief 历史银色材质片段；当前共享Xacro内已有银色定义，并未include本文件。
+-->
 <robot name="dummy-ros2" xmlns:xacro="http://www.ros.org/wiki/xacro" >
 
+<!--
+silver为材质名，color的rgba是红绿蓝和不透明度；只影响显示，不提供质量、摩擦或碰撞几何。
+-->
 <material name="silver">
   <color rgba="0.700 0.700 0.700 1.000"/>
 </material>

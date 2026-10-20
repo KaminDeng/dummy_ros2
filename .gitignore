@@ -1,8 +1,12 @@
+# @file .gitignore
+# @brief 本工作区的默认构建输出和Python缓存忽略规则，保留原匹配范围。
+# 默认colcon的build/install/log目录及下面的_dummy角色输出不进入普通未跟踪清单；其他自定义后缀目录未必被这些字面模式覆盖。
 build/
 install/
 log/
 build_dummy/
 install_dummy/
 log_dummy/
+# 忽略新生成Python缓存不等于删除历史已经受git追踪的pyc；被追踪原件仍需单独审查。
 __pycache__/
 *.pyc

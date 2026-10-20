@@ -1,10 +1,19 @@
+# @file sensor_consumer.yaml
+# @brief 可选RGB-D只读消费端的参数种子，默认关闭。
+# @details 当前demo_sensor_input.launch.py没有把此文件作为parameters传入；
+# 不能把这里的enabled/TTL值称为该launch已启用的运行门槛。参数实际生效需消费者显式加载。
+# ROS参数文件节点键为sensor_consumer；实际节点名/命名空间须与加载方式匹配。
 sensor_consumer:
   ros__parameters:
+# enabled关闭消费；namespace是输入命名空间。require_pair要求配对RGB-D，
+# require_aligned/require_robot_extrinsic分别要求对齐/机器人外参，此处均false。
     enabled: false
     namespace: /sensors/dabai
     require_pair: true
     require_aligned: false
     require_robot_extrinsic: false
+# 状态新鲜度2500ms、配对数据新鲜度300ms；单位是ms，不是设备控制周期µs。
+# read_only=true是消费角色声明，不提供机械臂执行接口。
     status_ttl_ms: 2500
     pair_ttl_ms: 300
     read_only: true

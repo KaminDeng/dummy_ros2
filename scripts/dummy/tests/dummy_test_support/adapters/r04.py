@@ -1,4 +1,9 @@
 """R04 nonblocking-control adapter using the existing C++ acceptance probes."""
+##
+# @file r04.py
+# @brief R04非阻塞/状态/代号case到C++组件或验收目标的适配器。
+#
+# FRE01直接临时编译stale_state_tests；ROS08明确改跑非阻塞/worker验收而非TARGETS同名静态方法；其余走所列unittest。只证明相应组件断言，不提供实机实时WCET或设备准入。
 
 from __future__ import annotations
 
@@ -27,6 +32,11 @@ SOURCES = (
 )
 
 
+##
+# @brief 处理FRE01/ROS08两个特殊分支后查TARGETS；未知case拒绝，返回公共runner证据字典。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r04_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     if case_id == "FRE01":
         return run_cpp_probe_case(

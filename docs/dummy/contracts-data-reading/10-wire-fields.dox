@@ -1,0 +1,577 @@
+/**
+@page ros_contract_wire_fields IDL 全字段与 wire 含义
+
+
+本文按原件SHA而非同名文件去重。10份不同IDL原文覆盖24个物理路径；同SHA副本共享字段表，逐路径归属仍见源映射。表中的offset/编码B数来自对应已核SHA的 `wire_layout.json`，不是ROS CDR布局、C++ `sizeof` 或真实Doxygen符号绑定。Doxygen只提取本阅读页；没有运行原生IDL/proto解析、rosidl或生成器。
+
+@section wire_read_layers 先分四个层级
+
+1. `request_id/request_seq` 定位原管理请求；Query使用独立请求ID并关联原mutation，重试Query不等重发mutation。
+2. `receipt` 是接纳/重放观察。`Queued` 不是 `accepted`，更不是管理终态；V2消费者还核独立operation、phase与原身份。
+3. `transaction_phase=COMMITTED` 且非Pending结果等组合才可形成事务终结果。V1用旧`operation_status`和各有效位；不能把两版同名字段直接拼接。
+4. `CAN submitted`、`CAN SENT`、运动保持terminal、释放child terminal、双Idle/清session是不同证据。SENT不证明电机跟踪或物理断能，原页SHA闭合也不证明现场来源。
+
+已核原header适配的服务元ID：V1 `4134`，request/response `4135/4136`；V2元ID `4140`，request/response `4141/4142`。元ID不编码在payload开头，不能把它当field ID或用来忽略schema minor。
+
+@section wire_units_and_validity 单位与有效性
+
+所有六轴数组按Joint1..Joint6/slot0..5；mask bit0为Joint1。rad是模型关节角，motor rev是电机圈，deg仅见旧fixture或profile说明。`*_us`按各字段声明的设备时钟/耗时/租期解释，不能与Host UTC/ROS仿真时钟直接相减。票据是不可透明解释的身份，不能把数值当时间。
+
+v1 State对accepted/applied/tx分别有有效位；v1 service对snapshot/info/status/result也分别有有效位，false时零填充不是可用观测。v2 State按position/velocity/raw/hold轴mask判断，当前350B尾保持目标只有Hold且全配置轴有效可用。序号新旧还需同boot/epoch和消费者环回规则；本表不把所有0值一概定义有效或无效。
+
+
+@section raw_0512857fb959d5f3 contracts/dummy_robot_v1/idl/DummyDeviceStatusV1.msg
+
+这是历史wire-v1字段合同；manifest的release_id曾名dummy-wire-v2，不能据该标签误当schema major2。
+
+原文 SHA256：`0512857fb959d5f3db0189930e705ade5addc574235d61507043df5836f62d9b`；805 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyDeviceStatusV1
+
+原payload ID 4131，固定编码 297 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 本v1固定合同minor0，不能从manifest release标签推成V2。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `boot_epoch` | `uint64` | 20 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 28 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `client_instance_id` | `uint8[16]` | 36 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `reference_epoch` | `uint32` | 52 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 56 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `management_epoch` | `uint32` | 60 | 4 | u32代次 | 管理状态变更代次，和 motion/reference 分开；合法管理操作可能推进它。 |
+| `profile_id` | `uint32` | 64 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `core_state` | `uint16` | 68 | 2 | Core状态码 | v1按本页旧core_state枚举解释；v2枚举JSON未单列Core状态表，不因相同uint16就套全部旧名。Idle/Hold仍需新鲜度/有效轴和事务关联，非机械断能证明。 |
+| `fault_reason` | `uint16` | 70 | 2 | v1原因码 | v1故障原因观察；必须同boot/状态新鲜度解释，不能用0猜全系统无故障。 |
+| `control_mode` | `uint8` | 72 | 1 | 枚举 | NONE/ROS/NATIVE所有权模式；选择模式不等允许运动。 |
+| `reference_kind` | `uint8` | 73 | 1 | 枚举 | INVALID/BENCH_SESSION/SIM_FIXED/FORMAL_CALIBRATED；software seed不因此变实测参考。 |
+| `drive_request` | `uint8` | 74 | 1 | v1枚举 | 请求的HOLD/DISABLE意图；不是电机物理回执。 |
+| `drive_evidence` | `uint8` | 75 | 1 | v1枚举 | UNKNOWN/QUEUED/SENT_UNCONFIRMED，明确没有把SENT升级成物理Disable确认。 |
+| `configured_mask` | `uint8` | 76 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `real_motion_permitted` | `bool` | 77 | 1 | bool观测 | 当前设备报告的运动允许位；必须结合剩余permit、身份、epoch和实际门，非此数据文件授信。 |
+| `permit_remaining_us` | `uint64` | 78 | 8 | µs余量 | 设备/请求中的剩余许可预算，不是UTC截止时刻；不能把新Query到达时间当原permit起点。 |
+| `capabilities` | `uint64` | 86 | 8 | u64位图 | 已声明能力位；v1 metadata将物理Disable确认等能力列不可用，位图不是测量报告。 |
+| `operation_id` | `uint64` | 94 | 8 | u64关联ID | 旧Core管理操作关联ID；须核operation_status、operation_result_valid及原请求/会话身份所关联的终结果，不能只见非零就报成功。 |
+| `operation_status` | `uint16` | 102 | 2 | v1枚举 | 旧UNKNOWN/ACCEPTED/RUNNING/SUCCEEDED/FAILED/REJECTED/EXPIRED；与receipt传输接纳层不同。 |
+| `operation_result_code` | `uint16` | 104 | 2 | v1结果码 | 缓存operation结果；只有operation_result_valid成立才作为有效结果，不等receipt result_code。 |
+| `operation_result_valid` | `bool` | 106 | 1 | bool有效位 | 标明operation缓存结果可读；false时不能把默认0当成功。 |
+| `command_reject_count` | `uint32` | 107 | 4 | 累计次数 | 设备拒绝命令累计计数，不能从无增量自动证明全部命令已执行。 |
+| `can_error_count` | `uint32` | 111 | 4 | 累计次数 | CAN错误累计观察；历史非零、增长与重置须分别解释，不是现场采集认证。 |
+| `deadline_miss_count` | `uint32` | 115 | 4 | 累计次数 | 控制/路径deadline错失计数，不替代逐事件时戳和预算证明。 |
+| `contract_sha256` | `uint8[32]` | 119 | 32 | 32 B摘要 | 协议bundle/contract聚合身份；不是本manifest文件原SHA或device_id。 |
+| `model_sha256` | `uint8[32]` | 151 | 32 | 32 B摘要 | 所用model原件身份；方向/减速比/限位任变即不同模型，不能凭文件路径同名放行。 |
+| `profile_sha256` | `uint8[32]` | 183 | 32 | 32 B摘要 | profile/策略身份角色依bundle合同；不能与profile_id或image SHA混同。 |
+| `activation_profile_sha256` | `uint8[32]` | 215 | 32 | v1 32 B摘要 | v1当前安装activation/profile绑定观察，独立于编译profile摘要。 |
+| `motion_supported` | `bool` | 247 | 1 | bool能力 | 固件/策略是否支持运动，不等motion_permitted或现场资格。 |
+| `hold_ready` | `bool` | 248 | 1 | bool观察 | 保持准备状态，必须结合Core Hold、有效轴mask/新鲜度和来源，不单凭true发送。 |
+| `firmware_sha256` | `uint8[32]` | 249 | 32 | 32 B摘要 | 预期/观察固件image身份，不证明板上内容已由独立探针核过。 |
+| `board_name_ascii` | `uint8[16]` | 281 | 16 | 16 B文本 | 固定容量ASCII板名字节数组；不是可认证硬件序列号，也不能假设任意内容带NUL。 |
+
+@section raw_08243121628086a2 contracts/dummy_robot_v1/idl/DummyJointCommandV1.msg
+
+这是历史wire-v1字段合同；manifest的release_id曾名dummy-wire-v2，不能据该标签误当schema major2。
+
+原文 SHA256：`08243121628086a2c4cece5a651c14883ab82231db135f9959ec9b8662736a97`；276 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyJointCommandV1
+
+原payload ID 4132，固定编码 125 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 本v1固定合同minor0，不能从manifest release标签推成V2。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `boot_epoch` | `uint64` | 20 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 28 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `client_instance_id` | `uint8[16]` | 36 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `reference_epoch` | `uint32` | 52 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 56 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `profile_id` | `uint32` | 60 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `producer_seq` | `uint32` | 64 | 4 | u32序号 | Host生产命令序号；产生/发布不等admitted、committed或CAN SENT，环回须在同身份上下文判断。 |
+| `freshness_ticket` | `uint64` | 68 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `configured_mask` | `uint8` | 76 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `position_rad` | `float64[6]` | 77 | 48 | 6×rad | 关节模型坐标，Joint1..6顺序；State仅position_valid_mask有效轴可用，Command目标也须mask/identity/limits合法。 |
+
+@section raw_7e91ee5d0b550c89 contracts/dummy_robot_v1/idl/DummyJointStateV1.msg
+
+这是历史wire-v1字段合同；manifest的release_id曾名dummy-wire-v2，不能据该标签误当schema major2。
+
+原文 SHA256：`7e91ee5d0b550c891c50e32f0d5e0a96d765478f50fea1f9d220d6a7342eb6ed`；853 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyJointStateV1
+
+原payload ID 4133，固定编码 356 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 本v1固定合同minor0，不能从manifest release标签推成V2。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `boot_epoch` | `uint64` | 20 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 28 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `client_instance_id` | `uint8[16]` | 36 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `reference_epoch` | `uint32` | 52 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 56 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `management_epoch` | `uint32` | 60 | 4 | u32代次 | 管理状态变更代次，和 motion/reference 分开；合法管理操作可能推进它。 |
+| `profile_id` | `uint32` | 64 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `state_seq` | `uint32` | 68 | 4 | u32序号 | 状态发布序号，同boot/epoch下做顺序与重复判断；增进不证明物理运动，不能跨重启比较。 |
+| `produced_at_us` | `uint64` | 72 | 8 | 设备µs | 状态生成时刻，属于设备时钟域；不是ROS /clock、Host wall或UTC，跨域不能直接相减。 |
+| `freshness_ticket` | `uint64` | 80 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `configured_mask` | `uint8` | 88 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `position_valid_mask` | `uint8` | 89 | 1 | 轴位图 | 模型位置有效轴，未置位字段不得当零角度或真实位置。 |
+| `velocity_valid_mask` | `uint8` | 90 | 1 | 轴位图 | 估计速度有效轴；无有效速度应保未知/NaN，不能伪造零速静止。 |
+| `planner_finish_mask` | `uint8` | 91 | 1 | v1轴位图 | 旧planner完成提示，不能替现场静止窗口或管理Complete终态。 |
+| `hold_valid_mask` | `uint8` | 92 | 1 | 轴位图 | V1固定hold_position_rad保持目标的有效轴位图；未置位的轴不能作为有效保持观测，不能仅凭目标存在判定真实静止。 |
+| `accepted_seq_valid` | `bool` | 93 | 1 | v1有效位 | accepted_producer_seq是否有意义，false不把0当首命令已接受。 |
+| `accepted_producer_seq` | `uint32` | 94 | 4 | v1 u32序号 | Host命令被接纳进程观察，不等CAN发送或物理到位。 |
+| `applied_seq_valid` | `bool` | 98 | 1 | v1有效位 | applied_producer_seq观察是否有效，与accepted有效位不同。 |
+| `applied_producer_seq` | `uint32` | 99 | 4 | v1 u32序号 | 旧Core应用步骤的序号，不等总线SENT/终端机械完成。 |
+| `tx_group_seq_valid` | `bool` | 103 | 1 | v1有效位 | tx_group_producer_seq关联是否可读，不能从默认字段补。 |
+| `tx_group_producer_seq` | `uint32` | 104 | 4 | v1 u32序号 | 与当前CAN发送组对应的生产序号，不表示所有轴已SENT。 |
+| `submitted_axis_mask` | `uint8` | 108 | 1 | v1轴位图 | 旧提交给发送路径的轴，提交不等硬件mailbox终事件。 |
+| `sent_axis_mask` | `uint8` | 109 | 1 | v1轴位图 | 旧报告SENT轴；不能证明电机执行/到位或物理断能。 |
+| `feedback_seq` | `uint32[6]` | 110 | 24 | 6×u32 | 逐轴反馈样本序号，不能把重复读同样本累计成新静止样本。 |
+| `can_rx_age_us` | `uint32[6]` | 134 | 24 | 6×µs | 逐轴反馈年龄，需要与有效mask及预冻结预算同看。 |
+| `position_rad` | `float64[6]` | 158 | 48 | 6×rad | 关节模型坐标，Joint1..6顺序；State仅position_valid_mask有效轴可用，Command目标也须mask/identity/limits合法。 |
+| `estimated_velocity_rad_s` | `float64[6]` | 206 | 48 | 6×rad/s | 基于反馈估计速度，不是独立测得的物理速度/力矩。 |
+| `hold_position_rad` | `float64[6]` | 254 | 48 | 6×rad | V1设备报告的固定保持目标，单位为模型关节rad；须结合hold_valid_mask、Core状态与新鲜度读取，目标值不等实际到位。 |
+| `core_state` | `uint16` | 302 | 2 | Core状态码 | v1按本页旧core_state枚举解释；v2枚举JSON未单列Core状态表，不因相同uint16就套全部旧名。Idle/Hold仍需新鲜度/有效轴和事务关联，非机械断能证明。 |
+| `fault_reason` | `uint16` | 304 | 2 | v1原因码 | v1故障原因观察；必须同boot/状态新鲜度解释，不能用0猜全系统无故障。 |
+| `hold_ready` | `bool` | 306 | 1 | bool观察 | 保持准备状态，必须结合Core Hold、有效轴mask/新鲜度和来源，不单凭true发送。 |
+| `raw_position_valid_mask` | `uint8` | 307 | 1 | 轴位图 | 原motor反馈位置有效位，区别模型坐标position_valid_mask和参考已建立。 |
+| `raw_motor_position_rev` | `float64[6]` | 308 | 48 | 6×motor rev | 电机原坐标圈数，经过direction/gear_ratio及参考锚才得关节rad，不可直接当关节角。 |
+
+@section raw_71c4f4178b8f7ff2 contracts/dummy_robot_v1/idl/DummyManageV1.srv
+
+这是历史wire-v1字段合同；manifest的release_id曾名dummy-wire-v2，不能据该标签误当schema major2。
+
+原文 SHA256：`71c4f4178b8f7ff2fa7d668e20d224df8beefddadd1822a7fdfbf72b2d9248c8`；2170 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## request：DummyManageV1Request
+
+原payload ID 4135，固定编码 233 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 本v1固定合同minor0，不能从manifest release标签推成V2。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `expected_boot_epoch` | `uint64` | 20 | 8 | u64代号 | 请求预期启动身份；只读 GET_INFO 等是否允许零值依 v1 metadata，不能全部操作一概放宽。 |
+| `expected_session_id` | `uint64` | 28 | 8 | u64身份 | 请求绑定原会话；Query 的只读放宽字段规则与 mutation 不同，不得自行填当前会话改变归属。 |
+| `expected_reference_epoch` | `uint32` | 36 | 4 | u32代次 | mutation 绑定原 reference；与状态回读核对，不能从 ROS Home 名称反推。 |
+| `expected_motion_epoch` | `uint32` | 40 | 4 | u32代次 | 请求必须关联的原 motion 代次，防旧命令跨新运动重放。 |
+| `expected_management_epoch` | `uint32` | 44 | 4 | u32代次 | mutation 的管理前提，需与原请求观察匹配；不得用后续状态重锚原提交。 |
+| `expected_profile_id` | `uint32` | 48 | 4 | u32目录ID | 请求指定的profile ID，和独立编译策略哈希共同约束。 |
+| `client_instance_id` | `uint8[16]` | 52 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `request_id` | `uint64` | 68 | 8 | u64关联ID | Host原管理请求身份；同请求重试必须守原body，Query另有request ID并指原ID，不能重发mutation制造新事务。 |
+| `request_seq` | `uint32` | 76 | 4 | u32序号 | 管理请求序列/去重关联，和producer_seq、operation_id不同角色。 |
+| `freshness_ticket` | `uint64` | 80 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `queried_operation_id` | `uint64` | 88 | 8 | u64关联字段 | 旧GET_OPERATION所引用的operation关联字段；与另列queried_request_id区分，须按V1请求合同和原操作身份解释。 |
+| `queried_request_id` | `uint64` | 96 | 8 | v1 u64关联字段 | v1额外原request查询关联字段，与operation查询分列，按旧published合同填。 |
+| `operation` | `uint16` | 104 | 2 | u16枚举 | 管理操作码，v1/v2数值不同且v2有13..15空档，须按所选枚举精确集合而非<=max全放行。 |
+| `requested_control_mode` | `uint8` | 106 | 1 | 枚举 | SELECT请求的模式，和响应实际control_mode分开，提交不等切换完成。 |
+| `configured_mask` | `uint8` | 107 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `operator_confirmed` | `bool` | 108 | 1 | bool意图 | 显式操作者意图记录；v1 metadata明确不是认证、签名或自动机械安全批准。 |
+| `permit_sha256` | `uint8[32]` | 109 | 32 | 32 B票据身份 | 单次permit摘要/不透明wire身份，不是设备登录凭证或可从普通profile推导的授权。 |
+| `compiled_policy_sha256` | `uint8[32]` | 141 | 32 | 32 B摘要 | 编译策略canonical身份；Query/mutation是否应填零依操作合同，不靠文件名自动一致。 |
+| `permit_remaining_us` | `uint64` | 173 | 8 | µs余量 | 设备/请求中的剩余许可预算，不是UTC截止时刻；不能把新Query到达时间当原permit起点。 |
+| `terminal_producer_seq` | `uint32` | 181 | 4 | u32关联序号 | Complete/收尾请求期望的末命令序号，需与原trajectory/capture核对，不从晚状态猜。 |
+| `terminal_position_rad` | `float64[6]` | 185 | 48 | 6×rad | 请求期望的末关节坐标；合法有限shape不等避碰或已物理到达。 |
+
+## response：DummyManageV1Response
+
+原payload ID 4136，固定编码 618 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 本v1固定合同minor0，不能从manifest release标签推成V2。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `client_instance_id` | `uint8[16]` | 20 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `owner_client_instance_id` | `uint8[16]` | 36 | 16 | 16 B身份 | 响应中观察到的当前 owner，和请求者身份分列；相同并不自行授予新会话。 |
+| `request_id` | `uint64` | 52 | 8 | u64关联ID | Host原管理请求身份；同请求重试必须守原body，Query另有request ID并指原ID，不能重发mutation制造新事务。 |
+| `receipt` | `uint8` | 60 | 1 | u8接纳层 | V1 wire接纳/重放层观察；不能从Queued或Replayed推导操作成功，仍核原身份、operation_status和结果有效位。 |
+| `core_request_id` | `uint64` | 61 | 8 | v1内部关联ID | 旧Core请求队列身份，独立于Host request_id与最终operation_id。 |
+| `accepted` | `bool` | 69 | 1 | v1 bool | 旧响应接纳信息，不能把receipt Queued推成accepted true，更不能推成执行成功。 |
+| `result_code` | `uint16` | 70 | 2 | 结果枚举 | V1响应结果码；不能以单独OK值代替operation_status终态及operation_result_valid等有效条件，也不套V2 transaction_phase。 |
+| `operation_result_valid` | `bool` | 72 | 1 | bool有效位 | 标明operation缓存结果可读；false时不能把默认0当成功。 |
+| `operation_id` | `uint64` | 73 | 8 | u64关联ID | 旧Core管理操作关联ID；须核operation_status、operation_result_valid及原请求/会话身份所关联的终结果，不能只见非零就报成功。 |
+| `operation_status` | `uint16` | 81 | 2 | v1枚举 | 旧UNKNOWN/ACCEPTED/RUNNING/SUCCEEDED/FAILED/REJECTED/EXPIRED；与receipt传输接纳层不同。 |
+| `snapshot_valid` | `bool` | 83 | 1 | v1有效位 | 当前response的State snapshot部分可读，false时其位置/时钟/序号不是有效观测。 |
+| `info_valid` | `bool` | 84 | 1 | v1有效位 | 设备info/profile/hash部分可读，不代表State snapshot也可读。 |
+| `status_valid` | `bool` | 85 | 1 | v1有效位 | 状态部分可读，与info/snapshot/result四类有效性分开。 |
+| `boot_epoch` | `uint64` | 86 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 94 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `reference_epoch` | `uint32` | 102 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 106 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `management_epoch` | `uint32` | 110 | 4 | u32代次 | 管理状态变更代次，和 motion/reference 分开；合法管理操作可能推进它。 |
+| `profile_id` | `uint32` | 114 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `state_seq` | `uint32` | 118 | 4 | u32序号 | 状态发布序号，同boot/epoch下做顺序与重复判断；增进不证明物理运动，不能跨重启比较。 |
+| `produced_at_us` | `uint64` | 122 | 8 | 设备µs | 状态生成时刻，属于设备时钟域；不是ROS /clock、Host wall或UTC，跨域不能直接相减。 |
+| `freshness_ticket` | `uint64` | 130 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `configured_mask` | `uint8` | 138 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `position_valid_mask` | `uint8` | 139 | 1 | 轴位图 | 模型位置有效轴，未置位字段不得当零角度或真实位置。 |
+| `velocity_valid_mask` | `uint8` | 140 | 1 | 轴位图 | 估计速度有效轴；无有效速度应保未知/NaN，不能伪造零速静止。 |
+| `planner_finish_mask` | `uint8` | 141 | 1 | v1轴位图 | 旧planner完成提示，不能替现场静止窗口或管理Complete终态。 |
+| `hold_valid_mask` | `uint8` | 142 | 1 | 轴位图 | V1固定hold_position_rad保持目标的有效轴位图；未置位的轴不能作为有效保持观测，不能仅凭目标存在判定真实静止。 |
+| `accepted_seq_valid` | `bool` | 143 | 1 | v1有效位 | accepted_producer_seq是否有意义，false不把0当首命令已接受。 |
+| `accepted_producer_seq` | `uint32` | 144 | 4 | v1 u32序号 | Host命令被接纳进程观察，不等CAN发送或物理到位。 |
+| `applied_seq_valid` | `bool` | 148 | 1 | v1有效位 | applied_producer_seq观察是否有效，与accepted有效位不同。 |
+| `applied_producer_seq` | `uint32` | 149 | 4 | v1 u32序号 | 旧Core应用步骤的序号，不等总线SENT/终端机械完成。 |
+| `tx_group_seq_valid` | `bool` | 153 | 1 | v1有效位 | tx_group_producer_seq关联是否可读，不能从默认字段补。 |
+| `tx_group_producer_seq` | `uint32` | 154 | 4 | v1 u32序号 | 与当前CAN发送组对应的生产序号，不表示所有轴已SENT。 |
+| `submitted_axis_mask` | `uint8` | 158 | 1 | v1轴位图 | 旧提交给发送路径的轴，提交不等硬件mailbox终事件。 |
+| `sent_axis_mask` | `uint8` | 159 | 1 | v1轴位图 | 旧报告SENT轴；不能证明电机执行/到位或物理断能。 |
+| `feedback_seq` | `uint32[6]` | 160 | 24 | 6×u32 | 逐轴反馈样本序号，不能把重复读同样本累计成新静止样本。 |
+| `can_rx_age_us` | `uint32[6]` | 184 | 24 | 6×µs | 逐轴反馈年龄，需要与有效mask及预冻结预算同看。 |
+| `position_rad` | `float64[6]` | 208 | 48 | 6×rad | 关节模型坐标，Joint1..6顺序；State仅position_valid_mask有效轴可用，Command目标也须mask/identity/limits合法。 |
+| `estimated_velocity_rad_s` | `float64[6]` | 256 | 48 | 6×rad/s | 基于反馈估计速度，不是独立测得的物理速度/力矩。 |
+| `hold_position_rad` | `float64[6]` | 304 | 48 | 6×rad | V1设备报告的固定保持目标，单位为模型关节rad；须结合hold_valid_mask、Core状态与新鲜度读取，目标值不等实际到位。 |
+| `core_state` | `uint16` | 352 | 2 | Core状态码 | v1按本页旧core_state枚举解释；v2枚举JSON未单列Core状态表，不因相同uint16就套全部旧名。Idle/Hold仍需新鲜度/有效轴和事务关联，非机械断能证明。 |
+| `fault_reason` | `uint16` | 354 | 2 | v1原因码 | v1故障原因观察；必须同boot/状态新鲜度解释，不能用0猜全系统无故障。 |
+| `hold_ready` | `bool` | 356 | 1 | bool观察 | 保持准备状态，必须结合Core Hold、有效轴mask/新鲜度和来源，不单凭true发送。 |
+| `raw_position_valid_mask` | `uint8` | 357 | 1 | 轴位图 | 原motor反馈位置有效位，区别模型坐标position_valid_mask和参考已建立。 |
+| `raw_motor_position_rev` | `float64[6]` | 358 | 48 | 6×motor rev | 电机原坐标圈数，经过direction/gear_ratio及参考锚才得关节rad，不可直接当关节角。 |
+| `control_mode` | `uint8` | 406 | 1 | 枚举 | NONE/ROS/NATIVE所有权模式；选择模式不等允许运动。 |
+| `reference_kind` | `uint8` | 407 | 1 | 枚举 | INVALID/BENCH_SESSION/SIM_FIXED/FORMAL_CALIBRATED；software seed不因此变实测参考。 |
+| `drive_request` | `uint8` | 408 | 1 | v1枚举 | 请求的HOLD/DISABLE意图；不是电机物理回执。 |
+| `drive_evidence` | `uint8` | 409 | 1 | v1枚举 | UNKNOWN/QUEUED/SENT_UNCONFIRMED，明确没有把SENT升级成物理Disable确认。 |
+| `real_motion_permitted` | `bool` | 410 | 1 | bool观测 | 当前设备报告的运动允许位；必须结合剩余permit、身份、epoch和实际门，非此数据文件授信。 |
+| `permit_remaining_us` | `uint64` | 411 | 8 | µs余量 | 设备/请求中的剩余许可预算，不是UTC截止时刻；不能把新Query到达时间当原permit起点。 |
+| `capabilities` | `uint64` | 419 | 8 | u64位图 | 已声明能力位；v1 metadata将物理Disable确认等能力列不可用，位图不是测量报告。 |
+| `operation_result_code` | `uint16` | 427 | 2 | v1结果码 | 缓存operation结果；只有operation_result_valid成立才作为有效结果，不等receipt result_code。 |
+| `command_reject_count` | `uint32` | 429 | 4 | 累计次数 | 设备拒绝命令累计计数，不能从无增量自动证明全部命令已执行。 |
+| `can_error_count` | `uint32` | 433 | 4 | 累计次数 | CAN错误累计观察；历史非零、增长与重置须分别解释，不是现场采集认证。 |
+| `deadline_miss_count` | `uint32` | 437 | 4 | 累计次数 | 控制/路径deadline错失计数，不替代逐事件时戳和预算证明。 |
+| `contract_sha256` | `uint8[32]` | 441 | 32 | 32 B摘要 | 协议bundle/contract聚合身份；不是本manifest文件原SHA或device_id。 |
+| `model_sha256` | `uint8[32]` | 473 | 32 | 32 B摘要 | 所用model原件身份；方向/减速比/限位任变即不同模型，不能凭文件路径同名放行。 |
+| `profile_sha256` | `uint8[32]` | 505 | 32 | 32 B摘要 | profile/策略身份角色依bundle合同；不能与profile_id或image SHA混同。 |
+| `activation_profile_sha256` | `uint8[32]` | 537 | 32 | v1 32 B摘要 | v1当前安装activation/profile绑定观察，独立于编译profile摘要。 |
+| `motion_supported` | `bool` | 569 | 1 | bool能力 | 固件/策略是否支持运动，不等motion_permitted或现场资格。 |
+| `firmware_sha256` | `uint8[32]` | 570 | 32 | 32 B摘要 | 预期/观察固件image身份，不证明板上内容已由独立探针核过。 |
+| `board_name_ascii` | `uint8[16]` | 602 | 16 | 16 B文本 | 固定容量ASCII板名字节数组；不是可认证硬件序列号，也不能假设任意内容带NUL。 |
+
+此大response同时装旧snapshot/info/status/result，但`*_valid`并列控制可读部分，不能把解码成功等同每部分都有效。
+
+@section raw_848daa404280f342 contracts/dummy_robot_v2/idl/DummyAttemptEvidenceV2.msg
+
+这是当前wire2.5相关IDL；若原SHA也用于legacy目录，仅说明字段声明相同，不意味着运行minor/源bundle相同。
+
+原文 SHA256：`848daa404280f3424ab675f7cbae542b38a3e597ad1eb847609829896a50d265`；640 B；4 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyAttemptEvidenceV2
+
+原payload ID 4143，固定编码 372 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 当前 v2.5 要求5；legacy 2.4 为4，不能仅按 V2 类型名或 ID 4139 选布局。 |
+| `run_id` | `uint64` | 4 | 8 | u64运行ID | 一条attempt/run的证据根身份，和管理operation_id分开，不能拼不同run页。 |
+| `evidence_seq` | `uint32` | 12 | 4 | u32页序号 | 每attempt原页顺序，一条链内不容缺洞/重序；不是producer或CAN group ID。 |
+| `group_id` | `uint64` | 16 | 8 | u64组ID | CAN组身份，terminal应为0；独立attempt链不自动允许复用之前组身份。 |
+| `producer_seq` | `uint32` | 24 | 4 | u32序号 | Host生产命令序号；产生/发布不等admitted、committed或CAN SENT，环回须在同身份上下文判断。 |
+| `motion_epoch` | `uint32` | 28 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `category` | `uint8` | 32 | 1 | u8枚举 | MOTION1/SAFETY2/DISABLE3/TERMINAL4；terminal没有CAN轴mask/时间，不可当一条Disable组。 |
+| `expected_mask` | `uint8` | 33 | 1 | 轴位图 | 本CAN组计划覆盖轴；本组结果须和配置/失败语义一致，terminal为0。 |
+| `submitted_mask` | `uint8` | 34 | 1 | 轴位图 | 本组已提交轴，与sent/failed和逐轴时间一致，非发送完成。 |
+| `sent_mask` | `uint8` | 35 | 1 | 轴位图 | 本组收到SENT的轴；只到CAN提交/终事件层，不证明电机动作。 |
+| `failed_mask` | `uint8` | 36 | 1 | 轴位图 | 本组失败轴，不可超expected范围，不能用总成功标签抹掉。 |
+| `final` | `uint8` | 37 | 1 | u8标志 | 该页结果是否最终；wire声明是uint8而不是IDL bool，值域由codec/语义门另查。 |
+| `first_failure_source` | `uint16` | 38 | 2 | u16来源码 | 该attempt保留的首失败源，不要与terminal_reason或result_code混用。 |
+| `first_failure_axis_mask` | `uint8` | 40 | 1 | 轴位图 | 首故障轴集合；terminal与故障终态组合另有形状约束。 |
+| `queued_at_us` | `uint64[6]` | 41 | 48 | 6×设备µs | 逐轴CAN组排队时刻，未发生/terminal通常0；不能与Host steady混算。 |
+| `taken_at_us` | `uint64[6]` | 89 | 48 | 6×设备µs | 逐轴组被发送owner取走时刻，处于queued与submitted之间。 |
+| `submitted_at_us` | `uint64[6]` | 137 | 48 | 6×设备µs | 逐轴CAN提交时刻，不等mailbox终事件。 |
+| `sent_at_us` | `uint64[6]` | 185 | 48 | 6×设备µs | 逐轴SENT终事件时刻，预算需匹配同轴queued/submitted与原时钟。 |
+| `abort_at_us` | `uint64[6]` | 233 | 48 | 6×设备µs | 逐轴abort时刻；成功全SENT证明通常要求0，但不由数据表自行认成功。 |
+| `group_count` | `uint32` | 281 | 4 | 累计组数 | attempt内CAN组数量，terminal自身不是一组；与页数及两个attempt合计各自分开。 |
+| `attempt_id` | `uint64` | 285 | 8 | u64身份 | 独立尝试ID，当前页合同通常与run_id绑定；不把motion/release双attempt合成一条链。 |
+| `attempt_kind` | `uint8` | 293 | 1 | 枚举 | NONE/MOTION/SAFETY/RELEASE，和CAN evidence category不同层。 |
+| `parent_run_id` | `uint64` | 294 | 8 | u64父ID | 释放child指原motion run，motion根为0；相同boot不够替父子关联。 |
+| `motion_complete` | `bool` | 302 | 1 | bool结果 | 运动阶段完成标志，APPLICATION_HOLD terminal6可完成而仍保持，不能推session清除/释放。 |
+| `release_committed` | `bool` | 303 | 1 | bool结果 | 释放事务已提交标志，须配独立child terminal/Disable原组和新鲜State/Status，不单项确认物理停机。 |
+| `final_state` | `uint8` | 304 | 1 | 终态枚举 | 保持6/7/9与已释放8等明确区分；FaultUncommunicable5保未知释放，不能统一当成功停机。 |
+| `terminal_reason` | `uint16` | 305 | 2 | u16终因 | terminal结果原因，和first failure保首错、事务result三层分列。 |
+| `previous_chain_sha256` | `uint8[32]` | 307 | 32 | 32 B链 | 该页前驱链SHA，独立run用身份chain0，防跨client/model/FW拼接。 |
+| `chain_sha256` | `uint8[32]` | 339 | 32 | 32 B链 | SHA(previous + canonical原页字段)，canonical排两条chain但保lost；哈希闭合不等现场来源认证。 |
+| `evidence_lost` | `bool` | 371 | 1 | bool完整性 | 设备标记证据丢失；false仍要逐页seq/索引/SHA闭合，不能掩Host落盘丢页。 |
+
+CAN类1/2/3含逐轴时刻；terminal4应零CAN组/producer/mask和五组时刻，并有合法final_state。372B页的canonical前缀307B，previous在307、chain在339、lost在371；独立run/client/boot/四身份构chain0，续链排两条chain而保lost。哈希自洽只证明当前原bytes闭合，不替原采集来源、预算或现场资格。
+
+@section raw_dca9436dc60101d3 contracts/dummy_robot_v2/idl/DummyDeviceStatusV2.msg
+
+这是当前wire2.5相关IDL；若原SHA也用于legacy目录，仅说明字段声明相同，不意味着运行minor/源bundle相同。
+
+原文 SHA256：`dca9436dc60101d3e25875a2d1bc0e069512a966085394bb583e92a8a4fd7c4c`；1414 B；4 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyDeviceStatusV2
+
+原payload ID 4137，固定编码 651 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 当前 v2.5 要求5；legacy 2.4 为4，不能仅按 V2 类型名或 ID 4139 选布局。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `boot_epoch` | `uint64` | 20 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 28 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `reference_epoch` | `uint32` | 36 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 40 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `management_epoch` | `uint32` | 44 | 4 | u32代次 | 管理状态变更代次，和 motion/reference 分开；合法管理操作可能推进它。 |
+| `profile_id` | `uint32` | 48 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `core_state` | `uint16` | 52 | 2 | Core状态码 | v1按本页旧core_state枚举解释；v2枚举JSON未单列Core状态表，不因相同uint16就套全部旧名。Idle/Hold仍需新鲜度/有效轴和事务关联，非机械断能证明。 |
+| `control_mode` | `uint8` | 54 | 1 | 枚举 | NONE/ROS/NATIVE所有权模式；选择模式不等允许运动。 |
+| `reference_kind` | `uint8` | 55 | 1 | 枚举 | INVALID/BENCH_SESSION/SIM_FIXED/FORMAL_CALIBRATED；software seed不因此变实测参考。 |
+| `configured_mask` | `uint8` | 56 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `motion_supported` | `bool` | 57 | 1 | bool能力 | 固件/策略是否支持运动，不等motion_permitted或现场资格。 |
+| `real_motion_permitted` | `bool` | 58 | 1 | bool观测 | 当前设备报告的运动允许位；必须结合剩余permit、身份、epoch和实际门，非此数据文件授信。 |
+| `permit_remaining_us` | `uint64` | 59 | 8 | µs余量 | 设备/请求中的剩余许可预算，不是UTC截止时刻；不能把新Query到达时间当原permit起点。 |
+| `capabilities` | `uint64` | 67 | 8 | u64位图 | 已声明能力位；v1 metadata将物理Disable确认等能力列不可用，位图不是测量报告。 |
+| `operation_id` | `uint64` | 75 | 8 | u64关联ID | Core管理事务ID；响应Queued不必已有终ID，须读transaction phase/终结果，不能只见非零就报成功。 |
+| `transaction_phase` | `uint8` | 83 | 1 | v2阶段枚举 | IDLE0/RECEIVED1/PREPARED2/COMMITTED3/FAILED4；PREPARED也不是完成，Committed仍不等CAN SENT或物理结果。 |
+| `first_failure_reason` | `uint16` | 84 | 2 | v2原因枚举 | 管理/运行过程首失败原因，保首错不能被cleanup或后成功Query覆盖。 |
+| `operation_deadline_us` | `uint64` | 86 | 8 | 设备µs截止 | 事务截止观察，需同设备时钟域判断，不能当UTC或Host到达年龄。 |
+| `committed_producer_seq` | `uint32` | 94 | 4 | v2 u32序号 | Core已提交命令序号，与admitted/published/SENT分层；不等trajectory终态。 |
+| `can_submitted_mask` | `uint8` | 98 | 1 | 轴位图 | 送入CAN提交路径的轴，不等全部mailbox terminal SENT。 |
+| `can_sent_mask` | `uint8` | 99 | 1 | 轴位图 | 设备报告CAN SENT的轴，需原组/时戳关联；不等电机实际动作或物理Disable证据。 |
+| `can_failed_mask` | `uint8` | 100 | 1 | 轴位图 | CAN发送失败轴；必须保留，不能以final_idle标签覆盖。 |
+| `command_reject_count` | `uint32` | 101 | 4 | 累计次数 | 设备拒绝命令累计计数，不能从无增量自动证明全部命令已执行。 |
+| `can_error_count` | `uint32` | 105 | 4 | 累计次数 | CAN错误累计观察；历史非零、增长与重置须分别解释，不是现场采集认证。 |
+| `deadline_miss_count` | `uint32` | 109 | 4 | 累计次数 | 控制/路径deadline错失计数，不替代逐事件时戳和预算证明。 |
+| `contract_sha256` | `uint8[32]` | 113 | 32 | 32 B摘要 | 协议bundle/contract聚合身份；不是本manifest文件原SHA或device_id。 |
+| `model_sha256` | `uint8[32]` | 145 | 32 | 32 B摘要 | 所用model原件身份；方向/减速比/限位任变即不同模型，不能凭文件路径同名放行。 |
+| `profile_sha256` | `uint8[32]` | 177 | 32 | 32 B摘要 | profile/策略身份角色依bundle合同；不能与profile_id或image SHA混同。 |
+| `firmware_sha256` | `uint8[32]` | 209 | 32 | 32 B摘要 | 预期/观察固件image身份，不证明板上内容已由独立探针核过。 |
+| `board_name_ascii` | `uint8[16]` | 241 | 16 | 16 B文本 | 固定容量ASCII板名字节数组；不是可认证硬件序列号，也不能假设任意内容带NUL。 |
+| `compiled_policy_sha256` | `uint8[32]` | 257 | 32 | 32 B摘要 | 编译策略canonical身份；Query/mutation是否应填零依操作合同，不靠文件名自动一致。 |
+| `position_min_rad` | `float64[6]` | 289 | 48 | 6×rad | 编译策略逐轴模型位置下限，非feedback margin或绝对电机圈数。 |
+| `position_max_rad` | `float64[6]` | 337 | 48 | 6×rad | 编译策略逐轴模型位置上限，目标与反馈边界须分开。 |
+| `velocity_max_rad_s` | `float64[6]` | 385 | 48 | 6×rad/s | 声明关节速度上限，还须与motor cap/gear ratio有效上界取约束，不等已资格速度。 |
+| `acceleration_max_rad_s` | `float64[6]` | 433 | 48 | 6×加速度值 | 历史wire字段名缺平方后缀；对应profile/policy acceleration_max_rad_s2。应按加速度rad/s²语义核对消费者，不能因名称误作速度。 |
+| `control_period_us` | `uint64` | 481 | 8 | µs周期 | 控制周期配置/观察，和producer/state发布周期分开，不由源码循环数等同实测。 |
+| `state_publish_period_us` | `uint64` | 489 | 8 | µs周期 | 状态发布名义周期，不能把Host到达抖动当设备生产节拍。 |
+| `feedback_period_us` | `uint32[6]` | 497 | 24 | 6×µs周期 | 逐轴反馈名义/报告周期，不替逐样本age/seq及实际采样窗。 |
+| `mailbox_turnover` | `uint32` | 521 | 4 | 累计次数 | CAN mailbox周转观察，非每帧已执行或无丢失证据。 |
+| `tx_event_overflow` | `uint32` | 525 | 4 | 累计次数 | 发送终事件队列溢出计数，非零破坏完整性；零也需来源/窗口可核。 |
+| `rx_overflow` | `uint32` | 529 | 4 | 累计次数 | 接收路径溢出累计观察，历史值/增量/重置分开。 |
+| `bus_off` | `bool` | 533 | 1 | bool故障 | CAN控制器bus-off观察，false不等没有其它通信或机械故障。 |
+| `run_id` | `uint64` | 534 | 8 | u64运行ID | 一条attempt/run的证据根身份，和管理operation_id分开，不能拼不同run页。 |
+| `attempt_id` | `uint64` | 542 | 8 | u64身份 | 独立尝试ID，当前页合同通常与run_id绑定；不把motion/release双attempt合成一条链。 |
+| `final_state` | `uint8` | 550 | 1 | 终态枚举 | 保持6/7/9与已释放8等明确区分；FaultUncommunicable5保未知释放，不能统一当成功停机。 |
+| `failure_source` | `uint16` | 551 | 2 | u16来源码 | 设备结果首故障来源，须按故障命名空间解释，非result_code的同枚举。 |
+| `failure_axis_mask` | `uint8` | 553 | 1 | 轴位图 | 首失败涉及轴，不因其它轴正常而自动降级配置。 |
+| `cleanup_state` | `uint8` | 554 | 1 | 枚举 | NONE/QUEUED/SUBMITTED/SENT/FAILED清理进度；SENT是总线层观察，非物理断能确认。 |
+| `can_queue_to_submit_us` | `uint32[6]` | 555 | 24 | 6×µs | 逐轴排队→提交耗时统计；需独立预算/原时戳，不能跨clock相减。 |
+| `can_submit_to_sent_us` | `uint32[6]` | 579 | 24 | 6×µs | 逐轴提交→SENT耗时统计，不是电机跟踪/机械停车时长。 |
+| `group_count` | `uint32` | 603 | 4 | 累计组数 | attempt内CAN组数量，terminal自身不是一组；与页数及两个attempt合计各自分开。 |
+| `evidence_chain_sha256` | `uint8[32]` | 607 | 32 | 32 B末链 | 状态公布的证据链尾，须与当前run原页重算一致；单个非零SHA不是完整性证明。 |
+| `evidence_lost` | `bool` | 639 | 1 | bool完整性 | 设备标记证据丢失；false仍要逐页seq/索引/SHA闭合，不能掩Host落盘丢页。 |
+| `attempt_kind` | `uint8` | 640 | 1 | 枚举 | NONE/MOTION/SAFETY/RELEASE，和CAN evidence category不同层。 |
+| `parent_run_id` | `uint64` | 641 | 8 | u64父ID | 释放child指原motion run，motion根为0；相同boot不够替父子关联。 |
+| `motion_complete` | `bool` | 649 | 1 | bool结果 | 运动阶段完成标志，APPLICATION_HOLD terminal6可完成而仍保持，不能推session清除/释放。 |
+| `release_committed` | `bool` | 650 | 1 | bool结果 | 释放事务已提交标志，须配独立child terminal/Disable原组和新鲜State/Status，不单项确认物理停机。 |
+
+@section raw_302f007f28b25864 contracts/dummy_robot_v2/idl/DummyJointCommandV2.msg
+
+这是当前wire2.5相关IDL；若原SHA也用于legacy目录，仅说明字段声明相同，不意味着运行minor/源bundle相同。
+
+原文 SHA256：`302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714`；296 B；4 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyJointCommandV2
+
+原payload ID 4138，固定编码 133 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 当前 v2.5 要求5；legacy 2.4 为4，不能仅按 V2 类型名或 ID 4139 选布局。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `client_instance_id` | `uint8[16]` | 20 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `boot_epoch` | `uint64` | 36 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 44 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `operation_id` | `uint64` | 52 | 8 | u64关联ID | Core管理事务ID；响应Queued不必已有终ID，须读transaction phase/终结果，不能只见非零就报成功。 |
+| `reference_epoch` | `uint32` | 60 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 64 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `profile_id` | `uint32` | 68 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `producer_seq` | `uint32` | 72 | 4 | u32序号 | Host生产命令序号；产生/发布不等admitted、committed或CAN SENT，环回须在同身份上下文判断。 |
+| `freshness_ticket` | `uint64` | 76 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `configured_mask` | `uint8` | 84 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `position_rad` | `float64[6]` | 85 | 48 | 6×rad | 关节模型坐标，Joint1..6顺序；State仅position_valid_mask有效轴可用，Command目标也须mask/identity/limits合法。 |
+
+@section raw_daea24db35c5f4bb contracts/dummy_robot_v2/idl/DummyJointStateV2.msg
+
+这是当前wire2.5相关IDL；若原SHA也用于legacy目录，仅说明字段声明相同，不意味着运行minor/源bundle相同。
+
+原文 SHA256：`daea24db35c5f4bbb0f1210d989d77b073d74b34b104d50f913190e8a1daf8a2`；899 B；3 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyJointStateV2
+
+原payload ID 4139，固定编码 350 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 当前 v2.5 要求5；legacy 2.4 为4，不能仅按 V2 类型名或 ID 4139 选布局。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `boot_epoch` | `uint64` | 20 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 28 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `reference_epoch` | `uint32` | 36 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 40 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `management_epoch` | `uint32` | 44 | 4 | u32代次 | 管理状态变更代次，和 motion/reference 分开；合法管理操作可能推进它。 |
+| `profile_id` | `uint32` | 48 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `state_seq` | `uint32` | 52 | 4 | u32序号 | 状态发布序号，同boot/epoch下做顺序与重复判断；增进不证明物理运动，不能跨重启比较。 |
+| `produced_at_us` | `uint64` | 56 | 8 | 设备µs | 状态生成时刻，属于设备时钟域；不是ROS /clock、Host wall或UTC，跨域不能直接相减。 |
+| `freshness_ticket` | `uint64` | 64 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `configured_mask` | `uint8` | 72 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `position_valid_mask` | `uint8` | 73 | 1 | 轴位图 | 模型位置有效轴，未置位字段不得当零角度或真实位置。 |
+| `velocity_valid_mask` | `uint8` | 74 | 1 | 轴位图 | 估计速度有效轴；无有效速度应保未知/NaN，不能伪造零速静止。 |
+| `raw_position_valid_mask` | `uint8` | 75 | 1 | 轴位图 | 原motor反馈位置有效位，区别模型坐标position_valid_mask和参考已建立。 |
+| `committed_producer_seq` | `uint32` | 76 | 4 | v2 u32序号 | Core已提交命令序号，与admitted/published/SENT分层；不等trajectory终态。 |
+| `admitted_producer_seq` | `uint32` | 80 | 4 | v2 u32序号 | 当前接纳进流的producer序号，可能领先committed；不能用其填已执行计数。 |
+| `operation_id` | `uint64` | 84 | 8 | u64关联ID | Core管理事务ID；响应Queued不必已有终ID，须读transaction phase/终结果，不能只见非零就报成功。 |
+| `transaction_phase` | `uint8` | 92 | 1 | v2阶段枚举 | IDLE0/RECEIVED1/PREPARED2/COMMITTED3/FAILED4；PREPARED也不是完成，Committed仍不等CAN SENT或物理结果。 |
+| `first_failure_reason` | `uint16` | 93 | 2 | v2原因枚举 | 管理/运行过程首失败原因，保首错不能被cleanup或后成功Query覆盖。 |
+| `operation_deadline_us` | `uint64` | 95 | 8 | 设备µs截止 | 事务截止观察，需同设备时钟域判断，不能当UTC或Host到达年龄。 |
+| `can_submitted_mask` | `uint8` | 103 | 1 | 轴位图 | 送入CAN提交路径的轴，不等全部mailbox terminal SENT。 |
+| `can_sent_mask` | `uint8` | 104 | 1 | 轴位图 | 设备报告CAN SENT的轴，需原组/时戳关联；不等电机实际动作或物理Disable证据。 |
+| `can_failed_mask` | `uint8` | 105 | 1 | 轴位图 | CAN发送失败轴；必须保留，不能以final_idle标签覆盖。 |
+| `feedback_seq` | `uint32[6]` | 106 | 24 | 6×u32 | 逐轴反馈样本序号，不能把重复读同样本累计成新静止样本。 |
+| `can_rx_age_us` | `uint32[6]` | 130 | 24 | 6×µs | 逐轴反馈年龄，需要与有效mask及预冻结预算同看。 |
+| `position_rad` | `float64[6]` | 154 | 48 | 6×rad | 关节模型坐标，Joint1..6顺序；State仅position_valid_mask有效轴可用，Command目标也须mask/identity/limits合法。 |
+| `estimated_velocity_rad_s` | `float64[6]` | 202 | 48 | 6×rad/s | 基于反馈估计速度，不是独立测得的物理速度/力矩。 |
+| `raw_motor_position_rev` | `float64[6]` | 250 | 48 | 6×motor rev | 电机原坐标圈数，经过direction/gear_ratio及参考锚才得关节rad，不可直接当关节角。 |
+| `core_state` | `uint16` | 298 | 2 | Core状态码 | v1按本页旧core_state枚举解释；v2枚举JSON未单列Core状态表，不因相同uint16就套全部旧名。Idle/Hold仍需新鲜度/有效轴和事务关联，非机械断能证明。 |
+| `hold_ready` | `bool` | 300 | 1 | bool观察 | 保持准备状态，必须结合Core Hold、有效轴mask/新鲜度和来源，不单凭true发送。 |
+| `hold_position_rad` | `float64[6]` | 301 | 48 | 6×rad | 设备全轴真实SENT的固定保持目标；current v2.5有效性受hold_valid_mask与Hold状态约束，legacy2.4 State没有此尾字段。 |
+| `hold_valid_mask` | `uint8` | 349 | 1 | 轴位图 | 固定hold_position_rad真实SENT保持目标有效轴；current v2.5新增字段须Hold且配置全轴有效才可作保持依据。 |
+
+@section raw_7dcec4292e1d2e15 contracts/dummy_robot_v2/idl/DummyManageV2.srv
+
+这是当前wire2.5相关IDL；若原SHA也用于legacy目录，仅说明字段声明相同，不意味着运行minor/源bundle相同。
+
+原文 SHA256：`7dcec4292e1d2e156b6642bf1bf22b316a0947c614bc06bbabdcaabdbcca08d9`；1204 B；4 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## request：DummyManageV2Request
+
+原payload ID 4141，固定编码 233 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 当前 v2.5 要求5；legacy 2.4 为4，不能仅按 V2 类型名或 ID 4139 选布局。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `client_instance_id` | `uint8[16]` | 20 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `request_id` | `uint64` | 36 | 8 | u64关联ID | Host原管理请求身份；同请求重试必须守原body，Query另有request ID并指原ID，不能重发mutation制造新事务。 |
+| `request_seq` | `uint32` | 44 | 4 | u32序号 | 管理请求序列/去重关联，和producer_seq、operation_id不同角色。 |
+| `operation` | `uint16` | 48 | 2 | u16枚举 | 管理操作码，v1/v2数值不同且v2有13..15空档，须按所选枚举精确集合而非<=max全放行。 |
+| `queried_operation_id` | `uint64` | 50 | 8 | u64关联字段 | GET_OPERATION引用的目标字段；本V2调用链用原管理request ID查终收据，不能仅因字段名把它改成新opid。 |
+| `expected_boot_epoch` | `uint64` | 58 | 8 | u64代号 | 请求预期启动身份；只读 GET_INFO 等是否允许零值依 v1 metadata，不能全部操作一概放宽。 |
+| `expected_session_id` | `uint64` | 66 | 8 | u64身份 | 请求绑定原会话；Query 的只读放宽字段规则与 mutation 不同，不得自行填当前会话改变归属。 |
+| `expected_reference_epoch` | `uint32` | 74 | 4 | u32代次 | mutation 绑定原 reference；与状态回读核对，不能从 ROS Home 名称反推。 |
+| `expected_motion_epoch` | `uint32` | 78 | 4 | u32代次 | 请求必须关联的原 motion 代次，防旧命令跨新运动重放。 |
+| `expected_management_epoch` | `uint32` | 82 | 4 | u32代次 | mutation 的管理前提，需与原请求观察匹配；不得用后续状态重锚原提交。 |
+| `expected_profile_id` | `uint32` | 86 | 4 | u32目录ID | 请求指定的profile ID，和独立编译策略哈希共同约束。 |
+| `freshness_ticket` | `uint64` | 90 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `requested_control_mode` | `uint8` | 98 | 1 | 枚举 | SELECT请求的模式，和响应实际control_mode分开，提交不等切换完成。 |
+| `configured_mask` | `uint8` | 99 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `operator_confirmed` | `bool` | 100 | 1 | bool意图 | 显式操作者意图记录；v1 metadata明确不是认证、签名或自动机械安全批准。 |
+| `permit_sha256` | `uint8[32]` | 101 | 32 | 32 B票据身份 | 单次permit摘要/不透明wire身份，不是设备登录凭证或可从普通profile推导的授权。 |
+| `compiled_policy_sha256` | `uint8[32]` | 133 | 32 | 32 B摘要 | 编译策略canonical身份；Query/mutation是否应填零依操作合同，不靠文件名自动一致。 |
+| `permit_remaining_us` | `uint64` | 165 | 8 | µs余量 | 设备/请求中的剩余许可预算，不是UTC截止时刻；不能把新Query到达时间当原permit起点。 |
+| `terminal_producer_seq` | `uint32` | 173 | 4 | u32关联序号 | Complete/收尾请求期望的末命令序号，需与原trajectory/capture核对，不从晚状态猜。 |
+| `terminal_position_rad` | `float64[6]` | 177 | 48 | 6×rad | 请求期望的末关节坐标；合法有限shape不等避碰或已物理到达。 |
+| `requested_session_lease_us` | `uint64` | 225 | 8 | µs预算 | 请求租期长度，提交/续租余量须依据原请求时钟锚；不能用Query轮次刷新同一次mutation。 |
+
+## response：DummyManageV2Response
+
+原payload ID 4142，固定编码 132 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 当前 v2.5 要求5；legacy 2.4 为4，不能仅按 V2 类型名或 ID 4139 选布局。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `client_instance_id` | `uint8[16]` | 20 | 16 | 16 B身份 | 当前调用者/会话客户端身份；更换 client 是不同拥有者，不能借另客户端的收据。 |
+| `request_id` | `uint64` | 36 | 8 | u64关联ID | Host原管理请求身份；同请求重试必须守原body，Query另有request ID并指原ID，不能重发mutation制造新事务。 |
+| `receipt` | `uint8` | 44 | 1 | u8接纳层 | QUEUED1/REPLAYED2/BUSY4等wire接纳观察；Queued与Replayed都不是管理终态成功，仍核原身份/phase/result。 |
+| `result_code` | `uint16` | 45 | 2 | 结果枚举 | 当前响应/事务结果码；OK0需合法终phase组合，PENDING23不是终成功，缓存有效位亦须尊重。 |
+| `operation_id` | `uint64` | 47 | 8 | u64关联ID | Core管理事务ID；响应Queued不必已有终ID，须读transaction phase/终结果，不能只见非零就报成功。 |
+| `transaction_phase` | `uint8` | 55 | 1 | v2阶段枚举 | IDLE0/RECEIVED1/PREPARED2/COMMITTED3/FAILED4；PREPARED也不是完成，Committed仍不等CAN SENT或物理结果。 |
+| `first_failure_reason` | `uint16` | 56 | 2 | v2原因枚举 | 管理/运行过程首失败原因，保首错不能被cleanup或后成功Query覆盖。 |
+| `operation_deadline_us` | `uint64` | 58 | 8 | 设备µs截止 | 事务截止观察，需同设备时钟域判断，不能当UTC或Host到达年龄。 |
+| `boot_epoch` | `uint64` | 66 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 74 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `reference_epoch` | `uint32` | 82 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 86 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `management_epoch` | `uint32` | 90 | 4 | u32代次 | 管理状态变更代次，和 motion/reference 分开；合法管理操作可能推进它。 |
+| `profile_id` | `uint32` | 94 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `committed_producer_seq` | `uint32` | 98 | 4 | v2 u32序号 | Core已提交命令序号，与admitted/published/SENT分层；不等trajectory终态。 |
+| `can_submitted_mask` | `uint8` | 102 | 1 | 轴位图 | 送入CAN提交路径的轴，不等全部mailbox terminal SENT。 |
+| `can_sent_mask` | `uint8` | 103 | 1 | 轴位图 | 设备报告CAN SENT的轴，需原组/时戳关联；不等电机实际动作或物理Disable证据。 |
+| `can_failed_mask` | `uint8` | 104 | 1 | 轴位图 | CAN发送失败轴；必须保留，不能以final_idle标签覆盖。 |
+| `run_id` | `uint64` | 105 | 8 | u64运行ID | 一条attempt/run的证据根身份，和管理operation_id分开，不能拼不同run页。 |
+| `attempt_id` | `uint64` | 113 | 8 | u64身份 | 独立尝试ID，当前页合同通常与run_id绑定；不把motion/release双attempt合成一条链。 |
+| `attempt_kind` | `uint8` | 121 | 1 | 枚举 | NONE/MOTION/SAFETY/RELEASE，和CAN evidence category不同层。 |
+| `parent_run_id` | `uint64` | 122 | 8 | u64父ID | 释放child指原motion run，motion根为0；相同boot不够替父子关联。 |
+| `motion_complete` | `bool` | 130 | 1 | bool结果 | 运动阶段完成标志，APPLICATION_HOLD terminal6可完成而仍保持，不能推session清除/释放。 |
+| `release_committed` | `bool` | 131 | 1 | bool结果 | 释放事务已提交标志，须配独立child terminal/Disable原组和新鲜State/Status，不单项确认物理停机。 |
+
+@section raw_4c68ebf366448816 contracts/dummy_robot_v2_legacy_2_4/idl/DummyJointStateV2.msg
+
+这是legacy wire2.4的301B State原文，没有Hold目标尾字段；其它同名V2原件即便相同，仍要绑定legacy metadata。
+
+原文 SHA256：`4c68ebf3664488169e31b13e5ad2d240a62cadde93c3bb3ace916a1b28263b1f`；750 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+
+
+## message：DummyJointStateV2
+
+原payload ID 4139，固定编码 301 B，LE无padding。
+
+| 字段 | IDL类型 | offset B | 占用 B | 单位/角色 | 读取条件和含义 |
+| --- | --- | --- | --- | --- | --- |
+| `schema_major` | `uint16` | 0 | 2 | 版本号 | wire 主版本；v1=1、v2=2。字段声明本身不是固定值，接收端仍须核版本。 |
+| `schema_minor` | `uint16` | 2 | 2 | 版本号 | 当前 v2.5 要求5；legacy 2.4 为4，不能仅按 V2 类型名或 ID 4139 选布局。 |
+| `device_id` | `uint8[16]` | 4 | 16 | 16 B身份 | 目标设备字节身份；不是 CAN node、ROS node 名或可认证签名。 |
+| `boot_epoch` | `uint64` | 20 | 8 | u64代号 | 设备本次启动代号；重启使旧 session/reference/ticket/operation 关联失效，不是 UTC 时间。 |
+| `session_id` | `uint64` | 28 | 8 | u64身份 | 会话/授权身份；释放清零是观测条件之一，单独零值不能确认 Stop。 |
+| `reference_epoch` | `uint32` | 36 | 4 | u32代次 | 参考坐标的 RAM 代次；新 reference/清除会影响旧目标，不是物理标定编号。 |
+| `motion_epoch` | `uint32` | 40 | 4 | u32代次 | 运动/保持命令所属代次；安全 Stop、Hold prime 与 attempt 根各自绑定，不能直接用末 CAN 组覆盖根身份。 |
+| `management_epoch` | `uint32` | 44 | 4 | u32代次 | 管理状态变更代次，和 motion/reference 分开；合法管理操作可能推进它。 |
+| `profile_id` | `uint32` | 48 | 4 | u32目录ID | 当前profile数值ID；不是 profile 原文 SHA，ID相同仍需核 model/policy/contract。 |
+| `state_seq` | `uint32` | 52 | 4 | u32序号 | 状态发布序号，同boot/epoch下做顺序与重复判断；增进不证明物理运动，不能跨重启比较。 |
+| `produced_at_us` | `uint64` | 56 | 8 | 设备µs | 状态生成时刻，属于设备时钟域；不是ROS /clock、Host wall或UTC，跨域不能直接相减。 |
+| `freshness_ticket` | `uint64` | 64 | 8 | u64不透明票据 | 设备状态给出的新鲜度票据，非µs时间；重复同票据不重置首次接收发送窗口。 |
+| `configured_mask` | `uint8` | 72 | 1 | 轴位图 | bit0=Joint1，bit5=Joint6；1为J1、63为六轴，区别旧CAN node索引位图。 |
+| `position_valid_mask` | `uint8` | 73 | 1 | 轴位图 | 模型位置有效轴，未置位字段不得当零角度或真实位置。 |
+| `velocity_valid_mask` | `uint8` | 74 | 1 | 轴位图 | 估计速度有效轴；无有效速度应保未知/NaN，不能伪造零速静止。 |
+| `raw_position_valid_mask` | `uint8` | 75 | 1 | 轴位图 | 原motor反馈位置有效位，区别模型坐标position_valid_mask和参考已建立。 |
+| `committed_producer_seq` | `uint32` | 76 | 4 | v2 u32序号 | Core已提交命令序号，与admitted/published/SENT分层；不等trajectory终态。 |
+| `admitted_producer_seq` | `uint32` | 80 | 4 | v2 u32序号 | 当前接纳进流的producer序号，可能领先committed；不能用其填已执行计数。 |
+| `operation_id` | `uint64` | 84 | 8 | u64关联ID | Core管理事务ID；响应Queued不必已有终ID，须读transaction phase/终结果，不能只见非零就报成功。 |
+| `transaction_phase` | `uint8` | 92 | 1 | v2阶段枚举 | IDLE0/RECEIVED1/PREPARED2/COMMITTED3/FAILED4；PREPARED也不是完成，Committed仍不等CAN SENT或物理结果。 |
+| `first_failure_reason` | `uint16` | 93 | 2 | v2原因枚举 | 管理/运行过程首失败原因，保首错不能被cleanup或后成功Query覆盖。 |
+| `operation_deadline_us` | `uint64` | 95 | 8 | 设备µs截止 | 事务截止观察，需同设备时钟域判断，不能当UTC或Host到达年龄。 |
+| `can_submitted_mask` | `uint8` | 103 | 1 | 轴位图 | 送入CAN提交路径的轴，不等全部mailbox terminal SENT。 |
+| `can_sent_mask` | `uint8` | 104 | 1 | 轴位图 | 设备报告CAN SENT的轴，需原组/时戳关联；不等电机实际动作或物理Disable证据。 |
+| `can_failed_mask` | `uint8` | 105 | 1 | 轴位图 | CAN发送失败轴；必须保留，不能以final_idle标签覆盖。 |
+| `feedback_seq` | `uint32[6]` | 106 | 24 | 6×u32 | 逐轴反馈样本序号，不能把重复读同样本累计成新静止样本。 |
+| `can_rx_age_us` | `uint32[6]` | 130 | 24 | 6×µs | 逐轴反馈年龄，需要与有效mask及预冻结预算同看。 |
+| `position_rad` | `float64[6]` | 154 | 48 | 6×rad | 关节模型坐标，Joint1..6顺序；State仅position_valid_mask有效轴可用，Command目标也须mask/identity/limits合法。 |
+| `estimated_velocity_rad_s` | `float64[6]` | 202 | 48 | 6×rad/s | 基于反馈估计速度，不是独立测得的物理速度/力矩。 |
+| `raw_motor_position_rev` | `float64[6]` | 250 | 48 | 6×motor rev | 电机原坐标圈数，经过direction/gear_ratio及参考锚才得关节rad，不可直接当关节角。 |
+| `core_state` | `uint16` | 298 | 2 | Core状态码 | v1按本页旧core_state枚举解释；v2枚举JSON未单列Core状态表，不因相同uint16就套全部旧名。Idle/Hold仍需新鲜度/有效轴和事务关联，非机械断能证明。 |
+| `hold_ready` | `bool` | 300 | 1 | bool观察 | 保持准备状态，必须结合Core Hold、有效轴mask/新鲜度和来源，不单凭true发送。 |
+
+*/

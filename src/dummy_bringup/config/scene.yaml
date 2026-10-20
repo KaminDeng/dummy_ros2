@@ -1,5 +1,12 @@
+# @file scene.yaml
+# @brief Gazebo world与MoveIt场景发布器共用的版本化静态障碍物输入。
+# @details generate_world.py写出SDF，scene_publisher.py构造PlanningScene；
+# 编辑YAML本身不更新已有服务端场景，消费者需重新生成/加载。
+# scene_revision标记格式/场景版本，frame_id统一使用world坐标。
 scene_revision: dummy_scene_v1
 frame_id: world
+# 对象ID须唯一；当前两个消费者只接受box，size是正的xyz全长（m），
+# pose_xyz_rpy依次为位置m与roll/pitch/yaw弧度。0.15m处障碍物不是模型地面保护体。
 objects:
   - id: planning_barrier
     shape: box

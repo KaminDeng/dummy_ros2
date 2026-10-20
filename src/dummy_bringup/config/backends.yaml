@@ -1,10 +1,18 @@
+# @file backends.yaml
+# @brief 记录Gazebo/SIL/只读J1后端的轴、时钟、身份来源与自动授权默认值。
+# @details 该表用于后端合同/验收读取，不是所有launch自动遍历的通用启动分派器；
+# 真正启动哪个节点、连哪个端点，以所选launch和其参数校验为准。
 schema: dummy.ros.backends.v1
 backends:
+# 六轴Gazebo使用simulation时钟/transport描述，read_only=false允许仿真控制形状，
+# 不表示它使用DPSDK设备或允许真实机械臂运动。
   gazebo_6dof:
     active_axes: [Joint1, Joint2, Joint3, Joint4, Joint5, Joint6]
     clock: simulation
     transport: gazebo
     read_only: false
+# SIL用steady时钟与virtual_can；两个本地TCP端口区分六轴/J1角色。
+# device_id/serial是表中软件角色标识，不能原样当作真实协议的128bit设备ID或USB序列号。
   sil_6dof:
     active_axes: [Joint1, Joint2, Joint3, Joint4, Joint5, Joint6]
     clock: steady
@@ -23,6 +31,8 @@ backends:
     profile: sil_j1
     endpoint: tcp/127.0.0.1:17447
     read_only: false
+# J1真实链路明确read_only=true，设备/串口/端点必须由launch显式提供，
+# required-at-launch只是占位文本，不是有效串行端点或设备身份。
   real_j1:
     active_axes: [Joint1]
     clock: steady
@@ -32,6 +42,8 @@ backends:
     profile: real_j1
     endpoint: required-at-launch
     read_only: true
+# 三个auto_*均false：该合同不自动Grant、不自动CaptureReference、不自动Enable。
+# 这只是表的声明，运行时权限还要看真实Host/设备接口校验。
 security:
   auto_grant: false
   auto_capture_reference: false

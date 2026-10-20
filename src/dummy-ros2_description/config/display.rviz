@@ -1,3 +1,6 @@
+# @file display.rviz
+# @brief 资源包的纯显示RViz布局，读取robot_description和TF；不产生机械臂控制会话。
+# 侧栏面板与展开状态属于GUI布局，不是机器人模型或设备参数。
 Panels:
   - Class: rviz_common/Displays
     Help Height: 78
@@ -23,6 +26,7 @@ Panels:
       - /Current View1
     Name: Views
     Splitter Ratio: 0.5
+# 显示插件从话题/参数读取模型和场景；加载插件不等于底层服务/状态已经就绪。
 Visualization Manager:
   Class: ""
   Displays:
@@ -46,6 +50,7 @@ Visualization Manager:
       Value: true
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
+# 此处只关闭RobotModel的碰撞几何显示，不关闭MoveIt碰撞检查；Visual Enabled控制视觉显示。
       Collision Enabled: false
       Description File: ""
       Description Source: Topic
@@ -56,6 +61,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /robot_description
       Enabled: true
+# 保留了旧显示会话的back/front wheel与motor条目；这些是RViz属性缓存，不会向当前Dummy URDF增加这些link。
       Links:
         All Links Enabled: true
         Expand Joint Details: false
@@ -115,6 +121,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/TF
       Enabled: true
       Frame Timeout: 15
+# 旧TF勾选/树形属性不等于当前运行TF中存在相应frame；真实连接仍由订阅的TF消息决定。
       Frames:
         All Enabled: true
         back_motor_left_2:
@@ -157,11 +164,13 @@ Visualization Manager:
       Update Interval: 0
       Value: true
   Enabled: true
+# Fixed Frame是渲染统一坐标系；必须能通过TF连接各显示源，改它不会改变设备机械零点。
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: base_link
     Frame Rate: 30
   Name: root
+# 交互、相机与选择等工具；若工具配置了话题，点击时可发布相应ROS消息，但不直接建立DPSDK运动授权。
   Tools:
     - Class: rviz_default_plugins/Interact
       Hide Inactive Objects: true
@@ -196,6 +205,7 @@ Visualization Manager:
     Current:
       Class: rviz_default_plugins/TF
   Value: true
+# Orbit距离/焦点/角度只控制摄像机视角；角度不能当成Joint1至Joint6目标。
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
@@ -219,6 +229,7 @@ Visualization Manager:
       Value: Orbit (rviz)
       Yaw: 0.5103846192359924
     Saved: ~
+# 窗口大小、位置与Qt序列化布局；QMainWindow State长串是GUI状态，不是固件、编码器或运动证据。
 Window Geometry:
   Displays:
     collapsed: false

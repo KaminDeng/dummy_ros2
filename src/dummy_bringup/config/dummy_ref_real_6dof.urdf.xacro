@@ -1,32 +1,49 @@
 <?xml version="1.0"?>
+<!-- @file dummy_ref_real_6dof.urdf.xacro
+     @brief 把共享六轴几何与显式身份/限制参数装配为GuardedZenbeddedSystem。
+     这里只生成URDF；真正创建硬件插件和连接设备发生在后续ros2_control生命周期。 -->
 <robot name="dummy-ros2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- 视觉/关节模型复用描述包，下面只追加ros2_control接口，不复制另一套几何。 -->
   <xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.xacro"/>
 
+  <!-- 必填参数默认空，展开时由required_param或内联表达式拒绝空值。
+       endpoint为串行/Zenoh定位文本；device/client分别是设备与客户端身份，profile/mask区分角色与活动轴。 -->
   <xacro:arg name="endpoint" default=""/>
   <xacro:arg name="device_id" default=""/>
   <xacro:arg name="client_instance_id" default=""/>
   <xacro:arg name="profile_id" default=""/>
   <xacro:arg name="configured_mask" default=""/>
+  <!-- 合同/模型/profile/固件/编译策略摘要必须由选定同版构建与部署输入显式传入；
+       非空只是Xacro层前提，格式/身份/能力匹配由传输与插件继续校验。 -->
   <xacro:arg name="contract_sha256" default=""/>
   <xacro:arg name="model_sha256" default=""/>
   <xacro:arg name="profile_sha256" default=""/>
   <xacro:arg name="firmware_sha256" default=""/>
   <xacro:arg name="compiled_policy_sha256" default=""/>
+  <!-- 位置上下界用rad，速度rad/s，加速度实义rad/s²（acceleration_max_rad_s为既有名称）。
+       六轴数组的具体文本编码由device_transport解析；不能用Xacro非空检查代替有限值/长度校验。 -->
   <xacro:arg name="position_min_rad" default=""/>
   <xacro:arg name="position_max_rad" default=""/>
   <xacro:arg name="velocity_max_rad_s" default=""/>
   <xacro:arg name="acceleration_max_rad_s" default=""/>
+  <!-- 控制/状态周期、State最大年龄、心跳停止预算和停止确认预算均用µs。
+       stop_confirmation_timeout_us虽默认字符串0，但此模板会显式输出该参数，当前transport的parse_number拒绝显式0；
+       不能将这里的0默认值声称为已经打通的下游回退路径，实际入口须传可接受的非零预算。 -->
   <xacro:arg name="control_period_us" default=""/>
   <xacro:arg name="state_publish_period_us" default=""/>
   <xacro:arg name="max_state_age_us" default=""/>
   <xacro:arg name="heartbeat_stop_budget_us" default=""/>
   <xacro:arg name="stop_confirmation_timeout_us" default="0"/>
+  <!-- 可选原始证据输出路径；空字符串时不生成该hardware参数，不等于故障/收尾已被证实。 -->
   <xacro:arg name="raw_evidence_path" default=""/>
 
+  <!-- @brief required_param按key生成param，value为空则以除零使Xacro展开失败。
+       key/value是宏文本参数；这里不连接设备、不补猜测身份，也不把0字符串解释为缺省空值。 -->
   <xacro:macro name="required_param" params="key value">
     <param name="${key}">${value if value else 1/0}</param>
   </xacro:macro>
 
+  <!-- system插件拥有一组六轴接口；模型的joint轴/限位来自上方共享Xacro，运行期硬件参数在此显式传递。 -->
   <ros2_control name="dummy_ref_real_6dof" type="system">
     <hardware>
       <plugin>dummy_ros_control/GuardedZenbeddedSystem</plugin>
@@ -53,6 +70,8 @@
         <param name="raw_evidence_path">$(arg raw_evidence_path)</param>
       </xacro:if>
     </hardware>
+  <!-- Joint1..6各只提供position命令，以及position/velocity反馈；
+       导出接口不意味着当前已激活、参考有效或permit已签发。 -->
     <joint name="Joint1"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
     <joint name="Joint2"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>
     <joint name="Joint3"><command_interface name="position"/><state_interface name="position"/><state_interface name="velocity"/></joint>

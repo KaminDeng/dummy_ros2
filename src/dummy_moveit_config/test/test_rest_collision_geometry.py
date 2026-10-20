@@ -1,3 +1,8 @@
+##
+# @file test_rest_collision_geometry.py
+# @brief 回归REST让位空间和J1凹支架分区外包络的完整覆盖。
+# @details 使用FCL与最终STL几何，拒绝用SRDF豁免掩盖误碰撞；这些离线局部对检查不替代完整MoveIt路径回归。
+
 """REST 必须保留进出空间；旋转底座的保守几何不能填实支架凹部。"""
 import json
 import math
@@ -15,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[3]
 DESCRIPTION = ROOT / 'src/dummy-ros2_description'
 
 
+##
+# @brief 把指定link各collision转为FCL BVH或box，结合关节链和collision origin得到base坐标物体。
+# @param model 展开的生产URDF XML根。
+# @param joint_positions Joint名→rad映射。
+# @param name 需要建立FCL碰撞体的link名。
+# @return FCL CollisionObject列表；这里只实现mesh/box，不是通用URDF形状解释器。
 def collision_objects(model, joint_positions, name):
     transforms = frames(model, joint_positions)
     result = []
@@ -36,6 +47,8 @@ def collision_objects(model, joint_positions, name):
     return result
 
 
+##
+# @brief 保留J1/J2电机碰撞对，固定其余REST轴并从REST-J2再减0.5°扫到Home-J2，共122点检查该对无碰撞。
 def test_rest_j2_mount_clearance_without_collision_exemption():
     """旧整件凸包在 REST 下与 J2 电机误碰撞；修复必须改几何而非允许碰撞矩阵。"""
     model = ET.fromstring(xacro.process_file(str(DESCRIPTION/'urdf/dummy-ros2.xacro')).toxml())
@@ -54,6 +67,8 @@ def test_rest_j2_mount_clearance_without_collision_exemption():
                 assert not fcl.collide(a, b, fcl.CollisionRequest(), fcl.CollisionResult()), j2
 
 
+##
+# @brief 核四资源SHA，按Z=24mm两侧裁剪源三角面，最终凸面至少外扩0.3mm包含；12紧固件仍被14包络覆盖。
 def test_refined_envelopes_cover_every_clipped_source_triangle_and_fastener():
     """校核最终文件的真实凸面，不能只信生成清单的数值或缩小后无碰撞。"""
     import hashlib
@@ -67,6 +82,8 @@ def test_refined_envelopes_cover_every_clipped_source_triangle_and_fastener():
         assert hashlib.sha256((folder/name).read_bytes()).hexdigest() == report[key]
     bracket = trimesh.load_mesh(folder/'full_step_link1-bracket-source.stl')
     envelopes = trimesh.load_mesh(folder/'full_step_link1-collision-local.stl').split(only_watertight=False)
+    # ConvexHull面方程的法向量为单位长度，内部满足n·x+d<=0；源STL单位mm，
+    # 因而<=-0.3直接表达至少0.3mm面内余量。每侧必须由同一个凸包包含全部裁剪顶点。
     planes = [ConvexHull(part.vertices).equations for part in envelopes]
     for sign in (-1., 1.):
         clipped = trimesh.intersections.slice_mesh_plane(bracket, [0., 0., sign], [0., 0., 24.], cap=False)

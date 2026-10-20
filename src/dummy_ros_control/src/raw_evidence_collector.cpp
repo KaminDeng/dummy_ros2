@@ -1,3 +1,8 @@
+/**
+ * @file raw_evidence_collector.cpp
+ * @brief 实现有界原始证据校验与私有writer归档。
+ * 生产回调复制/校验/入256槽队列，捕获文件由writer独占fwrite和flush；channel为空时序号/组数错误仍有同步stderr诊断，带channel的生产路径使用固定journal。first/terminal回执在相应写出刷新成功后发布；这里未调用fsync，不声称断电持久性或动作资格。任何首错粘滞并阻止继续入队。
+ */
 #include "dummy_ros_control/raw_evidence_collector.hpp"
 
 #include <algorithm>
@@ -13,10 +18,22 @@
 
 namespace dummy_ros_control {
 namespace {
+/**
+ * @brief 把一个整数低width字节写为小端。
+ * @param out 至少width字节可写缓冲。
+ * @param value 整数源位型。
+ * @param width 当前调用为2/4/8，不超过8。
+ */
 void put_le(std::uint8_t *out, std::uint64_t value, std::size_t width) noexcept {
   for (std::size_t i = 0U; i < width; ++i) out[i] = static_cast<std::uint8_t>(value >> (8U * i));
 }
 
+/**
+ * @brief 从根目录逐段打开无符号链接路径并独占创建证据文件。
+ * 目录openat使用O_DIRECTORY/O_NOFOLLOW，末项O_EXCL权限0600；不自动建目录或覆盖已有文件。
+ * @param path 规范绝对路径，不含NUL、空目录段、点或父目录段。
+ * @return 文件描述符；任一目录/创建错误返回-1。
+ */
 int open_new_capture(const std::string &path) noexcept {
   if (path.size() < 2U || path.front() != '/' || path.find('\0') != std::string::npos) return -1;
   int parent = ::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -42,12 +59,24 @@ int open_new_capture(const std::string &path) noexcept {
 }
 }  // namespace
 
+/**
+ * @brief 查找run绑定的只读借用地址。
+ * @param run_id 尝试ID。
+ * @return 内部槽指针或nullptr；后续observe可能回收该槽，调用方不可无限保存指针。
+ */
 const RawEvidenceBinding *RawEvidenceBindings::find(std::uint64_t run_id) const noexcept {
   for (std::size_t i = 0U; i < count_; ++i)
     if (slots_[i].run_id == run_id) return &slots_[i];
   return nullptr;
 }
 
+/**
+ * @brief 观察同run一致身份或登记单调新增run。
+ * 已有run允许session_id=0只作其他字段核对；真正新run不能用0会话。表满无可回收槽即拒绝，不动态扩容。
+ * @param binding 待核对尝试绑定。
+ * @param terminal_written_run_id writer已刷新终页水位，允许回收不晚于此的旧槽。
+ * @return bool；新绑定必须session非零、run递增且parent关系合法。
+ */
 bool RawEvidenceBindings::observe(const RawEvidenceBinding &binding,
                                   std::uint64_t terminal_written_run_id) noexcept {
   if (binding.run_id == 0U || binding.boot_epoch == 0U ||
@@ -72,14 +101,31 @@ bool RawEvidenceBindings::observe(const RawEvidenceBinding &binding,
   return true;
 }
 
+/**
+ * @brief 冻结身份并保存可选channel及flush钩子的借用。
+ * @param identity 构造首链seed所用固定身份。
+ * @param channel 可空共享管理对象裸指针，外部保证寿命覆盖collector。
+ * @param before_terminal_flush 可选终页flush前判定函数。
+ * @param flush_context 两个钩子的借用上下文。
+ * @param flush_file 可选刷新函数，空则std::fflush。
+ */
 RawEvidenceCollector::RawEvidenceCollector(RawEvidenceIdentity identity,
     DeviceManagementChannel *channel, BeforeTerminalFlush before_terminal_flush,
     void *flush_context, FlushFile flush_file)
     : identity_(std::move(identity)), channel_(channel),
       before_terminal_flush_(before_terminal_flush), flush_context_(flush_context),
       flush_file_(flush_file) {}
+/**
+ * @brief 调用stop排空/关闭并检查未封口run。
+ */
 RawEvidenceCollector::~RawEvidenceCollector() { stop(); }
 
+/**
+ * @brief 独占创建新捕获文件、写DPRaw头并启动writer。
+ * 文件权限0600，逐段openat+O_NOFOLLOW，最终O_EXCL；不覆盖旧证据。启动不清除此前首错/验证水位，本对象应按一个采集寿命使用。
+ * @param path 绝对路径，各目录段存在且无符号链接，目标必须不存在。
+ * @return bool；重复启动/无路径/打开或线程创建失败返回false。
+ */
 bool RawEvidenceCollector::start(const std::string &path) {
   if (path.empty() || running_ || file_ || writer_.joinable()) return false;
   const int fd = open_new_capture(path);
@@ -103,6 +149,10 @@ bool RawEvidenceCollector::start(const std::string &path) {
   return true;
 }
 
+/**
+ * @brief 标记未终结run为Incomplete并结束/等待writer和关闭文件。
+ * 正常writer排空已排队记录，I/O错误可能提前结束；join/flush/close均非RT。无返回值，应读取failure而非假设证据完整。
+ */
 void RawEvidenceCollector::stop() noexcept {
   for (std::size_t i = 0U; i < expected_count_; ++i)
     if (!expected_runs_[i].terminal) fail(Failure::kIncomplete);
@@ -116,6 +166,11 @@ void RawEvidenceCollector::stop() noexcept {
   }
 }
 
+/**
+ * @brief 登记未来应收到终页的run并限制期望槽容量。
+ * @param run_id 非零且新增时单调递增的尝试ID。
+ * @return bool；重复期望允许，满槽且无已消费终页可回收时粘滞Overflow。
+ */
 bool RawEvidenceCollector::expect_run(std::uint64_t run_id) noexcept {
   if (failure() != Failure::kNone) return false;
   if (run_id == 0U) { fail(Failure::kInvalid); return false; }
@@ -141,6 +196,12 @@ bool RawEvidenceCollector::expect_run(std::uint64_t run_id) noexcept {
   return true;
 }
 
+/**
+ * @brief 核对首seed或前页链，以及原页规范前缀的SHA-256。
+ * 首seed为192字节零初始化，身份字段占前160字节；页摘要由前链+codec规范前缀+evidence_lost尾字节计算，不包含自引用摘要。
+ * @param page 本次原页与前/当前摘要。
+ * @return bool；首seed绑定run/boot/client及四类hash，后页接last_chain。
+ */
 bool RawEvidenceCollector::verify_chain(const RawEvidencePage &page) noexcept {
   std::array<std::uint8_t, 32U> expected_previous{};
   if (page.evidence_seq == 0U) {
@@ -168,6 +229,11 @@ bool RawEvidenceCollector::verify_chain(const RawEvidencePage &page) noexcept {
   return ::SHA256(input.data(), input.size(), computed.data()) && computed == page.chain_sha256;
 }
 
+/**
+ * @brief 只保留第一个失败并同步到可选channel。
+ * 后续失败不覆盖原因为便于定位首因；不自动请求设备运动或停止。
+ * @param value 待锁存失败原因。
+ */
 void RawEvidenceCollector::fail(Failure value) noexcept {
   Failure expected = Failure::kNone;
   if (failure_.compare_exchange_strong(expected, value, std::memory_order_acq_rel) && channel_)
@@ -175,6 +241,11 @@ void RawEvidenceCollector::fail(Failure value) noexcept {
                                          std::memory_order_release);
 }
 
+/**
+ * @brief 将一条已复制记录交给唯一writer。
+ * @param record 单生产者拥有的完整值。
+ * @return bool；已有首错或满256槽拒绝。
+ */
 bool RawEvidenceCollector::enqueue(const Record &record) noexcept {
   if (failure() != Failure::kNone) return false;
   const auto produced = produced_.load(std::memory_order_relaxed);
@@ -187,6 +258,17 @@ bool RawEvidenceCollector::enqueue(const Record &record) noexcept {
   return true;
 }
 
+/**
+ * @brief 复制State/Status原始字节并携带清理生命周期代入队。
+ * @param kind 仅kState或kStatus。
+ * @param raw 借用字节，调用时有效。
+ * @param size 非零且≤651字节。
+ * @param received_at_us 宿主接收µs。
+ * @param boot_epoch 提取的设备boot。
+ * @param session_id 提取的设备session。
+ * @param cleanup_producer_valid 故障State源时钟校验结果，只供清理lane。
+ * @return bool：入RAM队列成功，不表示此帧通过正常控制校验。
+ */
 bool RawEvidenceCollector::offer_observation(Kind kind, const std::uint8_t *raw,
     std::size_t size, std::uint64_t received_at_us, std::uint64_t boot_epoch,
     std::uint64_t session_id,bool cleanup_producer_valid) noexcept {
@@ -203,6 +285,13 @@ bool RawEvidenceCollector::offer_observation(Kind kind, const std::uint8_t *raw,
   return enqueue(record);
 }
 
+/**
+ * @brief 核对请求codec并复制到采集队列。
+ * @param raw 管理请求原载荷。
+ * @param size 必须等于请求codec编码长度。
+ * @param sent_at_us 宿主发送/提交观察µs，不是设备接纳时刻。
+ * @return bool；未running或codec错误粘滞失败。
+ */
 bool RawEvidenceCollector::offer_management_request(const std::uint8_t *raw,
     std::size_t size, std::uint64_t sent_at_us) noexcept {
   using namespace dp::protocol::dummy_robot_v2;
@@ -227,6 +316,13 @@ bool RawEvidenceCollector::offer_management_request(const std::uint8_t *raw,
   return enqueue(record);
 }
 
+/**
+ * @brief 核对管理响应codec并保留原字节。
+ * @param raw 借用响应载荷。
+ * @param size 精确codec长度。
+ * @param received_at_us 宿主收到响应µs。
+ * @return bool：合法并入队，不代表管理操作结果一定成功。
+ */
 bool RawEvidenceCollector::offer_management_response(const std::uint8_t *raw,
     std::size_t size, std::uint64_t received_at_us) noexcept {
   using namespace dp::protocol::dummy_robot_v2;
@@ -251,6 +347,13 @@ bool RawEvidenceCollector::offer_management_response(const std::uint8_t *raw,
   return enqueue(record);
 }
 
+/**
+ * @brief 校验run链、页序、group计数和原字节一致性后排队。
+ * 根run首seq=0，后续run须在前run终页后单调且保持boot/session；拒绝丢证据、异常final/kind/parent/链。category4核终页组数，首非终页及终页各导出额外证明；单生产者调用。
+ * @param page 固定372字节原页及提取元数据。
+ * @param received_at_us 宿主steady接收µs。
+ * @return bool仅表示通过验证且RAM入队；真正写出/flush稍后发生。
+ */
 bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
                                       std::uint64_t received_at_us) noexcept {
   if (failure() != Failure::kNone) return false;
@@ -309,6 +412,9 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
         page.group_count,can_page_count_,page.category);
     fail(Failure::kSequence); return false;
   }
+  /**
+   * @brief 非终页报告组数须严格前进；终页组数必须等于实际已接纳CAN页数，不因设备声明更大group_count就补出缺失原页。
+   */
   if ((page.category == 4U && page.group_count != can_page_count_) ||
       (page.category != 4U && (page.group_count == 0U ||
                                page.group_count <= can_page_count_ ||
@@ -328,12 +434,18 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     fail(Failure::kSequence);
     return false;
   }
+  /**
+   * @brief 零CAN组终页只接受特定根尝试无动作拒绝终态；不能把任意空原页集合当作完整运行。
+   */
   if (page.category == 4U && page.group_count == 0U &&
       (page.final_state != 3U || page.terminal_reason != 14U ||
        page.attempt_kind != 1U || page.parent_run_id != 0U)) {
     fail(Failure::kInvalid);
     return false;
   }
+  /**
+   * @brief 先校验链再解码核对全部提取元数据，确保外部包装字段与实际372字节载荷相符。
+   */
   if (!verify_chain(page)) {
     fail(Failure::kChain);
     return false;
@@ -373,6 +485,9 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     safety_hold_valid_ = true;
   }
   // 完整fault证明另lane：不改变旧collector接纳/取消Hold语义，只导出已验证原页的证明。
+  /**
+   * @brief 故障证明独立lane要求六轴SENT且设备queue≤take≤submit≤sent、每轴不超过100ms，顺序为motion→stop→disable；不改变普通collector接纳规则。
+   */
   if(page.category!=4U) {
     bool valid=decoded.group_id()>fault_last_group_id_ && decoded.expected_mask()==63U &&
       decoded.submitted_mask()==63U && decoded.sent_mask()==63U && decoded.failed_mask()==0U &&
@@ -426,6 +541,9 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
       std::all_of(std::begin(decoded.submitted_at_us()),std::end(decoded.submitted_at_us()),[](auto x){return x==0U;}) &&
       std::all_of(std::begin(decoded.sent_at_us()),std::end(decoded.sent_at_us()),[](auto x){return x==0U;}) &&
       std::all_of(std::begin(decoded.abort_at_us()),std::end(decoded.abort_at_us()),[](auto x){return x==0U;});
+    /**
+     * @brief 只有完整fault组相位、唯一disable、终页掩码/时间清零、failure与release等条件都满足才导出全故障证明；终页flags单独不足。
+     */
     record.full_fault_groups_valid=fault_groups_valid_ && fault_group_phase_==2U && fault_disable_count_==1U &&
       page.attempt_kind==1U && page.parent_run_id==0U && decoded.motion_epoch()==first_motion_epoch_ &&
       decoded.group_id()==0U && decoded.group_count()==can_page_count_ && decoded.expected_mask()==0U &&
@@ -451,6 +569,9 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
         !decoded.motion_complete() && !decoded.release_committed() &&
         page.final && !page.evidence_lost && full_six};
   }
+  /**
+   * @brief RAM入队成功才推进链与next_seq；文件写出尚在writer，后续I/O失败会锁存并阻断资格消费者。
+   */
   if (!enqueue(record)) return false;
   last_chain_ = page.chain_sha256;
   next_seq_ = page.evidence_seq + 1U;
@@ -469,6 +590,11 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
   return true;
 }
 
+/**
+ * @brief 写39字节小端记录头及精确wire载荷。
+ * @param record 待输出记录，size指明有效载荷长度。
+ * @return bool：两次fwrite均达到请求长度；本方法本身不fflush/fsync。
+ */
 bool RawEvidenceCollector::write_record(const Record &record) noexcept {
   // Version 1: fixed 39-byte little-endian record header, followed by exact
   // wire codec bytes. Length permits future wire variants without ambiguity.
@@ -484,6 +610,10 @@ bool RawEvidenceCollector::write_record(const Record &record) noexcept {
       std::fwrite(record.raw.data(), 1U, record.size, file_) == record.size;
 }
 
+/**
+ * @brief 私有writer按序落盘并在首/终页刷新后发布回执。
+ * 空队列休眠1ms；消费水位在成功写/必要flush后推进。State/Status写出后可进入独立cleanup槽，终页flush成功后才发布terminal_written；I/O失败立即锁存并退出。
+ */
 void RawEvidenceCollector::write_loop() noexcept {
   while (running_.load(std::memory_order_acquire) ||
          consumed_.load(std::memory_order_relaxed) != produced_.load(std::memory_order_acquire)) {
@@ -497,6 +627,9 @@ void RawEvidenceCollector::write_loop() noexcept {
       fail(Failure::kIo);
       return;
     }
+    /**
+     * @brief 首个非终页与终页需要flush后才发布回执；before_terminal_flush可注入测试失败。fflush不是fsync。
+     */
     const bool first_page = record.first_page.run_id != 0U;
     if ((record.terminal || first_page) &&
         ((record.terminal && before_terminal_flush_ &&
@@ -505,6 +638,9 @@ void RawEvidenceCollector::write_loop() noexcept {
       fail(Failure::kIo);
       return;
     }
+    /**
+     * @brief 成功写/必要flush后才归还队列槽；cleanup观测及终页回执由写出路径发布，不能拿尚在RAM的页作完成凭证。
+     */
     consumed_.store(consumed + 1U, std::memory_order_release);
     if(channel_ && (record.kind==Kind::kState || record.kind==Kind::kStatus) && failure()==Failure::kNone)
       channel_->publish_raw_cleanup_observation(record.kind==Kind::kState,record.raw.data(),record.size,record.received_at_us,record.cleanup_producer_valid,record.cleanup_generation);

@@ -1,4 +1,9 @@
 """R08 release artifact adapter."""
+##
+# @file r08.py
+# @brief 发布锁、文档证据隔离及既有运行产物新鲜度检查。
+#
+# 只读取文档/manifest/既有R06/R07报告、文件mtime和Git结果，不重跑这些套件或设备。peer/report current仅为相对mtime规则，不能证明二进制由当前源码构建或报告确实对应同一运行；固定release/路径/文本要求是现有合同，不在此自动迁移。
 
 from __future__ import annotations
 
@@ -22,6 +27,10 @@ FILES = (
 )
 
 
+##
+# @brief 逐行按首个等号拆键值，跳空/首字符为井号的注释；不strip空白，重复键后者覆盖。
+# @param text versions.lock原始文本，不进行空白规范化。
+# @return 未strip的key/value字典，重复键取末项。
 def _lock_values(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in text.splitlines():
@@ -32,17 +41,27 @@ def _lock_values(text: str) -> dict[str, str]:
     return result
 
 
+##
+# @brief 在DPSDK_ROOT执行给定Git子命令并捕获结果，不check返回码也无timeout。
+# @param arguments 传给Git/组件的原样argv，是否可变参数见函数签名。
+# @return CompletedProcess，调用者自行检查returncode。
 def _git(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(DPSDK_ROOT), *arguments], capture_output=True, text=True, check=False,
     )
 
 
+##
+# @brief 要求build_dummy中R06/R07报告晚于控制/motion全部文件及manifest、全case PASS/executed；只复核既有报告，不运行用例。
+# @return 现有报告mtime与内容状态是否通过；不重跑报告。
 def _runtime_reports_current() -> bool:
     reports = [ROOT / "build_dummy/reports/R06.json", ROOT / "build_dummy/reports/R07.json"]
     sources = [ROOT / "contracts/dummy_robot_v2/manifest.json"]
     for directory in (ROOT / "src/dummy_motion_client", ROOT / "src/dummy_ros_control"):
         sources.extend(path for path in directory.rglob("*") if path.is_file())
+    ##
+    # @par mtime局限
+    # 任何被枚举文件变新都会使旧报告失效，包含注释修改；反之mtime较新并不证明报告执行了相同源码或真实设备。
     newest_source = max(path.stat().st_mtime_ns for path in sources)
     for report in reports:
         if not report.is_file() or report.stat().st_mtime_ns < newest_source:
@@ -59,6 +78,9 @@ def _runtime_reports_current() -> bool:
     return True
 
 
+##
+# @brief 要求D08 peer存在且mtime不早于所列application/contract/posix配置输入；不做可复现构建或二进制SHA匹配。
+# @return 既有peer mtime是否不早于已列输入。
 def _dpsdk_peer_current() -> bool:
     peer = DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"
     if not peer.is_file():
@@ -78,6 +100,11 @@ def _dpsdk_peer_current() -> bool:
     return peer.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in inputs)
 
 
+##
+# @brief 只允许REL01，核文档、base祖先、bundle镜像、DPSDK HEAD/合同clean及mtime/报告状态，并给静态发布证据摘要。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     if case_id != "REL01" or stimulus != {
         "case_id": "REL01", "hardware": "none", "test_only": True,
@@ -116,6 +143,9 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     )
     head = _git("rev-parse", "HEAD")
     dpsdk_commit_matches = head.returncode == 0 and locks.get("dpsdk_commit") == head.stdout.strip()
+    ##
+    # @par Git检查路径
+    # 这里按现有代码查询DPSDK根下contracts/dummy_robot_v2；manifest读取却来自applications/dummy_ref_control/contracts。路径文本不自动证明整个SDK工作树clean。
     unstaged = _git("diff", "--quiet", "--", "contracts/dummy_robot_v2")
     staged = _git("diff", "--cached", "--quiet", "--", "contracts/dummy_robot_v2")
     dpsdk_contract_clean = unstaged.returncode == 0 and staged.returncode == 0

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file refine_j1_collision.py
+# @brief 原位重建J1分件保守碰撞体并更新其5mm保护体。
+#
+# 与只写候选目录的视觉工具不同，build会覆盖meshes目录内两个STL与三份清单。
+# 分解只保留REST安装让位的几何表达，所有包络/源SHA证明局限于所给网格；不认证真实机械间隙，不调用ROS/电机。
 """分解 J1 凹支架的保守碰撞包络，保留 REST 安装让位空间；不连接 ROS/电机。"""
 import argparse
 import hashlib
@@ -14,10 +20,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_clearance_guards import expand_parts
 
 
+##
+# @brief 计算网格/清单原字节SHA。
+# @param path 输入文件Path。
+# @return 小写SHA-256；文件异常传播。
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+##
+# @brief 构造带padding的固定方向凸包并核float32后最小源余量。
+# @param points 三维输入顶点数组，单位mm，须足以建立三维ConvexHull。
+# @param padding_mm 支撑平面外移量mm，build使用0.301。
+# @return (Trimesh,最小余量mm)；小于固定0.3mm拒绝，几何退化由scipy异常报告。
+# 这里只核输入点到最终凸面半空间的包含余量；不做装配干涉或实机标定验证。
 def outer_envelope(points, padding_mm):
     """以固定支撑方向生成外包络，并在 float32 序列化精度下验证包含全部输入点。"""
     hull = ConvexHull(points)
@@ -38,6 +54,13 @@ def outer_envelope(points, padding_mm):
     return trimesh.Trimesh(vertices=rounded, faces=faces, process=False), margin
 
 
+##
+# @brief 切分支架、合并紧固件并原位更新目标及清单。
+# @param meshes 含两份source STL、clearance-guards.json及full_step_manifest.json的目录。
+# @return 本次refinement报告dict；缺源/清单行、几何或写入失败传播，可能留下部分更新。
+# z=24mm用两个反向平面几何裁剪，cap=false再各自外包凸包；不是仅丢弃跨面三角形。
+# 紧固件不重建，沿原网格合并；再对最终碰撞体expand_parts(5.01mm)，更新guard行及link1三角数。
+# source_step_sha256是写死的来源声明，不在此读取STEP重算；source_bracket/fasteners和输出SHA才来自当前实际文件。
 def build(meshes):
     """仅重建旋转底座及其 5mm 保护体；紧固件沿用原包络，其余连杆完全不变。"""
     bracket_path = meshes/'full_step_link1-bracket-source.stl'
@@ -81,6 +104,9 @@ def build(meshes):
     return report
 
 
+##
+# @brief 显式选择mesh目录后调用原位重建。
+# @return 无显式返回值；成功打印报告，错误传播；不会自动备份或回滚已写资源。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--meshes', type=Path, required=True, help='描述包 meshes 目录，原位更新明确的两个碰撞网格及清单')

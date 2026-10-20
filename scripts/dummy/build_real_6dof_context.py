@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file build_real_6dof_context.py
+# @brief 从同一次Gate/raw/action捕获生成显式预算与SHA绑定上下文。
+#
+# 全程离线读取，不连接ROS/设备；输出新context是验证输入关系，不签名授权。
+# producer_lag为Host接收−设备Source产生的偏移跨度max−min，消去固定时钟偏移，不是绝对单向通信延迟或跨设备同步保证。
 """从同一次 ROS 原始采集生成 join_real_6dof_evidence 所需的上下文。"""
 
 import argparse
@@ -23,6 +29,16 @@ PRODUCER_LAG_METHOD = "state_receive_minus_produced_offset_span"
 WINDOW_LAG_METHOD = PRODUCER_LAG_METHOD + "_motion_window"
 
 
+##
+# @brief 核取消过渡可计入观测覆盖的完整原页链与精确回执。
+# @param records 已解码DPRAW记录。
+# @param goal CSV目标行。
+# @param request 唯一Cancel原请求记录。
+# @param receipt 关联COMMITTED Cancel回执。
+# @param stop_page 当前run新stop epoch的CAN页。
+# @param client 唯一client hex身份。
+# @return None；静态hash不唯一、链/全六轴SENT/干净取消终态不符拒绝。
+# State没有run字段且事务号可滞后；只能用本run完整链补观测覆盖，不能把旧State operation号单独当Stop确认。
 def _cancel_coverage_chain(records, goal, request, receipt, stop_page, client):
     """完整取消链只授权观测覆盖，State旧事务号不作为Stop确认。"""
     boot, session, run = int(goal["boot"]), int(goal["session"]), int(goal["run_id"])
@@ -74,6 +90,15 @@ def _cancel_coverage_chain(records, goal, request, receipt, stop_page, client):
         raise ValueError("unlinked cancel coverage terminal")
 
 
+##
+# @brief 从首accepted到最终释放Idle限定同一次运动观测窗口。
+# @param timeline_data CSV原字节，含Gate事件。
+# @param records 同次raw解码记录。
+# @param client 非零唯一管理client hex。
+# @param state_max_age Host覆盖间隔/末尾Idle年龄上限µs。
+# @return (start_us,end_us,窗口全部State,release_run)；缺唯一release、错身份/epoch/覆盖失败拒绝。
+# 分别核Disable请求/回执/终页/新鲜Idle；取消段还核原Cancel请求、精确回执及完整原链。
+# 双时钟不直接比较绝对值，覆盖检查用Host when；Source produced用于随后offset跨度。只允许受证据支持的同session释放过渡，不以位移猜Run。
 def _motion_window(timeline_data, records, client, state_max_age):
     try:
         reader = csv.DictReader(io.StringIO(timeline_data.decode("utf-8")))
@@ -347,6 +372,11 @@ def _motion_window(timeline_data, records, client, state_max_age):
     return start, end, window_states, release_run
 
 
+##
+# @brief 校验六个有限正预算/容差值。
+# @param values list/tuple六项，排除bool。
+# @param name 诊断字段名。
+# @return 六项list；不符ValueError。
 def _six_positive(values, name):
     if (not isinstance(values, (list, tuple)) or len(values) != 6 or
             any(type(value) not in (int, float) or not math.isfinite(value) or
@@ -355,12 +385,33 @@ def _six_positive(values, name):
     return list(values)
 
 
+##
+# @brief 要求预算为精确正整数。
+# @param value 待核值。
+# @param name 错误字段名。
+# @return 原int，bool不接受；未独立检查uint64上界。
 def _positive_int(value, name):
     if type(value) is not int or value <= 0:
         raise ValueError(f"invalid {name}: positive integer required")
     return value
 
 
+##
+# @brief 校验源快照与预算后以独占link发布新context。
+# @param timeline_path CSV捕获路径。
+# @param raw_path DPRAW01路径。
+# @param action_path Action JSON路径。
+# @param output_path 全新context路径，父目录必须已存在，不能是任一输入。
+# @param path_tolerance_rad 六轴有限正路径容差rad。
+# @param goal_tolerance_rad 六轴有限正目标容差rad。
+# @param producer_lag_budget_us offset跨度预算µs，window_v2固定250000。
+# @param feedback_age_budget_us 六轴设备反馈年龄预算µs。
+# @param ros_feedback_lag_budget_us ROS/raw时间邻近预算µs。
+# @param gate_state_max_age_us Gate关联State最大Host年龄µs，不得超过joiner的1s上限。
+# @param producer_lag_scope full_stream_v1全流跨度，motion_window_v2只对严格关联活动窗计算。
+# @return 写出并返回context dict；输入/预算不符或目标已存在失败。
+# 输入用joiner._snapshot一次读取并绑定SHA；raw需同一非零管理client，Source产生时刻正且不回退（允许相等）。
+# 临时文件置同目录、flush/fsync文件后os.link到最终名，已存在不会覆盖；finally删临时名。未fsync父目录，不应扩大为断电持久事务保证。
 def build_context(timeline_path, raw_path, action_path, output_path, *,
                   path_tolerance_rad, goal_tolerance_rad,
                   producer_lag_budget_us, feedback_age_budget_us,
@@ -407,6 +458,9 @@ def build_context(timeline_path, raw_path, action_path, output_path, *,
             raise ValueError("nonmonotonic DPRAW01 State produced time")
         previous_produced = produced
         offsets.append(item["when"] - produced)
+    ##
+    # @brief 全流offset跨度保留environment_lag；v2另算活动窗跨度并在context保留两者及window run身份。
+    # 正窗口门槛通过不意味着全采集环境总跨度也低于预算。
     environment_lag = max(offsets) - min(offsets)
     try:
         action = json.loads(snapshots[2][0])
@@ -461,6 +515,10 @@ def build_context(timeline_path, raw_path, action_path, output_path, *,
     return context
 
 
+##
+# @brief 解析逗号分隔浮点文本。
+# @param value 命令行文本。
+# @return float列表；此层不核恰六项/正值/有限，交build_context验证。
 def _six_argument(value):
     try:
         return [float(part) for part in value.split(",")]
@@ -468,6 +526,10 @@ def _six_argument(value):
         raise argparse.ArgumentTypeError("expected six comma-separated numbers") from error
 
 
+##
+# @brief 要求显式捕获路径和预算后生成离线context。
+# @param argv 可选argv列表，None使用进程参数。
+# @return 成功0；OSError/ValueError转parser.error，打印路径和观察跨度。
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("timeline", "raw", "action", "output"):

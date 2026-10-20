@@ -1,3 +1,9 @@
+/**
+ * @file request_handle_destructor_tests.cpp
+ * @brief 验证尚未调度的RequestHandle析构释放本地pending槽。
+ *
+ * StaticOnly进程内服务只有1个pending槽；先销毁请求句柄再调度。结论不延伸为撤销已发到远端或已执行业务的请求。
+ */
 #include <cstdint>
 #include <cstdio>
 #include <utility>
@@ -5,11 +11,32 @@
 #include "dp_comm/dp_comm.hpp"
 
 namespace {
+/**
+ * @brief 请求夹具，value区分会被析构清理的1与应实际送达的2。
+ */
 struct Request { std::uint32_t value; };
+/**
+ * @brief 响应夹具，回显请求value以确定回调属于第二次请求。
+ */
 struct Response { std::uint32_t value; };
+/**
+ * @brief 本地typed service的请求/响应类型绑定，不含额外wire协议。
+ */
 struct Service { using Request = ::Request; using Response = ::Response; };
+/**
+ * @brief calls计服务执行次数，responses计结果Ok且回显2的回调次数。
+ */
 struct State { std::uint32_t calls = 0U; std::uint32_t responses = 0U; };
 
+/**
+ * @brief 回显请求并计一次真实服务调用。
+ * @param request 本次收到的值夹具。
+ * @param response dp_comm提供的可写响应槽。
+ * @par 未命名RequestInfo参数
+ * 此用例不检查来源身份。
+ * @param context 指向main中存活的State计数器。
+ * @return kOk，表示本地服务处理成功。
+ */
 dp::comm::Result serve(const Request &request, Response *response,
                        const dp::comm::RequestInfo &, void *context) {
   auto *state = static_cast<State *>(context);
@@ -18,6 +45,15 @@ dp::comm::Result serve(const Request &request, Response *response,
   return dp::comm::Result::kOk;
 }
 
+/**
+ * @brief 只计第二次请求的成功响应。
+ * @param result 调度结果；非Ok不计数。
+ * @param response 可空响应；只在非空且value=2时计数。
+ * @par 未命名ResponseInfo参数
+ * 此用例不使用其内容。
+ * @param context 指向State。
+ * @return 无；main核对最终计数。
+ */
 void receive(dp::comm::Result result, const Response *response,
              const dp::comm::ResponseInfo &, void *context) {
   if (result == dp::comm::Result::kOk && response && response->value == 2U) {
@@ -26,6 +62,12 @@ void receive(dp::comm::Result result, const Response *response,
 }
 }  // namespace
 
+/**
+ * @brief 用同一correlation=77重用唯一pending槽。
+ *
+ * 第一请求的句柄在executor运行前离开作用域；第二请求应成功占槽并仅被执行一次。两个请求的100ms超时是dp_comm请求参数，不是本测试强制测得的执行时长。
+ * @return 0 表示本文件全部检查通过；非零定位失败检查。
+ */
 int main() {
   dp::comm::StaticStorageConfig config{1U, 0U, 0U, 0U, 4U, sizeof(Request), 96U};
   config.services = 1U;

@@ -1,4 +1,9 @@
 """Real local operations used by R00 acceptance cases."""
+##
+# @file r00.py
+# @brief 环境/runner行为检查与内存硬件拒绝guard的R00适配器。
+#
+# AUD01只核路径sentinel与三文件摘要；AUD02实际运行三个临时unittest进程；AUD03仅调用自有PermissionError guard并统计内存元组，不能据此证明整个OS禁止任意串口/CAN/JLink访问。ROS01转R02实际运行时探针。
 
 from __future__ import annotations
 
@@ -23,10 +28,17 @@ SOURCE_FILES = (
 )
 
 
+##
+# @brief 对单文件原字节求SHA-256，不解析文件语义。
+# @param path 必须存在的文件Path，读失败异常传播。
+# @return 64字符小写SHA-256。
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+##
+# @brief 按固定SOURCE_FILES顺序拼相对路径及各文件hex摘要再SHA，不是整个仓库或构建产物摘要。
+# @return 三个选定输入按既定拼接规则的SHA-256。
 def _source_hash() -> str:
     digest = hashlib.sha256()
     for path in SOURCE_FILES:
@@ -35,6 +47,10 @@ def _source_hash() -> str:
     return digest.hexdigest()
 
 
+##
+# @brief 仅查repos sentinel、zenbedded_control目录和顶层CMakeLists三个形状条件。
+# @param path 待核SDK根路径，不自动解析为其上级。
+# @return 三个文件/目录形状条件是否都成立。
 def _valid_dpsdk_root(path: Path) -> bool:
     return (
         (path / "tools/ros2/zenbedded.repos").is_file()
@@ -43,6 +59,12 @@ def _valid_dpsdk_root(path: Path) -> bool:
     )
 
 
+##
+# @brief 发现0例或全部skip优先归退出4，否则保留子进程非零码，正常有效测试归0。
+# @param return_code 原子测试进程退出码。
+# @param discovered 解析发现测试数。
+# @param skipped 解析跳过测试数。
+# @return 分类退出码，空/全skip优先4。
 def _classified_exit(return_code: int, discovered: int, skipped: int) -> int:
     if discovered == 0 or discovered == skipped:
         return 4
@@ -51,6 +73,10 @@ def _classified_exit(return_code: int, discovered: int, skipped: int) -> int:
     return 0
 
 
+##
+# @brief 运行命令并捕获输出但只返回退出码；缺可执行文件归127，无显式timeout。
+# @param command 要实际运行的argv列表，不经本helper加硬件限制。
+# @return 子进程退出码，缺命令127。
 def _test_exit(command: list[str]) -> int:
     try:
         return subprocess.run(command, check=False, capture_output=True, text=True).returncode
@@ -58,6 +84,10 @@ def _test_exit(command: list[str]) -> int:
         return 127
 
 
+##
+# @brief 临时写test_probe.py并启动unittest discover，从文本Ran/skipped提取计数，退出后删除目录。
+# @param source 原样写入test_probe.py的Python文本，将在子进程执行。
+# @return (原退出码, 发现数, skip数, stdout+stderr)。
 def _run_temporary_unittest(source: str) -> tuple[int, int, int, str]:
     with tempfile.TemporaryDirectory(prefix="r00_aud02_") as temporary:
         test_file = Path(temporary) / "test_probe.py"
@@ -72,22 +102,38 @@ def _run_temporary_unittest(source: str) -> tuple[int, int, int, str]:
     return completed.returncode, int(match.group(1)) if match else 0, int(skipped.group(1)) if skipped else 0, output
 
 
+##
+# @brief 只记录请求并总抛PermissionError的内存guard；不是系统范围硬件访问拦截器。
 class _HardwareNoneGuard:
     """Reject hardware access before a serial, CAN, or J-Link API is invoked."""
 
+    ##
+    # @brief 初始化denied/opened空元组，opened在本guard中从不写入真实打开结果。
+    # @return None；仅初始化内存元组。
     def __init__(self) -> None:
         self.denied_probes: tuple[str, ...] = ()
         self.opened_probes: tuple[str, ...] = ()
 
+    ##
+    # @brief 先记录probe名称再抛PermissionError，根本不调用硬件API。
+    # @param probe ttyACM0/socketcan/jlink等guard名称，仅用于内存拒绝记录。
+    # @return 无正常返回；总抛PermissionError。
     def request_probe(self, probe: str) -> None:
         self.denied_probes = (*self.denied_probes, probe)
         raise PermissionError(f"hardware probe denied in --hardware none: {probe}")
 
 
+##
+# @brief 只接受hardware=none，依次请求三个自有guard名称并核拒绝计数；不探测真实设备。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 内存guard的拒绝名称与零打开计数字典。
 def _hardware_denial(stimulus: dict[str, Any]) -> dict[str, Any]:
     if stimulus.get("hardware") != "none":
         raise ValueError("R00 adapter only supports --hardware none")
     guard = _HardwareNoneGuard()
+    ##
+    # @par 拒绝证据范围
+    # 三个字符串只经过本guard，opened_probes从未打开API；零计数是该局部流程性质，不是对所有进程/设备访问的审计。
     for probe in ("ttyACM0", "socketcan", "jlink"):
         try:
             guard.request_probe(probe)
@@ -103,6 +149,11 @@ def _hardware_denial(stimulus: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+##
+# @brief 按AUD01/02/03执行对应局部检查或把ROS01委托R02，形成source/trace摘要和observations。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 对应case结果字典；ROS01直接返回R02结果，其他附document_utility标签。
 def run_r00_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     source_hash_before = _source_hash()
     observations: dict[str, Any]

@@ -1,4 +1,9 @@
 """限时自动测试的目标连续性与终止协议；不连接硬件。"""
+##
+# @file test_manual_moveit_autotest.py
+# @brief 自动测试会话的采样包络、期限与连续路径回执的离线回归。
+#
+# AutoTestSession为真实产品对象，panel/tab/planner由NS、Mock和Future替代。q/路径为rad，limits与速度输入为deg/deg/s，Host monotonic期限为秒，chain_phase沿产品协议使用µs；没有发送设备命令。
 import sys,math,random
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -8,6 +13,9 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from manual_moveit_autotest import AutoTestSession, next_test_goal
 
 
+##
+# @brief 固定随机种子采100目标，核单步3..15°、硬范围及正向偏好，不当作碰撞可行性证明。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_random_test_targets_are_bounded_different_and_prefer_forward_direction():
     start=(0.,0.,math.pi/2,0.,.3,0.)
     limits=[(-169.,169.),(-72.,89.),(36.,179.),(-179.,179.),(-99.,99.),(-719.,719.)]
@@ -20,6 +28,9 @@ def test_random_test_targets_are_bounded_different_and_prefer_forward_direction(
         assert q[4]>0.
 
 
+##
+# @brief 构造active会话与Mock面板，人工身份(7,1,9)、deadline10s及Home=J3 90°，供状态机测试复用。
+# @return (AutoTestSession, tab替身)；对象已人工置active，不代表已获设备许可。
 def session():
     panel=NS(actual_q=[0.,0.,math.pi/2,0.,0.,0.],cfg={'home_deg':[0,0,90,0,0,0]},busy=True,
              speed_input=Mock(),acceleration_input=Mock(),release=Mock(),fresh=lambda:True,authorized=True,
@@ -30,6 +41,9 @@ def session():
     return s,tab
 
 
+##
+# @brief 时长到期只进入returning，不取消正在执行的段；收到标记为Home的完成且实际位于Home后才completed。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_expiry_does_not_interrupt_inflight_motion_and_requires_home_receipt():
     s,tab=session();tab.executing=True;s.request_finish('测试时长到期')
     assert s.active and s.returning
@@ -39,6 +53,9 @@ def test_expiry_does_not_interrupt_inflight_motion_and_requires_home_receipt():
     assert s.result=='completed'
 
 
+##
+# @brief 碰撞类错误终止会话、请求STOP且不自动规划回Home。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_error_aborts_and_never_attempts_automatic_home():
     s,tab=session();tab.executing=True;s.abort('碰撞检查失败')
     assert not s.active and s.result=='error'
@@ -46,6 +63,9 @@ def test_error_aborts_and_never_attempts_automatic_home():
     assert not s.returning
 
 
+##
+# @brief abort(stop=False)取消未完成Future并结束会话，不向panel.release发STOP或安排返程。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_cancel_cancels_prefetch_and_has_no_future_home_motion():
     from concurrent.futures import Future
     s,tab=session();f=Future();s.future=f;s.abort('用户停止',stop=False)
@@ -53,12 +73,21 @@ def test_cancel_cancels_prefetch_and_has_no_future_home_motion():
     tab.panel.release.assert_not_called()
 
 
+##
+# @brief J1偏离Home0.1rad时，即使回调声称Home完成也必须error并请求STOP。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_home_completion_requires_actual_home_position():
     s,tab=session();s.executing_home=True;tab.panel.actual_q[0]=.1
     s.on_path_completed()
     assert not s.active and s.result=='error'
     tab.panel.release.assert_called_once_with('STOP')
 
+##
+# @brief 按small/medium/large核单步峰值分别3..15°、8..40°、16..80°，并保留正腕偏好。
+# @param amplitude 采样档位small/medium/large。
+# @param maximum 该档单步最大角度deg。
+# @param minimum 该档单步最小峰值deg。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 @pytest.mark.parametrize('amplitude,maximum,minimum', [('small',15,3),('medium',40,8),('large',80,16)])
 def test_amplitude_tiers_change_motion_range(amplitude, maximum, minimum):
     start=(0.,0.,math.pi/2,0.,.3,0.)
@@ -71,6 +100,9 @@ def test_amplitude_tiers_change_motion_range(amplitude, maximum, minimum):
     assert all(q[4]>=0 for q in goals)
 
 
+##
+# @brief 手动中断走interrupted并发STOP，文本及琥珀色区别于失败。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_manual_interrupt_cancels_motion_and_is_distinct_from_failure():
     s,tab=session();tab.auto_status=Mock();tab.executing=True
     s.interrupt()
@@ -80,6 +112,9 @@ def test_manual_interrupt_cancels_motion_and_is_distinct_from_failure():
     assert '#b45309' in tab.auto_status.setStyleSheet.call_args[0][0]
 
 
+##
+# @brief Mock状态标签核error红色、complete绿色；只检UI调用值。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_failure_and_pass_have_visible_distinct_result_colors():
     s,tab=session();tab.auto_status=Mock();s.abort('故障')
     assert '#b91c1c' in tab.auto_status.setStyleSheet.call_args[0][0]
@@ -87,6 +122,9 @@ def test_failure_and_pass_have_visible_distinct_result_colors():
     assert '#15803d' in tab.auto_status.setStyleSheet.call_args[0][0]
 
 
+##
+# @brief 起点J4/J6远离anchor时仍能生成合法且单步≤15°目标，不强迫瞬间回anchor包络。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_sampling_can_return_from_an_ik_branch_outside_original_anchor_box():
     anchor=(0.,0.,math.pi/2,0.,.3,0.)
     start=(0.,0.,math.pi/2,math.radians(150),.3,math.radians(200))
@@ -96,6 +134,9 @@ def test_sampling_can_return_from_an_ik_branch_outside_original_anchor_box():
     assert max(abs(a-b) for a,b in zip(q,start))<=math.radians(15)+1e-9
 
 
+##
+# @brief 有cancel_motion_hold时中断优先调用受控Hold接口，不再调用release；只核方法选择。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_manual_interrupt_uses_controlled_hold_when_transport_supports_it():
     s,tab=session();tab.panel.cancel_motion_hold=Mock();s.interrupt()
     tab.panel.cancel_motion_hold.assert_called_once_with()
@@ -103,6 +144,9 @@ def test_manual_interrupt_uses_controlled_hold_when_transport_supports_it():
     assert s.result=='interrupted'
 
 
+##
+# @brief 固定种子走300步，核相对anchor前三轴≤80°、后三轴≤120°，防止腕部累积绕圈。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_long_random_walk_does_not_accumulate_wrist_turns_outside_session_envelope():
     anchor=(0.,0.,math.pi/2,0.,.3,0.);q=anchor;direction=(0.,)*6
     limits=[(-169,169),(-72,89),(36,179),(-179,179),(-99,99),(-719,719)]
@@ -114,6 +158,9 @@ def test_long_random_walk_does_not_accumulate_wrist_turns_outside_session_envelo
         direction=tuple(b-a for a,b in zip(q,goal));q=goal
 
 
+##
+# @brief J5从正80°向负偏好靠近但不强跨零，单步仍≤40°。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_opposite_wrist_preference_can_approach_sign_without_exceeding_step():
     q=(0.,0.,math.pi/2,0.,math.radians(80.),0.)
     limits=[(-169,169),(-72,89),(36,179),(-179,179),(-99,99),(-719,719)]
@@ -122,6 +169,9 @@ def test_opposite_wrist_preference_can_approach_sign_without_exceeding_step():
     assert max(abs(a-b) for a,b in zip(q,goal))<=math.radians(40)+1e-9
 
 
+##
+# @brief 100次候选继续请求validity，不能因旧8次上限结束会话；Mock没有真实碰撞结果。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_candidate_collision_rejections_do_not_end_unattended_session():
     s,tab=session()
     tab.panel.limits=[(-169,169),(-72,89),(36,179),(-179,179),(-99,99),(-719,719)]
@@ -137,6 +187,10 @@ def test_candidate_collision_rejections_do_not_end_unattended_session():
     tab.cancel_execution.assert_not_called()
 
 
+##
+# @brief 注入42s/53s时钟使每个候选各获12s服务期限，但会话总deadline1000s不变。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_new_candidate_has_own_service_deadline_without_extending_test(monkeypatch):
     s,tab=session()
     tab.panel.limits=[(-169,169),(-72,89),(36,179),(-179,179),(-99,99),(-719,719)]
@@ -151,6 +205,10 @@ def test_new_candidate_has_own_service_deadline_without_extending_test(monkeypat
     assert s.plan_deadline==65. and s.deadline==1000.
 
 
+##
+# @brief 构造待拼接路径并调用chain tick，更新未确认时只保留chain_pending，不从旧尾部提前_begin。
+# @param tmp_path pytest临时目录Path；所有本用例产物限制在该目录。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_chain_update_does_not_start_plan_from_old_tail_before_ack(tmp_path):
     from manual_moveit_continuous import PreparedPath
     s,t=session();s.chain_enabled=True;s.chain_live=True;s.chain_phase=400000
@@ -164,6 +222,9 @@ def test_chain_update_does_not_start_plan_from_old_tail_before_ack(tmp_path):
     s._begin.assert_not_called()
 
 
+##
+# @brief started_motion缺失时保留queued，不发送链更新，不建立chain_pending。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_chain_waits_for_native_begin_receipt_before_submitting_update():
     s,t=session();s.chain_live=True;t.started_motion=None
     s.queued={'home':False}
@@ -171,6 +232,10 @@ def test_chain_waits_for_native_begin_receipt_before_submitting_update():
     assert s.queued=={'home':False} and s.chain_pending is None
 
 
+##
+# @brief 按接受缓冲和新鲜进度外推虚影，进度陈旧后冻结，inactive不改预览；虚影不是实际反馈。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_chain_preview_tracks_accepted_buffer_and_freezes_when_progress_is_stale(monkeypatch):
     from manual_moveit_continuous import PreparedPath
     s,t=session();s.chain_live=True;t.started_motion=10
@@ -194,6 +259,13 @@ def test_chain_preview_tracks_accepted_buffer_and_freezes_when_progress_is_stale
     t.panel.set_preview_pose.assert_not_called()
 
 
+##
+# @brief 普通近腕目标若路径绕到7rad则重新采样，远目标/返Home路径保留；所有分支仍未入执行队列。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @param home 是否正在规划Home，返程不套普通近腕绕行拒绝。
+# @param target J6目标rad，0.2或7。
+# @param reject 期望是否丢弃路径并重采样。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 @pytest.mark.parametrize('home,target,reject',[(False,.2,True),(False,7.,False),(True,.2,False)])
 def test_autotest_discards_gratuitous_multi_turn_wrist_route_before_execution(monkeypatch,home,target,reject):
     from concurrent.futures import Future

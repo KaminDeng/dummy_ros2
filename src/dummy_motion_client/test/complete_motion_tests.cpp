@@ -1,7 +1,20 @@
+/**
+ * @file complete_motion_tests.cpp
+ * @brief 核J1完成屏障、同值抑制prime的排空证据及全部到达排列。
+ *
+ * 复用action_test_support.hpp的内存Client/计数Port/Harness，管理快照是手工合成；不创建ROS节点或执行真实轨迹。位置rad，时间为人工Hostµs，轨迹点time为秒。
+ */
 #include "action_test_support.hpp"
 #include <iostream>
 #include <algorithm>
 #include <limits>
+/**
+ * @brief 在Complete后下一Hold epoch排列四类证据，检查只有完整同根屏障才能Succeeded。
+ * @param order 四事件排列：0末更新登记、1正式State codec输入、2hold_drain、3管理/观测回复。
+ * @param invalid 0正例；1..19逐项破坏quiescent/disposition/身份/代次/位置/掩码/seq/年龄/ready/容差/撤销等。
+ * @return 无；require不符抛异常。
+ * @details processed_generation12785表示新目标已处理，但committed_seq12784仍指前次已发送组，不能把抑制目标代次误认线序号ACK。
+ */
 void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned invalid=0U) {
   using namespace action_test;
   namespace wire=dp::protocol::dummy_robot_v2;
@@ -28,6 +41,10 @@ void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned inva
   processed.disposition=1U; processed.quiescent=true;
   processed.observed_us=16U; processed.max_state_age_us=250000U;
   processed.tolerance[0]=0.01;
+  /**
+   * @brief 1非静止、2无disposition、3..6错boot/session/ref/motion、7旧processed代次、8错排空位置；
+   * 9/10缺sent/submitted、11错committed、12年龄仅1µs、13State位置错、14not-ready、15管理未成功、16NaN容差、17负容差、18撤销排空、19错reply epoch均不得完成。
+   */
   switch(invalid) {
     case 1: processed.quiescent=false; break;
     case 2: processed.disposition=0U; break;
@@ -73,6 +90,11 @@ void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned inva
     require(h.gate.phase()==Phase::kStopping && h.gate.error()=="RESULT_UNCONFIRMED");
   }
 }
+/**
+ * @brief 先完成两目标，再检查24种证据排列和19个负例。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 原generation记录不能重入；每个负例保持terminal=None，推进到1000014µs后必须Stopping/RESULT_UNCONFIRMED，不把内层Succeeded当外层完成。
+ */
 int main() {
   using namespace action_test;
   Harness harness; harness.enable(); unsigned successes=0;

@@ -1,4 +1,9 @@
 """真实Qt面板验证：模拟模式不启动Native，切换目标后清除原授权。"""
+##
+# @file test_manual_panel_backend_qt.py
+# @brief 真实Qt面板搭配软件后端的交互与后端切换回归。
+#
+# 构造真实JointPanel和rclpy节点，但QProcess.start被替身拦截，三项发现查询注入内存Graph，ApplyPlanningScene成功由Future样式NS注入，不启动Native/MoveIt。Qt事件泵和软件advance有实际运行，所得反馈是纯软件，不是实机。
 import json
 import math
 import sys
@@ -13,6 +18,10 @@ sys.path.insert(0, str(SCRIPTS))
 from manual_joint_panel import JointPanel
 
 
+##
+# @brief 处理五轮Qt事件、每轮等待20ms后手动tick，用于驱动按钮和软件worker信号。
+# @param panel 真实Qt JointPanel，worker为软件后端。
+# @return 无；事件泵不等待真实运动完成。
 def pump(panel):
     for _ in range(5):
         QtWidgets.QApplication.processEvents()
@@ -20,6 +29,11 @@ def pump(panel):
     panel.tick()
 
 
+##
+# @brief 核确认拒绝/跳过确认、软件2°运动和STOP；切real仅记录一次start调用并清旧反馈/授权，切回sim仍不自动恢复授权。
+# @param tmp_path pytest临时目录Path；所有本用例产物限制在该目录。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_simulator_panel_move_stop_and_switch_without_hardware(tmp_path, monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     config = json.loads((SCRIPTS.parent/'config/manual_joint_panel.json').read_text())
@@ -35,7 +49,7 @@ def test_simulator_panel_move_stop_and_switch_without_hardware(tmp_path, monkeyp
     monkeypatch.setattr(QtWidgets.QMessageBox, 'question', lambda *args: QtWidgets.QMessageBox.Yes)
     rclpy.init(args=[])
     node = rclpy.create_node('panel_backend_test')
-    # 与Apply回执替身配套，显式提供唯一MoveIt发现图，不依赖真实MoveIt或绕过生产检查。
+    # 与Apply回执替身配套，提供唯一发现图；原生产门禁与UI断言均保留。
     from test_manual_moveit_service_topology import Graph
     graph = Graph()
     for method in ('count_services', 'get_node_names_and_namespaces',
@@ -55,6 +69,11 @@ def test_simulator_panel_move_stop_and_switch_without_hardware(tmp_path, monkeyp
         panel.resume.click(); pump(panel)
         assert dialogs == ['恢复控制'] and not panel.authorized
         panel.skip_confirmations.setChecked(True)
+        ##
+        # @par 内部回调 unexpected_dialog
+        # 跳过确认已选中后若仍弹框立即抛AssertionError，防止测试默许多余确认。
+        # 参数 args：额外位置参数，替身忽略。
+        # 返回：无正常返回；总抛AssertionError。
         def unexpected_dialog(*args):
             raise AssertionError('勾选跳过确认后仍弹出执行确认')
         monkeypatch.setattr(QtWidgets.QMessageBox, 'question', unexpected_dialog)

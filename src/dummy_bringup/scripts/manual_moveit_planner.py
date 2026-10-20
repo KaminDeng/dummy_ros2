@@ -1,18 +1,34 @@
+##
+# @file manual_moveit_planner.py
+# @brief 以异步只读服务对接 MoveIt 的 FK、IK、规划和状态有效性检查。
+# MoveIt 页和自动测试调度器持有返回 future，由主面板 rclpy.spin_once 推进响应；此模块不持有 USB，不直接执行运动，规划成功后仍须验证路径、场景和设备身份。
 """面板的异步 MoveIt 服务适配；不持有 USB、不执行运动。"""
 import math
 import re
 from concurrent.futures import Future
 
+##
+# @brief 作为同一碰撞世界发现门的六个绝对服务名。
+# Apply/Get用于场景事务；规划/FK/IK/validity请求虽只读，也须六项发现一致，不能各自只看自己的service_is_ready。
 MOVEIT_SCENE_SERVICES = (
     '/apply_planning_scene', '/get_planning_scene', '/plan_kinematic_path',
     '/check_state_validity', '/compute_ik', '/compute_fk',
 )
 
 
+##
+# @brief 仅表示发现尚未完整/节点列表暂变的ValueError子类。
+# 不表示服务重复、跨owner或图查询未知异常；ObstacleScene只在初次未发请求且期限内对它等待。
 class MoveItDiscoveryPending(ValueError):
     """服务尚未完整发现，与已发现重复或跨节点来源分开处理。"""
 
 
+##
+# @brief 核当前发现图六服务各一实例，并返回公共/读取场景提供者组合。
+# 先数实例再去重节点名，避免两个同名move_group被抹成一个；公共五服务必须同owner。Get可同owner或同namespace、名称匹配公共名加_private_十进制后缀的Jazzy monitor。
+# 这种名称兼容不是PID/进程认证，发现查询也非原子全图快照；所有不完整/重复/未知失败均不允许调用方继续请求。
+# @param node 主面板rclpy Node，提供名称解析、count_services与逐节点服务列表。
+# @return ((公共node名, namespace), (Get提供node名, namespace))；缺发现抛MoveItDiscoveryPending，重复/不一致/查询异常抛ValueError。
 def require_unique_moveit(node):
     """要求场景、规划、IK/FK与碰撞服务由同一唯一节点提供。
 
@@ -56,6 +72,8 @@ def require_unique_moveit(node):
     except Exception as error:
         raise ValueError('MoveIt服务来源查询失败，禁止规划：'+str(error)) from error
 
+##
+# 偏好描述提供给下拉框和帮助提示；这是候选排序策略，不是绕过碰撞、限位或设备策略的许可。
 IK_PREFERENCES = (
     ('nearest', '最短关节行程', '优先最小化六轴最大转角，通常耗时更短；适合日常点位测试，J6自动选择最近合法圈数。'),
     ('wrist_same', '保持腕部构型', '优先保持当前J5正负方向，减少腕部翻转；适合连续微调。当前构型不可达时允许其他有效解。'),
@@ -65,6 +83,14 @@ IK_PREFERENCES = (
 )
 
 
+##
+# @brief 按所选偏好给有效逆解生成可比较的代价元组。
+# 腕部方向由 J5 判断；wrist_same 在起点 J5 小于 1° 时不以噪声正负号加罚。偏好只排序已通过范围筛选的候选，不保证一定找到该构型。
+# @param start 实际起点六轴 rad。
+# @param goal 候选目标六轴 rad，已选合法等效圈数。
+# @param preference IK_PREFERENCES 中的偏好键。
+# @param home 可选 Home 六轴 rad，仅 near_home 使用。
+# @return tuple：越小越优；腕部罚项/最大行程/总行程，或 Home 距离及当前行程。
 def ik_goal_cost(start, goal, preference='nearest', home=None):
     delta = [abs(a-b) for a,b in zip(start,goal)]
     penalty = 0
@@ -83,8 +109,19 @@ def ik_goal_cost(start, goal, preference='nearest', home=None):
     return (penalty, max(delta), sum(delta))
 
 
+##
+# 随机测试幅度以度存储；sample_reasonable_joints 转为 rad 后在实际点邻域采样。
 MOTION_AMPLITUDES = (('small', '小（15°）', 15.), ('medium', '中（40°）', 40.), ('large', '大（80°）', 80.))
 
+##
+# @brief 在实际姿态附近随机生成范围内六轴目标。
+# 采样结果仅检查数值/范围，尚未做碰撞或可达路径检查；偏好区间无宽度时会尝试该符号下的完整合法范围。
+# @param start 六轴实际起点 rad。
+# @param limits_deg 六对关节工作范围，单位 °。
+# @param rng 提供 uniform(low,high) 的随机数对象。
+# @param preference 逆解偏好键；腕部正/反偏好限制 J5 采样符号。
+# @param amplitude 可选 small/medium/large 幅度键；省略时前三轴 20°、腕部 30°。
+# @return tuple：六轴目标 rad。
 def sample_reasonable_joints(start, limits_deg, rng, preference='nearest', amplitude=None):
     if len(start) != 6 or len(limits_deg) != 6 or not all(math.isfinite(v) for v in start):
         raise ValueError('随机目标需要有效六轴起点')
@@ -104,6 +141,13 @@ def sample_reasonable_joints(start, limits_deg, rng, preference='nearest', ampli
     return tuple(result)
 
 
+##
+# @brief 为每个逆解关节选择最靠近参考起点的合法等效圈数。
+# 逐轴求可用的 2π 整数圈区间并选择最近圈数；只用于 IK 后的规范化，不应用于用户明确要求的多圈关节目标。
+# @param start 圈数选择参考六轴 rad，通常是实际起点。
+# @param goal 逆解给出的六轴 rad。
+# @param limits_deg 六轴允许区间，单位 °。
+# @return tuple：在范围内的六轴等效逆解 rad。
 def nearest_ik_goal(start, goal, limits_deg):
     """参考MoveL的范围筛选/最小最大行程原则，为IK解选择最近合法等效圈数。
 
@@ -128,6 +172,13 @@ def nearest_ik_goal(start, goal, limits_deg):
     return tuple(selected)
 
 
+##
+# @brief 校验完整规划轨迹并重排到面板六轴顺序。
+# 检查关节集合、轴数、非负严格递增时间、有限值和逐点限位；不检查点间碰撞、速度或实际执行收据。
+# @param trajectory MoveIt JointTrajectory；positions 单位 rad，时间由 sec/nanosec 组成。
+# @param names 面板要求的六个关节名称。
+# @param limits_deg 面板六轴工作范围，单位 °。
+# @return tuple[tuple]：按 names 重排后的全部六轴 rad 路点。
 def validate_trajectory(trajectory, names, limits_deg):
     """返回原顺序的全部路点（弧度）；不裁剪、不只取末点。"""
     actual = list(trajectory.joint_names)
@@ -152,6 +203,13 @@ def validate_trajectory(trajectory, names, limits_deg):
     return tuple(result)
 
 
+##
+# @brief 将角度制 roll/pitch/yaw 转为 ROS 四元数。
+# 采用标准 roll/pitch/yaw 组合公式，输入必须有限；四元数顺序与 ROS 消息字段一致。
+# @param roll_deg 绕 X 的 roll，°。
+# @param pitch_deg 绕 Y 的 pitch，°。
+# @param yaw_deg 绕 Z 的 yaw，°。
+# @return tuple[float,float,float,float]：(x,y,z,w)，无量纲。
 def rpy_quaternion(roll_deg, pitch_deg, yaw_deg):
     if not all(math.isfinite(v) for v in (roll_deg, pitch_deg, yaw_deg)):
         raise ValueError('姿态角必须有限')
@@ -161,8 +219,19 @@ def rpy_quaternion(roll_deg, pitch_deg, yaw_deg):
             cr*cp*sy-sr*sp*cy, cr*cp*cy+sr*sp*sy)
 
 
+##
+# @class MoveItPlanner
+# @brief 保存 ROS 服务客户端及组合请求的回退策略。
+# 服务均为只读计算；返回的 rclpy future 或 concurrent.futures.Future 必须由外层事件循环轮询。取消组合 future 会取消本地子 future，不能撤销服务端已经开始的计算，更不能替代设备运动取消。
 class MoveItPlanner:
     """call_async 返回 future，由原面板 rclpy.spin_once 驱动。"""
+    ##
+    # @brief 建立 FK、IK、路径规划与碰撞有效性客户端。
+    # 有效性检查可并行挂起多个只读请求，响应队列 depth=32 保留默认服务可靠性/持久性设置。客户端建立不等于服务已可用。
+    # @param node 主面板持有的 rclpy Node，负责客户端和 spin_once 生命周期。
+    # @param names 六轴名称顺序。
+    # @param limits_deg 六轴工作范围，单位 °。
+    # @return 无；通过实例状态或界面产生作用。
     def __init__(self, node, names, limits_deg):
         from moveit_msgs.srv import GetMotionPlan, GetPositionFK, GetPositionIK, GetStateValidity
         from rclpy.qos import QoSProfile, qos_profile_services_default
@@ -178,6 +247,11 @@ class MoveItPlanner:
         self.validity = node.create_client(GetStateValidity, '/check_state_validity',
                                            qos_profile=validity_qos)
 
+    ##
+    # @brief 构造带显式地面保护体的六轴 RobotState。
+    # 保护盒在 base_link 下顶面位于 Z=0.055 m；base_link 与 clearance_base_link 豁免安装接触，其余连杆仍参与碰撞检查。这是规划模型保护，不是实机碰撞传感器。
+    # @param positions 六轴位置 rad，必须有限且完整。
+    # @return RobotState：关节顺序为 self.names，is_diff=True，并携带地面附着碰撞体。
     def robot_state(self, positions):
         from moveit_msgs.msg import RobotState, AttachedCollisionObject, CollisionObject
         from sensor_msgs.msg import JointState
@@ -196,6 +270,11 @@ class MoveItPlanner:
         return RobotState(joint_state=JointState(name=self.names, position=list(positions)),
                           attached_collision_objects=[attached],is_diff=True)
 
+    ##
+    # @brief 异步请求 link6_1_1 相对基座的正运动学。
+    # @param positions 六轴位置 rad，通常来自新鲜实际反馈。
+    # @return rclpy future：GetPositionFK 响应；调用方检查错误码和位姿内容。
+    # @exception ValueError 提交每个底层请求前六服务唯一来源门未通过；图门不替代场景版本/路径和执行前再次核对。
     def request_fk(self, positions):
         require_unique_moveit(self.node)
         from moveit_msgs.srv import GetPositionFK
@@ -204,6 +283,18 @@ class MoveItPlanner:
             header=Header(frame_id='base_link'), fk_link_names=['link6_1_1'],
             robot_state=self.robot_state(positions)))
 
+    ##
+    # @brief 并行探索多个数值 IK 种子并按偏好选择合法候选。
+    # 不枚举解析八解；实际种子来自当前位置、可选旧目标、腕部翻转和 Home。等待所有子请求结束后汇总；无有效解时优先返回服务失败响应，否则以异常结束。外层仍须验证返回码及 selected_goal。
+    # @param positions 实际起点六轴 rad，也是主要 IK 种子。
+    # @param xyz_mm 基座坐标下目标 XYZ，毫米。
+    # @param rpy_deg 目标 roll/pitch/yaw，°。
+    # @param preference 逆解候选排序偏好键。
+    # @param home 可选 Home 六轴 °；near_home 时增加此种子并以其选圈。
+    # @param rest 保留的调用接口参数；当前实现未使用。
+    # @param seed_goal 可选先前目标六轴 rad；去重后加入探索种子。
+    # @return Future：所选 GetPositionIK 响应；有效时另有 selected_goal 六轴 rad 属性。
+    # @exception ValueError 提交每个底层请求前六服务唯一来源门未通过；图门不替代场景版本/路径和执行前再次核对。
     def request_ik(self, positions, xyz_mm, rpy_deg, preference='nearest', home=None, rest=None, seed_goal=None):
         # 两个种子探索腕部解支，再沿原固件MoveL原则筛选；不是解析八解求解器。
         seeds = [tuple(positions)]
@@ -222,8 +313,16 @@ class MoveItPlanner:
         if preference == 'near_home' and home is not None:
             seed = tuple(math.radians(q) for q in home)
             if seed not in seeds:seeds.append(seed)
+        ##
+        # 每个种子各自调用服务；combined 是宿主聚合 future，不属于设备动作会话，selected_goal 仅在成功候选被选出时设置。
         requests = [self._request_ik_single(seed,xyz_mm,rpy_deg) for seed in seeds]
         combined = Future()
+        ##
+        # @par 内部回调 MoveItPlanner.request_ik.collect
+        # 在所有 IK 子 future 完成后筛选候选并结束组合 future。
+        # 组合 future 已结束时立即返回，避免取消后的迟到响应修改结果；候选异常被忽略，成功候选按 ik_goal_cost 排序。
+        # 参数 _：触发回调的某个子 future；通过闭包统一读取全部 requests。
+        # 返回：无；通过实例状态或界面产生作用。
         def collect(_):
             if combined.done() or not all(f.done() for f in requests):return
             valid, failures = [], []
@@ -251,12 +350,26 @@ class MoveItPlanner:
             else:
                 combined.set_exception(ValueError('逆解服务没有返回有效候选，请缩小目标或换偏好后重试'))
         for request in requests:request.add_done_callback(collect)
+        ##
+        # @par 内部回调 MoveItPlanner.request_ik.cancel_children
+        # 将组合 IK future 的本地取消传播给子 future。
+        # 仅在 cancelled() 为真时调用各 request.cancel()；此操作不会发送设备取消，也不保证远端服务终止计算。
+        # 参数 future：组合 concurrent.futures.Future。
+        # 返回：无；通过实例状态或界面产生作用。
         def cancel_children(future):
             if future.cancelled():
                 for request in requests:request.cancel()
         combined.add_done_callback(cancel_children)
         return combined
 
+    ##
+    # @brief 构造一个种子的避碰 IK 请求。
+    # 请求 dummy_arm、link6_1_1，位置转米、姿态转四元数，服务求解超时为 120 ms；本机等待超时由上层管理。
+    # @param positions 种子六轴 rad。
+    # @param xyz_mm 目标基座 XYZ 毫米。
+    # @param rpy_deg 目标 roll/pitch/yaw，°。
+    # @return rclpy future：一个 GetPositionIK 异步响应。
+    # @exception ValueError 提交每个底层请求前六服务唯一来源门未通过；图门不替代场景版本/路径和执行前再次核对。
     def _request_ik_single(self, positions, xyz_mm, rpy_deg):
         require_unique_moveit(self.node)
         from builtin_interfaces.msg import Duration
@@ -275,13 +388,34 @@ class MoveItPlanner:
             avoid_collisions=True, ik_link_name='link6_1_1', pose_stamped=pose,
             timeout=Duration(nanosec=120000000))))
 
+    ##
+    # @brief 异步规划并按失败码依次扩大搜索预算和范围。
+    # 先采用 J6 局部窗口和快速配置；指定失败码触发较长局部搜索，再允许完整工作域。部分无效路径错误会提高几何检查精度；不改目标，不把超时视为关节限位。
+    # @param start 实际起点六轴 rad。
+    # @param goal 已选定、保持圈数语义的目标六轴 rad。
+    # @return Future：最终 GetMotionPlan 响应；发生回退时附 retried=True。
+    # @exception ValueError 提交每个底层请求前六服务唯一来源门未通过；图门不替代场景版本/路径和执行前再次核对。
     def request_plan(self, start, goal):
         # 优先快速规划；没有找到路径时对同一目标自动增加搜索时间，不能把性能目标当限位。
         combined = Future()
         requests = []
+        ##
+        # @par 内部辅助函数 MoveItPlanner.request_plan.submit
+        # 提交当前一轮规划并安装结果回调。
+        # 请求由闭包 requests 保存，以便组合取消统一传递；collect 决定重试或结束组合 future。
+        # 参数 extended：是否使用较长规划时间和更多尝试。
+        # 参数 wrist_window：是否保留 J6 起终点附近的局部搜索窗。
+        # 参数 precise：是否选择更细几何检查的 planner 配置。
+        # 返回：无；通过实例状态或界面产生作用。
         def submit(extended=False,wrist_window=True,precise=False):
             child = self._request_plan_single(start,goal,extended,wrist_window=wrist_window,precise=precise)
             requests.append(child)
+            ##
+            # @par 内部回调 MoveItPlanner.request_plan.submit.collect
+            # 消费一轮规划响应，必要时递交下一轮。
+            # 仅在组合 future 未结束时处理；服务异常转为组合异常，指定失败码且仍处局部窗口时回退重试。
+            # 参数 future：本轮 GetMotionPlan 子 future。
+            # 返回：无；通过实例状态或界面产生作用。
             def collect(future):
                 if combined.done():return
                 try:
@@ -297,6 +431,12 @@ class MoveItPlanner:
                 except Exception as error:
                     combined.set_exception(error)
             child.add_done_callback(collect)
+        ##
+        # @par 内部回调 MoveItPlanner.request_plan.cancel_children
+        # 将组合规划 future 的取消传给已提交子 future。
+        # 只取消宿主响应等待；服务端工作可能继续，迟到响应因 combined.done() 被忽略。
+        # 参数 future：组合规划 Future。
+        # 返回：无；通过实例状态或界面产生作用。
         def cancel_children(future):
             if future.cancelled():
                 for child in requests:child.cancel()
@@ -304,6 +444,16 @@ class MoveItPlanner:
         submit()
         return combined
 
+    ##
+    # @brief 按当前部署动态上限构建单轮关节空间规划请求。
+    # motion_parameters 可由调用方注入，提供速度 °/s、加速度 rad/s²及对应部署上限；比例传给 MoveIt。目标约束容差 0.0001 rad；这里不截断或改写目标。
+    # @param start 起点六轴 rad。
+    # @param goal 目标六轴 rad；逐轴检查部署工作范围。
+    # @param extended True 时使用 2 s 和两次尝试；否则 0.25 s 和一次。
+    # @param wrist_window True 时将 J6 搜索限制到起终点外各 30°且仍在工作域内。
+    # @param precise True 选 RRTConnectPrecise，否则 RRTConnectFast。
+    # @return rclpy future：单轮 GetMotionPlan 响应。
+    # @exception ValueError 提交每个底层请求前六服务唯一来源门未通过；图门不替代场景版本/路径和执行前再次核对。
     def _request_plan_single(self, start, goal, extended=False,wrist_window=True,precise=False):
         require_unique_moveit(self.node)
         from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest
@@ -312,6 +462,8 @@ class MoveItPlanner:
         if len(goal) != 6 or any(not math.isfinite(q) or not lo <= math.degrees(q) <= hi
                               for q, (lo, hi) in zip(goal, self.limits)):
             raise ValueError('逆解不在当前工作范围')
+        ##
+        # 速度与加速度都必须为有限正数且不超过部署上限；缩放因子是无量纲比例，不能把 °/s 直接当作 ROS rad/s。
         speed,acceleration,speed_limit,acceleration_limit=getattr(
             self,'motion_parameters',lambda:(60.,4.,63.,4.))()
         if (not all(math.isfinite(v) and v>0. for v in (speed,acceleration,speed_limit,acceleration_limit)) or
@@ -338,6 +490,12 @@ class MoveItPlanner:
             max_velocity_scaling_factor=speed/speed_limit,
             max_acceleration_scaling_factor=acceleration/acceleration_limit)))
 
+    ##
+    # @brief 异步检查一个六轴姿态的 MoveIt 状态有效性。
+    # 检查包含 robot_state 注入的保护地面；单点有效不代表两个点之间连续路径有效。
+    # @param positions 待检查的六轴 rad，可来自目标或实际命令曲线采样。
+    # @return rclpy future：GetStateValidity 响应，调用方检查 valid 与场景版本。
+    # @exception ValueError 提交每个底层请求前六服务唯一来源门未通过；图门不替代场景版本/路径和执行前再次核对。
     def request_validity(self, positions):
         require_unique_moveit(self.node)
         from moveit_msgs.srv import GetStateValidity

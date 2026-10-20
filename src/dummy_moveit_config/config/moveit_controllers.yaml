@@ -1,15 +1,21 @@
+# @file moveit_controllers.yaml
+# @brief MoveIt执行管理器的公开FollowJointTrajectory入口；与内部JTC控制器名分开。
 # MoveIt uses this configuration for controller management
 
+# 使用SimpleControllerManager插件把规划轨迹送到指定Action服务器。只读面板规划节点禁用执行时不会仅凭此配置发运动。
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
+# controller_names列出MoveIt选择的入口，default=true只是默认选项，不代表设备已使能。
 moveit_simple_controller_manager:
   controller_names:
     - arm_controller
 
+# 公开入口为arm_controller/follow_joint_trajectory；Native守卫再转交内部JTC，不应直接绕过公开入口。
   arm_controller:
     type: FollowJointTrajectory
     action_ns: follow_joint_trajectory
     default: true
+# 必须包含六个关节；名称用于对应轨迹字段，不能只凭向量下标猜测关节身份。
     joints:
       - Joint1
       - Joint2

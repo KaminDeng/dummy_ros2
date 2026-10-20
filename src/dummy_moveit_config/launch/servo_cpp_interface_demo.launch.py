@@ -1,3 +1,8 @@
+##
+# @file servo_cpp_interface_demo.launch.py
+# @brief 历史Servo C++接口演示启动草稿，与当前面板/真机守卫入口分开。
+# @details 它引用dummy_servo_cpp_interface_demo可执行文件，但当前CMake只构建keyboard_input。
+# 控制器名仍用dummy_arm_controller，需核对实际安装产物和配置，不能据此宣称演示可直接运行。
 # adapt to Dummy by Muzhxiaowen, check out the details on bilibili.com
 
 import os
@@ -8,8 +13,13 @@ from launch.actions import ExecuteProcess
 from moveit_configs_utils import MoveItConfigsBuilder
 from launch_param_builder import ParameterBuilder
 
+##
+# @brief 构建示例的mock硬件、Servo/RSP/RViz/TF和controller spawner动作树。
+# @return LaunchDescription；缺失可执行文件或控制器名不匹配会在实际启动时失败，此函数不修正它们。
 def generate_launch_description():
     # moveit_config = MoveItConfigsBuilder("dummy-ros2", package_name="dummy_moveit_config").to_moveit_configs()
+    ##
+    # 显式选择mock URDF、SRDF和执行配置，保持示例参数来源可见；不载入DPSDK实机部署身份。
     moveit_config = (
         MoveItConfigsBuilder("dummy-ros2", package_name="dummy_moveit_config")
         .robot_description(file_path="config/dummy-ros2.urdf.xacro")
@@ -19,6 +29,8 @@ def generate_launch_description():
     )
 
     # Get parameters for the Servo node
+    ##
+    # 将历史Servo YAML放入moveit_servo参数命名空间；速度、话题、碰撞与平滑参数详见该YAML。
     servo_params = (
         ParameterBuilder("dummy_moveit_config")
         .yaml(
@@ -29,6 +41,8 @@ def generate_launch_description():
     )
 
     # A node to publish world -> base_link transform
+    ##
+    # 本演示独立发布world到base_link零静态变换，不能再叠加同一TF边的另一发布者。
     static_tf = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
@@ -39,6 +53,8 @@ def generate_launch_description():
 
     # The servo cpp interface demo
     # Creates the Servo node and publishes commands to it
+    ##
+    # 此可执行文件名须在安装区实际存在；当前本包CMake未声明同名target，示例源码存在也不等于已编译安装。
     servo_node = Node(
         package="dummy_moveit_config",
         executable="dummy_servo_cpp_interface_demo",
@@ -81,6 +97,8 @@ def generate_launch_description():
     )
 
     # ros2_control using FakeSystem as hardware
+    ##
+    # 示例使用FakeSystem描述装配controller_manager；这不建立设备session/permit。
     ros2_control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
@@ -96,6 +114,8 @@ def generate_launch_description():
     )
 
     # Load controllers
+    ##
+    # 旧演示用shell方式逐个启动spawner；其dummy_arm_controller名与当前通用YAML内部名不同，保留原行为并说明限制。
     load_controllers = []
     for controller in ["dummy_arm_controller", "joint_state_broadcaster"]:
         load_controllers += [

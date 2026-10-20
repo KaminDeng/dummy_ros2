@@ -1,4 +1,9 @@
 """障碍物真实场景差量、持久化和停车屏障回归。"""
+##
+# @file test_manual_scene_obstacles.py
+# @brief 场景差量、安装孔坐标、持久化与停车屏障的服务替身回归。
+#
+# 使用真实MoveIt消息类型但服务只记录请求或修改内存world；Graph提供人工发现图。仅origin_editor用例构造真实offscreen Qt控件，不创建ROS节点/发送服务。尺寸/安装孔输入mm，MoveIt几何m；State位置rad、速度rad/s，事件字段按文本协议解析。
 import importlib.util
 import sys
 from pathlib import Path
@@ -12,10 +17,17 @@ spec = importlib.util.spec_from_file_location('manual_scene_obstacles', SOURCE)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 
+##
+# @brief 构造id=fixture的竖直圆柱，基准x100/y−200、直径50/高150mm；kwargs额外字段不能与默认关键字重名。
+# @param kwargs 附加非重复键；需要改默认键时外层用例在返回字典上赋值。
+# @return 圆柱输入字典，尚未validate或应用。
 def row(**kwargs):
     return dict(id='fixture', frame='base_link', x_mm=100., y_mm=-200., diameter_mm=50., height_mm=150., **kwargs)
 
 
+##
+# @brief 构造人工Hold4/boot1/ref2/session3/seq11，节点客户端与Graph发现方法均为替身，calls记录请求或CANCEL_HOLD。
+# @return (面板NS, calls列表)，所有状态均人工提供。
 def panel():
     calls = []
     client = NS(service_is_ready=lambda: True, call_async=lambda request: calls.append(request) or
@@ -35,12 +47,20 @@ def panel():
     return p, calls
 
 
+##
+# @brief 高度0、负直径、NaN、bool尺寸和未知frame逐项拒绝，不能当合法几何写场景。
+# @param key 被破坏的字段名。
+# @param value 该字段非法测试值。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 @pytest.mark.parametrize('key,value', [('height_mm',0), ('diameter_mm',-1),('x_mm',float('nan')),('height_mm',True),('frame','unknown')])
 def test_invalid_geometry(key, value):
     item=row(); item[key]=value
     with pytest.raises(ValueError): m.validate_obstacles([item])
 
 
+##
+# @brief 安装孔偏移20/30mm与局部100/−200mm相加，圆柱高0.15m半径0.025m、中心z0.075m；diff含旧ID删除及新对象。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_cylinder_is_vertical_on_ground_and_scene_is_diff():
     item=row(); item['frame']='hole'
     scene=m.scene_message([item], {'fixture','deleted'}, {'hole':(20.,30.)})
@@ -55,6 +75,10 @@ def test_cylinder_is_vertical_on_ground_and_scene_is_diff():
     assert obj.header.frame_id == 'base_link'
 
 
+##
+# @brief 初始blocked直到人工Apply success才ready并写文件；request_change递增revision撤ready，重载只恢复desired还须重新同步。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_initial_load_requires_positive_service_ack_and_persists(tmp_path):
     p,calls=panel(); path=tmp_path/'obstacles.json'
     scene=m.ObstacleScene(p,path,{'base_link':(0.,0.)})
@@ -68,6 +92,10 @@ def test_initial_load_requires_positive_service_ack_and_persists(tmp_path):
     assert loaded.desired == [row()] and not loaded.scene_ready
 
 
+##
+# @brief Apply success=False后error/blocked，不能ready也不能持久化未应用输入。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_failed_service_never_opens_gate(tmp_path):
     p,_=panel(); scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.)})
     scene.tick(); scene.phase='apply';scene.future=NS(done=lambda:True,result=lambda:NS(success=False));scene.tick()
@@ -75,6 +103,10 @@ def test_failed_service_never_opens_gate(tmp_path):
     assert not scene.path.exists()
 
 
+##
+# @brief busy先CANCEL_HOLD；匹配取消事件仍要更新seq、hold_ready及安静速度，满足后才发Get并继续blocked。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_cancel_event_and_new_measured_hold_are_both_required(tmp_path):
     p,calls=panel(); scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.)})
     p.busy=True
@@ -90,6 +122,10 @@ def test_cancel_event_and_new_measured_hold_are_both_required(tmp_path):
     scene.tick(); assert len(calls)==2 and not scene.wait_hold and not scene.scene_ready
 
 
+##
+# @brief session99取消事件不能确认session3停车，仍wait_hold不Get/Apply。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_other_session_cannot_confirm_stop(tmp_path):
     p,calls=panel(); scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.)})
     p.busy=True;scene.request_change([row()])
@@ -97,6 +133,10 @@ def test_other_session_cannot_confirm_stop(tmp_path):
     scene.tick(); assert calls==['CANCEL_HOLD'] and scene.wait_hold
 
 
+##
+# @brief 停车过期保持wait_hold/error，新的request_change也拒绝，不能通过重试绕屏障。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_stop_timeout_cannot_be_retried_around_barrier(tmp_path):
     p,calls=panel(); scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.)})
     p.busy=True;scene.request_change([row()]);scene.stop_deadline=0.;scene.tick()
@@ -104,6 +144,10 @@ def test_stop_timeout_cannot_be_retried_around_barrier(tmp_path):
     with pytest.raises(ValueError):scene.request_change([])
 
 
+##
+# @brief 安装孔20/30→40/50mm使引用圆柱世界x/y各加0.02m，revision/失效通知递增且成功后持久化frame。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_measured_origin_moves_all_references_invalidates_and_survives_reload(tmp_path):
     p,calls=panel(); invalidations=[]
     p.moveit_tab=NS(executing=False,auto_test=NS(active=False),scene_change_requested=lambda:invalidations.append(True))
@@ -122,6 +166,10 @@ def test_measured_origin_moves_all_references_invalidates_and_survives_reload(tm
     assert loaded.frames['安装孔A']==(40.,50.) and loaded.desired[0]['frame']=='安装孔A'
 
 
+##
+# @brief 删除被引用孔先重写圆柱为base_link并保持世界几何，仍撤路径；固定base_link不能删或移动。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_delete_referenced_origin_preserves_world_cylinder_and_still_invalidates(tmp_path):
     p,_=panel();scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.),'孔':(20.,30.)})
     item=row();item['frame']='孔';scene.request_change([item]);before=m.cylinder_geometry(item,scene.frames)
@@ -133,6 +181,10 @@ def test_delete_referenced_origin_preserves_world_cylinder_and_still_invalidates
         with pytest.raises(ValueError):scene.request_origin_change('base_link',offset)
 
 
+##
+# @brief 运行中改引用孔坐标同样先请求Hold，不能只把它当显示设置。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_referenced_origin_update_requires_stop_confirmation_when_running(tmp_path):
     p,calls=panel();scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.),'孔':(20.,30.)})
     item=row();item['frame']='孔';scene.request_change([item]);p.busy=True
@@ -140,6 +192,10 @@ def test_referenced_origin_update_requires_stop_confirmation_when_running(tmp_pa
     assert calls==['CANCEL_HOLD'] and scene.wait_hold and scene.blocked
 
 
+##
+# @brief 真实Qt表单按钮添加/更新/删除实测孔，核frames、下拉和revision三次变化；没有真实服务回执。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_offscreen_origin_editor_add_update_delete(tmp_path):
     from PyQt5 import QtWidgets
     app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -162,6 +218,9 @@ def test_offscreen_origin_editor_add_update_delete(tmp_path):
     widget.deleteLater();p.deleteLater()
 
 
+##
+# @brief 复制旧ACM原矩阵/default条目不变，仅新增floor↔圆柱豁免，机器人link/clearance与圆柱均不豁免。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_acm_preserves_srdf_guard_pairs_and_only_allows_floor_cylinders():
     from moveit_msgs.msg import AllowedCollisionMatrix, AllowedCollisionEntry
     names=['base_link','link1','clearance_link1','link6_1_1']
@@ -185,6 +244,10 @@ def test_acm_preserves_srdf_guard_pairs_and_only_allows_floor_cylinders():
             assert not result.entry_values[cylinder].enabled[i]
 
 
+##
+# @brief Get后带原ACM形成Apply；直到第二个成功回执才ready，不能只靠服务ready或Get成功开门。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_get_acm_then_apply_are_both_required(tmp_path):
     from moveit_msgs.msg import PlanningScene, AllowedCollisionMatrix
     from moveit_msgs.srv import GetPlanningScene, ApplyPlanningScene
@@ -202,6 +265,11 @@ def test_get_acm_then_apply_are_both_required(tmp_path):
     assert scene.scene_ready
 
 
+##
+# @brief Get响应None或scene=None只发最初Get，保持error/blocked，不发送Apply。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @param bad_response None或scene=None的人工Get返回。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 @pytest.mark.parametrize('bad_response',[None,NS(scene=None)])
 def test_failed_get_never_applies_or_opens_gate(tmp_path,bad_response):
     p,calls=panel();scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.)})
@@ -209,6 +277,10 @@ def test_failed_get_never_applies_or_opens_gate(tmp_path,bad_response):
     assert len(calls)==1 and scene.error and scene.blocked and not scene.scene_ready
 
 
+##
+# @brief Get过期保留future与error，防止丢弃迟到请求后并发新事务；request_change仍拒绝。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_get_timeout_keeps_transaction_blocked(tmp_path):
     p,calls=panel();scene=m.ObstacleScene(p,tmp_path/'s.json',{'base_link':(0.,0.)})
     scene.tick();scene.deadline=0.;scene.tick()
@@ -216,6 +288,10 @@ def test_get_timeout_keeps_transaction_blocked(tmp_path):
     with pytest.raises(ValueError):scene.request_change([])
 
 
+##
+# @brief 内存world模拟重复REMOVE会失败：添加/删除/改孔/重载均只删除Get实际看到的对象，保留external_fixture。
+# @param tmp_path pytest临时目录Path，证据/配置fixture仅写此处。
+# @return None；以assert/unittest断言报告结果，失败抛异常。
 def test_remove_uses_actual_world_names_not_persisted_tombstones(tmp_path):
     """真实MoveIt拒绝REMOVE不存在对象：跨添加/删除/再修改/重启模拟此语义。"""
     from moveit_msgs.msg import PlanningScene, PlanningSceneWorld, CollisionObject
@@ -223,6 +299,11 @@ def test_remove_uses_actual_world_names_not_persisted_tombstones(tmp_path):
     from moveit_msgs.msg import PlanningSceneComponents
     world = {'external_fixture'}
     applied = []
+    ##
+    # @par 内部回调 call
+    # Get返回当前world名称，Apply逐对象执行内存ADD/REMOVE并禁止删除不存在ID，再返回已完成成功替身。
+    # 参数 request：Get/Apply消息请求，只在内存模拟。
+    # 返回：合成服务Future/完成状态替身，见外层用例。
     def call(request):
         if isinstance(request,GetPlanningScene.Request):
             assert request.components.components & PlanningSceneComponents.WORLD_OBJECT_NAMES
@@ -241,6 +322,11 @@ def test_remove_uses_actual_world_names_not_persisted_tombstones(tmp_path):
     p,_=panel();client=NS(service_is_ready=lambda:True,call_async=call)
     p.node.create_client=lambda *args:client
     path=tmp_path/'world.json';scene=m.ObstacleScene(p,path,{'base_link':(0.,0.)})
+    ##
+    # @par 内部回调 sync
+    # 对场景控制器手动tick三次并断言ready且非blocked，仅用于同步响应替身，不等待真实ROS。
+    # 参数 controller：要手动tick的ObstacleScene。
+    # 返回：None；三tick后断言scene_ready且非blocked。
     def sync(controller):
         for _ in range(3):controller.tick()
         assert controller.scene_ready and not controller.blocked

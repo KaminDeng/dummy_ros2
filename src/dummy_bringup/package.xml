@@ -1,41 +1,41 @@
-<?xml version="1.0"?>
-<package format="3">
+<?xml version="1.0"?><!-- @file package.xml；@brief dummy_bringup 的 ament 包元数据、启动/面板运行依赖和测试依赖。此清单描述软件装配，不负责设备部署或电机授权。 -->
+<package format="3"><!-- 包格式3；name/version/description/maintainer/license 保持发布元数据语义，修改注释不改变依赖解析。 -->
   <name>dummy_bringup</name>
   <version>0.1.0</version>
   <description>Launch package reserved for Dummy ROS bringup.</description>
   <maintainer email="maintainer@example.invalid">Dummy ROS maintainers</maintainer>
   <license>Apache-2.0</license>
-  <buildtool_depend>ament_cmake</buildtool_depend>
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>builtin_interfaces</exec_depend>
-  <exec_depend>control_msgs</exec_depend>
-  <exec_depend>controller_manager_msgs</exec_depend>
-  <exec_depend>dummy_moveit_config</exec_depend>
-  <exec_depend>dummy_motion_client</exec_depend>
-  <exec_depend>gz_tools_vendor</exec_depend>
-  <exec_depend>launch</exec_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend><!-- 构建工具与 CMakeLists.txt 中 ament_package 配合，安装 launch/config/脚本并注册包索引。 -->
+  <exec_depend>ament_index_python</exec_depend><!-- 运行时通过 ament 索引定位显式安装区资源，不依赖源码工作目录。 -->
+  <exec_depend>builtin_interfaces</exec_depend><!-- Duration 等基础时间消息供规划和轨迹请求使用；时间字段的秒/纳秒单位由消息定义。 -->
+  <exec_depend>control_msgs</exec_depend><!-- 轨迹 action 消息支持公开门控及探针；依赖消息类型不表示已发送或接受目标。 -->
+  <exec_depend>controller_manager_msgs</exec_depend><!-- 控制器/硬件组件查询消息用于观察生命周期；创建或查询组件不等于激活。 -->
+  <exec_depend>dummy_moveit_config</exec_depend><!-- 提供 OMPL、语义模型及 Gazebo/MoveIt 启动配置；手动面板可通过开关关闭规划页。 -->
+  <exec_depend>dummy_motion_client</exec_depend><!-- 提供原生仿真门控和受保护设备 action gate；各后端的身份、许可和传输条件分别由运行时检查。 -->
+  <exec_depend>gz_tools_vendor</exec_depend><!-- 运行探针使用 Gazebo transport 命令行查询世界/位姿及暂停恢复，仅适用于明确的仿真运行环境。 -->
+  <exec_depend>launch</exec_depend><!-- 基础 launch 动作和参数展开；launch_ros 进一步提供 ROS 节点动作。 -->
   <exec_depend>launch_ros</exec_depend>
-  <exec_depend>moveit_msgs</exec_depend>
-  <exec_depend>moveit_ros_move_group</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>visualization_msgs</exec_depend>
-  <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>python3-pyqt5</exec_depend>
-  <exec_depend>rviz2</exec_depend>
-  <exec_depend>robot_state_publisher</exec_depend>
-  <exec_depend>dummy-ros2_description</exec_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>rosgraph_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>xacro</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>shape_msgs</exec_depend>
-  <exec_depend>trajectory_msgs</exec_depend>
-  <test_depend>launch_testing_ament_cmake</test_depend>
-  <test_depend>ament_cmake_pytest</test_depend>
-  <test_depend>python3-yaml</test_depend>
-  <export>
+  <exec_depend>moveit_msgs</exec_depend><!-- FK/IK、规划、状态有效性及场景服务消息；计算结果与设备执行回执属于不同流程。 -->
+  <exec_depend>moveit_ros_move_group</exec_depend><!-- 提供 MoveIt 计算服务进程；手动面板入口明确关闭其轨迹执行。 -->
+  <exec_depend>geometry_msgs</exec_depend><!-- 末端位姿、障碍几何和 RViz 标记采用 ROS 米制位置及四元数，界面毫米/角度需显式换算。 -->
+  <exec_depend>visualization_msgs</exec_depend><!-- 目标与障碍物 Marker 独立于实测关节状态，可视化本身不构成实际运动证据。 -->
+  <exec_depend>python3-yaml</exec_depend><!-- 读取场景、模型、控制器与限制配置；运行时 YAML 输入仍须各入口校验。 -->
+  <exec_depend>python3-pyqt5</exec_depend><!-- 桌面面板使用 Qt 控件/定时器/QProcess；Native worker 和管理辅助进程需串行移交单一传输所有者。 -->
+  <exec_depend>rviz2</exec_depend><!-- 用于反馈模型、目标虚影和场景显示，不直接授予电机控制。 -->
+  <exec_depend>robot_state_publisher</exec_depend><!-- 从关节状态生成 TF；手动面板对测量与 target_preview 使用独立话题和 frame_prefix。 -->
+  <exec_depend>dummy-ros2_description</exec_depend><!-- 提供安装的机械臂描述默认入口；明确部署模型可覆盖该路径，不能静默混用模型身份。 -->
+  <exec_depend>rclpy</exec_depend><!-- Python ROS 节点和异步服务/action 客户端；面板用有界 spin 驱动响应以保持 UI 可用。 -->
+  <exec_depend>rosgraph_msgs</exec_depend><!-- Clock 消息供 Gazebo 探针观察仿真时间；宿主单调超时与仿真时钟暂停需分开处理。 -->
+  <exec_depend>sensor_msgs</exec_depend><!-- JointState 用于实际/目标关节发布；两类话题不能互相替代。 -->
+  <exec_depend>std_msgs</exec_depend><!-- Header 和 String 用于带坐标系消息以及测量/目标描述的独立发布。 -->
+  <exec_depend>xacro</exec_depend><!-- 展开明确选择的 URDF 模型及插件参数；展开描述不激活控制器。 -->
+  <exec_depend>tf2_ros</exec_depend><!-- 静态显示原点变换连接目标预览基座，不修改设备boot/reference/session身份。 -->
+  <exec_depend>shape_msgs</exec_depend><!-- BOX/CYLINDER 等碰撞形状维度供 MoveIt 场景构建。 -->
+  <exec_depend>trajectory_msgs</exec_depend><!-- JointTrajectory 的角度/速度/相对时间用于规划与轨迹探针，实际执行仍由门控和设备确认。 -->
+  <test_depend>launch_testing_ament_cmake</test_depend><!-- 仅测试阶段使用的 launch 集成注册；Gazebo/执行图测试与纯离线单测须区分。 -->
+  <test_depend>ament_cmake_pytest</test_depend><!-- 把配置、状态机和假异步服务等 pytest 回归接入 ament/CTest。 -->
+  <test_depend>python3-yaml</test_depend><!-- 测试也解析 YAML 夹具；不改变同名运行依赖的语义。 -->
+  <export><!-- 导出本包构建类型；具体安装和测试条目由 CMakeLists.txt 装配。 -->
     <build_type>ament_cmake</build_type>
   </export>
 </package>

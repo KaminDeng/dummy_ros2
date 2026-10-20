@@ -1,5 +1,14 @@
 # R03 Zenbedded And Controller Hook Report
 
+## 中文导读：源码归属和证据层级
+
+R03记录上游pin、ROS自有插件、DPSDK生成codec和controller gate各自的责任范围，
+没有声称提交上游Zenbedded补丁。raw-fixed设备字节与ROS CDR是独立表示。
+QUEUED且accepted=false只证明当时服务回执语义，不是Capture或运动已完成。
+注册goal UUID/digest的值对象测试、插件编译、controller运行加载、跨进程绕过关闭
+属于不同验证层；不能从前一层推出后一层。本页引用提交与版本为历史输入。
+当前生产调用/授权流程见 [运行手册](ros-runbook.md)，冻结生成物说明见 [生成协议](generated-protocol-c03/README.md)。
+
 ## Locked Inputs
 
 The upstream repository is locked by DPSDK `tools/ros2/zenbedded.repos` to

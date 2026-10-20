@@ -1,3 +1,10 @@
+/**
+ * @file fault_cleanup_receipt_tests.cpp
+ * @brief 重放固定146原页并核故障清理强回执/当前Fault观测配对。
+ *
+ * 来自fixtures/ros05_fault146的固定载荷/接收时刻由正式codec和RawEvidenceCollector重新验证；执行会写本地raw文件并开writer线程，不连接设备。
+ * 这是已有抓取夹具的宿主重放，不是新做硬件故障实验；文件flush、完整故障CAN组、当前raw Fault观测三层必须分别满足，不能只凭final4/release标志批准清理。
+ */
 #include "fixtures/ros05_fault146/original-once-decoded-146-payloads-fixture.hpp"
 #include "fixtures/ros05_fault146/original-once-decoded-current-fault-observations.hpp"
 #include "dummy_motion_client/dp_management_transport.hpp"
@@ -10,6 +17,13 @@
 #include <thread>
 #include <unistd.h>
 #include <openssl/sha.h>
+/**
+ * @brief 修改尾部语义后逐页重算合法SHA，隔离“链合法但故障证明无效”负例。
+ * @param base 输出文件名前缀，不自动删除本辅助生成文件。
+ * @param mode 0 Stop页sent31，1 Disable页sent31，2 Stop页motion2，3终态未release，4终态motion2，5终态final5。
+ * @return collector明确拒绝或最终full_fault_groups_valid=false为true；准备/异步writer1s超时false。
+ * @note 链哈希按32+307+1=340字节重算，不让坏SHA先挡住本应验证的尾部语义。
+ */
 static bool canonical_bad_tail_never_confirms(const char* base,unsigned mode) {
  using namespace dummy_ros_control;namespace wire=dp::protocol::dummy_robot_v2;
  RawEvidenceIdentity trust{original_fixture::client_id,original_fixture::contract_hash,original_fixture::model_hash,original_fixture::profile_hash,original_fixture::firmware_hash};
@@ -34,6 +48,14 @@ static bool canonical_bad_tail_never_confirms(const char* base,unsigned mode) {
  }
  collector.stop();return !channel.raw_evidence_terminal_flushed().full_fault_groups_valid;
 }
+/**
+ * @brief 把146页依序交异步collector，再配对当前观测及32个负例。
+ * @param argc 参数个数（含程序名）。
+ * @param argv 参数数组，模式/路径位置见下述说明。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 无参数时mkdtemp并保留component.raw；argv[1]可指定输出文件，argc仅1/2。每页等实际writer≤1s而非扩容跳过背压。
+ * 正例核run1/final4/release/chain及first_failure_source0x1003、原attempt epoch1/stop epoch3/full_fault_groups_valid，再由raw_fault_cleanup_matches核boot3498049537/session71及当前Fault字节。
+ */
 int main(int argc,char**argv) {
  char temp[]="/tmp/dummy-fault-receipt-XXXXXX";std::string permanent_path;
  if(argc==1) {char* dir=mkdtemp(temp);if(!dir)return 1;permanent_path=std::string(dir)+"/component.raw";}
@@ -72,6 +94,10 @@ int main(int argc,char**argv) {
  std::array<std::uint8_t,16> device{};device[0]=1;
  const auto now=std::max(observation.state_received_us,observation.status_received_us);
  if(!dummy_motion_client::raw_fault_cleanup_matches(proof,first,observation,3498049537ULL,71,1,2,1,63,device,now))return 39;
+ /**
+  * @brief 配对26个负例逐项改预期boot/session/run、原/stop epoch、failure来源/轴位、完整组/release/链/lost/complete/parent。
+  * 另含观测>250ms、未来State/终页、缺State、hash不符、producer失效、首页失效、Status错链、State非Fault及profile错。每项都须拒绝；不是只测试hash形状。
+  */
  for(unsigned n=0;n<26;++n) {
   auto r=proof;auto ffirst=first;auto o=observation;auto expected_boot=3498049537ULL;std::uint64_t expected_session=71,expected_run=1;auto sample_now=now;
   switch(n) {

@@ -3,6 +3,11 @@
 This adapter intentionally reports a missing ROS bridge as ``NOT_RUN``. It does
 not infer controller or management behavior from launch-file text.
 """
+##
+# @file r07.py
+# @brief DPSDK POSIX peer、控制组件与Action的R07 SIL证据适配器。
+#
+# 这些入口实际运行上游adapter、CTest或本机TCP peer/ROS Action探针，不是读取launch文本推断行为。real_hardware_accessed=False是本适配器填的范围声明；real peer仍为POSIX/虚拟CAN，不证明实体硬件。缓存按profile/mask/缺轴或整体Action复用。
 
 from __future__ import annotations
 
@@ -37,6 +42,10 @@ _PEER_OBSERVATIONS: dict[tuple[int, int, int], dict[str, Any]] = {}
 _REAL_ACTION: dict[str, Any] | None = None
 
 
+##
+# @brief 动态执行上游d06/d07 adapter；要求loader存在，不自行构建SDK。
+# @param name 上游adapter基名d06或d07。
+# @return 已导入上游模块对象。
 def _load(name: str):
     path = DPSDK_ROOT / "applications/dummy_ref_control/tools/dummy_ref_tools/tests/dummy_test_support/adapters" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"dpsdk_{name}_r07", path)
@@ -47,6 +56,9 @@ def _load(name: str):
     return module
 
 
+##
+# @brief 按BACKEND_SOURCES相对名/原字节或missing占位求摘要，不绑定所有运行二进制字节。
+# @return 列举输入相对名/字节的SHA-256。
 def _source_hash() -> str:
     digest = sha256()
     for path in BACKEND_SOURCES:
@@ -55,6 +67,14 @@ def _source_hash() -> str:
     return digest.hexdigest()
 
 
+##
+# @brief 统一status/trace与范围字段；executed仅status==PASS为True，FAIL也会置False，不能当实际从未启动进程。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param status PASS/FAIL/NOT_RUN等现有结果状态。
+# @param reason 人类可读失败/未运行原因。
+# @param trace 待哈希的运行/诊断文本，不自动证明设备行为。
+# @param observations 要验证/嵌入结果的观测字典，保留其原有证据层级。
+# @return 统一结果字典；executed按照PASS状态设置。
 def _result(
     case_id: str, *, status: str, reason: str, trace: str, observations: dict[str, Any],
 ) -> dict[str, Any]:
@@ -76,6 +96,10 @@ def _result(
     }
 
 
+##
+# @brief 对既有控制构建目录用精确名称正则跑CTest≤30s，仅检查退出0，不独立解析实际发现测试数。
+# @param name 精确匹配的CTest名字，不是新建测试。
+# @return (退出码是否0, stdout+stderr)。
 def _run_ctest(name: str) -> tuple[bool, str]:
     completed = subprocess.run(
         ["ctest", "--test-dir", str(ROOT / "build_dummy/dummy_ros_control"),
@@ -85,6 +109,10 @@ def _run_ctest(name: str) -> tuple[bool, str]:
     return completed.returncode == 0, completed.stdout + completed.stderr
 
 
+##
+# @brief 按SEN05/06选d07，其余B02/AUTH04选d06，向上游传hardware none/test_only。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 上游adapter返回结果原值。
 def _upstream(case_id: str) -> dict[str, Any]:
     suite = "d07" if case_id in D07_CASES else "d06"
     upstream_case = case_id if suite == "d07" else D06_CASES[case_id]
@@ -93,6 +121,10 @@ def _upstream(case_id: str) -> dict[str, Any]:
     )
 
 
+##
+# @brief 合并上游成功与J1 peer原始反馈有效但未引用/无session的观测；返回启动链/零自动管理等声明，非USB证据。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 合并J1 peer与上游判断的结果字典。
 def _sil_transport_case(case_id: str) -> dict[str, Any]:
     upstream = _upstream(case_id)
     upstream_observations = dict(upstream["observations"])
@@ -116,6 +148,10 @@ def _sil_transport_case(case_id: str) -> dict[str, Any]:
     )
 
 
+##
+# @brief SEN05核J1 mask1，SEN06核六轴mask63/J3缺反馈/Fault9、不自动降级，合并上游证据。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 含缺轴/掩码与上游证据的结果字典。
 def _d07_case(case_id: str) -> dict[str, Any]:
     upstream = _upstream(case_id)
     observations = dict(upstream["observations"])
@@ -142,12 +178,22 @@ def _d07_case(case_id: str) -> dict[str, Any]:
     )
 
 
+##
+# @brief 封装NOT_RUN/blocked结果，当前run分派无直接调用此helper。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param reason 人类可读失败/未运行原因。
+# @param observations 要验证/嵌入结果的观测字典，保留其原有证据层级。
+# @return executed=False/NOT_RUN且blocked=True结果。
 def _blocked_case(case_id: str, reason: str, observations: dict[str, Any]) -> dict[str, Any]:
     return _result(
         case_id, status="NOT_RUN", reason=reason, trace=reason, observations=observations,
     )
 
 
+##
+# @brief FRE11核steady配置与peer session；ROS07跑状态/争用，ROS08非阻塞+Action，ROS10插件/生命周期+J1 peer。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 对应后端case结果；未知case抛ValueError。
 def _backend_case(case_id: str) -> dict[str, Any]:
     config = yaml.safe_load((ROOT / "src/dummy_bringup/config/backends.yaml").read_text())
     if case_id == "FRE11":
@@ -183,6 +229,12 @@ def _backend_case(case_id: str) -> dict[str, Any]:
     raise ValueError(f"unsupported backend case: {case_id}")
 
 
+##
+# @brief 按(profile,mask,missing_axis)缓存；首次选本机TCP端口启动D08 peer，0.5s后跑10s状态probe，finally终止peer并最多等5s。
+# @param profile D08 peer的profile ID整数。
+# @param mask 配置轴位掩码，J1=1、六轴=63。
+# @param missing_axis 要注入缺反馈的1起始轴号；0不注入。
+# @return 缓存或新采集peer JSON；启动/探针/解析失败异常传播。
 def _peer_state(profile: int, mask: int, missing_axis: int = 0) -> dict[str, Any]:
     key = (profile, mask, missing_axis)
     if key in _PEER_OBSERVATIONS:
@@ -191,6 +243,9 @@ def _peer_state(profile: int, mask: int, missing_axis: int = 0) -> dict[str, Any
     probe = ROOT / "build_dummy/dummy_ros_control/real_peer_state_probe"
     if not peer.is_file() or not probe.is_file():
         raise RuntimeError("real D08 peer state probe binaries are missing")
+    ##
+    # @par 端口与owner寿命
+    # 先临时bind端口再释放后启动peer；不是持有socket直交peer的端口预约保证。finally负责终止所启动peer，未做硬件owner交接。
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         endpoint = f"tcp/127.0.0.1:{reserve.getsockname()[1]}"
@@ -219,6 +274,9 @@ def _peer_state(profile: int, mask: int, missing_axis: int = 0) -> dict[str, Any
     return observed
 
 
+##
+# @brief source ROS环境后实际跑D08 peer与device Action gate E2E≤60s，非零抛异常，成功解析real_dpsdk_peer JSON并缓存。
+# @return 缓存或新运行Action E2E JSON，非零退出抛RuntimeError。
 def _real_action_e2e() -> dict[str, Any]:
     global _REAL_ACTION
     if _REAL_ACTION is not None:
@@ -238,6 +296,11 @@ def _real_action_e2e() -> dict[str, Any]:
     return _REAL_ACTION
 
 
+##
+# @brief 严格校验stimulus后按D06/D07/后端case派发，未识别case最终ValueError。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r07_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     if stimulus != {"case_id": case_id, "hardware": "none", "test_only": True}:
         raise ValueError("R07 stimulus is invalid")

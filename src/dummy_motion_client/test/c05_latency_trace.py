@@ -1,4 +1,9 @@
 """C05 离线单调时钟时序诊断，不产生合格判定。"""
+##
+# @file c05_latency_trace.py
+# @brief 有界C05日志标记与PTY块的离线时序汇总。
+#
+# 只读/整理已采日志，clock必须声明steady_monotonic_us，声明不独立证明跨机器时钟已同步。State/Command按各自序号关联，native桥chunk无法映射wire序号；阶段齐全也仅MEASURED_COMPONENT_ONLY，strict_50ms_pass始终false，不自动作策略/硬件合格结论。
 
 from collections import defaultdict
 import json
@@ -15,6 +20,11 @@ MAX_EVENTS = 4096
 MAX_CHUNKS = 16
 
 
+##
+# @brief 从首字符为左花括号的JSON日志提state_trace/command接收标记，其余事件忽略；超过事件上限抛错不截断。
+# @param lines 日志文本行序列；本函数只解析，不采样运行进程。
+# @param max_events 允许标记数上限，默认4096；超过拒绝不截断。
+# @return 有界State发布/Command接收标记列表。
 def peer_events(lines, max_events=MAX_EVENTS):
     events = []
     for line in lines:
@@ -33,6 +43,11 @@ def peer_events(lines, max_events=MAX_EVENTS):
     return events
 
 
+##
+# @brief 从heartbeat诊断提seq/received配对，拒缺一、非正或同seq时间冲突；同值重复去重后按seq输出。
+# @param lines 日志文本行序列；本函数只解析，不采样运行进程。
+# @param max_events 允许标记数上限，默认4096；超过拒绝不截断。
+# @return 按seq去重排序的Host接收标记。
 def host_callback_events(lines, max_events=MAX_EVENTS):
     observed = {}
     for line in lines:
@@ -52,6 +67,11 @@ def host_callback_events(lines, max_events=MAX_EVENTS):
              "clock": CLOCK} for seq, at_us in sorted(observed.items())]
 
 
+##
+# @brief 按sequence归组指定阶段，重复stage或已见时间倒序拒绝；缺阶段显式列missing，只有完整行才算端到端差。
+# @param events 带stage/sequence/at_us/clock的已采或合成标记列表。
+# @param stages 指定方向的有序阶段名元组。
+# @return 每sequence时间字典、missing及可选端到端µs的行列表。
 def _rows(events, stages):
     grouped = defaultdict(dict)
     for event in events:
@@ -73,6 +93,10 @@ def _rows(events, stages):
     return rows
 
 
+##
+# @brief 桥必须同声明clock、每方向最近chunk/长gap至多16，核入出µs顺序；保统计但sequence_correlation固定unavailable。
+# @param bridge 原生PTY桥诊断字典，空表示无桥证据。
+# @return 双方向块统计，wire序号关联均unavailable。
 def _bridge_rows(bridge):
     if bridge and bridge.get("clock") != CLOCK:
         raise ValueError("mixed or missing bridge clock domain")
@@ -99,6 +123,10 @@ def _bridge_rows(bridge):
     return result
 
 
+##
+# @brief 按已归序行计算peer发布最大间隙并保两侧seq；不足两点返回None，不推断丢帧原因。
+# @param rows 已按sequence排序、含timestamps_us的State行；计算peer gap要求相应peer时间存在。
+# @return 最大gap及两侧seq字典，少于两行None；缺peer字段可抛KeyError。
 def _peer_state_max_gap(rows):
     largest = None
     for before, after in zip(rows, rows[1:]):
@@ -111,6 +139,12 @@ def _peer_state_max_gap(rows):
     return largest
 
 
+##
+# @brief 核最多4096事件、阶段/序号/时间/clock，汇总双流与桥；全部阶段齐也不赋strict50ms通过。
+# @param events 带stage/sequence/at_us/clock的已采或合成标记列表。
+# @param bridge 原生PTY桥诊断字典，空表示无桥证据。
+# @param max_events 允许标记数上限，默认4096；超过拒绝不截断。
+# @return component_only时序报告；strict_50ms_pass始终False。
 def summarize(events, bridge, max_events=MAX_EVENTS):
     if not isinstance(max_events, int) or not 0 < max_events <= MAX_EVENTS:
         raise ValueError("invalid event bound")
@@ -141,6 +175,11 @@ def summarize(events, bridge, max_events=MAX_EVENTS):
     }
 
 
+##
+# @brief 排他x模式创建UTF8 JSON并末尾换行，既有证据文件拒绝覆盖。
+# @param path 输入/输出文件Path，具体读写及排他要求见函数职责。
+# @param report 要写出的JSON可编码报告字典。
+# @return None；只排他写报告文件。
 def write_report(path, report):
     with Path(path).open("x", encoding="utf-8") as output:
         json.dump(report, output, sort_keys=True)

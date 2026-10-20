@@ -1,4 +1,9 @@
 """R06 device action lifecycle acceptance against ROS and the shared DPSDK core."""
+##
+# @file test_r06_acceptance.py
+# @brief 按既有R06 fixture动态生成真实adapter调用的验收方法。
+#
+# fixture是期望值/用例名，读取它不等于设备验证；每生成方法仍调用run_case，可能真实运行组件/ROS/POSIX peer。非ROS06固定NOT_RUN的旧oracle与当前adapter可在真实DPSDK peer E2E成功后PASS的分支有条件冲突，保留原断言。
 
 import json
 from pathlib import Path
@@ -15,11 +20,21 @@ FIXTURE = json.loads((ROOT / "scripts/dummy/tests/fixtures/R06.json").read_text(
 CASES = FIXTURE["cases"]
 
 
+##
+# @brief 本套件unittest验收集合；实际子进程与证据层级见文件职责，各方法断言原样保留。
 class R06Acceptance(unittest.TestCase):
     pass
 
 
+##
+# @brief 闭包捕获case_id并返回unittest方法，顶层setattr为fixture每case注册独立名字，不在注册时执行adapter。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 闭包test函数，尚未执行其adapter。
 def _make_case(case_id: str):
+    ##
+    # @par 内部回调 test
+    # 实际调用R06 adapter，核摘要/身份；非ROS06固定要求NOT_RUN后检查组件，ROS06可NOT_RUN或PASS并核反馈数量/位移。
+    # 返回：None；通过assert/unittest断言报告结果，失败抛异常。
     def test(self):
         observed = run_case("R06", case_id, {
             "case_id": case_id,

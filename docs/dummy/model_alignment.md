@@ -1,5 +1,14 @@
 # Dummy Model Alignment
 
+## 中文导读：本页是早期 C02 对照记录
+
+合同摘要、关节方向/减速比、标准DH和四组固定/128组随机FK对照都对应本页锁定的旧输入。
+rad是关节角，deg是旧初始化角，m是DH长度；J6有限多圈值不归一化成[-π,π]。
+这里的“current CAD”“REST不可执行”和七网格盒体描述属于早期模型阶段，不能覆盖后续完整STEP与
+[REST包络修复](rest-planning.md)；当前工作REST与旧`[0,-73°,180°,0,0,0]`数学样本也不是同一姿态。
+当前模型、全50:1映射及后端选择以 [主 README](../../README.md) 和匹配的model/profile为准。
+旧数学FK通过不证明碰撞、质量惯量、负载、机械标定或真实安装正确；下文原数值保留供溯源。
+
 ## Contract Identity
 
 ROS consumes the read-only C02 bundle at `contracts/dummy_robot_v1`. Its release

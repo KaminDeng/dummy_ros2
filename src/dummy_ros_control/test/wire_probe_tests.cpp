@@ -1,3 +1,9 @@
+/**
+ * @file wire_probe_tests.cpp
+ * @brief 检查wire固定布局、整数精度、管理语义字段与本地service桥。
+ *
+ * 所有消息为合成夹具；编码/roundtrip成功不表示远端已接受命令或完成管理事务。固定size和接口ID的static_assert只在编译时检查生成类型形状。
+ */
 #include <cstdint>
 #include <cstring>
 
@@ -6,6 +12,16 @@
 namespace {
 using ManageService = dp::protocol::services::DummyManageV2RawFixed;
 
+/**
+ * @brief 处理进程内monitor_snapshot服务并回显请求来源身份。
+ * @par 未命名管理请求参数
+ * 本用例不依赖其正文。
+ * @param response 调用方提供的可写wire响应。
+ * @param info dp_comm桥传入的请求来源元数据，用source_device填client ID。
+ * @par 未命名上下文参数
+ * void*上下文在本夹具中不使用。
+ * @return kOk；写入的phase/run/session等仅是固定响应夹具。
+ */
 dp::comm::Result monitor_snapshot(
     const ManageService::Request &, ManageService::Response *response,
     const dp::comm::RequestInfo &info, void *) {
@@ -23,6 +39,12 @@ dp::comm::Result monitor_snapshot(
 }
 }  // namespace
 
+/**
+ * @brief 验证当前wire roundtrip、异常长度不覆盖输出和来源桥接。
+ *
+ * 身份/ticket刻意大于2^53，J6=3πrad；必须保留uint64与展开角度。Queued响应夹具填receipt=1/phase=1/result=8，但只断言选定解码字段，未检查result_code；不能把夹具填值当作完整roundtrip证明或Accepted/Committed。
+ * @return 0 表示本文件全部检查通过；非零定位失败检查。
+ */
 int main() {
   namespace wire = dp::protocol::dummy_robot_v2;
   static_assert(wire::DummyJointCommandV2Codec::kEncodedSize == 133U);
@@ -51,11 +73,18 @@ int main() {
       decoded_command.session_id() != 9007199254740995ULL ||
       decoded_command.freshness_ticket() != 9007199254740997ULL ||
       decoded_command.position_rad()[5] != positions[5]) return 3;
+  /**
+   * @brief encode可承载minor=0原文，但decode必须拒绝不匹配schema。
+   * 因此编码Ok不能单独当作完整schema/业务验证通过。
+   */
   command.set_schema_minor(0U);
   if (wire::DummyJointCommandV2Codec::encode(command, command_bytes, sizeof(command_bytes)) != wire::CodecResult::kOk ||
       wire::DummyJointCommandV2Codec::decode(command_bytes, sizeof(command_bytes), &decoded_command) == wire::CodecResult::kOk)
     return 14;
 
+  /**
+   * @brief Status夹具包含能力位、策略hash、rad/rad/s/rad/s²限制及µs周期；下面只断言选定的hash/限额/周期等字段，未检查解码后的capabilities。
+   */
   wire::DummyDeviceStatusV2 status;
   status.set_schema_major(2U);
   status.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
@@ -112,6 +141,10 @@ int main() {
       decoded_evidence.run_id() != evidence.run_id() || decoded_evidence.evidence_seq() != 17U ||
       !decoded_evidence.evidence_lost()) return 15;
 
+  /**
+   * @brief raw-fixed service_invoke使用人工authenticated来源元数据。
+   * 回调回显source_device[0]=0xB2；这检查桥是否传递RequestInfo，不执行真实认证握手。
+   */
   wire::DummyManageV2Request monitor;
   monitor.set_schema_major(2U);
   monitor.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
@@ -134,6 +167,9 @@ int main() {
       snapshot.transaction_phase() != 3U || snapshot.result_code() != 0U ||
       snapshot.session_id() != 9007199254740995ULL) return 11;
 
+  /**
+   * @brief 截短一字节应解码失败且保持原输出boot=42，不能留下半解码对象。
+   */
   decoded_command.set_boot_epoch(42U);
   if (wire::DummyJointCommandV2Codec::decode(command_bytes, sizeof(command_bytes) - 1U, &decoded_command) == wire::CodecResult::kOk ||
       decoded_command.boot_epoch() != 42U) return 12;

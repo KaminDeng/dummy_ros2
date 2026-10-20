@@ -1,3 +1,10 @@
+/**
+ * @file transfer_owner_tests.cpp
+ * @brief 以链接wrap和门闩复现重叠transfer的单producer所有权。
+ *
+ * 本TU包含正式硬件实现并暂时禁用重复plugin注册。wrapped_consume故意等待另一个调用结束，控制并发窗口；这段阻塞是测试钩子，不是生产transfer实现。
+ * 用例不连接设备；还验证latest-only、容量4重试原generation和旧身份退休。
+ */
 // 只在本测试TU取消重复plugin注册；被测方法仍逐字包含正式CPP。
 #include "pluginlib/class_list_macros.hpp"
 #undef PLUGINLIB_EXPORT_CLASS
@@ -11,12 +18,28 @@
 #include <mutex>
 #include <thread>
 using namespace dummy_ros_control;
+/**
+ * @brief 门闩状态由同一mutex保护；consume_calls为进入底层consume的次数。
+ * first_inside表示首调用已取记录且尚未返回；second_finished让首调用退出；timeout_seen区分调度/锁行为异常。
+ */
 std::mutex barrier_mutex;
 std::condition_variable barrier_cv;
 bool first_inside=false,second_finished=false,timeout_seen=false;
 std::atomic<unsigned> consume_calls{0U};
+/**
+ * @brief 链接器--wrap对应的真实consume符号声明，保持生产ABI签名不变。
+ */
 extern "C" std::optional<CommandGenerationRecord> real_consume(std::uint64_t) asm("__real__ZN17dummy_ros_control22consume_control_updateEm");
+/**
+ * @brief --wrap转入口声明；具体实现仅在本测试进程替换调用边界。
+ */
 extern "C" std::optional<CommandGenerationRecord> wrapped_consume(std::uint64_t) asm("__wrap__ZN17dummy_ros_control22consume_control_updateEm");
+/**
+ * @brief 首次consume后持有测试门闩，允许第二transfer与其重叠。
+ * @param generation 已消费代次水位，原样传递真实consume。
+ * @return 真实consume取得的optional记录，不改内容或generation。
+ * @note 最多等待2s；第二transfer应因owner已占用直接失败，不能再进入本钩子。
+ */
 extern "C" std::optional<CommandGenerationRecord> wrapped_consume(std::uint64_t generation) {
   auto record=real_consume(generation);
   const auto call=consume_calls.fetch_add(1U);
@@ -27,6 +50,12 @@ extern "C" std::optional<CommandGenerationRecord> wrapped_consume(std::uint64_t 
   }
   return record;
 }
+/**
+ * @brief 验证并发transfer只转入一份原始记录并释放owner。
+ *
+ * 首先用线程a/b检查重叠窗口；随后分别构造独立系统对象检查常规latest-only、队列满后原代次重试、授权更替。所有position都是目标rad夹具。
+ * @return 0 所有合同通过；1 合同不符；2 初次发布失败；3 等待首调用进入钩子超时。
+ */
 int main() {
   GuardedZenbeddedSystem system;
   const CommandIdentity identity{11U,22U,33U,44U,55U};
@@ -56,6 +85,9 @@ int main() {
   std::printf("重叠transfer first=%d second=%d 实际记录数=%u 原记录一致=%d consume次数=%u 成功后重试=%d 超时=%d\n",first,second,count,intact,consume_calls.load(),retry,timeout_seen);
   bool contracts=true;
   {
+    /**
+     * @brief 连续两次目标提交后只转入最新generation；成功后再transfer应为空。
+     */
     GuardedZenbeddedSystem ordinary;
     const auto older=publish_control_update(q.data(),q.size(),0,nullptr);
     const auto latest=publish_control_update(q.data(),q.size(),0,nullptr);
@@ -67,6 +99,10 @@ int main() {
     std::printf("latest_only=%d empty_release=%d\n",sent && one,empty);
   }
   {
+    /**
+     * @brief 前4代填满队列，第5代失败计drop但仍保留待重试值。
+     * 释放一槽后应转入原第5代，不能重建代次、乱序或额外复制。
+     */
     GuardedZenbeddedSystem bounded;
     std::array<std::uint64_t,5> generations{};
     for(unsigned i=0;i<4;++i) {generations[i]=publish_control_update(q.data(),q.size(),0,nullptr);contracts=bounded.transfer_control_update() && contracts;}
@@ -81,6 +117,9 @@ int main() {
     std::printf("capacity4_full=%d retry_original_generation=%d order=%d drops=%llu\n",full,retry_full,order,static_cast<unsigned long long>(bounded.publish_drops()));
   }
   {
+    /**
+     * @brief 清理身份后旧目标不能转移；替换身份发布的新代次应带新boot/ticket。
+     */
     GuardedZenbeddedSystem identity_gate;
     (void)publish_control_update(q.data(),q.size(),0,nullptr);
     clear_command_identity();

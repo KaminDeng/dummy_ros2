@@ -1,3 +1,8 @@
+##
+# @file test_r05_action_gate_contract.py
+# @brief 检查公共Action经Native守卫而内部JTC保持私有的配置契约。
+# @details 通过YAML/源码文本确认命名、入口与取消减速度；不发送Action、不测试真实抢占时序。
+
 """Configuration boundary checks for the native Gazebo action gate."""
 
 from pathlib import Path
@@ -9,7 +14,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 
 
+##
+# @brief 公共Action守卫和内部JTC配置回归。
 class R05ActionGateContract(unittest.TestCase):
+    ##
+    # @brief 核公共arm_controller与内部_internal_arm_controller命名、守卫main及无detach，逐轴取消减速度0.5。
     def test_public_action_uses_gate_and_jtc_is_internal(self):
         source = ROOT / "src/dummy_motion_client/src/native_action_gate.cpp"
         self.assertTrue(source.is_file(), "native action gate is missing")

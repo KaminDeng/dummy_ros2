@@ -1,15 +1,20 @@
 <?xml version="1.0"?>
+<!-- @file empty.sdf
+     @brief 由scene.yaml及world_template.sdf生成的当前Gazebo world，障碍物来源保持canonical场景。
+     重新运行generate_world.py会覆盖此文件，维护场景应修改输入/模板。 -->
 <sdf version="1.10">
   <world name="default">
-    <physics name="1ms" type="ignored">
+    <!-- max_step_size为0.001秒，real_time_factor=1是目标实时倍率；实际算力不保证达到。
+         type=ignored由Gazebo Sim系统/引擎处理，不能读作物理仿真被关闭。 --><physics name="1ms" type="ignored">
       <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
-    <gravity>0 0 -9.81</gravity>
+    <!-- 重力向世界-Z，单位m/s²；三个系统分别提供物理、用户命令、场景广播。 --><gravity>0 0 -9.81</gravity>
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics" />
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands" />
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster" />
-    <model name="planning_barrier">
+    <!-- 静态障碍物pose按xyz(m)+rpy(rad)，box尺寸m；visual与collision同源一致。
+         该world只定义仿真对象；MoveIt还需scene_publisher加载对应PlanningScene。 --><model name="planning_barrier">
       <static>true</static>
       <pose>0.15 0.0 0.25 0.0 0.0 0.0</pose>
       <link name="planning_barrier_link">

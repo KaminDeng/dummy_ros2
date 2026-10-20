@@ -1,9 +1,18 @@
 # Dummy ROS 运行手册
 
+## 操作前先选入口
+
+本手册同时保留早期Gazebo/SIL、只读J1、受守卫六轴Action与真实开发会话流程。
+Qt面板的Native执行路径请先读 [主 README](../../README.md)，不要混用两种入口的授权和连接所有权。
+构建/安装目录与source环境必须配套；`--symlink-install`或改源码不会让已运行窗口自动重新导入。
+下方真实会话、enable与Action命令有设备副作用，应按其固定身份/外部SHA/独占owner条件执行，
+不是排查MoveIt的只读查询命令。bootstrap的Pending、Complete和EnabledHold也需按各步分别判断。
+旧报告中的门禁和版本身份不能自动沿用到新镜像/boot/session；停止和失能应读取独立终态证据。
+
 ## 构建与测试
 
 ```sh
-cd <home>/kamin_work/00-code/dummy_ros2
+cd <workspace-root>
 source /opt/ros/jazzy/setup.zsh
 export DPSDK_ROOT=../dpsdk
 colcon --log-base log_dummy build --build-base build_dummy --install-base install_dummy
@@ -168,5 +177,49 @@ controller；正常退出也会经 gate 执行 `DisableAndRelease`，确认 `REL
 ## 公共接口
 
 原生仿真 action 为 `/arm_controller/follow_joint_trajectory`；内部 controller action
-仅供 gate 使用。设备管理使用 wire-v1 `manage_v1`，command/state 使用设备限定路由
-下的 `command_v1`/`state_v1`。发布哈希记录在 `versions.lock`。
+仅供 gate 使用。当前生产设备传输使用 wire-v2 `manage_v2`、`command_v2`、`state_v2`，
+各自位于设备限定路由；历史wire-v1材料保留作对照，不能混链。发布哈希记录在 `versions.lock`。
+
+
+## 查看和关闭重复MoveIt实例
+
+以下示例在zsh中使用面板所在域83；其他域须改为当前面板实际值。先看节点和本机候选进程：
+
+```zsh
+source /opt/ros/jazzy/setup.zsh
+export ROS_DOMAIN_ID=83
+ros2 node list --no-daemon
+ps -eo pid,ppid,args | rg 'move_group|ros2 launch'
+for service in /compute_fk /compute_ik /plan_kinematic_path /check_state_validity /apply_planning_scene /get_planning_scene; do
+  ros2 service info --no-daemon "$service"
+done
+```
+
+六个服务的`Services count`分别应为1；0/未知需等待发现或查启动状态，2表示重复提供者。
+同进程可能出现同名节点及`manual_move_group_private_数字`子节点，节点重名不能单独作为重复进程证据。
+`ps`显示本机所有域，必须结合启动终端、父PID和完整命令行确定旧会话归属。
+
+优先回到已确认的旧`ros2 launch`终端按`Ctrl+C`，等launch和move_group子进程退出。
+找不到原终端时，只对已核对的旧launch数字PID发SIGINT。下面先展示PID，核对后再执行第二段：
+
+```zsh
+read 'OLD_LAUNCH_PID?输入已核对的旧 ros2 launch 数字 PID：'
+ps -p "$OLD_LAUNCH_PID" -o pid,ppid,args
+```
+
+```zsh
+if [[ "$OLD_LAUNCH_PID" == <-> ]] && (( OLD_LAUNCH_PID > 1 )); then
+  kill -INT "$OLD_LAUNCH_PID"
+else
+  print -u2 'PID 无效，未发送信号'
+fi
+```
+
+重新查看服务数量和父子进程，保留当前需要的一套。`ros2 daemon stop`只停止CLI图缓存，
+不会关闭MoveIt。关闭MoveIt也不等于Native取消、机械停车或失能：运动时先经原控制通道受控停止，
+需要失能时按设备流程读取确认，不能凭进程消失认定设备状态。
+
+唯一实例恢复后，在保留面板中重试场景同步；若旧确认状态没有重新提交，重新打开面板使保存圆柱再同步。
+作废所有旧路径，从新鲜实际姿态重新规划。标记可见、服务唯一、一次Apply成功分别只说明各自阶段，
+仍须核对实际规划world与圆柱。详细原因及HTML指引位于DPSDK的
+`applications/dummy_ref_control/docs/six-axis-stability-debugging-review.html`第09A节。

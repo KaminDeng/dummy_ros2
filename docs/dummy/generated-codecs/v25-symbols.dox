@@ -1,0 +1,5376 @@
+/**
+ * @namespace dp::protocol::dummy_robot_v2
+ * @brief 本提取配置独立选中的2.5协议命名空间。
+ *
+ * 同名v2命名空间在2.4/2.5/fixture中不能合并INPUT；对象类型不是许可或控制会话。
+ */
+
+/**
+ * @enum dp::protocol::dummy_robot_v2::CodecResult
+ * @brief 固定codec局部结果码：kOk=0或kInvalidArgument。
+ *
+ * kOk仅表示该函数实现的格式门通过，不等管理操作接纳、页链验证、实机动作成功；枚举不携详细失败原因。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::kSchemaMajor
+ * @brief 本头支持的schema常量=2。
+ *
+ * 构造消息所有字段仍零初始化，不会自动把此值写进对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::kSchemaMinor
+ * @brief 本头支持的schema常量=5。
+ *
+ * 构造消息所有字段仍零初始化，不会自动把此值写进对象。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::detail::put_le8(uint8_t value, uint8_t* output)
+ * @brief 将无符号8位整数按低字节在先写入。
+ *
+ * 内部循环只位移/写字节，无指针/容量检查；caller须提供至少1个可写字节。不是网络发送或对象整体memcpy。
+ * @param value 要编码的无符号位值，无业务单位。
+ * @param output 借用可写缓冲，函数返回后不保留指针。
+ * @return 无返回值；写入1字节。
+ */
+
+/**
+ * @fn uint8_t dp::protocol::dummy_robot_v2::detail::get_le8(const uint8_t* input)
+ * @brief 从低字节在先的1字节拼无符号8位整数。
+ *
+ * 不查指针/容量；仅返回位模式，double等由调用方memcpy恢复，不解析业务单位。
+ * @param input 至少1个可读字节的借用指针，返回后不保留。
+ * @return 拼得的无符号整数值。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::detail::put_le16(uint16_t value, uint8_t* output)
+ * @brief 将无符号16位整数按低字节在先写入。
+ *
+ * 内部循环只位移/写字节，无指针/容量检查；caller须提供至少2个可写字节。不是网络发送或对象整体memcpy。
+ * @param value 要编码的无符号位值，无业务单位。
+ * @param output 借用可写缓冲，函数返回后不保留指针。
+ * @return 无返回值；写入2字节。
+ */
+
+/**
+ * @fn uint16_t dp::protocol::dummy_robot_v2::detail::get_le16(const uint8_t* input)
+ * @brief 从低字节在先的2字节拼无符号16位整数。
+ *
+ * 不查指针/容量；仅返回位模式，double等由调用方memcpy恢复，不解析业务单位。
+ * @param input 至少2个可读字节的借用指针，返回后不保留。
+ * @return 拼得的无符号整数值。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::detail::put_le32(uint32_t value, uint8_t* output)
+ * @brief 将无符号32位整数按低字节在先写入。
+ *
+ * 内部循环只位移/写字节，无指针/容量检查；caller须提供至少4个可写字节。不是网络发送或对象整体memcpy。
+ * @param value 要编码的无符号位值，无业务单位。
+ * @param output 借用可写缓冲，函数返回后不保留指针。
+ * @return 无返回值；写入4字节。
+ */
+
+/**
+ * @fn uint32_t dp::protocol::dummy_robot_v2::detail::get_le32(const uint8_t* input)
+ * @brief 从低字节在先的4字节拼无符号32位整数。
+ *
+ * 不查指针/容量；仅返回位模式，double等由调用方memcpy恢复，不解析业务单位。
+ * @param input 至少4个可读字节的借用指针，返回后不保留。
+ * @return 拼得的无符号整数值。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::detail::put_le64(uint64_t value, uint8_t* output)
+ * @brief 将无符号64位整数按低字节在先写入。
+ *
+ * 内部循环只位移/写字节，无指针/容量检查；caller须提供至少8个可写字节。不是网络发送或对象整体memcpy。
+ * @param value 要编码的无符号位值，无业务单位。
+ * @param output 借用可写缓冲，函数返回后不保留指针。
+ * @return 无返回值；写入8字节。
+ */
+
+/**
+ * @fn uint64_t dp::protocol::dummy_robot_v2::detail::get_le64(const uint8_t* input)
+ * @brief 从低字节在先的8字节拼无符号64位整数。
+ *
+ * 不查指针/容量；仅返回位模式，double等由调用方memcpy恢复，不解析业务单位。
+ * @param input 至少8个可读字节的借用指针，返回后不保留。
+ * @return 拼得的无符号整数值。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2
+ * @brief 单RUN的CAN组页/终页证据值对象（wire 372字节，schema 2.5）。
+ *
+ * 本对象拥有所有固定字段/数组，默认全零并不构成有效schema/身份。getter不加锁；同一对象并发读写须调用方同步。数组getter返回内部const数组引用，寿命至对象销毁，后续setter/赋值会改变观察值；需要稳定快照时主动复制。setter只复制，不验证数值、掩码、许可或状态机。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::schema_major() const
+ * @brief 读取wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_schema_major(uint16_t value)
+ * @brief 写入wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::schema_major_
+ * @brief 拥有式字段存储：wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::schema_minor() const
+ * @brief 读取wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_schema_minor(uint16_t value)
+ * @brief 写入wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::schema_minor_
+ * @brief 拥有式字段存储：wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::run_id() const
+ * @brief 读取设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 4，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_run_id(uint64_t value)
+ * @brief 写入设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 4，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::run_id_
+ * @brief 拥有式字段存储：设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 4，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::evidence_seq() const
+ * @brief 读取单RUN页链序号，无单位；序列连续/不重放由collector检查，codec不保存历史。
+ *
+ * wire offset 12，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_evidence_seq(uint32_t value)
+ * @brief 写入单RUN页链序号，无单位；序列连续/不重放由collector检查，codec不保存历史。
+ *
+ * wire offset 12，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::evidence_seq_
+ * @brief 拥有式字段存储：单RUN页链序号，无单位；序列连续/不重放由collector检查，codec不保存历史。
+ *
+ * wire offset 12，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::group_id() const
+ * @brief 读取CAN组64位标识，无单位；终页必须0，组ID连续关系由上层校验。
+ *
+ * wire offset 16，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_group_id(uint64_t value)
+ * @brief 写入CAN组64位标识，无单位；终页必须0，组ID连续关系由上层校验。
+ *
+ * wire offset 16，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::group_id_
+ * @brief 拥有式字段存储：CAN组64位标识，无单位；终页必须0，组ID连续关系由上层校验。
+ *
+ * wire offset 16，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::producer_seq() const
+ * @brief 读取宿主命令生产者线序号，无单位；是更新顺序/ACK锚，不是时间或管理请求号。
+ *
+ * wire offset 24，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_producer_seq(uint32_t value)
+ * @brief 写入宿主命令生产者线序号，无单位；是更新顺序/ACK锚，不是时间或管理请求号。
+ *
+ * wire offset 24，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::producer_seq_
+ * @brief 拥有式字段存储：宿主命令生产者线序号，无单位；是更新顺序/ACK锚，不是时间或管理请求号。
+ *
+ * wire offset 24，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::motion_epoch() const
+ * @brief 读取当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 28，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_motion_epoch(uint32_t value)
+ * @brief 写入当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 28，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::motion_epoch_
+ * @brief 拥有式字段存储：当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 28，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::category() const
+ * @brief 读取v2证据类别：1运动/普通Hold、2安全组、3失能、4终页；数值无单位。
+ *
+ * wire offset 32，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_category(uint8_t value)
+ * @brief 写入v2证据类别：1运动/普通Hold、2安全组、3失能、4终页；数值无单位。
+ *
+ * wire offset 32，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::category_
+ * @brief 拥有式字段存储：v2证据类别：1运动/普通Hold、2安全组、3失能、4终页；数值无单位。
+ *
+ * wire offset 32，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::expected_mask() const
+ * @brief 读取本证据组预期轴位；六轴目标通常63，codec组形状仅要求非零，不保证恰当前配置。
+ *
+ * wire offset 33，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_expected_mask(uint8_t value)
+ * @brief 写入本证据组预期轴位；六轴目标通常63，codec组形状仅要求非零，不保证恰当前配置。
+ *
+ * wire offset 33，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::expected_mask_
+ * @brief 拥有式字段存储：本证据组预期轴位；六轴目标通常63，codec组形状仅要求非零，不保证恰当前配置。
+ *
+ * wire offset 33，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::submitted_mask() const
+ * @brief 读取本组已交CAN驱动的轴位；组分支没有完整性/SENT子集强证明，collector另核。
+ *
+ * wire offset 34，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_submitted_mask(uint8_t value)
+ * @brief 写入本组已交CAN驱动的轴位；组分支没有完整性/SENT子集强证明，collector另核。
+ *
+ * wire offset 34，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::submitted_mask_
+ * @brief 拥有式字段存储：本组已交CAN驱动的轴位；组分支没有完整性/SENT子集强证明，collector另核。
+ *
+ * wire offset 34，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::sent_mask() const
+ * @brief 读取本组CAN SENT轴位，不等物理到位；codec条件使用数值<=expected而非完整按位子集证明。
+ *
+ * wire offset 35，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_sent_mask(uint8_t value)
+ * @brief 写入本组CAN SENT轴位，不等物理到位；codec条件使用数值<=expected而非完整按位子集证明。
+ *
+ * wire offset 35，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::sent_mask_
+ * @brief 拥有式字段存储：本组CAN SENT轴位，不等物理到位；codec条件使用数值<=expected而非完整按位子集证明。
+ *
+ * wire offset 35，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::failed_mask() const
+ * @brief 读取本组CAN失败轴位；codec使用数值<=expected，业务层还需核每轴/故障语义。
+ *
+ * wire offset 36，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_failed_mask(uint8_t value)
+ * @brief 写入本组CAN失败轴位；codec使用数值<=expected，业务层还需核每轴/故障语义。
+ *
+ * wire offset 36，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::failed_mask_
+ * @brief 拥有式字段存储：本组CAN失败轴位；codec使用数值<=expected，业务层还需核每轴/故障语义。
+ *
+ * wire offset 36，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::final() const
+ * @brief 读取证据组/页完成标记uint8；终页要求1，组分支当前未统一强制1，完整页检查在上层。
+ *
+ * wire offset 37，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_final(uint8_t value)
+ * @brief 写入证据组/页完成标记uint8；终页要求1，组分支当前未统一强制1，完整页检查在上层。
+ *
+ * wire offset 37，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::final_
+ * @brief 拥有式字段存储：证据组/页完成标记uint8；终页要求1，组分支当前未统一强制1，完整页检查在上层。
+ *
+ * wire offset 37，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::first_failure_source() const
+ * @brief 读取证据首故障来源原码，可含0x1003等领域码；不是terminal_reason的0..14枚举。
+ *
+ * wire offset 38，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_first_failure_source(uint16_t value)
+ * @brief 写入证据首故障来源原码，可含0x1003等领域码；不是terminal_reason的0..14枚举。
+ *
+ * wire offset 38，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::first_failure_source_
+ * @brief 拥有式字段存储：证据首故障来源原码，可含0x1003等领域码；不是terminal_reason的0..14枚举。
+ *
+ * wire offset 38，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::first_failure_axis_mask() const
+ * @brief 读取首故障影响轴位；终页仅特定故障final状态允许非零六轴位，不能把它当配置掩码。
+ *
+ * wire offset 40，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_first_failure_axis_mask(uint8_t value)
+ * @brief 写入首故障影响轴位；终页仅特定故障final状态允许非零六轴位，不能把它当配置掩码。
+ *
+ * wire offset 40，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::first_failure_axis_mask_
+ * @brief 拥有式字段存储：首故障影响轴位；终页仅特定故障final状态允许非零六轴位，不能把它当配置掩码。
+ *
+ * wire offset 40，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::queued_at_us() const
+ * @brief 读取六轴组进入队列的Source单调µs，非Host收页时间；终页数组须全零。
+ *
+ * wire offset 41，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_queued_at_us(const uint64_t (&value)[6])
+ * @brief 写入六轴组进入队列的Source单调µs，非Host收页时间；终页数组须全零。
+ *
+ * wire offset 41，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::queued_at_us_
+ * @brief 拥有式字段存储：六轴组进入队列的Source单调µs，非Host收页时间；终页数组须全零。
+ *
+ * wire offset 41，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::taken_at_us() const
+ * @brief 读取六轴worker取组的Source单调µs，与queued/submitted/sent角色分开；终页全零。
+ *
+ * wire offset 89，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_taken_at_us(const uint64_t (&value)[6])
+ * @brief 写入六轴worker取组的Source单调µs，与queued/submitted/sent角色分开；终页全零。
+ *
+ * wire offset 89，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::taken_at_us_
+ * @brief 拥有式字段存储：六轴worker取组的Source单调µs，与queued/submitted/sent角色分开；终页全零。
+ *
+ * wire offset 89，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::submitted_at_us() const
+ * @brief 读取六轴交CAN驱动时的Source单调µs，提交不等总线SENT；终页全零。
+ *
+ * wire offset 137，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_submitted_at_us(const uint64_t (&value)[6])
+ * @brief 写入六轴交CAN驱动时的Source单调µs，提交不等总线SENT；终页全零。
+ *
+ * wire offset 137，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::submitted_at_us_
+ * @brief 拥有式字段存储：六轴交CAN驱动时的Source单调µs，提交不等总线SENT；终页全零。
+ *
+ * wire offset 137，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::sent_at_us() const
+ * @brief 读取六轴CAN发送证据的Source单调µs，不是Host日志接收时间或机械到达；终页全零。
+ *
+ * wire offset 185，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_sent_at_us(const uint64_t (&value)[6])
+ * @brief 写入六轴CAN发送证据的Source单调µs，不是Host日志接收时间或机械到达；终页全零。
+ *
+ * wire offset 185，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::sent_at_us_
+ * @brief 拥有式字段存储：六轴CAN发送证据的Source单调µs，不是Host日志接收时间或机械到达；终页全零。
+ *
+ * wire offset 185，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::abort_at_us() const
+ * @brief 读取六轴CAN中止记录Source单调µs，不自动证明失能；终页全零。
+ *
+ * wire offset 233，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_abort_at_us(const uint64_t (&value)[6])
+ * @brief 写入六轴CAN中止记录Source单调µs，不自动证明失能；终页全零。
+ *
+ * wire offset 233，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::abort_at_us_
+ * @brief 拥有式字段存储：六轴CAN中止记录Source单调µs，不自动证明失能；终页全零。
+ *
+ * wire offset 233，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::group_count() const
+ * @brief 读取证据累计组计数/终页总数，无单位；可有异步领先平台，完整页序与最终总量由collector判。
+ *
+ * wire offset 281，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_group_count(uint32_t value)
+ * @brief 写入证据累计组计数/终页总数，无单位；可有异步领先平台，完整页序与最终总量由collector判。
+ *
+ * wire offset 281，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::group_count_
+ * @brief 拥有式字段存储：证据累计组计数/终页总数，无单位；可有异步领先平台，完整页序与最终总量由collector判。
+ *
+ * wire offset 281，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::attempt_id() const
+ * @brief 读取设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 285，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_attempt_id(uint64_t value)
+ * @brief 写入设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 285，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::attempt_id_
+ * @brief 拥有式字段存储：设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 285，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::attempt_kind() const
+ * @brief 读取v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 293，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_attempt_kind(uint8_t value)
+ * @brief 写入v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 293，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::attempt_kind_
+ * @brief 拥有式字段存储：v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 293，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::parent_run_id() const
+ * @brief 读取释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 294，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_parent_run_id(uint64_t value)
+ * @brief 写入释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 294，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::parent_run_id_
+ * @brief 拥有式字段存储：释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 294，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::motion_complete() const
+ * @brief 读取已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 302，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_motion_complete(bool value)
+ * @brief 写入已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 302，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::motion_complete_
+ * @brief 拥有式字段存储：已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 302，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::release_committed() const
+ * @brief 读取释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 303，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_release_committed(bool value)
+ * @brief 写入释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 303，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::release_committed_
+ * @brief 拥有式字段存储：释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 303，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::final_state() const
+ * @brief 读取v2终态枚举0..9；6完成Hold、7取消Hold、8释放、4故障并释放等，以相应枚举文件为准。
+ *
+ * wire offset 304，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_final_state(uint8_t value)
+ * @brief 写入v2终态枚举0..9；6完成Hold、7取消Hold、8释放、4故障并释放等，以相应枚举文件为准。
+ *
+ * wire offset 304，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::final_state_
+ * @brief 拥有式字段存储：v2终态枚举0..9；6完成Hold、7取消Hold、8释放、4故障并释放等，以相应枚举文件为准。
+ *
+ * wire offset 304，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::terminal_reason() const
+ * @brief 读取v2终页原因枚举0..14，区别于首故障原码；组页要求0。
+ *
+ * wire offset 305，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_terminal_reason(uint16_t value)
+ * @brief 写入v2终页原因枚举0..14，区别于首故障原码；组页要求0。
+ *
+ * wire offset 305，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::terminal_reason_
+ * @brief 拥有式字段存储：v2终页原因枚举0..14，区别于首故障原码；组页要求0。
+ *
+ * wire offset 305，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::previous_chain_sha256() const
+ * @brief 读取前链32字节；首链从run/boot/client/四身份摘要加零尾构造，codec只拷贝不核链。
+ *
+ * wire offset 307，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_previous_chain_sha256(const uint8_t (&value)[32])
+ * @brief 写入前链32字节；首链从run/boot/client/四身份摘要加零尾构造，codec只拷贝不核链。
+ *
+ * wire offset 307，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::previous_chain_sha256_
+ * @brief 拥有式字段存储：前链32字节；首链从run/boot/client/四身份摘要加零尾构造，codec只拷贝不核链。
+ *
+ * wire offset 307，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::chain_sha256() const
+ * @brief 读取当前链32字节，外层按previous32+canonical prefix307+lost1重算；codec不计算或认证此值。
+ *
+ * wire offset 339，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_chain_sha256(const uint8_t (&value)[32])
+ * @brief 写入当前链32字节，外层按previous32+canonical prefix307+lost1重算；codec不计算或认证此值。
+ *
+ * wire offset 339，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::chain_sha256_
+ * @brief 拥有式字段存储：当前链32字节，外层按previous32+canonical prefix307+lost1重算；codec不计算或认证此值。
+ *
+ * wire offset 339，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::evidence_lost() const
+ * @brief 读取证据丢失声明；False本身不能证明全链完整，collector还需页序/SHA/终页验证。
+ *
+ * wire offset 371，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::set_evidence_lost(bool value)
+ * @brief 写入证据丢失声明；False本身不能证明全链完整，collector还需页序/SHA/终页验证。
+ *
+ * wire offset 371，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2::evidence_lost_
+ * @brief 拥有式字段存储：证据丢失声明；False本身不能证明全链完整，collector还需页序/SHA/终页验证。
+ *
+ * wire offset 371，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec
+ * @brief 将DummyAttemptEvidenceV2值对象与固定小端wire缓冲互转。
+ *
+ * exact size=372。逐字段位拷贝/端序处理，double按8字节位模式搬运；不动态分配、不把有padding的C++对象整块发送。encode和decode都核精确schema、attempt_kind<=3/terminal_reason<=14；组category1..3要求expected非零、sent/failed数值<=expected、final_state/reason为0且complete/release为false。终页category4要求组ID/producer/掩码和五组时间数组全零、final1、final_state1..9；只有故障final4/5/9可带非零合法六轴首故障位。没有重算链SHA、页连续性、完整组SENT、session/boot身份，也不以数值<=替代按位子集审计。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::kEncodedSize
+ * @brief 序列化固定字节数，传size必须恰等此值，不是C++ sizeof对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::kScratchSize
+ * @brief codec额外scratch字节数，固定0；不等于解码没有栈局部对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::kAlignment
+ * @brief C++消息值对象alignof，受目标ABI影响，不是wire缓冲对齐要求。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::kMaxAge
+ * @brief 生成traits最大年龄占位0，本codec不据此做新鲜度/时钟/timeout监督。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize
+ * @brief Evidence链规范前缀307字节，结束于previous_chain前；codec不自行求SHA。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::kEvidenceLostOffset
+ * @brief Evidence evidence_lost位于wire offset371；该一字节需纳外层链摘要。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::encode(const dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2& message, uint8_t* output, size_t size)
+ * @brief 把DummyAttemptEvidenceV2的当前字段按IDL顺序写成372字节。
+ *
+ *  先核Evidence页形状，任一前置失败都在写output前返回；不求链SHA。 输入为借用const引用，仅调用期间读取，输出由caller拥有；无CAN/ROS发送、ACK或目标执行。
+ * @param message 要序列化的当前消息；所有业务身份/单位值须由caller先准备。
+ * @param output 至少size字节可写缓冲，非空；函数不保留。
+ * @param size 必须恰为kEncodedSize（372），不是只要大于等于。
+ * @return kOk写完；kInvalidArgument为指针/长度或本Evidence前置条件不满足。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2Codec::decode(const uint8_t* input, size_t size, dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2* message)
+ * @brief 从exact wire缓冲解码并在全部检查成功后一次提交值对象。
+ *
+ * encode和decode都核精确schema、attempt_kind<=3/terminal_reason<=14；组category1..3要求expected非零、sent/failed数值<=expected、final_state/reason为0且complete/release为false。终页category4要求组ID/producer/掩码和五组时间数组全零、final1、final_state1..9；只有故障final4/5/9可带非零合法六轴首故障位。没有重算链SHA、页连续性、完整组SENT、session/boot身份，也不以数值<=替代按位子集审计。 先填零初始化decoded局部对象；任何失败不执行末尾*message赋值，原输出对象保持。输入buf只在调用期间借用，成功后消息拥有数组拷贝，不引用wire缓冲。
+ * @param input 借用至少size字节可读缓冲，非空。
+ * @param size 必须恰为372字节。
+ * @param message 非空caller输出对象；成功时被整体值赋值。
+ * @return kOk仅说明上述格式门通过；kInvalidArgument拒绝，需业务端另核准入/有限性/时序/链。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyDeviceStatusV2
+ * @brief 设备状态/能力及终态摘要值对象（wire 651字节，schema 2.5）。
+ *
+ * 本对象拥有所有固定字段/数组，默认全零并不构成有效schema/身份。getter不加锁；同一对象并发读写须调用方同步。数组getter返回内部const数组引用，寿命至对象销毁，后续setter/赋值会改变观察值；需要稳定快照时主动复制。setter只复制，不验证数值、掩码、许可或状态机。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::schema_major() const
+ * @brief 读取wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_schema_major(uint16_t value)
+ * @brief 写入wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::schema_major_
+ * @brief 拥有式字段存储：wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::schema_minor() const
+ * @brief 读取wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_schema_minor(uint16_t value)
+ * @brief 写入wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::schema_minor_
+ * @brief 拥有式字段存储：wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::device_id() const
+ * @brief 读取设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_device_id(const uint8_t (&value)[16])
+ * @brief 写入设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::device_id_
+ * @brief 拥有式字段存储：设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::boot_epoch() const
+ * @brief 读取设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 20，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_boot_epoch(uint64_t value)
+ * @brief 写入设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 20，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::boot_epoch_
+ * @brief 拥有式字段存储：设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 20，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::session_id() const
+ * @brief 读取设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 28，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_session_id(uint64_t value)
+ * @brief 写入设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 28，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::session_id_
+ * @brief 拥有式字段存储：设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 28，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::reference_epoch() const
+ * @brief 读取设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 36，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_reference_epoch(uint32_t value)
+ * @brief 写入设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 36，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::reference_epoch_
+ * @brief 拥有式字段存储：设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 36，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::motion_epoch() const
+ * @brief 读取当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 40，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_motion_epoch(uint32_t value)
+ * @brief 写入当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 40，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::motion_epoch_
+ * @brief 拥有式字段存储：当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 40，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::management_epoch() const
+ * @brief 读取设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 44，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_management_epoch(uint32_t value)
+ * @brief 写入设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 44，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::management_epoch_
+ * @brief 拥有式字段存储：设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 44，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::profile_id() const
+ * @brief 读取部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 48，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_profile_id(uint32_t value)
+ * @brief 写入部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 48，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::profile_id_
+ * @brief 拥有式字段存储：部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 48，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::core_state() const
+ * @brief 读取设备Core状态码，无单位；原数值按相应版本枚举解释，Hold/Run/Fault不能凭名称重编号。
+ *
+ * wire offset 52，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_core_state(uint16_t value)
+ * @brief 写入设备Core状态码，无单位；原数值按相应版本枚举解释，Hold/Run/Fault不能凭名称重编号。
+ *
+ * wire offset 52，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::core_state_
+ * @brief 拥有式字段存储：设备Core状态码，无单位；原数值按相应版本枚举解释，Hold/Run/Fault不能凭名称重编号。
+ *
+ * wire offset 52，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::control_mode() const
+ * @brief 读取设备当前控制模式数值，无单位；codec仅检查版本相应范围，不执行切换。
+ *
+ * wire offset 54，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_control_mode(uint8_t value)
+ * @brief 写入设备当前控制模式数值，无单位；codec仅检查版本相应范围，不执行切换。
+ *
+ * wire offset 54，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::control_mode_
+ * @brief 拥有式字段存储：设备当前控制模式数值，无单位；codec仅检查版本相应范围，不执行切换。
+ *
+ * wire offset 54，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::reference_kind() const
+ * @brief 读取参考坐标类别，无单位；BENCH相对参考与模型绝对零位不能混用。
+ *
+ * wire offset 55，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_reference_kind(uint8_t value)
+ * @brief 写入参考坐标类别，无单位；BENCH相对参考与模型绝对零位不能混用。
+ *
+ * wire offset 55，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::reference_kind_
+ * @brief 拥有式字段存储：参考坐标类别，无单位；BENCH相对参考与模型绝对零位不能混用。
+ *
+ * wire offset 55，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::configured_mask() const
+ * @brief 读取本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 56，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_configured_mask(uint8_t value)
+ * @brief 写入本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 56，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::configured_mask_
+ * @brief 拥有式字段存储：本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 56，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::motion_supported() const
+ * @brief 读取设备是否声明支持运动；False时仍可能有只读状态，True不等于当前已授权。
+ *
+ * wire offset 57，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_motion_supported(bool value)
+ * @brief 写入设备是否声明支持运动；False时仍可能有只读状态，True不等于当前已授权。
+ *
+ * wire offset 57，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::motion_supported_
+ * @brief 拥有式字段存储：设备是否声明支持运动；False时仍可能有只读状态，True不等于当前已授权。
+ *
+ * wire offset 57，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::real_motion_permitted() const
+ * @brief 读取设备声明的当前真实运动许可位；True字段本身不签发permit，也不代替owner/期限门。
+ *
+ * wire offset 58，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_real_motion_permitted(bool value)
+ * @brief 写入设备声明的当前真实运动许可位；True字段本身不签发permit，也不代替owner/期限门。
+ *
+ * wire offset 58，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::real_motion_permitted_
+ * @brief 拥有式字段存储：设备声明的当前真实运动许可位；True字段本身不签发permit，也不代替owner/期限门。
+ *
+ * wire offset 58，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::permit_remaining_us() const
+ * @brief 读取许可剩余或申请有效时长，单位µs；这是相对时长，不是Host绝对时间戳。
+ *
+ * wire offset 59，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_permit_remaining_us(uint64_t value)
+ * @brief 写入许可剩余或申请有效时长，单位µs；这是相对时长，不是Host绝对时间戳。
+ *
+ * wire offset 59，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::permit_remaining_us_
+ * @brief 拥有式字段存储：许可剩余或申请有效时长，单位µs；这是相对时长，不是Host绝对时间戳。
+ *
+ * wire offset 59，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::capabilities() const
+ * @brief 读取能力位集合，无单位；只能按该版本metadata解释，位存在不等于功能资格已测量。
+ *
+ * wire offset 67，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_capabilities(uint64_t value)
+ * @brief 写入能力位集合，无单位；只能按该版本metadata解释，位存在不等于功能资格已测量。
+ *
+ * wire offset 67，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::capabilities_
+ * @brief 拥有式字段存储：能力位集合，无单位；只能按该版本metadata解释，位存在不等于功能资格已测量。
+ *
+ * wire offset 67，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::operation_id() const
+ * @brief 读取设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 75，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_operation_id(uint64_t value)
+ * @brief 写入设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 75，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::operation_id_
+ * @brief 拥有式字段存储：设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 75，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::transaction_phase() const
+ * @brief 读取v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 83，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_transaction_phase(uint8_t value)
+ * @brief 写入v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 83，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::transaction_phase_
+ * @brief 拥有式字段存储：v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 83，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::first_failure_reason() const
+ * @brief 读取v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 84，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_first_failure_reason(uint16_t value)
+ * @brief 写入v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 84，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::first_failure_reason_
+ * @brief 拥有式字段存储：v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 84，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::operation_deadline_us() const
+ * @brief 读取设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 86，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_operation_deadline_us(uint64_t value)
+ * @brief 写入设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 86，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::operation_deadline_us_
+ * @brief 拥有式字段存储：设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 86，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::committed_producer_seq() const
+ * @brief 读取设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 94，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_committed_producer_seq(uint32_t value)
+ * @brief 写入设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 94，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::committed_producer_seq_
+ * @brief 拥有式字段存储：设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 94，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_submitted_mask() const
+ * @brief 读取当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 98，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_can_submitted_mask(uint8_t value)
+ * @brief 写入当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 98，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_submitted_mask_
+ * @brief 拥有式字段存储：当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 98，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_sent_mask() const
+ * @brief 读取当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 99，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_can_sent_mask(uint8_t value)
+ * @brief 写入当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 99，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_sent_mask_
+ * @brief 拥有式字段存储：当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 99，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_failed_mask() const
+ * @brief 读取当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 100，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_can_failed_mask(uint8_t value)
+ * @brief 写入当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 100，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_failed_mask_
+ * @brief 拥有式字段存储：当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 100，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::command_reject_count() const
+ * @brief 读取累计命令拒绝计数，无单位；不是本次目标的专属错误或CAN发送数量。
+ *
+ * wire offset 101，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_command_reject_count(uint32_t value)
+ * @brief 写入累计命令拒绝计数，无单位；不是本次目标的专属错误或CAN发送数量。
+ *
+ * wire offset 101，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::command_reject_count_
+ * @brief 拥有式字段存储：累计命令拒绝计数，无单位；不是本次目标的专属错误或CAN发送数量。
+ *
+ * wire offset 101，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_error_count() const
+ * @brief 读取CAN错误诊断计数，无单位；0不独立证明完整原始证据或物理运动成功。
+ *
+ * wire offset 105，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_can_error_count(uint32_t value)
+ * @brief 写入CAN错误诊断计数，无单位；0不独立证明完整原始证据或物理运动成功。
+ *
+ * wire offset 105，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_error_count_
+ * @brief 拥有式字段存储：CAN错误诊断计数，无单位；0不独立证明完整原始证据或物理运动成功。
+ *
+ * wire offset 105，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::deadline_miss_count() const
+ * @brief 读取控制/时限遗漏诊断计数，无单位；需观察区间/来源上下文，codec不测WCET。
+ *
+ * wire offset 109，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_deadline_miss_count(uint32_t value)
+ * @brief 写入控制/时限遗漏诊断计数，无单位；需观察区间/来源上下文，codec不测WCET。
+ *
+ * wire offset 109，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::deadline_miss_count_
+ * @brief 拥有式字段存储：控制/时限遗漏诊断计数，无单位；需观察区间/来源上下文，codec不测WCET。
+ *
+ * wire offset 109，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::contract_sha256() const
+ * @brief 读取合同payload聚合身份32字节；不是manifest原文件SHA，也不由codec重新计算。
+ *
+ * wire offset 113，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_contract_sha256(const uint8_t (&value)[32])
+ * @brief 写入合同payload聚合身份32字节；不是manifest原文件SHA，也不由codec重新计算。
+ *
+ * wire offset 113，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::contract_sha256_
+ * @brief 拥有式字段存储：合同payload聚合身份32字节；不是manifest原文件SHA，也不由codec重新计算。
+ *
+ * wire offset 113，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::model_sha256() const
+ * @brief 读取模型身份摘要32字节；仅保存字节，不验证真实机械模型/标定。
+ *
+ * wire offset 145，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_model_sha256(const uint8_t (&value)[32])
+ * @brief 写入模型身份摘要32字节；仅保存字节，不验证真实机械模型/标定。
+ *
+ * wire offset 145，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::model_sha256_
+ * @brief 拥有式字段存储：模型身份摘要32字节；仅保存字节，不验证真实机械模型/标定。
+ *
+ * wire offset 145，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::profile_sha256() const
+ * @brief 读取运行profile身份摘要32字节；其具体源对象按manifest/deployment约定，不自动等于任意profile文件或policy。
+ *
+ * wire offset 177，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_profile_sha256(const uint8_t (&value)[32])
+ * @brief 写入运行profile身份摘要32字节；其具体源对象按manifest/deployment约定，不自动等于任意profile文件或policy。
+ *
+ * wire offset 177，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::profile_sha256_
+ * @brief 拥有式字段存储：运行profile身份摘要32字节；其具体源对象按manifest/deployment约定，不自动等于任意profile文件或policy。
+ *
+ * wire offset 177，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::firmware_sha256() const
+ * @brief 读取固件镜像身份32字节；fixture可使用人工d8标记，不自动说明真实flash内容一致。
+ *
+ * wire offset 209，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_firmware_sha256(const uint8_t (&value)[32])
+ * @brief 写入固件镜像身份32字节；fixture可使用人工d8标记，不自动说明真实flash内容一致。
+ *
+ * wire offset 209，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::firmware_sha256_
+ * @brief 拥有式字段存储：固件镜像身份32字节；fixture可使用人工d8标记，不自动说明真实flash内容一致。
+ *
+ * wire offset 209，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::board_name_ascii() const
+ * @brief 读取固定16字节板名槽，原始ASCII字节；未保证零结尾，打印必须有界。
+ *
+ * wire offset 241，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_board_name_ascii(const uint8_t (&value)[16])
+ * @brief 写入固定16字节板名槽，原始ASCII字节；未保证零结尾，打印必须有界。
+ *
+ * wire offset 241，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::board_name_ascii_
+ * @brief 拥有式字段存储：固定16字节板名槽，原始ASCII字节；未保证零结尾，打印必须有界。
+ *
+ * wire offset 241，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::compiled_policy_sha256() const
+ * @brief 读取编译策略身份摘要32字节；不是policy说明文字，不自动匹配模型或运行固件。
+ *
+ * wire offset 257，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_compiled_policy_sha256(const uint8_t (&value)[32])
+ * @brief 写入编译策略身份摘要32字节；不是policy说明文字，不自动匹配模型或运行固件。
+ *
+ * wire offset 257，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::compiled_policy_sha256_
+ * @brief 拥有式字段存储：编译策略身份摘要32字节；不是policy说明文字，不自动匹配模型或运行固件。
+ *
+ * wire offset 257，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::position_min_rad() const
+ * @brief 读取六轴设备声明位置下界rad；不是自动收窄的规划相对范围，codec不校验min<max。
+ *
+ * wire offset 289，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_position_min_rad(const double (&value)[6])
+ * @brief 写入六轴设备声明位置下界rad；不是自动收窄的规划相对范围，codec不校验min<max。
+ *
+ * wire offset 289，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::position_min_rad_
+ * @brief 拥有式字段存储：六轴设备声明位置下界rad；不是自动收窄的规划相对范围，codec不校验min<max。
+ *
+ * wire offset 289，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::position_max_rad() const
+ * @brief 读取六轴设备声明位置上界rad；多圈边界不应通过2π折叠改写。
+ *
+ * wire offset 337，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_position_max_rad(const double (&value)[6])
+ * @brief 写入六轴设备声明位置上界rad；多圈边界不应通过2π折叠改写。
+ *
+ * wire offset 337，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::position_max_rad_
+ * @brief 拥有式字段存储：六轴设备声明位置上界rad；多圈边界不应通过2π折叠改写。
+ *
+ * wire offset 337，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::velocity_max_rad_s() const
+ * @brief 读取六轴设备声明关节速度上限rad/s；非CAN cap电机rev/s，不由codec限幅。
+ *
+ * wire offset 385，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_velocity_max_rad_s(const double (&value)[6])
+ * @brief 写入六轴设备声明关节速度上限rad/s；非CAN cap电机rev/s，不由codec限幅。
+ *
+ * wire offset 385，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::velocity_max_rad_s_
+ * @brief 拥有式字段存储：六轴设备声明关节速度上限rad/s；非CAN cap电机rev/s，不由codec限幅。
+ *
+ * wire offset 385，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::acceleration_max_rad_s() const
+ * @brief 读取六轴设备声明关节加速度上限，实际单位rad/s²；字段历史后缀少一个2，不能按rad/s解释。
+ *
+ * wire offset 433，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_acceleration_max_rad_s(const double (&value)[6])
+ * @brief 写入六轴设备声明关节加速度上限，实际单位rad/s²；字段历史后缀少一个2，不能按rad/s解释。
+ *
+ * wire offset 433，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::acceleration_max_rad_s_
+ * @brief 拥有式字段存储：六轴设备声明关节加速度上限，实际单位rad/s²；字段历史后缀少一个2，不能按rad/s解释。
+ *
+ * wire offset 433，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::control_period_us() const
+ * @brief 读取设备控制周期µs，区别于State发布周期；数值声明不证明实时线程已满足节奏。
+ *
+ * wire offset 481，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_control_period_us(uint64_t value)
+ * @brief 写入设备控制周期µs，区别于State发布周期；数值声明不证明实时线程已满足节奏。
+ *
+ * wire offset 481，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::control_period_us_
+ * @brief 拥有式字段存储：设备控制周期µs，区别于State发布周期；数值声明不证明实时线程已满足节奏。
+ *
+ * wire offset 481，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::state_publish_period_us() const
+ * @brief 读取设备State发布周期µs，不可直接拿它当controller update_rate或CAN反馈周期。
+ *
+ * wire offset 489，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_state_publish_period_us(uint64_t value)
+ * @brief 写入设备State发布周期µs，不可直接拿它当controller update_rate或CAN反馈周期。
+ *
+ * wire offset 489，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::state_publish_period_us_
+ * @brief 拥有式字段存储：设备State发布周期µs，不可直接拿它当controller update_rate或CAN反馈周期。
+ *
+ * wire offset 489，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::feedback_period_us() const
+ * @brief 读取六轴CAN反馈周期诊断µs，和Host回调间隔不同。
+ *
+ * wire offset 497，占24字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_feedback_period_us(const uint32_t (&value)[6])
+ * @brief 写入六轴CAN反馈周期诊断µs，和Host回调间隔不同。
+ *
+ * wire offset 497，占24字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::feedback_period_us_
+ * @brief 拥有式字段存储：六轴CAN反馈周期诊断µs，和Host回调间隔不同。
+ *
+ * wire offset 497，占24字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::mailbox_turnover() const
+ * @brief 读取CAN邮箱周转诊断计数，无单位；不证明每目标全部组SENT。
+ *
+ * wire offset 521，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_mailbox_turnover(uint32_t value)
+ * @brief 写入CAN邮箱周转诊断计数，无单位；不证明每目标全部组SENT。
+ *
+ * wire offset 521，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::mailbox_turnover_
+ * @brief 拥有式字段存储：CAN邮箱周转诊断计数，无单位；不证明每目标全部组SENT。
+ *
+ * wire offset 521，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::tx_event_overflow() const
+ * @brief 读取CAN发送事件缓冲溢出计数，无单位；非零影响证据完整性判断，不由codec清零。
+ *
+ * wire offset 525，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_tx_event_overflow(uint32_t value)
+ * @brief 写入CAN发送事件缓冲溢出计数，无单位；非零影响证据完整性判断，不由codec清零。
+ *
+ * wire offset 525，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::tx_event_overflow_
+ * @brief 拥有式字段存储：CAN发送事件缓冲溢出计数，无单位；非零影响证据完整性判断，不由codec清零。
+ *
+ * wire offset 525，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::rx_overflow() const
+ * @brief 读取接收缓冲溢出计数，无单位；仅诊断字段，不提供缺失恢复。
+ *
+ * wire offset 529，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_rx_overflow(uint32_t value)
+ * @brief 写入接收缓冲溢出计数，无单位；仅诊断字段，不提供缺失恢复。
+ *
+ * wire offset 529，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::rx_overflow_
+ * @brief 拥有式字段存储：接收缓冲溢出计数，无单位；仅诊断字段，不提供缺失恢复。
+ *
+ * wire offset 529，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::bus_off() const
+ * @brief 读取CAN bus-off状态声明；和管理Fault/运动终态不同，需当前有效观测。
+ *
+ * wire offset 533，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_bus_off(bool value)
+ * @brief 写入CAN bus-off状态声明；和管理Fault/运动终态不同，需当前有效观测。
+ *
+ * wire offset 533，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::bus_off_
+ * @brief 拥有式字段存储：CAN bus-off状态声明；和管理Fault/运动终态不同，需当前有效观测。
+ *
+ * wire offset 533，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::run_id() const
+ * @brief 读取设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 534，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_run_id(uint64_t value)
+ * @brief 写入设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 534，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::run_id_
+ * @brief 拥有式字段存储：设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 534，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::attempt_id() const
+ * @brief 读取设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 542，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_attempt_id(uint64_t value)
+ * @brief 写入设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 542，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::attempt_id_
+ * @brief 拥有式字段存储：设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 542，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::final_state() const
+ * @brief 读取v2终态枚举0..9；6完成Hold、7取消Hold、8释放、4故障并释放等，以相应枚举文件为准。
+ *
+ * wire offset 550，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_final_state(uint8_t value)
+ * @brief 写入v2终态枚举0..9；6完成Hold、7取消Hold、8释放、4故障并释放等，以相应枚举文件为准。
+ *
+ * wire offset 550，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::final_state_
+ * @brief 拥有式字段存储：v2终态枚举0..9；6完成Hold、7取消Hold、8释放、4故障并释放等，以相应枚举文件为准。
+ *
+ * wire offset 550，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::failure_source() const
+ * @brief 读取Status当前/缓存故障来源原码，不是管理first_failure_reason枚举；不能跨RUN借用。
+ *
+ * wire offset 551，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_failure_source(uint16_t value)
+ * @brief 写入Status当前/缓存故障来源原码，不是管理first_failure_reason枚举；不能跨RUN借用。
+ *
+ * wire offset 551，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::failure_source_
+ * @brief 拥有式字段存储：Status当前/缓存故障来源原码，不是管理first_failure_reason枚举；不能跨RUN借用。
+ *
+ * wire offset 551，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::failure_axis_mask() const
+ * @brief 读取Status故障轴位，无单位；对应failure_source/RUN解释。
+ *
+ * wire offset 553，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_failure_axis_mask(uint8_t value)
+ * @brief 写入Status故障轴位，无单位；对应failure_source/RUN解释。
+ *
+ * wire offset 553，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::failure_axis_mask_
+ * @brief 拥有式字段存储：Status故障轴位，无单位；对应failure_source/RUN解释。
+ *
+ * wire offset 553，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::cleanup_state() const
+ * @brief 读取v2清理阶段0无/1Queued/2Submitted/3Sent/4Failed；物理失能能力仍独立。
+ *
+ * wire offset 554，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_cleanup_state(uint8_t value)
+ * @brief 写入v2清理阶段0无/1Queued/2Submitted/3Sent/4Failed；物理失能能力仍独立。
+ *
+ * wire offset 554，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::cleanup_state_
+ * @brief 拥有式字段存储：v2清理阶段0无/1Queued/2Submitted/3Sent/4Failed；物理失能能力仍独立。
+ *
+ * wire offset 554，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_queue_to_submit_us() const
+ * @brief 读取六轴队列至CAN提交耗时诊断µs，是区间差而非绝对Source时间。
+ *
+ * wire offset 555，占24字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_can_queue_to_submit_us(const uint32_t (&value)[6])
+ * @brief 写入六轴队列至CAN提交耗时诊断µs，是区间差而非绝对Source时间。
+ *
+ * wire offset 555，占24字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_queue_to_submit_us_
+ * @brief 拥有式字段存储：六轴队列至CAN提交耗时诊断µs，是区间差而非绝对Source时间。
+ *
+ * wire offset 555，占24字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_submit_to_sent_us() const
+ * @brief 读取六轴CAN提交至SENT耗时诊断µs，非机械运动时长。
+ *
+ * wire offset 579，占24字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_can_submit_to_sent_us(const uint32_t (&value)[6])
+ * @brief 写入六轴CAN提交至SENT耗时诊断µs，非机械运动时长。
+ *
+ * wire offset 579，占24字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::can_submit_to_sent_us_
+ * @brief 拥有式字段存储：六轴CAN提交至SENT耗时诊断µs，非机械运动时长。
+ *
+ * wire offset 579，占24字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::group_count() const
+ * @brief 读取证据累计组计数/终页总数，无单位；可有异步领先平台，完整页序与最终总量由collector判。
+ *
+ * wire offset 603，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_group_count(uint32_t value)
+ * @brief 写入证据累计组计数/终页总数，无单位；可有异步领先平台，完整页序与最终总量由collector判。
+ *
+ * wire offset 603，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::group_count_
+ * @brief 拥有式字段存储：证据累计组计数/终页总数，无单位；可有异步领先平台，完整页序与最终总量由collector判。
+ *
+ * wire offset 603，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::evidence_chain_sha256() const
+ * @brief 读取Status所公布终态链32字节；只携声明，需对原页链/同RUN/身份重核，特殊清理Idle可能清零。
+ *
+ * wire offset 607，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_evidence_chain_sha256(const uint8_t (&value)[32])
+ * @brief 写入Status所公布终态链32字节；只携声明，需对原页链/同RUN/身份重核，特殊清理Idle可能清零。
+ *
+ * wire offset 607，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::evidence_chain_sha256_
+ * @brief 拥有式字段存储：Status所公布终态链32字节；只携声明，需对原页链/同RUN/身份重核，特殊清理Idle可能清零。
+ *
+ * wire offset 607，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::evidence_lost() const
+ * @brief 读取证据丢失声明；False本身不能证明全链完整，collector还需页序/SHA/终页验证。
+ *
+ * wire offset 639，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_evidence_lost(bool value)
+ * @brief 写入证据丢失声明；False本身不能证明全链完整，collector还需页序/SHA/终页验证。
+ *
+ * wire offset 639，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::evidence_lost_
+ * @brief 拥有式字段存储：证据丢失声明；False本身不能证明全链完整，collector还需页序/SHA/终页验证。
+ *
+ * wire offset 639，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::attempt_kind() const
+ * @brief 读取v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 640，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_attempt_kind(uint8_t value)
+ * @brief 写入v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 640，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::attempt_kind_
+ * @brief 拥有式字段存储：v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 640，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::parent_run_id() const
+ * @brief 读取释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 641，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_parent_run_id(uint64_t value)
+ * @brief 写入释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 641，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::parent_run_id_
+ * @brief 拥有式字段存储：释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 641，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::motion_complete() const
+ * @brief 读取已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 649，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_motion_complete(bool value)
+ * @brief 写入已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 649，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::motion_complete_
+ * @brief 拥有式字段存储：已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 649，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::release_committed() const
+ * @brief 读取释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 650，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::set_release_committed(bool value)
+ * @brief 写入释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 650，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2::release_committed_
+ * @brief 拥有式字段存储：释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 650，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec
+ * @brief 将DummyDeviceStatusV2值对象与固定小端wire缓冲互转。
+ *
+ * exact size=651。逐字段位拷贝/端序处理，double按8字节位模式搬运；不动态分配、不把有padding的C++对象整块发送。decode核精确本minor、control_mode<=2/reference_kind<=3/transaction_phase<=4、final_state<=9/attempt_kind<=3/cleanup_state<=4和bool字节；此Status路径未额外统一约束core_state范围。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kEncodedSize
+ * @brief 序列化固定字节数，传size必须恰等此值，不是C++ sizeof对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kScratchSize
+ * @brief codec额外scratch字节数，固定0；不等于解码没有栈局部对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kAlignment
+ * @brief C++消息值对象alignof，受目标ABI影响，不是wire缓冲对齐要求。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kMaxAge
+ * @brief 生成traits最大年龄占位0，本codec不据此做新鲜度/时钟/timeout监督。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::encode(const dp::protocol::dummy_robot_v2::DummyDeviceStatusV2& message, uint8_t* output, size_t size)
+ * @brief 把DummyDeviceStatusV2的当前字段按IDL顺序写成651字节。
+ *
+ *  除output非空与exact size外不做decode的语义检查，可能编码不兼容schema/NaN等位值。 输入为借用const引用，仅调用期间读取，输出由caller拥有；无CAN/ROS发送、ACK或目标执行。
+ * @param message 要序列化的当前消息；所有业务身份/单位值须由caller先准备。
+ * @param output 至少size字节可写缓冲，非空；函数不保留。
+ * @param size 必须恰为kEncodedSize（651），不是只要大于等于。
+ * @return kOk写完；kInvalidArgument为指针/长度或本Evidence前置条件不满足。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::decode(const uint8_t* input, size_t size, dp::protocol::dummy_robot_v2::DummyDeviceStatusV2* message)
+ * @brief 从exact wire缓冲解码并在全部检查成功后一次提交值对象。
+ *
+ * decode核精确本minor、control_mode<=2/reference_kind<=3/transaction_phase<=4、final_state<=9/attempt_kind<=3/cleanup_state<=4和bool字节；此Status路径未额外统一约束core_state范围。 先填零初始化decoded局部对象；任何失败不执行末尾*message赋值，原输出对象保持。输入buf只在调用期间借用，成功后消息拥有数组拷贝，不引用wire缓冲。
+ * @param input 借用至少size字节可读缓冲，非空。
+ * @param size 必须恰为651字节。
+ * @param message 非空caller输出对象；成功时被整体值赋值。
+ * @return kOk仅说明上述格式门通过；kInvalidArgument拒绝，需业务端另核准入/有限性/时序/链。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyJointCommandV2
+ * @brief 宿主六轴关节位置命令值对象（wire 133字节，schema 2.5）。
+ *
+ * 本对象拥有所有固定字段/数组，默认全零并不构成有效schema/身份。getter不加锁；同一对象并发读写须调用方同步。数组getter返回内部const数组引用，寿命至对象销毁，后续setter/赋值会改变观察值；需要稳定快照时主动复制。setter只复制，不验证数值、掩码、许可或状态机。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::schema_major() const
+ * @brief 读取wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_schema_major(uint16_t value)
+ * @brief 写入wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::schema_major_
+ * @brief 拥有式字段存储：wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::schema_minor() const
+ * @brief 读取wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_schema_minor(uint16_t value)
+ * @brief 写入wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::schema_minor_
+ * @brief 拥有式字段存储：wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::device_id() const
+ * @brief 读取设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_device_id(const uint8_t (&value)[16])
+ * @brief 写入设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::device_id_
+ * @brief 拥有式字段存储：设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::client_instance_id() const
+ * @brief 读取宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_client_instance_id(const uint8_t (&value)[16])
+ * @brief 写入宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::client_instance_id_
+ * @brief 拥有式字段存储：宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::boot_epoch() const
+ * @brief 读取设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 36，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_boot_epoch(uint64_t value)
+ * @brief 写入设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 36，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::boot_epoch_
+ * @brief 拥有式字段存储：设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 36，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::session_id() const
+ * @brief 读取设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 44，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_session_id(uint64_t value)
+ * @brief 写入设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 44，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::session_id_
+ * @brief 拥有式字段存储：设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 44，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::operation_id() const
+ * @brief 读取设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 52，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_operation_id(uint64_t value)
+ * @brief 写入设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 52，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::operation_id_
+ * @brief 拥有式字段存储：设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 52，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::reference_epoch() const
+ * @brief 读取设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 60，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_reference_epoch(uint32_t value)
+ * @brief 写入设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 60，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::reference_epoch_
+ * @brief 拥有式字段存储：设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 60，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::motion_epoch() const
+ * @brief 读取当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 64，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_motion_epoch(uint32_t value)
+ * @brief 写入当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 64，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::motion_epoch_
+ * @brief 拥有式字段存储：当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 64，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::profile_id() const
+ * @brief 读取部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 68，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_profile_id(uint32_t value)
+ * @brief 写入部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 68，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::profile_id_
+ * @brief 拥有式字段存储：部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 68，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::producer_seq() const
+ * @brief 读取宿主命令生产者线序号，无单位；是更新顺序/ACK锚，不是时间或管理请求号。
+ *
+ * wire offset 72，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_producer_seq(uint32_t value)
+ * @brief 写入宿主命令生产者线序号，无单位；是更新顺序/ACK锚，不是时间或管理请求号。
+ *
+ * wire offset 72，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::producer_seq_
+ * @brief 拥有式字段存储：宿主命令生产者线序号，无单位；是更新顺序/ACK锚，不是时间或管理请求号。
+ *
+ * wire offset 72，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::freshness_ticket() const
+ * @brief 读取设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 76，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_freshness_ticket(uint64_t value)
+ * @brief 写入设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 76，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::freshness_ticket_
+ * @brief 拥有式字段存储：设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 76，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::configured_mask() const
+ * @brief 读取本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 84，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_configured_mask(uint8_t value)
+ * @brief 写入本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 84，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::configured_mask_
+ * @brief 拥有式字段存储：本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 84，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointCommandV2::position_rad() const
+ * @brief 读取六轴关节位置，单位rad；Command中为目标，State/快照中为设备参考映射反馈，方向/减速比由上层模型解释。
+ *
+ * wire offset 85，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointCommandV2::set_position_rad(const double (&value)[6])
+ * @brief 写入六轴关节位置，单位rad；Command中为目标，State/快照中为设备参考映射反馈，方向/减速比由上层模型解释。
+ *
+ * wire offset 85，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2::position_rad_
+ * @brief 拥有式字段存储：六轴关节位置，单位rad；Command中为目标，State/快照中为设备参考映射反馈，方向/减速比由上层模型解释。
+ *
+ * wire offset 85，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyJointCommandV2Codec
+ * @brief 将DummyJointCommandV2值对象与固定小端wire缓冲互转。
+ *
+ * exact size=133。逐字段位拷贝/端序处理，double按8字节位模式搬运；不动态分配、不把有padding的C++对象整块发送。decode仅核精确本minor的schema；不限制NaN/inf、目标范围、票号/owner/producer次序。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2Codec::kEncodedSize
+ * @brief 序列化固定字节数，传size必须恰等此值，不是C++ sizeof对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2Codec::kScratchSize
+ * @brief codec额外scratch字节数，固定0；不等于解码没有栈局部对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2Codec::kAlignment
+ * @brief C++消息值对象alignof，受目标ABI影响，不是wire缓冲对齐要求。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointCommandV2Codec::kMaxAge
+ * @brief 生成traits最大年龄占位0，本codec不据此做新鲜度/时钟/timeout监督。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyJointCommandV2Codec::encode(const dp::protocol::dummy_robot_v2::DummyJointCommandV2& message, uint8_t* output, size_t size)
+ * @brief 把DummyJointCommandV2的当前字段按IDL顺序写成133字节。
+ *
+ *  除output非空与exact size外不做decode的语义检查，可能编码不兼容schema/NaN等位值。 输入为借用const引用，仅调用期间读取，输出由caller拥有；无CAN/ROS发送、ACK或目标执行。
+ * @param message 要序列化的当前消息；所有业务身份/单位值须由caller先准备。
+ * @param output 至少size字节可写缓冲，非空；函数不保留。
+ * @param size 必须恰为kEncodedSize（133），不是只要大于等于。
+ * @return kOk写完；kInvalidArgument为指针/长度或本Evidence前置条件不满足。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyJointCommandV2Codec::decode(const uint8_t* input, size_t size, dp::protocol::dummy_robot_v2::DummyJointCommandV2* message)
+ * @brief 从exact wire缓冲解码并在全部检查成功后一次提交值对象。
+ *
+ * decode仅核精确本minor的schema；不限制NaN/inf、目标范围、票号/owner/producer次序。 先填零初始化decoded局部对象；任何失败不执行末尾*message赋值，原输出对象保持。输入buf只在调用期间借用，成功后消息拥有数组拷贝，不引用wire缓冲。
+ * @param input 借用至少size字节可读缓冲，非空。
+ * @param size 必须恰为133字节。
+ * @param message 非空caller输出对象；成功时被整体值赋值。
+ * @return kOk仅说明上述格式门通过；kInvalidArgument拒绝，需业务端另核准入/有限性/时序/链。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyJointStateV2
+ * @brief 设备六轴反馈/阶段及ACK水位值对象（wire 350字节，schema 2.5）。
+ *
+ * 本对象拥有所有固定字段/数组，默认全零并不构成有效schema/身份。getter不加锁；同一对象并发读写须调用方同步。数组getter返回内部const数组引用，寿命至对象销毁，后续setter/赋值会改变观察值；需要稳定快照时主动复制。setter只复制，不验证数值、掩码、许可或状态机。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::schema_major() const
+ * @brief 读取wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_schema_major(uint16_t value)
+ * @brief 写入wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::schema_major_
+ * @brief 拥有式字段存储：wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::schema_minor() const
+ * @brief 读取wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_schema_minor(uint16_t value)
+ * @brief 写入wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::schema_minor_
+ * @brief 拥有式字段存储：wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::device_id() const
+ * @brief 读取设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_device_id(const uint8_t (&value)[16])
+ * @brief 写入设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::device_id_
+ * @brief 拥有式字段存储：设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::boot_epoch() const
+ * @brief 读取设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 20，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_boot_epoch(uint64_t value)
+ * @brief 写入设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 20，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::boot_epoch_
+ * @brief 拥有式字段存储：设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 20，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::session_id() const
+ * @brief 读取设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 28，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_session_id(uint64_t value)
+ * @brief 写入设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 28，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::session_id_
+ * @brief 拥有式字段存储：设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 28，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::reference_epoch() const
+ * @brief 读取设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 36，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_reference_epoch(uint32_t value)
+ * @brief 写入设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 36，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::reference_epoch_
+ * @brief 拥有式字段存储：设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 36，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::motion_epoch() const
+ * @brief 读取当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 40，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_motion_epoch(uint32_t value)
+ * @brief 写入当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 40，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::motion_epoch_
+ * @brief 拥有式字段存储：当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 40，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::management_epoch() const
+ * @brief 读取设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 44，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_management_epoch(uint32_t value)
+ * @brief 写入设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 44，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::management_epoch_
+ * @brief 拥有式字段存储：设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 44，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::profile_id() const
+ * @brief 读取部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 48，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_profile_id(uint32_t value)
+ * @brief 写入部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 48，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::profile_id_
+ * @brief 拥有式字段存储：部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 48，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::state_seq() const
+ * @brief 读取设备State发布线序号，无单位；业务层另核重复/回绕/世代，codec不做新鲜度监督。
+ *
+ * wire offset 52，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_state_seq(uint32_t value)
+ * @brief 写入设备State发布线序号，无单位；业务层另核重复/回绕/世代，codec不做新鲜度监督。
+ *
+ * wire offset 52，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::state_seq_
+ * @brief 拥有式字段存储：设备State发布线序号，无单位；业务层另核重复/回绕/世代，codec不做新鲜度监督。
+ *
+ * wire offset 52，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::produced_at_us() const
+ * @brief 读取设备Source域State生产单调时间µs；不是Host接收时间，跨域需显式offset/span映射。
+ *
+ * wire offset 56，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_produced_at_us(uint64_t value)
+ * @brief 写入设备Source域State生产单调时间µs；不是Host接收时间，跨域需显式offset/span映射。
+ *
+ * wire offset 56，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::produced_at_us_
+ * @brief 拥有式字段存储：设备Source域State生产单调时间µs；不是Host接收时间，跨域需显式offset/span映射。
+ *
+ * wire offset 56，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::freshness_ticket() const
+ * @brief 读取设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 64，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_freshness_ticket(uint64_t value)
+ * @brief 写入设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 64，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::freshness_ticket_
+ * @brief 拥有式字段存储：设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 64，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::configured_mask() const
+ * @brief 读取本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 72，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_configured_mask(uint8_t value)
+ * @brief 写入本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 72，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::configured_mask_
+ * @brief 拥有式字段存储：本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 72，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::position_valid_mask() const
+ * @brief 读取位置反馈有效轴位；bit0=J1，数组有六元素并不表示全部有效。
+ *
+ * wire offset 73，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_position_valid_mask(uint8_t value)
+ * @brief 写入位置反馈有效轴位；bit0=J1，数组有六元素并不表示全部有效。
+ *
+ * wire offset 73，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::position_valid_mask_
+ * @brief 拥有式字段存储：位置反馈有效轴位；bit0=J1，数组有六元素并不表示全部有效。
+ *
+ * wire offset 73，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::velocity_valid_mask() const
+ * @brief 读取估计速度有效轴位；不能将缺有效位的默认0当已静止。
+ *
+ * wire offset 74，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_velocity_valid_mask(uint8_t value)
+ * @brief 写入估计速度有效轴位；不能将缺有效位的默认0当已静止。
+ *
+ * wire offset 74，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::velocity_valid_mask_
+ * @brief 拥有式字段存储：估计速度有效轴位；不能将缺有效位的默认0当已静止。
+ *
+ * wire offset 74，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::raw_position_valid_mask() const
+ * @brief 读取原电机位置有效轴位，不能因数组长度六就假定数据真实可用。
+ *
+ * wire offset 75，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_raw_position_valid_mask(uint8_t value)
+ * @brief 写入原电机位置有效轴位，不能因数组长度六就假定数据真实可用。
+ *
+ * wire offset 75，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::raw_position_valid_mask_
+ * @brief 拥有式字段存储：原电机位置有效轴位，不能因数组长度六就假定数据真实可用。
+ *
+ * wire offset 75，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::committed_producer_seq() const
+ * @brief 读取设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 76，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_committed_producer_seq(uint32_t value)
+ * @brief 写入设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 76，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::committed_producer_seq_
+ * @brief 拥有式字段存储：设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 76，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::admitted_producer_seq() const
+ * @brief 读取v2已接纳命令水位，无单位；不得替代committed/SENT水位。
+ *
+ * wire offset 80，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_admitted_producer_seq(uint32_t value)
+ * @brief 写入v2已接纳命令水位，无单位；不得替代committed/SENT水位。
+ *
+ * wire offset 80，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::admitted_producer_seq_
+ * @brief 拥有式字段存储：v2已接纳命令水位，无单位；不得替代committed/SENT水位。
+ *
+ * wire offset 80，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::operation_id() const
+ * @brief 读取设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 84，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_operation_id(uint64_t value)
+ * @brief 写入设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 84，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::operation_id_
+ * @brief 拥有式字段存储：设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 84，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::transaction_phase() const
+ * @brief 读取v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 92，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_transaction_phase(uint8_t value)
+ * @brief 写入v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 92，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::transaction_phase_
+ * @brief 拥有式字段存储：v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 92，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::first_failure_reason() const
+ * @brief 读取v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 93，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_first_failure_reason(uint16_t value)
+ * @brief 写入v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 93，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::first_failure_reason_
+ * @brief 拥有式字段存储：v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 93，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::operation_deadline_us() const
+ * @brief 读取设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 95，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_operation_deadline_us(uint64_t value)
+ * @brief 写入设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 95，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::operation_deadline_us_
+ * @brief 拥有式字段存储：设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 95，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::can_submitted_mask() const
+ * @brief 读取当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 103，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_can_submitted_mask(uint8_t value)
+ * @brief 写入当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 103，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::can_submitted_mask_
+ * @brief 拥有式字段存储：当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 103，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::can_sent_mask() const
+ * @brief 读取当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 104，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_can_sent_mask(uint8_t value)
+ * @brief 写入当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 104，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::can_sent_mask_
+ * @brief 拥有式字段存储：当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 104，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::can_failed_mask() const
+ * @brief 读取当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 105，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_can_failed_mask(uint8_t value)
+ * @brief 写入当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 105，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::can_failed_mask_
+ * @brief 拥有式字段存储：当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 105，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::feedback_seq() const
+ * @brief 读取六轴CAN反馈序号，无单位；每轴独立，不能用State序号代替。
+ *
+ * wire offset 106，占24字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_feedback_seq(const uint32_t (&value)[6])
+ * @brief 写入六轴CAN反馈序号，无单位；每轴独立，不能用State序号代替。
+ *
+ * wire offset 106，占24字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::feedback_seq_
+ * @brief 拥有式字段存储：六轴CAN反馈序号，无单位；每轴独立，不能用State序号代替。
+ *
+ * wire offset 106，占24字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::can_rx_age_us() const
+ * @brief 读取六轴CAN最近反馈年龄µs；数组元素有效性与掩码/当前State身份配合核验。
+ *
+ * wire offset 130，占24字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_can_rx_age_us(const uint32_t (&value)[6])
+ * @brief 写入六轴CAN最近反馈年龄µs；数组元素有效性与掩码/当前State身份配合核验。
+ *
+ * wire offset 130，占24字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::can_rx_age_us_
+ * @brief 拥有式字段存储：六轴CAN最近反馈年龄µs；数组元素有效性与掩码/当前State身份配合核验。
+ *
+ * wire offset 130，占24字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::position_rad() const
+ * @brief 读取六轴关节位置，单位rad；Command中为目标，State/快照中为设备参考映射反馈，方向/减速比由上层模型解释。
+ *
+ * wire offset 154，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_position_rad(const double (&value)[6])
+ * @brief 写入六轴关节位置，单位rad；Command中为目标，State/快照中为设备参考映射反馈，方向/减速比由上层模型解释。
+ *
+ * wire offset 154，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::position_rad_
+ * @brief 拥有式字段存储：六轴关节位置，单位rad；Command中为目标，State/快照中为设备参考映射反馈，方向/减速比由上层模型解释。
+ *
+ * wire offset 154，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::estimated_velocity_rad_s() const
+ * @brief 读取六轴估计关节速度rad/s；不是电机转速rev/s，需速度有效位。
+ *
+ * wire offset 202，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_estimated_velocity_rad_s(const double (&value)[6])
+ * @brief 写入六轴估计关节速度rad/s；不是电机转速rev/s，需速度有效位。
+ *
+ * wire offset 202，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::estimated_velocity_rad_s_
+ * @brief 拥有式字段存储：六轴估计关节速度rad/s；不是电机转速rev/s，需速度有效位。
+ *
+ * wire offset 202，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::raw_motor_position_rev() const
+ * @brief 读取六轴原电机位置，单位电机rev；不能当关节rad，不能随意折圈覆盖多圈反馈。
+ *
+ * wire offset 250，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_raw_motor_position_rev(const double (&value)[6])
+ * @brief 写入六轴原电机位置，单位电机rev；不能当关节rad，不能随意折圈覆盖多圈反馈。
+ *
+ * wire offset 250，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::raw_motor_position_rev_
+ * @brief 拥有式字段存储：六轴原电机位置，单位电机rev；不能当关节rad，不能随意折圈覆盖多圈反馈。
+ *
+ * wire offset 250，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::core_state() const
+ * @brief 读取设备Core状态码，无单位；原数值按相应版本枚举解释，Hold/Run/Fault不能凭名称重编号。
+ *
+ * wire offset 298，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_core_state(uint16_t value)
+ * @brief 写入设备Core状态码，无单位；原数值按相应版本枚举解释，Hold/Run/Fault不能凭名称重编号。
+ *
+ * wire offset 298，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::core_state_
+ * @brief 拥有式字段存储：设备Core状态码，无单位；原数值按相应版本枚举解释，Hold/Run/Fault不能凭名称重编号。
+ *
+ * wire offset 298，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::hold_ready() const
+ * @brief 读取设备声明保持阶段已ready；不能单独替代新鲜同身份State、全轴SENT和固定Hold位置证据。
+ *
+ * wire offset 300，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_hold_ready(bool value)
+ * @brief 写入设备声明保持阶段已ready；不能单独替代新鲜同身份State、全轴SENT和固定Hold位置证据。
+ *
+ * wire offset 300，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::hold_ready_
+ * @brief 拥有式字段存储：设备声明保持阶段已ready；不能单独替代新鲜同身份State、全轴SENT和固定Hold位置证据。
+ *
+ * wire offset 300，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::hold_position_rad() const
+ * @brief 读取六轴全轴真实SENT的固定保持目标rad；只在有效Hold/hold_valid_mask下解释，区别于瞬时position反馈。
+ *
+ * wire offset 301，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_hold_position_rad(const double (&value)[6])
+ * @brief 写入六轴全轴真实SENT的固定保持目标rad；只在有效Hold/hold_valid_mask下解释，区别于瞬时position反馈。
+ *
+ * wire offset 301，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::hold_position_rad_
+ * @brief 拥有式字段存储：六轴全轴真实SENT的固定保持目标rad；只在有效Hold/hold_valid_mask下解释，区别于瞬时position反馈。
+ *
+ * wire offset 301，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyJointStateV2::hold_valid_mask() const
+ * @brief 读取固定保持位置有效轴位；与Hold阶段/hold_ready及身份相干后才能使用保持数组。
+ *
+ * wire offset 349，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyJointStateV2::set_hold_valid_mask(uint8_t value)
+ * @brief 写入固定保持位置有效轴位；与Hold阶段/hold_ready及身份相干后才能使用保持数组。
+ *
+ * wire offset 349，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2::hold_valid_mask_
+ * @brief 拥有式字段存储：固定保持位置有效轴位；与Hold阶段/hold_ready及身份相干后才能使用保持数组。
+ *
+ * wire offset 349，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyJointStateV2Codec
+ * @brief 将DummyJointStateV2值对象与固定小端wire缓冲互转。
+ *
+ * exact size=350。逐字段位拷贝/端序处理，double按8字节位模式搬运；不动态分配、不把有padding的C++对象整块发送。decode核精确本minor的schema、core_state<=9/transaction_phase<=4及bool字节；不检查位置有限性、各有效掩码/年龄/状态与保持位置一致。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize
+ * @brief 序列化固定字节数，传size必须恰等此值，不是C++ sizeof对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kScratchSize
+ * @brief codec额外scratch字节数，固定0；不等于解码没有栈局部对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kAlignment
+ * @brief C++消息值对象alignof，受目标ABI影响，不是wire缓冲对齐要求。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kMaxAge
+ * @brief 生成traits最大年龄占位0，本codec不据此做新鲜度/时钟/timeout监督。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::encode(const dp::protocol::dummy_robot_v2::DummyJointStateV2& message, uint8_t* output, size_t size)
+ * @brief 把DummyJointStateV2的当前字段按IDL顺序写成350字节。
+ *
+ *  除output非空与exact size外不做decode的语义检查，可能编码不兼容schema/NaN等位值。 输入为借用const引用，仅调用期间读取，输出由caller拥有；无CAN/ROS发送、ACK或目标执行。
+ * @param message 要序列化的当前消息；所有业务身份/单位值须由caller先准备。
+ * @param output 至少size字节可写缓冲，非空；函数不保留。
+ * @param size 必须恰为kEncodedSize（350），不是只要大于等于。
+ * @return kOk写完；kInvalidArgument为指针/长度或本Evidence前置条件不满足。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::decode(const uint8_t* input, size_t size, dp::protocol::dummy_robot_v2::DummyJointStateV2* message)
+ * @brief 从exact wire缓冲解码并在全部检查成功后一次提交值对象。
+ *
+ * decode核精确本minor的schema、core_state<=9/transaction_phase<=4及bool字节；不检查位置有限性、各有效掩码/年龄/状态与保持位置一致。 先填零初始化decoded局部对象；任何失败不执行末尾*message赋值，原输出对象保持。输入buf只在调用期间借用，成功后消息拥有数组拷贝，不引用wire缓冲。
+ * @param input 借用至少size字节可读缓冲，非空。
+ * @param size 必须恰为350字节。
+ * @param message 非空caller输出对象；成功时被整体值赋值。
+ * @return kOk仅说明上述格式门通过；kInvalidArgument拒绝，需业务端另核准入/有限性/时序/链。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyManageV2Request
+ * @brief v2管理请求与有限续租参数值对象（wire 233字节，schema 2.5）。
+ *
+ * 本对象拥有所有固定字段/数组，默认全零并不构成有效schema/身份。getter不加锁；同一对象并发读写须调用方同步。数组getter返回内部const数组引用，寿命至对象销毁，后续setter/赋值会改变观察值；需要稳定快照时主动复制。setter只复制，不验证数值、掩码、许可或状态机。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::schema_major() const
+ * @brief 读取wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_schema_major(uint16_t value)
+ * @brief 写入wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::schema_major_
+ * @brief 拥有式字段存储：wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::schema_minor() const
+ * @brief 读取wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_schema_minor(uint16_t value)
+ * @brief 写入wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::schema_minor_
+ * @brief 拥有式字段存储：wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::device_id() const
+ * @brief 读取设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_device_id(const uint8_t (&value)[16])
+ * @brief 写入设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::device_id_
+ * @brief 拥有式字段存储：设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::client_instance_id() const
+ * @brief 读取宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_client_instance_id(const uint8_t (&value)[16])
+ * @brief 写入宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::client_instance_id_
+ * @brief 拥有式字段存储：宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::request_id() const
+ * @brief 读取宿主64位逻辑请求关联ID，无单位；响应回显原请求/本次Query ID，不能截为32位。
+ *
+ * wire offset 36，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_request_id(uint64_t value)
+ * @brief 写入宿主64位逻辑请求关联ID，无单位；响应回显原请求/本次Query ID，不能截为32位。
+ *
+ * wire offset 36，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::request_id_
+ * @brief 拥有式字段存储：宿主64位逻辑请求关联ID，无单位；响应回显原请求/本次Query ID，不能截为32位。
+ *
+ * wire offset 36，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::request_seq() const
+ * @brief 读取宿主管理请求uint32线序号，无单位；参与permit绑定/重放控制，不同于64位request_id。
+ *
+ * wire offset 44，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_request_seq(uint32_t value)
+ * @brief 写入宿主管理请求uint32线序号，无单位；参与permit绑定/重放控制，不同于64位request_id。
+ *
+ * wire offset 44，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::request_seq_
+ * @brief 拥有式字段存储：宿主管理请求uint32线序号，无单位；参与permit绑定/重放控制，不同于64位request_id。
+ *
+ * wire offset 44，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::operation() const
+ * @brief 读取管理操作码，无单位；v1允许0..14，v2是离散0..12及16..20，不能把13..15当可用操作。
+ *
+ * wire offset 48，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_operation(uint16_t value)
+ * @brief 写入管理操作码，无单位；v1允许0..14，v2是离散0..12及16..20，不能把13..15当可用操作。
+ *
+ * wire offset 48，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::operation_
+ * @brief 拥有式字段存储：管理操作码，无单位；v1允许0..14，v2是离散0..12及16..20，不能把13..15当可用操作。
+ *
+ * wire offset 48，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::queried_operation_id() const
+ * @brief 读取GET_OPERATION查询键，无单位；当前v2客户端把原mutation request_id写入此字段，旧v1还另有queried_request_id，业务解释按版本。
+ *
+ * wire offset 50，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_queried_operation_id(uint64_t value)
+ * @brief 写入GET_OPERATION查询键，无单位；当前v2客户端把原mutation request_id写入此字段，旧v1还另有queried_request_id，业务解释按版本。
+ *
+ * wire offset 50，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::queried_operation_id_
+ * @brief 拥有式字段存储：GET_OPERATION查询键，无单位；当前v2客户端把原mutation request_id写入此字段，旧v1还另有queried_request_id，业务解释按版本。
+ *
+ * wire offset 50，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_boot_epoch() const
+ * @brief 读取管理请求锚定的设备boot世代，无单位；解码仅存值，业务端核当前一致。
+ *
+ * wire offset 58，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_expected_boot_epoch(uint64_t value)
+ * @brief 写入管理请求锚定的设备boot世代，无单位；解码仅存值，业务端核当前一致。
+ *
+ * wire offset 58，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_boot_epoch_
+ * @brief 拥有式字段存储：管理请求锚定的设备boot世代，无单位；解码仅存值，业务端核当前一致。
+ *
+ * wire offset 58，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_session_id() const
+ * @brief 读取管理请求锚定owner session，无单位；Grant等操作对0/新session有各自业务约束。
+ *
+ * wire offset 66，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_expected_session_id(uint64_t value)
+ * @brief 写入管理请求锚定owner session，无单位；Grant等操作对0/新session有各自业务约束。
+ *
+ * wire offset 66，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_session_id_
+ * @brief 拥有式字段存储：管理请求锚定owner session，无单位；Grant等操作对0/新session有各自业务约束。
+ *
+ * wire offset 66，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_reference_epoch() const
+ * @brief 读取管理请求锚定参考世代，无单位；防旧参考请求落入新坐标。
+ *
+ * wire offset 74，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_expected_reference_epoch(uint32_t value)
+ * @brief 写入管理请求锚定参考世代，无单位；防旧参考请求落入新坐标。
+ *
+ * wire offset 74，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_reference_epoch_
+ * @brief 拥有式字段存储：管理请求锚定参考世代，无单位；防旧参考请求落入新坐标。
+ *
+ * wire offset 74，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_motion_epoch() const
+ * @brief 读取管理请求原始运动阶段锚，无单位；Query必须保原变更因果根，不能借新状态改锚。
+ *
+ * wire offset 78，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_expected_motion_epoch(uint32_t value)
+ * @brief 写入管理请求原始运动阶段锚，无单位；Query必须保原变更因果根，不能借新状态改锚。
+ *
+ * wire offset 78，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_motion_epoch_
+ * @brief 拥有式字段存储：管理请求原始运动阶段锚，无单位；Query必须保原变更因果根，不能借新状态改锚。
+ *
+ * wire offset 78，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_management_epoch() const
+ * @brief 读取请求预期管理世代，无单位；防并发管理状态漂移，codec不处理仲裁。
+ *
+ * wire offset 82，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_expected_management_epoch(uint32_t value)
+ * @brief 写入请求预期管理世代，无单位；防并发管理状态漂移，codec不处理仲裁。
+ *
+ * wire offset 82，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_management_epoch_
+ * @brief 拥有式字段存储：请求预期管理世代，无单位；防并发管理状态漂移，codec不处理仲裁。
+ *
+ * wire offset 82，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_profile_id() const
+ * @brief 读取请求预期profile ID，无单位；不是仅填对数值就完成摘要匹配。
+ *
+ * wire offset 86，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_expected_profile_id(uint32_t value)
+ * @brief 写入请求预期profile ID，无单位；不是仅填对数值就完成摘要匹配。
+ *
+ * wire offset 86，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::expected_profile_id_
+ * @brief 拥有式字段存储：请求预期profile ID，无单位；不是仅填对数值就完成摘要匹配。
+ *
+ * wire offset 86，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::freshness_ticket() const
+ * @brief 读取设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 90，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_freshness_ticket(uint64_t value)
+ * @brief 写入设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 90，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::freshness_ticket_
+ * @brief 拥有式字段存储：设备签发的新鲜度票号，无单位；是opaque token，不能直接与Host微秒相减。
+ *
+ * wire offset 90，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::requested_control_mode() const
+ * @brief 读取请求切换的控制模式，无单位；解码范围检查不等于模式切换成功。
+ *
+ * wire offset 98，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_requested_control_mode(uint8_t value)
+ * @brief 写入请求切换的控制模式，无单位；解码范围检查不等于模式切换成功。
+ *
+ * wire offset 98，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::requested_control_mode_
+ * @brief 拥有式字段存储：请求切换的控制模式，无单位；解码范围检查不等于模式切换成功。
+ *
+ * wire offset 98，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::configured_mask() const
+ * @brief 读取本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 99，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_configured_mask(uint8_t value)
+ * @brief 写入本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 99，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::configured_mask_
+ * @brief 拥有式字段存储：本部署轴位掩码；bit0=J1、bit5=J6，63为六轴，codec不自行建立可用轴集合。
+ *
+ * wire offset 99，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::operator_confirmed() const
+ * @brief 读取记录操作者明确意图的布尔值，不是身份认证、实机许可或人工审批签名。
+ *
+ * wire offset 100，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_operator_confirmed(bool value)
+ * @brief 写入记录操作者明确意图的布尔值，不是身份认证、实机许可或人工审批签名。
+ *
+ * wire offset 100，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::operator_confirmed_
+ * @brief 拥有式字段存储：记录操作者明确意图的布尔值，不是身份认证、实机许可或人工审批签名。
+ *
+ * wire offset 100，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::permit_sha256() const
+ * @brief 读取本次permit绑定摘要32字节；setter/codec不生成、不验证ledger或防重放。
+ *
+ * wire offset 101，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_permit_sha256(const uint8_t (&value)[32])
+ * @brief 写入本次permit绑定摘要32字节；setter/codec不生成、不验证ledger或防重放。
+ *
+ * wire offset 101，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::permit_sha256_
+ * @brief 拥有式字段存储：本次permit绑定摘要32字节；setter/codec不生成、不验证ledger或防重放。
+ *
+ * wire offset 101，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::compiled_policy_sha256() const
+ * @brief 读取编译策略身份摘要32字节；不是policy说明文字，不自动匹配模型或运行固件。
+ *
+ * wire offset 133，占32字节，共32元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 32元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_compiled_policy_sha256(const uint8_t (&value)[32])
+ * @brief 写入编译策略身份摘要32字节；不是policy说明文字，不自动匹配模型或运行固件。
+ *
+ * wire offset 133，占32字节，共32元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的32元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::compiled_policy_sha256_
+ * @brief 拥有式字段存储：编译策略身份摘要32字节；不是policy说明文字，不自动匹配模型或运行固件。
+ *
+ * wire offset 133，占32字节，共32元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::permit_remaining_us() const
+ * @brief 读取许可剩余或申请有效时长，单位µs；这是相对时长，不是Host绝对时间戳。
+ *
+ * wire offset 165，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_permit_remaining_us(uint64_t value)
+ * @brief 写入许可剩余或申请有效时长，单位µs；这是相对时长，不是Host绝对时间戳。
+ *
+ * wire offset 165，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::permit_remaining_us_
+ * @brief 拥有式字段存储：许可剩余或申请有效时长，单位µs；这是相对时长，不是Host绝对时间戳。
+ *
+ * wire offset 165，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::terminal_producer_seq() const
+ * @brief 读取Complete等终点冻结producer水位，无单位；必须与业务ACK及位置闭合，codec不等待回执。
+ *
+ * wire offset 173，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_terminal_producer_seq(uint32_t value)
+ * @brief 写入Complete等终点冻结producer水位，无单位；必须与业务ACK及位置闭合，codec不等待回执。
+ *
+ * wire offset 173，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::terminal_producer_seq_
+ * @brief 拥有式字段存储：Complete等终点冻结producer水位，无单位；必须与业务ACK及位置闭合，codec不等待回执。
+ *
+ * wire offset 173，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::terminal_position_rad() const
+ * @brief 读取管理终点冻结六轴关节位置rad，区别于当前State反馈；Complete业务端核同序号/位置。
+ *
+ * wire offset 177，占48字节，共6元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 6元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_terminal_position_rad(const double (&value)[6])
+ * @brief 写入管理终点冻结六轴关节位置rad，区别于当前State反馈；Complete业务端核同序号/位置。
+ *
+ * wire offset 177，占48字节，共6元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的6元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::terminal_position_rad_
+ * @brief 拥有式字段存储：管理终点冻结六轴关节位置rad，区别于当前State反馈；Complete业务端核同序号/位置。
+ *
+ * wire offset 177，占48字节，共6元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Request::requested_session_lease_us() const
+ * @brief 读取v2请求session租约时长µs；与单次motion permit不同，编码成功不等续租被设备批准。
+ *
+ * wire offset 225，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Request::set_requested_session_lease_us(uint64_t value)
+ * @brief 写入v2请求session租约时长µs；与单次motion permit不同，编码成功不等续租被设备批准。
+ *
+ * wire offset 225，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Request::requested_session_lease_us_
+ * @brief 拥有式字段存储：v2请求session租约时长µs；与单次motion permit不同，编码成功不等续租被设备批准。
+ *
+ * wire offset 225，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec
+ * @brief 将DummyManageV2Request值对象与固定小端wire缓冲互转。
+ *
+ * exact size=233。逐字段位拷贝/端序处理，double按8字节位模式搬运；不动态分配、不把有padding的C++对象整块发送。decode核精确本minor schema、operation只允许0..12和16..20、requested_control_mode<=2及operator_confirmed字节；不检查当前epoch、permit/操作者认证或lease时长。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize
+ * @brief 序列化固定字节数，传size必须恰等此值，不是C++ sizeof对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kScratchSize
+ * @brief codec额外scratch字节数，固定0；不等于解码没有栈局部对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kAlignment
+ * @brief C++消息值对象alignof，受目标ABI影响，不是wire缓冲对齐要求。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kMaxAge
+ * @brief 生成traits最大年龄占位0，本codec不据此做新鲜度/时钟/timeout监督。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::encode(const dp::protocol::dummy_robot_v2::DummyManageV2Request& message, uint8_t* output, size_t size)
+ * @brief 把DummyManageV2Request的当前字段按IDL顺序写成233字节。
+ *
+ *  除output非空与exact size外不做decode的语义检查，可能编码不兼容schema/NaN等位值。 输入为借用const引用，仅调用期间读取，输出由caller拥有；无CAN/ROS发送、ACK或目标执行。
+ * @param message 要序列化的当前消息；所有业务身份/单位值须由caller先准备。
+ * @param output 至少size字节可写缓冲，非空；函数不保留。
+ * @param size 必须恰为kEncodedSize（233），不是只要大于等于。
+ * @return kOk写完；kInvalidArgument为指针/长度或本Evidence前置条件不满足。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::decode(const uint8_t* input, size_t size, dp::protocol::dummy_robot_v2::DummyManageV2Request* message)
+ * @brief 从exact wire缓冲解码并在全部检查成功后一次提交值对象。
+ *
+ * decode核精确本minor schema、operation只允许0..12和16..20、requested_control_mode<=2及operator_confirmed字节；不检查当前epoch、permit/操作者认证或lease时长。 先填零初始化decoded局部对象；任何失败不执行末尾*message赋值，原输出对象保持。输入buf只在调用期间借用，成功后消息拥有数组拷贝，不引用wire缓冲。
+ * @param input 借用至少size字节可读缓冲，非空。
+ * @param size 必须恰为233字节。
+ * @param message 非空caller输出对象；成功时被整体值赋值。
+ * @return kOk仅说明上述格式门通过；kInvalidArgument拒绝，需业务端另核准入/有限性/时序/链。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyManageV2Response
+ * @brief v2事务阶段/结果与终态链接管理响应值对象（wire 132字节，schema 2.5）。
+ *
+ * 本对象拥有所有固定字段/数组，默认全零并不构成有效schema/身份。getter不加锁；同一对象并发读写须调用方同步。数组getter返回内部const数组引用，寿命至对象销毁，后续setter/赋值会改变观察值；需要稳定快照时主动复制。setter只复制，不验证数值、掩码、许可或状态机。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::schema_major() const
+ * @brief 读取wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_schema_major(uint16_t value)
+ * @brief 写入wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::schema_major_
+ * @brief 拥有式字段存储：wire主版本号，无单位；对象默认0，调用方须显式填支持版本，setter不自动采用常量。 本family要求2.5。
+ *
+ * wire offset 0，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::schema_minor() const
+ * @brief 读取wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_schema_minor(uint16_t value)
+ * @brief 写入wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::schema_minor_
+ * @brief 拥有式字段存储：wire次版本号，无单位；解码要求本头精确版本，不因同主版本就接受其它minor。 本family要求2.5。
+ *
+ * wire offset 2，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::device_id() const
+ * @brief 读取设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_device_id(const uint8_t (&value)[16])
+ * @brief 写入设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::device_id_
+ * @brief 拥有式字段存储：设备128bit身份的16个原字节，不是零结尾字符串；codec只搬运，不查USB/UID或认证来源。
+ *
+ * wire offset 4，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::client_instance_id() const
+ * @brief 读取宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 不做解码/状态判定或业务校验。
+ * @return 本对象内部const 16元素数组引用；对象必须存活，setter后所见值可变。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_client_instance_id(const uint8_t (&value)[16])
+ * @brief 写入宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 使用memcpy复制完整固定数组，不保存输入引用；数组长度由C++形参约束。
+ * @param value 同上述单位/身份语义的16元素输入数组；调用期间须有效。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::client_instance_id_
+ * @brief 拥有式字段存储：宿主实例128bit身份的16字节值；用于请求/owner关联，不等于密码认证。
+ *
+ * wire offset 20，占16字节，共16元素。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::request_id() const
+ * @brief 读取宿主64位逻辑请求关联ID，无单位；响应回显原请求/本次Query ID，不能截为32位。
+ *
+ * wire offset 36，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_request_id(uint64_t value)
+ * @brief 写入宿主64位逻辑请求关联ID，无单位；响应回显原请求/本次Query ID，不能截为32位。
+ *
+ * wire offset 36，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::request_id_
+ * @brief 拥有式字段存储：宿主64位逻辑请求关联ID，无单位；响应回显原请求/本次Query ID，不能截为32位。
+ *
+ * wire offset 36，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::receipt() const
+ * @brief 读取管理接收回执码，无单位；Queued/Replayed不等操作Accepted/Committed，更不等物理完成。
+ *
+ * wire offset 44，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_receipt(uint8_t value)
+ * @brief 写入管理接收回执码，无单位；Queued/Replayed不等操作Accepted/Committed，更不等物理完成。
+ *
+ * wire offset 44，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::receipt_
+ * @brief 拥有式字段存储：管理接收回执码，无单位；Queued/Replayed不等操作Accepted/Committed，更不等物理完成。
+ *
+ * wire offset 44，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::result_code() const
+ * @brief 读取管理结果码，无单位；0含义还需receipt/phase/有效标志，PENDING也不是拒绝终态。
+ *
+ * wire offset 45，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_result_code(uint16_t value)
+ * @brief 写入管理结果码，无单位；0含义还需receipt/phase/有效标志，PENDING也不是拒绝终态。
+ *
+ * wire offset 45，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::result_code_
+ * @brief 拥有式字段存储：管理结果码，无单位；0含义还需receipt/phase/有效标志，PENDING也不是拒绝终态。
+ *
+ * wire offset 45，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::operation_id() const
+ * @brief 读取设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 47，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_operation_id(uint64_t value)
+ * @brief 写入设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 47，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::operation_id_
+ * @brief 拥有式字段存储：设备管理事务ID，无单位；不同于请求关联request_id，也不同于RUN ID。
+ *
+ * wire offset 47，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::transaction_phase() const
+ * @brief 读取v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 55，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_transaction_phase(uint8_t value)
+ * @brief 写入v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 55，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::transaction_phase_
+ * @brief 拥有式字段存储：v2事务阶段0闲/1Received/2Prepared/3Committed/4Failed；只有结合结果/身份才可解释为强完成。
+ *
+ * wire offset 55，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::first_failure_reason() const
+ * @brief 读取v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 56，占2字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_first_failure_reason(uint16_t value)
+ * @brief 写入v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 56，占2字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::first_failure_reason_
+ * @brief 拥有式字段存储：v2管理第一失败原因枚举，区别于CAN Evidence首故障来源原码。
+ *
+ * wire offset 56，占2字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::operation_deadline_us() const
+ * @brief 读取设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 58，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_operation_deadline_us(uint64_t value)
+ * @brief 写入设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 58，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::operation_deadline_us_
+ * @brief 拥有式字段存储：设备Source域管理事务绝对截止µs，不能直接用Host时钟相减或随Query重试续期。
+ *
+ * wire offset 58，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::boot_epoch() const
+ * @brief 读取设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 66，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_boot_epoch(uint64_t value)
+ * @brief 写入设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 66，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::boot_epoch_
+ * @brief 拥有式字段存储：设备启动世代64位标识，无单位；不能跨boot沿用参考/许可/目标。
+ *
+ * wire offset 66，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::session_id() const
+ * @brief 读取设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 74，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_session_id(uint64_t value)
+ * @brief 写入设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 74，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::session_id_
+ * @brief 拥有式字段存储：设备当前控制owner会话标识，无单位；0通常表示无owner，是否准入由业务层判断。
+ *
+ * wire offset 74，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::reference_epoch() const
+ * @brief 读取设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 82，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_reference_epoch(uint32_t value)
+ * @brief 写入设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 82，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::reference_epoch_
+ * @brief 拥有式字段存储：设备RAM参考/采零世代，无单位；与boot/session一起界定位置解释。
+ *
+ * wire offset 82，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::motion_epoch() const
+ * @brief 读取当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 86，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_motion_epoch(uint32_t value)
+ * @brief 写入当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 86，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::motion_epoch_
+ * @brief 拥有式字段存储：当前运动/保持/停止阶段世代，无单位；一个RUN可能依阶段包含多个motion epoch。
+ *
+ * wire offset 86，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::management_epoch() const
+ * @brief 读取设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 90，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_management_epoch(uint32_t value)
+ * @brief 写入设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 90，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::management_epoch_
+ * @brief 拥有式字段存储：设备管理状态世代，无单位；区别于request_seq与producer_seq，不能互换作ACK。
+ *
+ * wire offset 90，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::profile_id() const
+ * @brief 读取部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 94，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_profile_id(uint32_t value)
+ * @brief 写入部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 94，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::profile_id_
+ * @brief 拥有式字段存储：部署profile数值ID，无单位；同ID仍须匹配合同/模型/profile/固件摘要。
+ *
+ * wire offset 94，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::committed_producer_seq() const
+ * @brief 读取设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 98，占4字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_committed_producer_seq(uint32_t value)
+ * @brief 写入设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 98，占4字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::committed_producer_seq_
+ * @brief 拥有式字段存储：设备已提交完成的命令producer水位，无单位；还须CAN轴位及同身份State，不等机械完成。
+ *
+ * wire offset 98，占4字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::can_submitted_mask() const
+ * @brief 读取当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 102，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_can_submitted_mask(uint8_t value)
+ * @brief 写入当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 102，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::can_submitted_mask_
+ * @brief 拥有式字段存储：当前关联CAN组已提交轴位；数值存在不独立保证全轴或SENT。
+ *
+ * wire offset 102，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::can_sent_mask() const
+ * @brief 读取当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 103，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_can_sent_mask(uint8_t value)
+ * @brief 写入当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 103，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::can_sent_mask_
+ * @brief 拥有式字段存储：当前关联CAN组已SENT轴位；全轴SENT仍不等目标位置到达。
+ *
+ * wire offset 103，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::can_failed_mask() const
+ * @brief 读取当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 104，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_can_failed_mask(uint8_t value)
+ * @brief 写入当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 104，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::can_failed_mask_
+ * @brief 拥有式字段存储：当前关联CAN失败轴位，无单位；要与组/producer/epoch对应，不能误借其它组错误。
+ *
+ * wire offset 104，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::run_id() const
+ * @brief 读取设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 105，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_run_id(uint64_t value)
+ * @brief 写入设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 105，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::run_id_
+ * @brief 拥有式字段存储：设备一次attempt/RUN身份，无单位；与ROS UUID/管理operation ID/phase epoch各自独立。
+ *
+ * wire offset 105，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::attempt_id() const
+ * @brief 读取设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 113，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_attempt_id(uint64_t value)
+ * @brief 写入设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 113，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::attempt_id_
+ * @brief 拥有式字段存储：设备attempt身份，无单位；通常须与RUN绑定，但codec不验证二者相等。
+ *
+ * wire offset 113，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::attempt_kind() const
+ * @brief 读取v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 121，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_attempt_kind(uint8_t value)
+ * @brief 写入v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 121，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::attempt_kind_
+ * @brief 拥有式字段存储：v2尝试类型0无/1运动/2安全/3释放；不是category，某些RUN可含多种组category。
+ *
+ * wire offset 121，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::parent_run_id() const
+ * @brief 读取释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 122，占8字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_parent_run_id(uint64_t value)
+ * @brief 写入释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 122，占8字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::parent_run_id_
+ * @brief 拥有式字段存储：释放等后继attempt的父RUN链接，无单位；codec不检查是否严格继任或属于当前session。
+ *
+ * wire offset 122，占8字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::motion_complete() const
+ * @brief 读取已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 130，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_motion_complete(bool value)
+ * @brief 写入已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 130，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::motion_complete_
+ * @brief 拥有式字段存储：已完成运动并保持的终态声明；不能与释放/取消语义随意混用，codec页形状之外仍需业务关联。
+ *
+ * wire offset 130，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::DummyManageV2Response::release_committed() const
+ * @brief 读取释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 131，占1字节。 不做解码/状态判定或业务校验。
+ * @return 字段当前值的拷贝。
+ */
+
+/**
+ * @fn void dp::protocol::dummy_robot_v2::DummyManageV2Response::set_release_committed(bool value)
+ * @brief 写入释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 131，占1字节。 直接赋值，不调用设备、不更新其它字段。
+ * @param value 同上述单位/身份语义的输入值。
+ * @return 无返回值；仅修改当前消息对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2Response::release_committed_
+ * @brief 拥有式字段存储：释放事务已提交完成声明；不是只看session0或全局Idle，更不等实体电机物理断电。
+ *
+ * wire offset 131，占1字节。 这是私有C++存储，sizeof含填充且不可当wire结构直接传；通过getter/setter访问。
+ */
+
+/**
+ * @class dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec
+ * @brief 将DummyManageV2Response值对象与固定小端wire缓冲互转。
+ *
+ * exact size=132。逐字段位拷贝/端序处理，double按8字节位模式搬运；不动态分配、不把有padding的C++对象整块发送。decode核精确本minor schema、receipt<=4/result_code<=36/transaction_phase<=4/attempt_kind<=3和bool字节；不关联原请求，也不确保Committed+终态标志的业务语义自洽。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::kEncodedSize
+ * @brief 序列化固定字节数，传size必须恰等此值，不是C++ sizeof对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::kScratchSize
+ * @brief codec额外scratch字节数，固定0；不等于解码没有栈局部对象。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::kAlignment
+ * @brief C++消息值对象alignof，受目标ABI影响，不是wire缓冲对齐要求。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::kMaxAge
+ * @brief 生成traits最大年龄占位0，本codec不据此做新鲜度/时钟/timeout监督。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::encode(const dp::protocol::dummy_robot_v2::DummyManageV2Response& message, uint8_t* output, size_t size)
+ * @brief 把DummyManageV2Response的当前字段按IDL顺序写成132字节。
+ *
+ *  除output非空与exact size外不做decode的语义检查，可能编码不兼容schema/NaN等位值。 输入为借用const引用，仅调用期间读取，输出由caller拥有；无CAN/ROS发送、ACK或目标执行。
+ * @param message 要序列化的当前消息；所有业务身份/单位值须由caller先准备。
+ * @param output 至少size字节可写缓冲，非空；函数不保留。
+ * @param size 必须恰为kEncodedSize（132），不是只要大于等于。
+ * @return kOk写完；kInvalidArgument为指针/长度或本Evidence前置条件不满足。
+ */
+
+/**
+ * @fn dp::protocol::dummy_robot_v2::CodecResult dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::decode(const uint8_t* input, size_t size, dp::protocol::dummy_robot_v2::DummyManageV2Response* message)
+ * @brief 从exact wire缓冲解码并在全部检查成功后一次提交值对象。
+ *
+ * decode核精确本minor schema、receipt<=4/result_code<=36/transaction_phase<=4/attempt_kind<=3和bool字节；不关联原请求，也不确保Committed+终态标志的业务语义自洽。 先填零初始化decoded局部对象；任何失败不执行末尾*message赋值，原输出对象保持。输入buf只在调用期间借用，成功后消息拥有数组拷贝，不引用wire缓冲。
+ * @param input 借用至少size字节可读缓冲，非空。
+ * @param size 必须恰为132字节。
+ * @param message 非空caller输出对象；成功时被整体值赋值。
+ * @return kOk仅说明上述格式门通过；kInvalidArgument拒绝，需业务端另核准入/有限性/时序/链。
+ */
+
+/**
+ * @fn size_t dp::protocol::dummy_robot_v2::max_object_bytes()
+ * @brief 取本family各消息C++ sizeof最大值，用于本机对象槽容量。
+ *
+ * constexpr计算受目标ABI/填充影响，不能当序列化长度；没有设备或内存分配副作用。
+ * @return 当前编译目标下的字节/对齐值。
+ */
+
+/**
+ * @fn size_t dp::protocol::dummy_robot_v2::max_object_alignment()
+ * @brief 取各消息C++ alignof最大值，用于本机对象槽对齐。
+ *
+ * constexpr计算受目标ABI/填充影响，不能当序列化长度；没有设备或内存分配副作用。
+ * @return 当前编译目标下的字节/对齐值。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::kMaxObjectBytes
+ * @brief 本family最大C++值对象字节数，区别于最大wire payload。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::kMaxObjectAlignment
+ * @brief 本family最大C++值对象对齐，不要求wire按C++结构排布。
+ */
+
+/**
+ * @struct dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyDeviceStatusV2>
+ * @brief 把DummyDeviceStatusV2固定codec接入dp_comm消息traits。
+ *
+ * 特化只是声明interface ID/长度/portable及转换bool；不注册节点/路由，不验证当前owner或消息业务语义。真正格式门仍由对应raw codec执行。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyDeviceStatusV2>::kEncodedSize
+ * @brief 精确payload字节数，引用raw codec长度，非C++ sizeof。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyDeviceStatusV2>::kInterfaceId
+ * @brief 消息interface ID=4137，是协议类型标识，不是CAN节点号或ROS服务名。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyDeviceStatusV2>::kPortable
+ * @brief 固定true，表示此traits选择可移植wire编码；不提供跨minor自动兼容或实机认证。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyDeviceStatusV2>::encode(const dp::protocol::dummy_robot_v2::DummyDeviceStatusV2& value, uint8_t* out, size_t size)
+ * @brief 调用raw codec encode并把kOk转换为true。
+ *
+ * 不添加额外验证；value/out仅调用期间借用，out由caller拥有，raw codec的schema/shape不对称边界原样保留。
+ * @param value 要编码的值对象const引用。
+ * @param out 非空可写缓冲，返回后不保留。
+ * @param size 必须恰等kEncodedSize。
+ * @return raw encode为kOk才true，否则false；不代表设备接纳。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyDeviceStatusV2>::decode(const uint8_t* in, size_t size, dp::protocol::dummy_robot_v2::DummyDeviceStatusV2* value)
+ * @brief 调用raw codec decode并把kOk转换为true。
+ *
+ * raw decoder以局部对象完成后再赋值，失败不提交value；不会保存in借用缓冲或执行管理状态机。
+ * @param in 借用可读wire缓冲。
+ * @param size 精确payload长度。
+ * @param value 非空caller输出对象。
+ * @return 仅格式门通过为true，不包含页链/owner/新鲜度验证。
+ */
+
+/**
+ * @struct dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointCommandV2>
+ * @brief 把DummyJointCommandV2固定codec接入dp_comm消息traits。
+ *
+ * 特化只是声明interface ID/长度/portable及转换bool；不注册节点/路由，不验证当前owner或消息业务语义。真正格式门仍由对应raw codec执行。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointCommandV2>::kEncodedSize
+ * @brief 精确payload字节数，引用raw codec长度，非C++ sizeof。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointCommandV2>::kInterfaceId
+ * @brief 消息interface ID=4138，是协议类型标识，不是CAN节点号或ROS服务名。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointCommandV2>::kPortable
+ * @brief 固定true，表示此traits选择可移植wire编码；不提供跨minor自动兼容或实机认证。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointCommandV2>::encode(const dp::protocol::dummy_robot_v2::DummyJointCommandV2& value, uint8_t* out, size_t size)
+ * @brief 调用raw codec encode并把kOk转换为true。
+ *
+ * 不添加额外验证；value/out仅调用期间借用，out由caller拥有，raw codec的schema/shape不对称边界原样保留。
+ * @param value 要编码的值对象const引用。
+ * @param out 非空可写缓冲，返回后不保留。
+ * @param size 必须恰等kEncodedSize。
+ * @return raw encode为kOk才true，否则false；不代表设备接纳。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointCommandV2>::decode(const uint8_t* in, size_t size, dp::protocol::dummy_robot_v2::DummyJointCommandV2* value)
+ * @brief 调用raw codec decode并把kOk转换为true。
+ *
+ * raw decoder以局部对象完成后再赋值，失败不提交value；不会保存in借用缓冲或执行管理状态机。
+ * @param in 借用可读wire缓冲。
+ * @param size 精确payload长度。
+ * @param value 非空caller输出对象。
+ * @return 仅格式门通过为true，不包含页链/owner/新鲜度验证。
+ */
+
+/**
+ * @struct dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointStateV2>
+ * @brief 把DummyJointStateV2固定codec接入dp_comm消息traits。
+ *
+ * 特化只是声明interface ID/长度/portable及转换bool；不注册节点/路由，不验证当前owner或消息业务语义。真正格式门仍由对应raw codec执行。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointStateV2>::kEncodedSize
+ * @brief 精确payload字节数，引用raw codec长度，非C++ sizeof。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointStateV2>::kInterfaceId
+ * @brief 消息interface ID=4139，是协议类型标识，不是CAN节点号或ROS服务名。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointStateV2>::kPortable
+ * @brief 固定true，表示此traits选择可移植wire编码；不提供跨minor自动兼容或实机认证。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointStateV2>::encode(const dp::protocol::dummy_robot_v2::DummyJointStateV2& value, uint8_t* out, size_t size)
+ * @brief 调用raw codec encode并把kOk转换为true。
+ *
+ * 不添加额外验证；value/out仅调用期间借用，out由caller拥有，raw codec的schema/shape不对称边界原样保留。
+ * @param value 要编码的值对象const引用。
+ * @param out 非空可写缓冲，返回后不保留。
+ * @param size 必须恰等kEncodedSize。
+ * @return raw encode为kOk才true，否则false；不代表设备接纳。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyJointStateV2>::decode(const uint8_t* in, size_t size, dp::protocol::dummy_robot_v2::DummyJointStateV2* value)
+ * @brief 调用raw codec decode并把kOk转换为true。
+ *
+ * raw decoder以局部对象完成后再赋值，失败不提交value；不会保存in借用缓冲或执行管理状态机。
+ * @param in 借用可读wire缓冲。
+ * @param size 精确payload长度。
+ * @param value 非空caller输出对象。
+ * @return 仅格式门通过为true，不包含页链/owner/新鲜度验证。
+ */
+
+/**
+ * @struct dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2>
+ * @brief 把DummyAttemptEvidenceV2固定codec接入dp_comm消息traits。
+ *
+ * 特化只是声明interface ID/长度/portable及转换bool；不注册节点/路由，不验证当前owner或消息业务语义。真正格式门仍由对应raw codec执行。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2>::kEncodedSize
+ * @brief 精确payload字节数，引用raw codec长度，非C++ sizeof。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2>::kInterfaceId
+ * @brief 消息interface ID=4143，是协议类型标识，不是CAN节点号或ROS服务名。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2>::kPortable
+ * @brief 固定true，表示此traits选择可移植wire编码；不提供跨minor自动兼容或实机认证。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2>::encode(const dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2& value, uint8_t* out, size_t size)
+ * @brief 调用raw codec encode并把kOk转换为true。
+ *
+ * 不添加额外验证；value/out仅调用期间借用，out由caller拥有，raw codec的schema/shape不对称边界原样保留。
+ * @param value 要编码的值对象const引用。
+ * @param out 非空可写缓冲，返回后不保留。
+ * @param size 必须恰等kEncodedSize。
+ * @return raw encode为kOk才true，否则false；不代表设备接纳。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2>::decode(const uint8_t* in, size_t size, dp::protocol::dummy_robot_v2::DummyAttemptEvidenceV2* value)
+ * @brief 调用raw codec decode并把kOk转换为true。
+ *
+ * raw decoder以局部对象完成后再赋值，失败不提交value；不会保存in借用缓冲或执行管理状态机。
+ * @param in 借用可读wire缓冲。
+ * @param size 精确payload长度。
+ * @param value 非空caller输出对象。
+ * @return 仅格式门通过为true，不包含页链/owner/新鲜度验证。
+ */
+
+/**
+ * @struct dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Request>
+ * @brief 把DummyManageV2Request固定codec接入dp_comm消息traits。
+ *
+ * 特化只是声明interface ID/长度/portable及转换bool；不注册节点/路由，不验证当前owner或消息业务语义。真正格式门仍由对应raw codec执行。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Request>::kEncodedSize
+ * @brief 精确payload字节数，引用raw codec长度，非C++ sizeof。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Request>::kInterfaceId
+ * @brief 消息interface ID=4141，是协议类型标识，不是CAN节点号或ROS服务名。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Request>::kPortable
+ * @brief 固定true，表示此traits选择可移植wire编码；不提供跨minor自动兼容或实机认证。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Request>::encode(const dp::protocol::dummy_robot_v2::DummyManageV2Request& value, uint8_t* out, size_t size)
+ * @brief 调用raw codec encode并把kOk转换为true。
+ *
+ * 不添加额外验证；value/out仅调用期间借用，out由caller拥有，raw codec的schema/shape不对称边界原样保留。
+ * @param value 要编码的值对象const引用。
+ * @param out 非空可写缓冲，返回后不保留。
+ * @param size 必须恰等kEncodedSize。
+ * @return raw encode为kOk才true，否则false；不代表设备接纳。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Request>::decode(const uint8_t* in, size_t size, dp::protocol::dummy_robot_v2::DummyManageV2Request* value)
+ * @brief 调用raw codec decode并把kOk转换为true。
+ *
+ * raw decoder以局部对象完成后再赋值，失败不提交value；不会保存in借用缓冲或执行管理状态机。
+ * @param in 借用可读wire缓冲。
+ * @param size 精确payload长度。
+ * @param value 非空caller输出对象。
+ * @return 仅格式门通过为true，不包含页链/owner/新鲜度验证。
+ */
+
+/**
+ * @struct dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Response>
+ * @brief 把DummyManageV2Response固定codec接入dp_comm消息traits。
+ *
+ * 特化只是声明interface ID/长度/portable及转换bool；不注册节点/路由，不验证当前owner或消息业务语义。真正格式门仍由对应raw codec执行。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Response>::kEncodedSize
+ * @brief 精确payload字节数，引用raw codec长度，非C++ sizeof。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Response>::kInterfaceId
+ * @brief 消息interface ID=4142，是协议类型标识，不是CAN节点号或ROS服务名。
+ */
+
+/**
+ * @var dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Response>::kPortable
+ * @brief 固定true，表示此traits选择可移植wire编码；不提供跨minor自动兼容或实机认证。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Response>::encode(const dp::protocol::dummy_robot_v2::DummyManageV2Response& value, uint8_t* out, size_t size)
+ * @brief 调用raw codec encode并把kOk转换为true。
+ *
+ * 不添加额外验证；value/out仅调用期间借用，out由caller拥有，raw codec的schema/shape不对称边界原样保留。
+ * @param value 要编码的值对象const引用。
+ * @param out 非空可写缓冲，返回后不保留。
+ * @param size 必须恰等kEncodedSize。
+ * @return raw encode为kOk才true，否则false；不代表设备接纳。
+ */
+
+/**
+ * @fn bool dp::comm::MessageCodec<dp::protocol::dummy_robot_v2::DummyManageV2Response>::decode(const uint8_t* in, size_t size, dp::protocol::dummy_robot_v2::DummyManageV2Response* value)
+ * @brief 调用raw codec decode并把kOk转换为true。
+ *
+ * raw decoder以局部对象完成后再赋值，失败不提交value；不会保存in借用缓冲或执行管理状态机。
+ * @param in 借用可读wire缓冲。
+ * @param size 精确payload长度。
+ * @param value 非空caller输出对象。
+ * @return 仅格式门通过为true，不包含页链/owner/新鲜度验证。
+ */
+
+/**
+ * @struct dp::protocol::services::DummyManageV2RawFixed
+ * @brief DummyManageV2服务的Request/Response类型与interface IDs。
+ *
+ * 这是编译期服务描述，不是ROS Trigger服务、已启动server或控制授权。
+ */
+
+/**
+ * @typedef dp::protocol::services::DummyManageV2RawFixed::Request
+ * @brief 管理请求值类型别名。
+ *
+ * 使用对应版本raw codec；不能因别名名称相同把v1/v2或2.4/2.5布局混用。
+ */
+
+/**
+ * @typedef dp::protocol::services::DummyManageV2RawFixed::Response
+ * @brief 管理响应值类型别名。
+ *
+ * 使用对应版本raw codec；不能因别名名称相同把v1/v2或2.4/2.5布局混用。
+ */
+
+/**
+ * @var dp::protocol::services::DummyManageV2RawFixed::kInterfaceId
+ * @brief 服务/请求/响应interface标识=4140。
+ *
+ * 无单位；与消息ID和CAN轴节点不同，不表示运行期server已经注册。
+ */
+
+/**
+ * @var dp::protocol::services::DummyManageV2RawFixed::kRequestInterfaceId
+ * @brief 服务/请求/响应interface标识=4141。
+ *
+ * 无单位；与消息ID和CAN轴节点不同，不表示运行期server已经注册。
+ */
+
+/**
+ * @var dp::protocol::services::DummyManageV2RawFixed::kResponseInterfaceId
+ * @brief 服务/请求/响应interface标识=4142。
+ *
+ * 无单位；与消息ID和CAN轴节点不同，不表示运行期server已经注册。
+ */
+
+/**
+ * @var dp::protocol::dummy_robot_v2::kStaticRequirements
+ * @brief 生成profile向dp_comm声明的静态槽/容量需求。
+ *
+ * 按实际SDK StaticRequirements字段顺序为：nodes=1, publishers=3, subscriptions=1, timers=0, event_queue=8, max_message_bytes=651, max_topic_bytes=96, codec_scratch_bytes=0, codec_alignment=kMaxObjectAlignment, services=1, clients=1, pending_requests=1, completed_responses=1。字节/对齐项为bytes，其余计数。它是配置需求而非已预留/已分配资源保证；Context仍核自身storage。
+ */
+
+/**
+ * @def DP_DUMMY_RAW_FIXED_MAX_MESSAGE_BYTES
+ * @brief 最大固定wire字节数651，区别于元数据可能声明的更保守预算和C++对象槽大小。
+ *
+ * 只有相应DP_COMM_RUNTIME_MAX_*宏已定义时，头中的条件预处理才检查不足并触发编译错误；本头不自动配置storage或启用服务。
+ */
+
+/**
+ * @def DP_DUMMY_RAW_FIXED_SERVICE_SLOTS
+ * @brief 要求服务槽至少1。
+ *
+ * 只有相应DP_COMM_RUNTIME_MAX_*宏已定义时，头中的条件预处理才检查不足并触发编译错误；本头不自动配置storage或启用服务。
+ */
+
+/**
+ * @def DP_DUMMY_RAW_FIXED_REQUEST_SLOTS
+ * @brief 要求pending request槽至少1。
+ *
+ * 只有相应DP_COMM_RUNTIME_MAX_*宏已定义时，头中的条件预处理才检查不足并触发编译错误；本头不自动配置storage或启用服务。
+ */
+
+/**
+ * @def DP_DUMMY_RAW_FIXED_RESPONSE_SLOTS
+ * @brief 要求completed response槽至少1。
+ *
+ * 只有相应DP_COMM_RUNTIME_MAX_*宏已定义时，头中的条件预处理才检查不足并触发编译错误；本头不自动配置storage或启用服务。
+ */

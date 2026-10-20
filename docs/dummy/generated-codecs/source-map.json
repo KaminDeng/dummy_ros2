@@ -1,0 +1,149 @@
+{
+  "description": "冻结原件路径/SHA与外部符号文档映射；不是产品manifest或授权输入。",
+  "sources": [
+    {
+      "path": "contracts/dummy_robot_v1/codec/dp_dummy_robot_v1.hpp",
+      "sha256": "e9c04f74bd73edcf5721401c3f2c35217ed9eed528e808fea0870fa56dcc8951",
+      "lines": 2603,
+      "family": "v1",
+      "file_sidecar": "v1-files.dox",
+      "symbol_sidecar": "v1-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/codec/dp_dummy_robot_v1_dp_comm.hpp",
+      "sha256": "b7959cff2853c32a4405aeff13b0ee1b4fdf1e9e5eb05f1b797a8598bb4e6743",
+      "lines": 84,
+      "family": "v1",
+      "file_sidecar": "v1-files.dox",
+      "symbol_sidecar": "v1-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/codec/dp_dummy_robot_v1_static_requirements.h",
+      "sha256": "b72871ece7fe611e8111f99deefac7d1f9f08f994470b06dad166b008c89fce0",
+      "lines": 18,
+      "family": "v1",
+      "file_sidecar": "v1-files.dox",
+      "symbol_sidecar": "v1-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/model/dummy_model.hpp",
+      "sha256": "c9fb2155a8531d3ea5d8febe2c2a17c549659b0fb6008d651c90bcb9462a2c7b",
+      "lines": 20,
+      "family": "v1",
+      "file_sidecar": "v1-files.dox",
+      "symbol_sidecar": "v1-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp",
+      "sha256": "649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143",
+      "lines": 2856,
+      "family": "v2-current",
+      "file_sidecar": "v2-current-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp",
+      "sha256": "78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40",
+      "lines": 96,
+      "family": "v2-current",
+      "file_sidecar": "v2-current-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_static_requirements.h",
+      "sha256": "c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352",
+      "lines": 18,
+      "family": "v2-current",
+      "file_sidecar": "v2-current-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2.hpp",
+      "sha256": "466da9fe8e856938908aff06f9e7a6b930c9143987567b4d494e16124bdbe5c2",
+      "lines": 2826,
+      "family": "v2-legacy-2-4",
+      "file_sidecar": "v2-legacy-2-4-files.dox",
+      "symbol_sidecar": "v24-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2_dp_comm.hpp",
+      "sha256": "78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40",
+      "lines": 96,
+      "family": "v2-legacy-2-4",
+      "file_sidecar": "v2-legacy-2-4-files.dox",
+      "symbol_sidecar": "v24-symbols.dox"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2_static_requirements.h",
+      "sha256": "c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352",
+      "lines": 18,
+      "family": "v2-legacy-2-4",
+      "file_sidecar": "v2-legacy-2-4-files.dox",
+      "symbol_sidecar": "v24-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2.hpp",
+      "sha256": "649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143",
+      "lines": 2856,
+      "family": "application-fixture",
+      "file_sidecar": "application-fixture-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2_dp_comm.hpp",
+      "sha256": "78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40",
+      "lines": 96,
+      "family": "application-fixture",
+      "file_sidecar": "application-fixture-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2_static_requirements.h",
+      "sha256": "c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352",
+      "lines": 18,
+      "family": "application-fixture",
+      "file_sidecar": "application-fixture-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/codec/dp_dummy_robot_v2.hpp",
+      "sha256": "649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143",
+      "lines": 2856,
+      "family": "trusted-sil-fixture",
+      "file_sidecar": "trusted-sil-fixture-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/codec/dp_dummy_robot_v2_dp_comm.hpp",
+      "sha256": "78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40",
+      "lines": 96,
+      "family": "trusted-sil-fixture",
+      "file_sidecar": "trusted-sil-fixture-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/codec/dp_dummy_robot_v2_static_requirements.h",
+      "sha256": "c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352",
+      "lines": 18,
+      "family": "trusted-sil-fixture",
+      "file_sidecar": "trusted-sil-fixture-files.dox",
+      "symbol_sidecar": "v25-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/ros05_fault146/original-once-decoded-146-payloads-fixture.hpp",
+      "sha256": "e8cdcb29921ab38e09b980828972436c7135459ebcaaf3fc442d0021a2241b12",
+      "lines": 159,
+      "family": "fault146",
+      "file_sidecar": "fault146-files.dox",
+      "symbol_sidecar": "fault146-symbols.dox"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/ros05_fault146/original-once-decoded-current-fault-observations.hpp",
+      "sha256": "3e7c0ff5a3c32cb489039097068446a661e16bc432a15e95c16ee99a045b4a1f",
+      "lines": 9,
+      "family": "fault146",
+      "file_sidecar": "fault146-files.dox",
+      "symbol_sidecar": "fault146-symbols.dox"
+    }
+  ]
+}

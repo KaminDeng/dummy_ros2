@@ -1,38 +1,48 @@
+# @file joint_limits.yaml
+# @brief MoveIt规划时的六轴速度/加速度限额和默认比例；并非真实电机的已批准运行包络。
 # joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
 
 # For beginners, we downscale velocity and acceleration limits.
 # You can always specify higher scaling factors (<= 1.0) in your motion requests.  # Increase the values below to 1.0 to always move at maximum speed.
+# 默认比例0.1相乘于规划上限；单次请求还可带自己的比例。加速度比例同理，不能把比例当rad/s。
 default_velocity_scaling_factor: 0.1
 default_acceleration_scaling_factor: 0.1
 
 # Specific joint properties can be changed with the keys [max_position, min_position, max_velocity, max_acceleration]
 # Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits]
+# 各轴max_velocity为rad/s、max_acceleration为rad/s²；has_*为true才声明相应限额。位置边界仍来自URDF/调用方，不能据本文件推断无限位置范围。
 joint_limits:
+# Joint1单轴规划限额；这份通用配置不等同设备profile/CAN速度帽，实机入口还要核对所选部署限制。
   Joint1:
     has_velocity_limits: true
     max_velocity: 3.1499999999999999
     has_acceleration_limits: true
     max_acceleration: 3.15
+# Joint2单轴规划限额；这份通用配置不等同设备profile/CAN速度帽，实机入口还要核对所选部署限制。
   Joint2:
     has_velocity_limits: true
     max_velocity: 3.1499999999999999
     has_acceleration_limits: true
     max_acceleration: 3.15
+# Joint3单轴规划限额；这份通用配置不等同设备profile/CAN速度帽，实机入口还要核对所选部署限制。
   Joint3:
     has_velocity_limits: true
     max_velocity: 3.1499999999999999
     has_acceleration_limits: true
     max_acceleration: 3.15
+# Joint4单轴规划限额；这份通用配置不等同设备profile/CAN速度帽，实机入口还要核对所选部署限制。
   Joint4:
     has_velocity_limits: true
     max_velocity: 3.1499999999999999
     has_acceleration_limits: true
     max_acceleration: 3.15
+# Joint5单轴规划限额；这份通用配置不等同设备profile/CAN速度帽，实机入口还要核对所选部署限制。
   Joint5:
     has_velocity_limits: true
     max_velocity: 3.1499999999999999
     has_acceleration_limits: true
     max_acceleration: 3.15
+# Joint6单轴规划限额；这份通用配置不等同设备profile/CAN速度帽，实机入口还要核对所选部署限制。
   Joint6:
     has_velocity_limits: true
     max_velocity: 3.1499999999999999

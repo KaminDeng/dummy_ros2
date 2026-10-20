@@ -1,3 +1,6 @@
+# @file moveit_empty.rviz
+# @brief 历史Servo演示的PlanningScene显示布局，监听Servo规划场景。
+# 侧栏面板与展开状态属于GUI布局，不是机器人模型或设备参数。
 Panels:
   - Class: rviz_common/Displays
     Help Height: 78
@@ -21,6 +24,7 @@ Panels:
       - /Current View1
     Name: Views
     Splitter Ratio: 0.5
+# 显示插件从话题/参数读取模型和场景；加载插件不等于底层服务/状态已经就绪。
 Visualization Manager:
   Class: ""
   Displays:
@@ -46,6 +50,7 @@ Visualization Manager:
       Enabled: true
       Move Group Namespace: ""
       Name: PlanningScene
+# 此布局监听/moveit_servo/publish_planning_scene，与通用move_group的monitored_planning_scene不是同一默认话题。
       Planning Scene Topic: /moveit_servo/publish_planning_scene
       Robot Description: robot_description
       Scene Geometry:
@@ -57,11 +62,13 @@ Visualization Manager:
         Voxel Rendering: Occupied Voxels
       Value: true
   Enabled: true
+# Fixed Frame是渲染统一坐标系；必须能通过TF连接各显示源，改它不会改变设备机械零点。
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: base_link
     Frame Rate: 30
   Name: root
+# 交互、相机与选择等工具；若工具配置了话题，点击时可发布相应ROS消息，但不直接建立DPSDK运动授权。
   Tools:
     - Class: rviz_default_plugins/Interact
       Hide Inactive Objects: true
@@ -96,6 +103,7 @@ Visualization Manager:
     Current:
       Class: rviz_default_plugins/TF
   Value: true
+# Orbit距离/焦点/角度只控制摄像机视角；角度不能当成Joint1至Joint6目标。
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
@@ -119,6 +127,7 @@ Visualization Manager:
       Value: Orbit (rviz)
       Yaw: 0.8753982782363892
     Saved: ~
+# 窗口大小、位置与Qt序列化布局；QMainWindow State长串是GUI状态，不是固件、编码器或运动证据。
 Window Geometry:
   Displays:
     collapsed: false

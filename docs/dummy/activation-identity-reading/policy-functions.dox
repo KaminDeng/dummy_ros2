@@ -1,0 +1,141 @@
+/**
+@page activation_identity_validator 冻结J1激活验证器逐函数说明
+
+原件固定于合同manifest的payload SHA，因此中文说明放在本页，原Python全文保持。
+本页列真实签名、参数、返回和流程；Doxygen提取的是文档页，不把无标注Python函数页伪称原符号绑定。
+
+@section activation_fn_strict_load strict_load：严格加载JSON并拒绝歧义输入
+原件第10行；真实签名：`def strict_load(path):`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| `path` | 要读取的Path；文本读取/JSON错误向调用者抛出，不写文件。 |
+
+返回：返回解析后的Python值，不强制顶层一定是字典。
+
+流程：object_pairs_hook的局部pairs逐键拒绝重复；parse_constant拒绝NaN/Infinity。局部pairs(items)的items为对象键值对列表，返回新dict。严格语法加载与后面的策略结构验证是不同层。
+
+@section activation_fn_is_hash is_hash：检查64位小写hex文本形状
+原件第20行；真实签名：`def is_hash(value):`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| `value` | 任意待检查对象。 |
+
+返回：返回是否为64字符字符串且字符集合只含0-9/a-f。
+
+流程：允许全零；只核格式，不读取文件、不重算对象摘要、不验签。64是十六进制字符数，对应32字节摘要。
+
+@section activation_fn_is_device_id is_device_id：检查32位小写hex设备名形状
+原件第21行；真实签名：`def is_device_id(value):`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| `value` | 任意待检查对象。 |
+
+返回：返回是否为32字符小写hex字符串。
+
+流程：允许全零，未读取真实设备UID或连接状态。32字符表示16字节，不是32字节设备ID。
+
+@section activation_fn_canonical_policy canonical_policy：形成compiled policy摘要所用的规范字节
+原件第22行；真实签名：`def canonical_policy(policy):`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| `policy` | 输入策略字典；上层负责字段集合/类型验证。 |
+
+返回：返回按键排序、紧凑分隔、禁止NaN的JSON编码bytes。
+
+流程：仅排除顶层note，其余项目保留。该bytes的SHA不是整个原policy文件的SHA；空白/键顺序与note的变化应按该规范与原文身份分别理解。
+
+@section activation_fn_parse_time parse_time：解析带时区的ISO时间并转成UTC
+原件第25行；真实签名：`def parse_time(value):`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| `value` | 包含有效时区信息的时间字符串。 |
+
+返回：返回aware UTC datetime；类型错误、无时区或解析失败抛ValueError。
+
+流程：不根据本机时区补猜时间。不查询设备时钟；后面的许可时间门使用Host当前UTC，不能拿它与设备微秒tick直接相减。
+
+@section activation_fn_positive_int positive_int：拒绝bool的严格正整数门
+原件第30行；真实签名：`def positive_int(value):`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| `value` | 任意待检查对象。 |
+
+返回：仅int且不是bool、并大于0时为True。
+
+流程：Python的bool是int子类，因此显式排除。这个门不单独限定上界；调用点负责uint32/uint64等范围。
+
+@section activation_fn_validate validate：交叉验证J1 policy/activation/runtime及证据文件
+原件第32行；真实签名：`def validate(activation, policy, runtime, evidence_root):`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| `activation` | 外部激活声明字典，不代表设备已授权。 |
+| `policy` | 外部策略字典；字段、单位与交叉约束按本固定版本处理。 |
+| `runtime` | 调用方提供的快照字典，不是函数主动读取的live设备状态。 |
+| `evidence_root` | 证据根Path，须存在；列举证据按解析后的边界与原文件SHA核对。 |
+
+返回：结构通过返回validation=PASS、motion_allowed=False、decision=STRUCTURALLY_VALID_NOT_AUTHORIZED；拒绝抛出错误。
+
+流程：先核格式/字段集合/布尔与J1 BENCH身份，再核数值相等、时序容量与停止包络、策略摘要、激活时间、runtime精确字典和证据。后面的专节逐步解释；结构成功始终不授权运动。
+
+@section activation_fn_main main：解析CLI并执行语法或完整结构验证
+原件第121行；真实签名：`def main():`。
+
+| 参数 | 作用和寿命 |
+| --- | --- |
+| 无显式函数参数 | CLI参数由argparse从进程命令行读取。 |
+
+返回：成功0，必需参数缺失2；所捕获的读文件/键/类型/值/JSON错误输出DENIED并返回1。
+
+流程：--check-json只严格解析JSON语法并返回，不验证激活结构。完整模式另要求consumed-ledger，检查组合permit_key是否已存在，但不更新ledger。完整验证后把结果JSON打印到stdout；未在本说明中运行此入口。
+
+@section activation_validation_steps validate的实际门与单位
+
+| 顺序 | 真实检查 | 边界 |
+| --- | --- | --- |
+| 固定字段/身份 | policy与activation字段集合必须精确匹配，format为dummy_j1_compiled_policy_v1/dummy_j1_activation_v1；active_axes恰Joint1，reference_kind为BENCH_SESSION，test_only不能为真。 | motion_supported/motion_permitted只查bool类型，不能据结构成功推断它们已授予设备权限。 |
+| limits/timing/capacity | 两份声明键集合一致且逐值相等。timing/capacity为严格正int；limits为非bool有限数，除position_min_rad外要求正值。 | rad、rad/s、rad/s²、微秒、槽数和CAN rev/s是不同单位；不读取真实机械范围。 |
+| 发布/票据容量 | state_publish_period_us不得小于control_period_us；ticket_ring_slots×state周期必须严格大于freshness窗口。 | 只算声明预算，不测真实线程、传输延迟或丢包。 |
+| 参数交叉关系 | position_min小于max；hold容差不大于stationary容差；stop距离不大于trial累计行程；stop时长不大于trial时长。 | 逐字段比较不是几何碰撞/工作空间验证。 |
+| 停止包络 | latency=(freshness+command_timeout+max_control_dt+max_CAN_residence)/1e6；stop_max_distance至少为v×latency+v²/(2×stop_deceleration)+tracking_margin。 | 结果单位rad，基于声明的保守模型，不是实测停车距离。 |
+| CAN速度容量 | 先把can_velocity_cap_rev_s往返为float32，再要求有限且cap32×51200在[1,2147483648)内。 | 51200是此旧协议的缩放；超float32可表示值时struct.pack也可能抛OverflowError，main并未列入捕获元组。 |
+| 策略摘要 | 排除note的规范policy bytes求SHA，必须等于activation.profile_sha256。 | model_sha256只查64hex形状，未加载实际model；firmware/contract摘要也未独立采设备身份。 |
+| 激活身份/时间 | device文本形状、摘要形状、approval文本/操作者非空；boot为正uint64，reference为正uint32。时间必须aware，not_before≤now、expires>now且超过停止清理预算。 | approval_state文字不是签名；Host UTC与设备tick不是同一时钟域。 |
+| runtime | 字典必须恰好等于按activation构造的设备/固件/合同/策略、J1/BENCH、boot/reference声明。 | runtime来自调用方文件，匹配不证明实时状态新鲜或真实来源。 |
+| evidence | 根目录resolve(strict=True)，列表非空；路径不绝对、不含..，最终项不是symlink、解析后不逃逸，原bytes SHA一致。 | 允许解析后仍在根内的路径；不重新验证证据里的业务结论，也不把hash当来源认证。 |
+
+固定limit字段：position_min_rad、position_max_rad、velocity_max_rad_s、acceleration_max_rad_s2、
+stop_deceleration_rad_s2、max_trial_travel_rad、stop_max_distance_rad、stationary_position_tolerance_rad、
+stationary_velocity_tolerance_rad_s、max_tracking_error_rad、max_feedback_step_rad、can_velocity_cap_rev_s、
+first_sample_position_tolerance_rad、hold_position_tolerance_rad、tracking_uncertainty_margin_rad。
+
+固定timing字段后缀均为_us：control_period、state_publish_period、command_timeout、freshness_ticket_window、
+can_feedback_timeout、stationary_window、stop_max_duration、trial_max_duration、first_sample_timeout、
+max_can_tx_residence、tracking_error_window、max_control_dt、state_query_refresh、completion_max_duration。
+
+capacity包含ticket_ring_slots、management_client_slots、operation_result_slots、operation_retention_us、
+permit_ledger_slots、minimum_stationary_samples；其中operation_retention_us仍是微秒，不是槽数。
+
+@section activation_cli CLI参数与消费记录
+
+--activation/--policy/--runtime/--evidence-root组成完整结构输入；--consumed-ledger提供已消费键集合，
+permit_key由device_id、expected_boot_epoch_hex、profile_sha256、expires_at拼接。只有“当前文件中不存在该键”
+这一检查，不实施原子写入、跨进程排他或设备防重放。--check-json单独路径仅语法检查，不需上述输入。
+
+模块HEX为0-9/a-f字符集合，作为形状门使用。函数不调用设备SDK、不读取串口/CAN/J-Link、
+不签发permit、不更新reference/Fault、不使能或失能电机。这里描述源语义，不声称已运行脚本。
+
+@section activation_wire_report 冻结wire-v1报告怎么读
+
+wire-v1-validation.md记录C04对R03/C03固定输入的历史验收，raw-fixed尺寸按command/state/status/request/response为
+125/356/297/233/618字节。ROS CDR另作语义往返，不与packed设备帧当作同一字节。
+大于2^53的uint64不可经浮点中转；QUEUED不是设备操作已完成。RPC01/RPC12是服务夹具，
+证明有界回调/单快照回执，不证明D04真正执行Capture或实体运动授权。原报告与validator同为manifest payload，
+保持原文SHA，后续v2/2.4/2.5须用各自合同/codec，不能因历史报告PASS而混链。
+*/

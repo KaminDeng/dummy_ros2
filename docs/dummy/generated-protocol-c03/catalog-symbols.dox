@@ -1,0 +1,1891 @@
+/**
+ * @struct dp::protocol::capabilities::CatalogEntry
+ * @brief 稳定catalog能力ID到静态名称映射行，不提供授权。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @struct dp::protocol::lite::routes::LiteRoute
+ * @brief 静态Lite路由描述行，绑定模板/schema/hash，不注册任何网络入口。
+ *
+ * C结构声明本身不初始化内存；caller须显式聚合初始化/memset和填有效长度。零值不构成有效身份或成功；本类型不执行IO、鉴权、CRC重算或机械动作。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kCatalogBitmapBytes
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr std::size_t；初始化表达式：= 16U。
+ */
+
+/**
+ * @typedef dp::protocol::capabilities::CatalogBitmap
+ * @brief 本作用域实际类型别名/回调签名。
+ *
+ * 原声明：using dp::protocol::capabilities::CatalogBitmap = typedef std::array&lt;uint8_t, kCatalogBitmapBytes&gt;。别名不创建对象、延长借用寿命或启用服务；回调的指针/字节范围约定沿用对应encoder/decoder。
+ */
+
+/**
+ * @var dp::protocol::capabilities::CatalogEntry::id
+ * @brief catalog从1开始的能力ID，无单位；只表示名称映射。
+ *
+ * 实际声明类型：uint16_t。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::capabilities::CatalogEntry::name
+ * @brief offline log请求附带名字节；catalog/route结构中则为静态名称借用指针。
+ *
+ * 实际声明类型：const char *。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kCatalogEntries
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr std::array&lt; ；初始化表达式：。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityLogStreamV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "log.stream.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityLogStreamV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 1U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityLogRemoteLevelV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "log.remote_level.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityLogRemoteLevelV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 2U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityCrashDumpPublishV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "crash.dump.publish.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityCrashDumpPublishV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 3U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityCrashFileTransferV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "crash.file_transfer.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityCrashFileTransferV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 4U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityCrashAnnounceV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "crash.announce.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityCrashAnnounceV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 5U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogFileTransferV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "offline_log.file_transfer.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogFileTransferV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 6U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogFileTransferV2
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "offline_log.file_transfer.v2"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogFileTransferV2Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 7U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogManifestV2
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "offline_log.manifest.v2"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogManifestV2Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 8U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogPreviewV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "offline_log.preview.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogPreviewV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 9U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogCommandV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "offline_log.command.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogCommandV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 10U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogCommandV2
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "offline_log.command.v2"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityOfflineLogCommandV2Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 11U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityFileTransferServerV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "file_transfer.server.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityFileTransferServerV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 12U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityDeviceStatusV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "device.status.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityDeviceStatusV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 13U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityDpProtocolCapabilityAnnounceV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "dp.protocol.capability_announce.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityDpProtocolCapabilityAnnounceV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 14U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityDpProtocolCapabilityQueryV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "dp.protocol.capability_query.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityDpProtocolCapabilityQueryV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 15U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityControlJointStateV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "control.joint_state.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityControlJointStateV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 16U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityControlJointCommandV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "control.joint_command.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityControlJointCommandV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 17U。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityLogStreamTinyV1
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr const char *；初始化表达式：= "log.stream.tiny.v1"。
+ */
+
+/**
+ * @var dp::protocol::capabilities::kDpProtocolCapabilityLogStreamTinyV1Id
+ * @brief 锁定能力目录常量/位图尺寸/16字节指纹或稳定ID映射。
+ *
+ * 能力编号1起、位索引ID-1；名称/指纹不提供HMAC、授权、当前固件或功能实测保证。
+原声明类型：constexpr uint16_t；初始化表达式：= 18U。
+ */
+
+/**
+ * @fn constexpr const char * dp::protocol::capabilities::capability_name(uint16_t id)
+ * @brief 按稳定能力ID线性查名称。
+ *
+ * 只遍历18个catalog行；返回静态字符串或nullptr，不生成能力。
+ * @param id 能力ID输入或输出；稳定编号1起，见指针类型。
+ * @return 找到的静态名称指针，程序寿命；未知ID为nullptr。
+ */
+
+/**
+ * @fn bool dp::protocol::capabilities::capability_id(std::string_view name, uint16_t *id)
+ * @brief 按精确string_view名称查稳定ID。
+ *
+ * out id必须非空；比较含显式长度，失败不改*id，不做认证。
+ * @param name 借用string_view精确能力名称，底层字符须在比较期间存活。
+ * @param id 能力ID输入或输出；稳定编号1起，见指针类型。
+ * @return 成功true并写ID，未知名/空输出false。
+ */
+
+/**
+ * @fn bool dp::protocol::capabilities::set_capability(CatalogBitmap *bitmap, std::string_view name)
+ * @brief 按名称置catalog位图的一个能力位。
+ *
+ * 先查已知ID，再置bit(id-1)；不清其它位，不提供原子并发写或运行资格。
+ * @param bitmap 借用16字节CatalogBitmap；set写一个位，has只读，不提供并发同步。
+ * @param name 借用string_view精确能力名称，底层字符须在比较期间存活。
+ * @return 名称有效且bitmap非空为true，否则false。
+ */
+
+/**
+ * @fn constexpr bool dp::protocol::capabilities::has_capability(const CatalogBitmap &bitmap, uint16_t id)
+ * @brief 读取1起编号能力的位图位。
+ *
+ * 拒绝ID0及大于128，但未要求ID存在18项catalog；保留位非零也可返回true。
+ * @param bitmap 借用16字节CatalogBitmap；set写一个位，has只读，不提供并发同步。
+ * @param id 能力ID输入或输出；稳定编号1起，见指针类型。
+ * @return 相应位是否置位；越界false。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashAnnounceRawFixedV1Schema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashAnnounce.raw_fixed.v1"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashAnnounceRawFixedV1Canonical
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashAnnounce"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashAnnounceRawFixedV1SourceHeader
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "libraries/dp_crash/include/dp_crash_types.h"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashAnnounceRawFixedV1StructDpCrashAnnounceT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_crash_announce_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashAnnounceRawFixedV1StructDpCrashExportInfoT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_crash_export_info_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashDumpRawFixedV1Schema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashDump.raw_fixed.v1"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashDumpRawFixedV1Canonical
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashDump"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashDumpRawFixedV1SourceHeader
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "libraries/dp_crash/include/dp_crash_types.h"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpCrashCrashDumpRawFixedV1StructDpCrashDumpT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_crash_dump_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcSchema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.FileTransferRpc"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1Schema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.FileTransferRpc.raw_fixed.v1"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1Canonical
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.FileTransferRpc"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1SourceHeader
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "libraries/dp_file_transfer/include/dp_file_transfer_protocol.h"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtOpenReqT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_open_req_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtOpenReqBufT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_open_req_buf_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtOpenRespT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_open_resp_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtChunkReqT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_chunk_req_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtChunkRespT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_chunk_resp_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtCloseReqT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_close_req_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtCloseRespT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_close_resp_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtCancelReqT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_cancel_req_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpFileTransferFileTransferRpcRawFixedV1StructDpFtCancelRespT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_ft_cancel_resp_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpLogLogRecordRawBytesV1Schema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.log.LogRecord.raw_bytes.v1"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpLogLogRecordRawBytesV1Canonical
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp.log.LogRecord"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpLogLogRecordRawBytesV1SourceHeader
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "libraries/dp_log/include/dp_log_bin.h"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpLogLogRecordRawBytesV1StructDpLogBinFrameT
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp_log_bin_frame_t"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpOfflineLogCommandTextCommandV1Schema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.Command.text_command.v1"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpOfflineLogCommandTextCommandV1Canonical
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.Command"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpOfflineLogCommandAckTextKvV1Schema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandAck.text_kv.v1"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpOfflineLogCommandAckTextKvV1Canonical
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandAck"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpOfflineLogCommandRpcSchema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpc"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpOfflineLogCommandRpcTextCommandV1Schema
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpc.text_command.v1"。
+ */
+
+/**
+ * @var dp::protocol::legacy::kDpProtocolLegacyPayloadDpOfflineLogCommandRpcTextCommandV1Canonical
+ * @brief 旧payload到canonical schema、原SDK头或结构名的静态索引。
+ *
+ * 只说明历史来源/投影，不把两者ABI视为一致，不读取该源码文件。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpc"。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::LiteRoute::name
+ * @brief offline log请求附带名字节；catalog/route结构中则为静态名称借用指针。
+ *
+ * 实际声明类型：const char *。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::LiteRoute::topic
+ * @brief 静态topic模板，不是已创建订阅。
+ *
+ * 实际声明类型：const char *。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::LiteRoute::canonical_schema
+ * @brief 静态canonical schema名称，数据投影目标不是运行已握手保证。
+ *
+ * 实际声明类型：const char *。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::LiteRoute::tiny_schema
+ * @brief tiny输入schema名称，转换是否可用以实际converter为准。
+ *
+ * 实际声明类型：const char *。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::LiteRoute::topic_hash
+ * @brief 锁定16位Lite topic哈希，不能作为防碰撞认证或设备UID。
+ *
+ * 实际声明类型：unsigned。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::LiteRoute::requires_bridge
+ * @brief 路由/profile声明需要bridge；不会启动bridge进程。
+ *
+ * 实际声明类型：bool。 getter/字段访问不会自动采集新设备数据。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::kDpProtocolLiteRoutes
+ * @brief 生成静态路由行数组，分别按其结构定义保存schema/hash或接口/能力/access/codec/QoS。
+ *
+ * 描述表不建立连接、不执行授权或转换；lookup借用静态行；表encoded_size只是预算，与实际TLV上限可能不同。
+原声明类型：constexpr ；初始化表达式：。
+ */
+
+/**
+ * @var dp::protocol::lite::routes::kDpProtocolLiteRouteCount
+ * @brief 相应静态route数组元素条数。
+ *
+ * 不是当前连接数或发现节点数。
+原声明类型：constexpr unsigned；初始化表达式：= sizeof(kDpProtocolLiteRoutes) / sizeof(kDpProtocolLiteRoutes[0])。
+ */
+
+/**
+ * @def DP_PROTOCOL_LITE_TOPIC_DEVICE_STATUS_HASH
+ * @brief 锁定Lite topic16位hash；不做防碰撞认证、设备识别或网络注册。
+ *
+ * 原宏展开文本：0x00B4u。需与选中的profile/layout一同解释；不修改冻结生成值。
+ */
+
+/**
+ * @var dp::protocol::lite::topics::kDpProtocolLiteTopicDeviceStatus
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/device/status"。
+ */
+
+/**
+ * @var dp::protocol::lite::topics::kDpProtocolLiteTopicDeviceStatusHash
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr unsigned；初始化表达式：= 0x00B4u。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileEmbeddedName
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr const char *；初始化表达式：= "profile_embedded"。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileEmbeddedMaxPayloadSize
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr unsigned；初始化表达式：= 4096u。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileEmbeddedRequiresBridge
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr bool；初始化表达式：= false。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileFullName
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr const char *；初始化表达式：= "profile_full"。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileFullMaxPayloadSize
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr unsigned；初始化表达式：= 65536u。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileFullRequiresBridge
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr bool；初始化表达式：= false。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileTinyName
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr const char *；初始化表达式：= "profile_tiny"。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileTinyMaxPayloadSize
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr unsigned；初始化表达式：= 128u。
+ */
+
+/**
+ * @var dp::protocol::profiles::kDpProtocolProfileTinyRequiresBridge
+ * @brief profile配置常量，名字/最大payload字节数/bridge需求以原值为准。
+ *
+ * 预算Embedded4096/Full65536/Tiny128不是自动分配或逐包强校验；TinyRequiresBridge不启动进程。
+原声明类型：constexpr bool；初始化表达式：= true。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashAnnounce
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashAnnounce"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashAnnounceSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/crash.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashAnnounceRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/CrashAnnounceV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashAnnounceRawFixedV1
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashAnnounce.raw_fixed.v1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashAnnounceRawFixedV1Canonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashAnnounce"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashAnnounceRawFixedV1Encoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "raw-fixed"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashAnnounceRawFixedV1SourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/crash_raw_fixed.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashDump
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashDump"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashDumpSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/crash.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashDumpRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/CrashDumpV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashDumpRawFixedV1
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashDump.raw_fixed.v1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashDumpRawFixedV1Canonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.crash.CrashDump"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashDumpRawFixedV1Encoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "raw-fixed"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpCrashCrashDumpRawFixedV1SourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/crash_raw_fixed.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityAnnounce
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.device.CapabilityAnnounce"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityAnnounceSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/device.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityAnnounceRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/CapabilityAnnounceV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityQueryRequest
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.device.CapabilityQueryRequest"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityQueryRequestSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/device.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityQueryRequestRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/CapabilityQueryV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityQueryResponse
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.device.CapabilityQueryResponse"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityQueryResponseSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/device.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceCapabilityQueryResponseRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/CapabilityQueryV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatus
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.device.Status"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatusSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/device.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatusRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/DeviceStatusV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatusTiny
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.device.StatusTiny"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatusTinyCanonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.device.Status"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatusTinyEncoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "raw-fixed"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatusTinySourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/tiny/device_status_raw_fixed.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpDeviceStatusTinyRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/DeviceStatusTinyV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCancelRequest
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.CancelRequest"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCancelRequestSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCancelRequestRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferCancelV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCancelResponse
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.CancelResponse"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCancelResponseSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCancelResponseRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferCancelV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferChunkRequest
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.ChunkRequest"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferChunkRequestSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferChunkRequestRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferChunkV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferChunkResponse
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.ChunkResponse"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferChunkResponseSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferChunkResponseRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferChunkV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCloseRequest
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.CloseRequest"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCloseRequestSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCloseRequestRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferCloseV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCloseResponse
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.CloseResponse"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCloseResponseSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferCloseResponseRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferCloseV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferFileTransferRpc
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.FileTransferRpc"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferFileTransferRpcSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/file_transfer_raw_fixed.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferFileTransferRpcRawFixedV1
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.FileTransferRpc.raw_fixed.v1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferFileTransferRpcRawFixedV1Canonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.FileTransferRpc"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferFileTransferRpcRawFixedV1Encoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "raw-fixed"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferFileTransferRpcRawFixedV1SourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/file_transfer_raw_fixed.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferOpenRequest
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.OpenRequest"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferOpenRequestSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferOpenRequestRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferOpenV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferOpenResponse
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.file_transfer.OpenResponse"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferOpenResponseSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/file_transfer.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpFileTransferOpenResponseRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/FileTransferOpenV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecord
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.log.LogRecord"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/LogRecordV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordRawBytesV1
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.log.LogRecord.raw_bytes.v1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordRawBytesV1Canonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.log.LogRecord"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordRawBytesV1Encoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "raw-bytes"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordRawBytesV1SourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/log_raw_bytes.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordTiny
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.log.LogRecordTiny"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordTinySourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogLogRecordTinyRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/LogRecordTinyV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogRemoteLevel
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.log.RemoteLevel"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogRemoteLevelSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpLogRemoteLevelRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/RemoteLevelV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommand
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.Command"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/offline_log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/OfflineLogCommandV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandTextCommandV1
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.Command.text_command.v1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandTextCommandV1Canonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.Command"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandTextCommandV1Encoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "text-command"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandTextCommandV1SourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/offline_log_text.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandAck
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandAck"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandAckSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/offline_log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandAckRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/msg/OfflineLogCommandAckV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandAckTextKvV1
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandAck.text_kv.v1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandAckTextKvV1Canonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandAck"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandAckTextKvV1Encoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "text-kv"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandAckTextKvV1SourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/offline_log_text.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRequest
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRequest"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRequestSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/offline_log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRequestRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/OfflineLogCommandV2"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandResponse
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandResponse"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandResponseSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/offline_log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandResponseRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/OfflineLogCommandV2"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpc
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpc"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/offline_log_text.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcTextCommandV1
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpc.text_command.v1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcTextCommandV1Canonical
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpc"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcTextCommandV1Encoding
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "text-command"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcTextCommandV1SourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/legacy/offline_log_text.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcRequest
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpcRequest"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcRequestSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/offline_log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcRequestRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/OfflineLogCommandRpcV1"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcResponse
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dp.offline_log.CommandRpcResponse"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcResponseSourceFile
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "schemas/canonical/offline_log.yaml"。
+ */
+
+/**
+ * @var dp::protocol::schemas::kDpProtocolSchemaDpOfflineLogCommandRpcResponseRosInterface
+ * @brief schema名称/来源/ROS接口/编码的静态索引，按本常量字面值解释。
+ *
+ * 它只是生成时目录关联，不读取文件、不验证当前加载schema或运行兼容性。
+原声明类型：constexpr const char *；初始化表达式：= "dpsdk_interfaces/srv/OfflineLogCommandRpcV1"。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_crash_announce(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/crash/announce"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_crash_dump(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/crash"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_crash_file(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/crash/file"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_device_capability_query(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/capability/query"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_device_status(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/device/status"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_file_transfer_server(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/ft/server"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_log_remote_level(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp_log/%s" "/set_level"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_offline_log_cmd(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/offline_log/cmd"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_offline_log_cmd_ack(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/offline_log/cmd_ack"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_offline_log_cmd_rpc(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/offline_log/cmd_rpc"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @fn static int dp_protocol_format_topic_offline_log_file(char *out, size_t out_size, const char *device_id)
+ * @brief 格式化此入口的device topic文本。
+ *
+ * 使用snprintf模板"dp/%s" "/offline_log/file"；拒绝空指针/0容量/截断，但截断时缓冲仍可能含部分字符串，不核device_id格式、转义或权限。
+ * @param out 借用结果对象/缓冲；C decoder可能清零后部分写，varint只有成功写标量。
+ * @param out_size 可写topic缓冲字节容量，包含终止NUL空间。
+ * @param device_id NUL终止文本；通用topic formatter不核身份格式，zenbedded要求32个小写hex字符且非全零。
+ * @return 完整格式化返回0，参数/截断/格式失败-1。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicCrashAnnounce
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/crash/announce"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicCrashDump
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/crash"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicCrashFile
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/crash/file"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicDeviceCapabilityAnnounce
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "/dp/capability/announce"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicDeviceCapabilityAnnouncePublishPattern
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "/dp/capability/announce"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicDeviceCapabilityQuery
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/capability/query"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicDeviceStatus
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/device/status"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicDeviceStatusPublishPattern
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/device/status"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicFileTransferServer
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/ft/server"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicLogRemoteLevel
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp_log/{device_id}/set_level"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicLogStream
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "log/&#42;"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicLogStreamPublishPattern
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "log/{device_id}"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicOfflineLogCmd
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/offline_log/cmd"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicOfflineLogCmdAck
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/offline_log/cmd_ack"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicOfflineLogCmdRpc
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/offline_log/cmd_rpc"。
+ */
+
+/**
+ * @var dp::protocol::topics::kDpProtocolTopicOfflineLogFile
+ * @brief 静态topic模板或publish pattern；hash项无单位，字符串程序寿命。
+ *
+ * 通配订阅pattern与具体发布pattern不同；不进行字符串替换或创建任何ROS/Zenoh实体。
+原声明类型：constexpr const char *；初始化表达式：= "dp/{device_id}/offline_log/file"。
+ */

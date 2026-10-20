@@ -1,0 +1,15 @@
+# 从本目录运行：doxygen Doxyfile；只读取外部阅读页，不扫描产品或冻结IDL。
+PROJECT_NAME = "ROS frozen contracts data reading"
+OUTPUT_DIRECTORY = /tmp/ros-contracts-data-reading
+INPUT = .
+FILE_PATTERNS = *.dox
+RECURSIVE = NO
+EXTRACT_ALL = YES
+GENERATE_HTML = YES
+GENERATE_LATEX = NO
+GENERATE_XML = YES
+QUIET = YES
+WARNINGS = YES
+WARN_IF_UNDOCUMENTED = YES
+WARN_IF_DOC_ERROR = YES
+WARN_LOGFILE = /tmp/ros-contracts-data-reading-warnings.log

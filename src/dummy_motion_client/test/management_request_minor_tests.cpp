@@ -1,3 +1,9 @@
+/**
+ * @file management_request_minor_tests.cpp
+ * @brief 核WireManagementClient自动填写当前minor和permit绑定前提。
+ *
+ * 本地Transport只解码保存原请求，Handle永远Pending；成功submit仅本地准入，不代表远端接纳或运动许可。assert须启用。
+ */
 #include "dummy_motion_client/management_client.hpp"
 #include <algorithm>
 #include <cassert>
@@ -5,14 +11,35 @@
 namespace {
 namespace wire = dp::protocol::dummy_robot_v2;
 
+/**
+ * @brief 保存最后请求及是否成功解出当前schema minor的单线程夹具。
+ */
 struct Transport : dummy_motion_client::ManagementTransport {
+  /**
+   * @brief 永远无响应的最小句柄，不伪造管理终态。
+   */
   struct Handle : RequestHandle {
+    /**
+     * @brief 维持本地请求未完成。
+     * @return 空optional，无服务结果。
+     */
     std::optional<std::vector<std::uint8_t>> poll() override { return {}; }
   };
 
+  /**
+   * @brief send实际解码成功且minor==kSchemaMinor才置true；不是文件名推断。
+   */
   bool decoded_current_minor = false;
+  /**
+   * @brief 最后解码请求副本，用于核实际发出的request_seq及permit摘要。
+   */
   dummy_motion_client::ManageRequest sent{};
 
+  /**
+   * @brief 解码并保存提交bytes，只有当前minor可创建Handle。
+   * @param bytes 完整管理请求。
+   * @return 成功Handle，否则nullptr；不运行RPC。
+   */
   std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &bytes) override {
     dummy_motion_client::ManageRequest request;
     decoded_current_minor = wire::DummyManageV2RequestCodec::decode(
@@ -24,6 +51,11 @@ struct Transport : dummy_motion_client::ManagementTransport {
 };
 }  // namespace
 
+/**
+ * @brief permit字段逐项补齐前不得消耗首请求序号。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 缺compiled policy、operator确认或permit时长均submit0；完整后首seq仍1且摘要用实际发送seq计算。binding换boot后拒绝。普通默认request也必须由client补当前minor。
+ */
 int main() {
   Transport transport;
   dummy_motion_client::WireManagementClient client(transport);

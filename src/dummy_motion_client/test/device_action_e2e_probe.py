@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """Component-only C05 peer, real ros2_control hardware/JTC, and public FJT probe."""
+##
+# @file device_action_e2e_probe.py
+# @brief 实际ROS Gate/JTC与本机合成或DPSDK D08 peer的可运行组件探针。
+#
+# 入口会起peer/Gate/description进程、ROS服务/FJT目标及PTY原生桥或本机TCP。real指DPSDK实现POSIX peer，不是USB实物；严格SIL bundle是独立fixture pin，不等当前canonical/真实activation。synthetic完整矩阵、real单目标BENCH_RELEASE和smoke分支覆盖不同，证据仍无硬件资格。
 import json
 import hashlib
 from contextlib import contextmanager
@@ -28,18 +33,36 @@ OFFLINE_SIL_CONTRACT_SHA256 = "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89
 SIX_AXIS_TARGET = (0.007, -0.010, 0.013, -0.016, 0.019, -0.022)
 
 
+##
+# @brief spin至Future完成或timeout后assert，返回响应；done不代表业务结果ok。
+# @param node 真实rclpy Node，由本探针spin推进。
+# @param future rclpy异步Future，done后仍须外层核业务响应。
+# @param timeout 等待秒数，默认5；不是设备动作安全预算。
+# @return future.result()原值，超时assert。
 def wait_future(node, future, timeout=5):
     rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
     assert future.done(), "ROS response timeout"
     return future.result()
 
 
+##
+# @brief 创建临时ROS client、最多10s等服务再异步调用并等5s，调用方核响应语义；此helper未显式destroy_client。
+# @param node 真实rclpy Node，由本探针spin推进。
+# @param service_type ROS服务类型，用于创建client。
+# @param name 服务名或子进程日志名，按调用接口。
+# @param request 要实际发送的服务Request消息。
+# @return 异步服务响应原值，外层负责语义检查。
 def call(node, service_type, name, request):
     client = node.create_client(service_type, name)
     assert client.wait_for_service(timeout_sec=10), f"service missing: {name}"
     return wait_future(node, client.call_async(request))
 
 
+##
+# @brief 核v2.5 bundle每payload/排序聚合及固定OFFLINE_SIL pin，再按J1/六轴profile导能力；固件d8为fixture声明。
+# @param bundle 固定trusted_sil_bundle根Path，payload自洽还须strict pin。
+# @param profile_name 仅sil_j1或sil_6dof，默认J1。
+# @return 由固定fixture导出的能力字典，firmware d8为人工标记。
 def real_peer_capability(bundle, profile_name="sil_j1"):
     manifest = json.loads((bundle / "manifest.json").read_text())
     if (manifest.get("release_id"), manifest.get("schema_major"), manifest.get("schema_minor")) != ("dummy-wire-v2.5", 2, 5):
@@ -96,6 +119,11 @@ def real_peer_capability(bundle, profile_name="sil_j1"):
     }
 
 
+##
+# @brief 在已pin能力上仅允许显式20ms/50ms State周期候选，保原控制节奏/静态摘要，不重签或升级资格。
+# @param bundle 固定trusted_sil_bundle根Path，payload自洽还须strict pin。
+# @param profile_name 仅sil_j1或sil_6dof，默认J1。
+# @return 原能力或只覆写State周期的新字典。
 def fixture_capability(bundle, profile_name="sil_j1"):
     capability = real_peer_capability(bundle, profile_name)
     candidate = os.environ.get("DUMMY_E2E_STATE_PERIOD_US")
@@ -106,6 +134,10 @@ def fixture_capability(bundle, profile_name="sil_j1"):
     return {**capability, "state_publish_period_us": int(candidate)}
 
 
+##
+# @brief control_period_us须正int且整除1s，返回Hz；不从State发布周期推controller速率。
+# @param capability fixture能力字典，含静态摘要/设备界/周期，未赋实机资格。
+# @return 整数Hz。
 def controller_update_rate(capability):
     period_us = capability["control_period_us"]
     if not isinstance(period_us, int) or period_us <= 0 or 1000000 % period_us:
@@ -113,6 +145,12 @@ def controller_update_rate(capability):
     return 1000000 // period_us
 
 
+##
+# @brief 每50ms采三次平滑插值，位置从start到target；只核正时长/轴数一致，不做完整有限性/动态/碰撞验证。
+# @param start 标量或各轴起点rad。
+# @param target 标量或各轴终点rad，轴数需与start一致。
+# @param duration_s 正的整型秒数，代码以duration_s×20用于range；未额外归一float类型。
+# @return JointTrajectoryPoint列表，每点间隔50000000ns。
 def smooth_motion_points(start, target, duration_s=7):
     if duration_s <= 0:
         raise ValueError("trajectory duration must be positive")
@@ -134,6 +172,11 @@ def smooth_motion_points(start, target, duration_s=7):
     return points
 
 
+##
+# @brief 读现有JSONL过滤command并取最后limit条，缺文件空列表；未验证命令对应实体CAN发送。
+# @param path 输入/输出文件Path，具体读写及排他要求见函数职责。
+# @param limit 末尾command条数，默认8；调用方提供合适正整数。
+# @return 过滤后的末limit条command事件。
 def peer_command_tail(path, limit=8):
     if not path.is_file():
         return []
@@ -141,6 +184,12 @@ def peer_command_tail(path, limit=8):
     return [event for event in events if event.get("event") == "command"][-limit:]
 
 
+##
+# @brief 逐轴只核末command距target<0.001rad、末actual距target<0.002rad；不是全路径误差或raw链校验。
+# @param feedback 实际FJT反馈message列表，不是设备raw页链。
+# @param commands peer日志的已接受command字典列表。
+# @param target 标量或各轴终点rad，轴数需与start一致。
+# @return None；末点缺轴/误差超界触发assert。
 def validate_six_axis_evidence(feedback, commands, target):
     assert feedback and commands, "six-axis feedback or commands missing"
     for axis, expected in enumerate(target):
@@ -150,10 +199,20 @@ def validate_six_axis_evidence(feedback, commands, target):
             f"axis {axis + 1} feedback target missing"
 
 
+##
+# @brief smoke/real_smoke J1用0.02rad，完整默认0.05rad；六轴调用方另用SIX_AXIS_TARGET。
+# @param mode synthetic/real/smoke等入口模式字符串。
+# @return 0.02或0.05rad。
 def first_goal_target(mode):
     return 0.02 if mode in ("real_smoke", "smoke") else 0.05
 
 
+##
+# @brief 生成最小1或6轴ros2_control XML，注入能力与Guarded插件；起始值0、State1s/heartbeat250ms是组件fixture预算。
+# @param endpoint host使用的本机serial PTY或TCP地址；非设备activation身份。
+# @param capability fixture能力字典，含静态摘要/设备界/周期，未赋实机资格。
+# @param joint_count 仅1或6，决定URDF关节/掩码。
+# @return 最小组件URDF XML字符串，不写文件或激活插件。
 def urdf(endpoint, capability=None, joint_count=1):
     capability = capability or {
         "contract_sha256": "01" * 32, "model_sha256": "02" * 32,
@@ -198,6 +257,10 @@ def urdf(endpoint, capability=None, joint_count=1):
 </hardware>{controls}</ros2_control></robot>'''
 
 
+##
+# @brief 只接受名为dummy_ref_d08_device_peer且存在可执行的路径，不搜索其它构建profile兜底，也不验证二进制SHA。
+# @param peer 要运行的POSIX peer可执行路径。
+# @return 输入peer Path原值，检查不符抛异常。
 def validate_peer_fixture(peer):
     if peer.name != "dummy_ref_d08_device_peer":
         raise ValueError(f"DPSDK D08 peer fixture must be dummy_ref_d08_device_peer: {peer}")
@@ -210,6 +273,9 @@ def validate_peer_fixture(peer):
     return peer
 
 
+##
+# @brief 显式ROS_DOMAIN_ID限制0..232，否则100+PID模100；不保证全系统域唯一。
+# @return 合法域ID十进制字符串。
 def selected_ros_domain_id():
     configured = os.environ.get("ROS_DOMAIN_ID")
     if configured is not None:
@@ -220,6 +286,9 @@ def selected_ros_domain_id():
     return str(100 + os.getpid() % 100)
 
 
+##
+# @brief 显式DUMMY_SERIAL_BRIDGE_EXECUTABLE优先，否则固定build_dummy原生PTY桥路径；不在此构建/核SHA。
+# @return 桥可执行Path，未检查文件存在。
 def serial_bridge_executable():
     configured = os.environ.get("DUMMY_SERIAL_BRIDGE_EXECUTABLE")
     if configured:
@@ -227,6 +296,11 @@ def serial_bridge_executable():
     return pathlib.Path(__file__).resolve().parents[3] / "build_dummy/dummy_motion_client/serial_pty_bridge"
 
 
+##
+# @brief 真实建两对PTY与原生bridge子进程，READY后yield两serial端点；退出stop→terminate→kill有限升级并关四fd/收诊断。
+# @param diagnostics 可变桥统计字典，正常退出时更新；None新建内部dict。
+# @param gap_threshold_us 记录长块间隙的阈值µs，默认100000。
+# @return yield(host serial端点, peer serial端点)，退出回收桥及四PTY fd。
 @contextmanager
 def serial_peer_endpoints(diagnostics=None, gap_threshold_us=100000):
     host_master, host_slave = pty.openpty()
@@ -268,6 +342,9 @@ def serial_peer_endpoints(diagnostics=None, gap_threshold_us=100000):
             for descriptor in (host_master, host_slave, peer_master, peer_slave):
                 os.close(descriptor)
 
+##
+# @brief 按argv模式及serial/tcp选择实际运行；serial可排他写latency报告，synthetic六轴失败也保INCOMPLETE trace再重抛。
+# @return None；执行真实探针/打印报告，异常重抛。
 def main():
     gate, peer, bundle = (pathlib.Path(value).resolve() for value in sys.argv[1:4])
     mode = sys.argv[4] if len(sys.argv) > 4 else "synthetic"
@@ -316,6 +393,21 @@ def main():
         raise ValueError(f"unsupported DUMMY_E2E_TRANSPORT: {transport}")
 
 
+##
+# @brief 真实启动组件并显式Enable/激活/JTC/FJT；unsupported验证零变更，smoke/六轴早退，real只核首目标及禁止第二/软件Release，synthetic才走续permit/Cancel/Abort。
+# @param gate device_action_gate可执行Path。
+# @param peer 要运行的POSIX peer可执行路径。
+# @param bundle 固定trusted_sil_bundle根Path，payload自洽还须strict pin。
+# @param unsupported true测试合成peer motion_supported=false的零变更拒绝路径。
+# @param real_peer true运行DPSDK D08 POSIX peer；false合成C05 peer，不表示实体硬件。
+# @param capability fixture能力字典，含静态摘要/设备界/周期，未赋实机资格。
+# @param endpoint host使用的本机serial PTY或TCP地址；非设备activation身份。
+# @param peer_endpoint peer使用的另一PTY端或同本机TCP地址。
+# @param first_target 单轴首目标rad；六轴模式使用独立SIX_AXIS_TARGET。
+# @param smoke true首成功后做简短断言并提前结束，不覆盖完整取消/中止矩阵。
+# @param six_axis true用六轴profile1/mask63及互异带符号目标，否则J1 profile2/mask1。
+# @param trace_capture 可选共享list，异常时保留已解析peer/Host trace，缺阶段不升级合格。
+# @return synthetic六轴成功返回peer标记列表；其它分支None，结果主经stdout JSON报告。
 def run_probe(gate, peer, bundle, unsupported, real_peer, capability, endpoint, peer_endpoint,
               first_target, smoke, six_axis=False, trace_capture=None):
     profile_name = "sil_6dof" if six_axis else "sil_j1"
@@ -352,6 +444,12 @@ def run_probe(gate, peer, bundle, unsupported, real_peer, capability, endpoint, 
         configuration.write_text(yaml.safe_dump(params))
         logs = {}
 
+        ##
+        # @par 内部回调 launch
+        # 为每个自有子进程建临时log、Popen并登记processes，最终逆序清理；不启动独立进程组。
+        # 参数 name：服务名或子进程日志名，按调用接口。
+        # 参数 command：要实际Popen的argv；包装器不替调用方审查硬件副作用。
+        # 返回：已登记的Popen对象。
         def launch(name, command):
             log = open(directory / f"{name}.log", "a+")
             logs[name] = log
@@ -493,6 +591,14 @@ def run_probe(gate, peer, bundle, unsupported, real_peer, capability, endpoint, 
                 rclpy.shutdown()
                 return
 
+            ##
+            # @par 内部回调 send
+            # 在当前公开Action上真实提交单轴平滑轨迹，收集回调并返回handle/stream；可注入极小path容差触发abort。
+            # 参数 start：标量或各轴起点rad。
+            # 参数 target：标量或各轴终点rad，轴数需与start一致。
+            # 参数 duration：send内部轨迹秒数，默认7。
+            # 参数 tolerance：可选J1 path tolerance rad，None用默认，极小值用于abort刺激。
+            # 返回：(Action handle, 后续继续追加的feedback list)。
             def send(start, target, duration=7, tolerance=None):
                 motion = FollowJointTrajectory.Goal()
                 motion.trajectory.joint_names = ["Joint1"]
@@ -530,6 +636,10 @@ def run_probe(gate, peer, bundle, unsupported, real_peer, capability, endpoint, 
                 rclpy.shutdown()
                 return
 
+            ##
+            # @par 内部回调 renew_permit
+            # 十秒共同预算内等SetPermit接纳再poll bootstrap成功；是组件会话交互，不恢复旧目标许可或提供硬件授权。
+            # 返回：None；十秒内未确认则AssertionError。
             def renew_permit():
                 renewal_deadline = time.monotonic() + 10
                 while time.monotonic() < renewal_deadline:
@@ -590,6 +700,9 @@ def run_probe(gate, peer, bundle, unsupported, real_peer, capability, endpoint, 
             assert sequences == sorted(set(sequences)), "producer generations repeated or regressed"
             ticket_count = len({event["freshness_ticket"] for event in commands})
             assert ticket_count > 20, "peer did not rotate freshness tickets during motion"
+            ##
+            # @par 历史终态扫描边界
+            # 上方expected_operations不含13且已断言相等，所以通过该表检查时下方op13扫描列表为空；不能把此循环当当前op8 Complete冻结的独立覆盖。
             frozen = []
             for index, event in enumerate(events):
                 if event["event"] != "manage" or event["operation"] != 13:

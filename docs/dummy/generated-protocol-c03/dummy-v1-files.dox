@@ -1,0 +1,26 @@
+/**
+ * @file dp_dummy_robot_v1.hpp
+ * @brief 与正式旧v1 raw生成头SHA相同的C03副本，schema1.0和Status297/Command125/State356/Manage233/618 bytes；不等portable TLV布局或当前v2资格。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_dummy_robot_v1.hpp
+原始SHA-256：e9c04f74bd73edcf5721401c3f2c35217ed9eed528e808fea0870fa56dcc8951
+原始行数：2603。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_dummy_robot_v1_dp_comm.hpp
+ * @brief 与旧v1 raw适配头SHA相同的C03副本，保留独立INPUT避免与其它profile同名特化/服务混淆。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_dummy_robot_v1_dp_comm.hpp
+原始SHA-256：b7959cff2853c32a4405aeff13b0ee1b4fdf1e9e5eb05f1b797a8598bb4e6743
+原始行数：84。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_dummy_robot_v1_static_requirements.h
+ * @brief 与旧v1 raw容量头SHA相同的C03副本，max_message618/服务请求响应各1；条件检查不分配资源。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_dummy_robot_v1_static_requirements.h
+原始SHA-256：b72871ece7fe611e8111f99deefac7d1f9f08f994470b06dad166b008c89fce0
+原始行数：18。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */

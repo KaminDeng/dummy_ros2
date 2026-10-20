@@ -1,4 +1,8 @@
 #!/usr/bin/python3
+##
+# @file planning_probe.py
+# @brief 通过只读 MoveIt 服务验证规划、逆解与公共场景一致性。
+# 不向 action 控制器发送轨迹，也不直接打开 USB；读取 /joint_states 比较调用前后 Joint1 变化。服务成功、返回完整路径与是否产生运动分别报告，单个布尔字段不是完整硬件安全证明。
 """Read-only MoveIt planning service probe for R05 acceptance."""
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ from std_msgs.msg import Header
 import yaml
 
 
+##
+# 测试固定六轴轴序与 START 都使用 rad；SOURCE_* 优先源码资源，不存在时从 ament 已安装包定位。
 JOINT_NAMES = tuple(f"Joint{index}" for index in range(1, 7))
 START = (0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0)
 SOURCE_MODEL = Path(__file__).resolve().parents[3] / "contracts/dummy_robot_v2/model/model.yaml"
@@ -47,6 +53,11 @@ if not SCENE.is_file():
     WORLD = Path(get_package_share_directory("dummy_moveit_config")) / "worlds/empty.sdf"
 
 
+##
+# @brief 按契约模型轴序和 model_limits_rad 检查六轴目标。
+# 每次读取 MODEL；契约轴序与 ROS 轴集不一致时抛 ValueError，不默默重排。这里的模型限位不同于面板为停车余量内收的工作范围。
+# @param positions 按 Joint1..Joint6 排列的六轴角度，rad。
+# @return bool：维数、有限性及逐轴模型限位均符合要求。
 def validate_joint_target(positions: tuple[float, ...]) -> bool:
     if len(positions) != len(JOINT_NAMES) or any(not math.isfinite(value) for value in positions):
         return False
@@ -59,6 +70,15 @@ def validate_joint_target(positions: tuple[float, ...]) -> bool:
     )
 
 
+##
+# @brief 等待一个 MoveIt 服务并有界读取响应。
+# 不可用、等待未完成或 future 异常抛 RuntimeError；本函数不提交执行 action，也不因超时自动撤销远端计算。
+# @param node 负责创建客户端及 spin 的 ROS 节点。
+# @param service_type 对应 ROS 服务类型。
+# @param name 完整服务名。
+# @param request 该服务的 Request 对象。
+# @param timeout 等待服务和等待响应分别使用的秒数，默认 15。
+# @return 响应对象：future.result()。
 def call(node: Node, service_type, name: str, request, timeout: float = 15.0):
     client = node.create_client(service_type, name)
     if not client.wait_for_service(timeout_sec=timeout):
@@ -70,9 +90,21 @@ def call(node: Node, service_type, name: str, request, timeout: float = 15.0):
     return future.result()
 
 
+##
+# @brief 临时订阅并取得至少一个 Joint1 位置。
+# finally 销毁临时订阅；无样本抛 RuntimeError。截止使用 node.get_clock()，若使用仿真时间且时钟暂停，宿主等待可能长于给定秒数。
+# @param node 负责订阅和 ROS 时钟截止判断的节点。
+# @param timeout ROS 节点时钟中的超时秒数，默认 8。
+# @return float：最后收到的 Joint1 位置 rad。
 def joint_sample(node: Node, timeout: float = 8.0) -> float:
     samples: list[float] = []
 
+    ##
+    # @par 内部回调 joint_sample.observe
+    # 按消息名称提取 Joint1 样本。
+    # 只要求 Joint1 名称存在；不在本回调核对完整六轴或消息时间戳。
+    # 参数 message：JointState，位置 rad。
+    # 返回：None；执行上述状态更新、界面或日志操作。
     def observe(message: JointState) -> None:
         if "Joint1" in message.name:
             samples.append(message.position[message.name.index("Joint1")])
@@ -89,6 +121,11 @@ def joint_sample(node: Node, timeout: float = 8.0) -> float:
         node.destroy_subscription(subscription)
 
 
+##
+# @brief 构造从固定 START 到合法六轴目标的只规划请求。
+# 目标容差 0.001 rad，最多两次尝试、5 s 规划时间，速度/加速度缩放均为 0.1。START 是测试固定姿态，不自动使用实机当前位置；返回路径不会自动执行。
+# @param goal 完整六轴目标 rad，必须通过契约模型范围检查。
+# @return GetMotionPlan.Request：dummy_arm 的关节约束请求。
 def motion_request(goal: tuple[float, ...]) -> GetMotionPlan.Request:
     if not validate_joint_target(goal):
         raise ValueError("target is outside the C02 joint limits")
@@ -119,6 +156,11 @@ def motion_request(goal: tuple[float, ...]) -> GetMotionPlan.Request:
     )
 
 
+##
+# @brief 以固定随机种子寻找接触 planning_barrier 的状态。
+# 在契约模型限位内生成候选，检查 contacts 中对象名称；单纯 invalid 但未指向 barrier 不算命中。所有请求只计算状态有效性。
+# @param node 用于调用 GetStateValidity 的 ROS 节点。
+# @return tuple 或 None：首次被报告接触 barrier 的六轴 rad；160 个候选均未命中则 None。
 def find_barrier_collision(node: Node) -> tuple[float, ...] | None:
     model = yaml.safe_load(MODEL.read_text())["joints"]
     generator = random.Random(20260914)
@@ -146,6 +188,11 @@ def find_barrier_collision(node: Node) -> tuple[float, ...] | None:
     return None
 
 
+##
+# @brief 比较首个公共场景对象与 MoveIt/Gazebo 文件几何。
+# 只比较 YAML 第一个对象；MoveIt 部分接受 world/base_link，核对 primitive 尺寸与 object.pose 位置，未比较完整场景或旋转。世界文件部分按原始 pose 和 size 列表比较；不是完整几何等价证明。
+# @param node 用于 GetPlanningScene 的 ROS 节点。
+# @return tuple[bool,bool]：规划场景尺寸/位置匹配，以及同时具有 scene_revision 且世界文件匹配。
 def scene_matches_canonical(node: Node) -> tuple[bool, bool]:
     canonical = yaml.safe_load(SCENE.read_text())
     expected = canonical["objects"][0]
@@ -186,6 +233,11 @@ def scene_matches_canonical(node: Node) -> tuple[bool, bool]:
     return planning_matches, bool(canonical.get("scene_revision")) and planning_matches and world_matches
 
 
+##
+# @brief 从固定 START 做 FK，再对 Y 偏移 5 mm 的目标做避碰 IK。
+# FK 失败立即返回其错误码和 False；IK 解按 Joint1..6 重排，缺轴用 NaN 使范围检查失败。IK 超时为服务侧 2 s，不执行运动。
+# @param node 用于 FK 和 IK 服务请求的 ROS 节点。
+# @return tuple[int,bool]：FK/IK 错误码和逆解是否位于契约模型范围。
 def solve_nearby_pose(node: Node) -> tuple[int, bool]:
     state = RobotState(joint_state=JointState(name=list(JOINT_NAMES), position=list(START)))
     fk = call(
@@ -222,6 +274,10 @@ def solve_nearby_pose(node: Node) -> tuple[int, bool]:
     return ik.error_code.val, validate_joint_target(solution)
 
 
+##
+# @brief 构造目标远离机械臂工作区的笛卡尔路径请求。
+# max_step=0.01 m、避碰开启，速度和加速度比例 0.1；用于观察不可达路径 fraction，不调用执行接口。
+# @return GetCartesianPath.Request：base 起点 START、末端 link6_1_1、X=5 m 的目标。
 def cartesian_request() -> GetCartesianPath.Request:
     far_pose = Pose()
     far_pose.position.x = 5.0
@@ -240,6 +296,11 @@ def cartesian_request() -> GetCartesianPath.Request:
     )
 
 
+##
+# @brief 顺序执行规划、越界、不可达、障碍和逆解观测。
+# 越界目标先在本地拒绝，不发送该目标的规划服务。trajectory_executed 仅表示两次 Joint1 样本差超过 0.005 rad 的观测启发式，不能定位运动来源或覆盖其他轴。
+# @param node 已可访问相应 MoveIt 服务和关节状态的节点。
+# @return dict：各服务错误码、完整路径点数、场景匹配、逆解范围与调用前后 Joint1 rad。
 def run(node: Node) -> dict[str, int | float | bool]:
     initial = joint_sample(node)
     valid = call(node, GetMotionPlan, "/plan_kinematic_path", motion_request((0.15,) + START[1:]))
@@ -274,6 +335,10 @@ def run(node: Node) -> dict[str, int | float | bool]:
     }
 
 
+##
+# @brief 创建探针节点并输出只读规划观测报告。
+# 要求 --report；finally 销毁节点并关闭 ROS 上下文，其他输入/文件异常继续传播。
+# @return int：成功 0，RuntimeError 表示运行服务条件未满足时为 3。
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", type=Path, required=True)

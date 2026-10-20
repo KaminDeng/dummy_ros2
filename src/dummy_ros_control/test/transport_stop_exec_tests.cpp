@@ -1,3 +1,10 @@
+/**
+ * @file transport_stop_exec_tests.cpp
+ * @brief 跨exec重启Host复用合成peer缓存，检查Stop旧终态重放隔离。
+ *
+ * 复用transport_component_tests.cpp的本地主机/PTY/peer夹具；不表示连接真实MCU。每轮Host使用execl建立新进程，防止依赖继承的Stop ID生成状态。
+ * 本轮注释维护只静态核对，不启动该peer/PTY集成程序。
+ */
 // 复用现有 PTY、真实 pico peer 和 Host 行为断言；旧 restart 用例仅覆盖同进程。
 #include <sys/mman.h>
 #include <new>
@@ -5,6 +12,15 @@
 #include "transport_component_tests.cpp"
 #undef main
 
+/**
+ * @brief 运行三轮Stop构建缓存、拒绝旧终态、确认当前请求的集成夹具。
+ *
+ * host子命令模式要求argc=8并委托run_parent；顶层创建PTY和共享mmap缓存，持久peer进程内每轮再fork连接worker。
+ * 错误路径杀进程组/等待子进程；正常路径逐轮消费旧通知并标Stimulus.done，避免上轮字节跨入下一轮。
+ * @param argc 命令行参数个数（含程序名）。
+ * @param argv 命令行字符串数组，具体位置见上述调用约定。
+ * @return 0 表示本文件全部检查通过；非零定位失败检查。
+ */
 int main(int argc, char **argv) {
   if (argc == 8 && std::strcmp(argv[1], "host") == 0) {
     replayed_stop_host = std::strcmp(argv[6], "replay") == 0;
@@ -19,6 +35,10 @@ int main(int argc, char **argv) {
   if (!bridge.open_pair()) return 1;
   int requests[2]{}, responses[2]{}, stops[2]{};
   if (::pipe(requests) || ::pipe(responses) || ::pipe(stops)) return 2;
+  /**
+   * @brief MAP_SHARED匿名区保存合成设备层Stop缓存，跨fork worker存活。
+   * Host走exec不继承生成器状态，peer缓存仍保持，从而实际覆盖跨Host进程的旧operation重放。
+   */
   void *cache_memory = ::mmap(nullptr, sizeof(PersistentStopCache),
       PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (cache_memory == MAP_FAILED) return 10;
@@ -32,6 +52,10 @@ int main(int argc, char **argv) {
     ::close(requests[1]); ::close(responses[0]); ::close(stops[0]);
     for (unsigned round = 0U; round < 3U; ++round) {
       // serial 握手需要两端同时 init，必须在 context init 前放行 fresh Host。
+      /**
+       * @brief 先通知fresh Host再初始化串行context，确保握手两端并发进入。
+       * 若在通知前单边等待context初始化，测试可能死锁而无法检验Stop语义。
+       */
       if (::write(responses[1], "R", 1) != 1) ::_exit(8);
       const auto worker = ::fork();
       if (worker < 0) ::_exit(11);
@@ -61,6 +85,10 @@ int main(int argc, char **argv) {
       const auto output = std::to_string(requests[1]);
       const auto stop_input = std::to_string(stops[0]);
       const auto round_arg = std::to_string(round);
+      /**
+       * @brief 用/proc/self/exe重建Host进程；第2轮标replay，其余current。
+       * execl失败以127退出，由父进程转为该轮失败，不能继续当作成功host。
+       */
       ::execl("/proc/self/exe", argv[0], "host", bridge.endpoint(1).c_str(),
           input.c_str(), output.c_str(), stop_input.c_str(),
           round == 1U ? "replay" : "current", round_arg.c_str(), nullptr);

@@ -1,4 +1,9 @@
 """R06 adapter combining the shared DPSDK core with ROS-owned gates."""
+##
+# @file r06.py
+# @brief 共享RobotCore组件、ROS组件及跨进程Action的R06证据适配器。
+#
+# run入口可实际执行上游adapter、已建组件、DPSDK POSIX peer E2E，ROS06还可启动Gazebo并发公开Action。real_dpsdk_peer指真实DPSDK实现的本机POSIX peer，不等同实体USB/机械臂。模块缓存使后续case可能复用本进程先前观测。
 
 from __future__ import annotations
 
@@ -35,11 +40,18 @@ ENGINE_FIELDS = {
     "STOP02": ("engine_stop_timeout_aborted", "stop_timeout_aborted"),
     "STOP09": ("engine_late_generation_accepted", "late_generation_accepted"),
 }
+##
+# @par 进程内缓存
+# 原生Action、合成peer E2E及DPSDK peer E2E各缓存一次，不绑定后续源码变化/新启动身份；复用缓存不算每case新跑设备。
 _ACTION_OBSERVATIONS: dict[str, Any] | None = None
 _DEVICE_E2E_OBSERVATIONS: dict[str, Any] | None = None
 _REAL_DEVICE_E2E: dict[str, Any] | None = None
 
 
+##
+# @brief 从显式DPSDK_ROOT按路径动态执行上游d04/d05模块，不构建其代码。
+# @param name 上游adapter基名，调用方使用d04/d05。
+# @return 已执行模块顶层定义的上游模块对象。
 def _load_upstream_adapter(name: str):
     path = DPSDK_ROOT / "applications/dummy_ref_control/tools/dummy_ref_tools/tests/dummy_test_support/adapters" / f"{name}.py"
     if not path.is_file():
@@ -52,6 +64,10 @@ def _load_upstream_adapter(name: str):
     return module
 
 
+##
+# @brief 执行上游Core case，按ENGINE_FIELDS补ROS engine/wire组件，MOV04另补Complete组件；组合摘要仍为组件证据。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 上游结果及补充组件观测/组合摘要。
 def _core_case(case_id: str) -> dict[str, Any]:
     suite = "d04" if case_id == "AUTH02" else "d05"
     upstream = _load_upstream_adapter(suite).run_case(
@@ -84,6 +100,11 @@ def _core_case(case_id: str) -> dict[str, Any]:
     return {**upstream, "observations": values}
 
 
+##
+# @brief 要求codec与build_dummy组件存在，source ROS环境后运行二进制≤20s，取stdout最后JSON并哈希所列源码。
+# @param name build_dummy/dummy_motion_client下既有组件二进制名。
+# @param arguments 传给Git/组件的原样argv，是否可变参数见函数签名。
+# @return 执行标志、当前源码摘要、运行trace摘要及最后JSON。
 def _component(name: str, arguments: list[str]) -> dict[str, Any]:
     codec = DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp"
     if not codec.is_file():
@@ -115,6 +136,10 @@ def _component(name: str, arguments: list[str]) -> dict[str, Any]:
     }
 
 
+##
+# @brief 运行LOCAL_CASES对应组件，MOV13/14把case作为参数，补component范围声明；成功执行不等同跨进程设备Action。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 附component scope的执行结果。
 def _local_case(case_id: str) -> dict[str, Any]:
     result = _component(LOCAL_CASES[case_id], [case_id] if case_id in {"MOV13", "MOV14"} else [])
     return {**result, "observations": {**result["observations"], "case_id": case_id,
@@ -122,6 +147,10 @@ def _local_case(case_id: str) -> dict[str, Any]:
             "evidence_scope": "ROS component; no cross-process device action"}}
 
 
+##
+# @brief 首次经公开Action预置0.1rad，再跑Action probe；server缺失可自启Gazebo，后续case复用缓存，不直接写仿真关节状态。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 缓存或新运行Action观测对应的PASS/FAIL结果。
 def _action_case(case_id: str) -> dict[str, Any]:
     global _ACTION_OBSERVATIONS
     probe = ROOT / "src/dummy_bringup/scripts/action_gate_probe.py"
@@ -152,6 +181,9 @@ finally:
                                  check=False, timeout=30)
         launched = None
         launch_log = None
+        ##
+        # @par 有副作用的兜底启动
+        # 只有预置Action报server unavailable才自启Gazebo；随后反复通过同一公开Action将J1置0.1rad，不直接覆写仿真状态。
         if prepare.returncode and "public action server unavailable" in prepare.stderr:
             launch_log = tempfile.TemporaryFile(mode="w+")
             launched = subprocess.Popen(
@@ -186,6 +218,9 @@ finally:
             if run.returncode or not report.is_file():
                 raise RuntimeError(f"live action probe failed ({run.returncode}):\n{run.stdout}{run.stderr}")
             _ACTION_OBSERVATIONS = json.loads(report.read_text())
+        ##
+        # @par 清理覆盖
+        # 本段在正常probe成功后才执行；前置失败分支另有terminate/wait。整个流程不是finally保护，probe运行/解析异常可越过后续清理。
         if launched:
             launched.terminate()
             try:
@@ -225,9 +260,17 @@ finally:
     }
 
 
+##
+# @brief 名称为历史保留：实际调用_real_device_e2e，E2E PASS则整体PASS/executed，否则NOT_RUN并保留component证据。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param component 先前组件结果，含源码/trace摘要和observations。
+# @return PASS或NOT_RUN包装结果；source/trace SHA仍取component，真实E2E放独立字段。
 def _device_not_run(case_id: str, component: dict[str, Any]) -> dict[str, Any]:
     real = _real_device_e2e()
     values = component["observations"]
+    ##
+    # @par 组件与跨进程证据
+    # 真实DPSDK peer结果单列；最外层sut_source_sha256/trace_sha256仍复制component，不能宣称它们已摘要绑定整个E2E产物。
     real_passed = real.get("status") == "PASS"
     return {
         "case_id": case_id, "executed": real_passed,
@@ -243,6 +286,9 @@ def _device_not_run(case_id: str, component: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+##
+# @brief 可运行device_action_gate+c05合成peer探针并缓存component_only观测；本文件run_r06_case当前分派未调用该helper。
+# @return 缓存的component_only观测；失败带executed=False/reason。
 def _device_e2e_component() -> dict[str, Any]:
     global _DEVICE_E2E_OBSERVATIONS
     if _DEVICE_E2E_OBSERVATIONS is not None:
@@ -276,6 +322,9 @@ def _device_e2e_component() -> dict[str, Any]:
     return _DEVICE_E2E_OBSERVATIONS
 
 
+##
+# @brief 运行device_action_gate与DPSDK已建D08 POSIX peer的60s跨进程探针，须成功≥2/取消≥1/中止≥1才PASS，失败归NOT_RUN缓存。
+# @return 缓存的real_dpsdk_peer PASS或NOT_RUN字典，不是实体硬件结果。
 def _real_device_e2e() -> dict[str, Any]:
     global _REAL_DEVICE_E2E
     if _REAL_DEVICE_E2E is not None:
@@ -309,6 +358,11 @@ def _real_device_e2e() -> dict[str, Any]:
     return _REAL_DEVICE_E2E
 
 
+##
+# @brief 严格校验stimulus；Core/local都再经_real_device_e2e门，ROS06走live原生Action，其它case拒绝。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r06_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     expected = {"case_id": case_id, "hardware": "none", "test_only": True}
     if stimulus != expected:

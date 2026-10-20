@@ -1,3 +1,6 @@
+# @file moveit.rviz
+# @brief 通用MoveIt MotionPlanning插件布局，保存显示话题、坐标系及窗口状态。
+# 侧栏面板与展开状态属于GUI布局，不是机器人模型或设备参数。
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -8,6 +11,7 @@ Panels:
     Name: Help
   - Class: rviz_common/Views
     Name: Views
+# 显示插件从话题/参数读取模型和场景；加载插件不等于底层服务/状态已经就绪。
 Visualization Manager:
   Displays:
     - Class: rviz_default_plugins/Grid
@@ -15,6 +19,7 @@ Visualization Manager:
       Value: true
     - Class: moveit_rviz_plugin/MotionPlanning
       Name: MotionPlanning
+# 显示规划轨迹与循环动画；这里看到的虚拟轨迹不证明实际执行，Scene Robot/实际关节反馈还要另外观察。
       Planned Path:
         Loop Animation: true
         State Display Time: 0.05 s
@@ -26,13 +31,16 @@ Visualization Manager:
       Scene Robot:
         Robot Alpha: 0.5
       Value: true
+# Fixed Frame是渲染统一坐标系；必须能通过TF连接各显示源，改它不会改变设备机械零点。
   Global Options:
     Fixed Frame: world
+# 交互、相机与选择等工具；若工具配置了话题，点击时可发布相应ROS消息，但不直接建立DPSDK运动授权。
   Tools:
     - Class: rviz_default_plugins/Interact
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/Select
   Value: true
+# Orbit距离/焦点/角度只控制摄像机视角；角度不能当成Joint1至Joint6目标。
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
@@ -45,6 +53,7 @@ Visualization Manager:
       Pitch: 0.5
       Target Frame: world
       Yaw: -0.623
+# 窗口大小、位置与Qt序列化布局；QMainWindow State长串是GUI状态，不是固件、编码器或运动证据。
 Window Geometry:
   Height: 975
   QMainWindow State: 000000ff00000000fd0000000100000000000002b400000375fc0200000005fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb000000100044006900730070006c006100790073010000003d00000123000000c900fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e00670100000166000001910000018800fffffffb0000000800480065006c0070000000029a0000006e0000006e00fffffffb0000000a0056006900650077007301000002fd000000b5000000a400ffffff000001f60000037500000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000

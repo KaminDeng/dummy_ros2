@@ -1,5 +1,16 @@
+/**
+ * @file management_client_tests.cpp
+ * @brief 核管理操作值追踪器中Queued、Accepted和结果关联ID。
+ *
+ * 不实例化wire传输或设备；所有ID用大于2^53的uint64夹具验证精度/逻辑关联，不能以Queued产生operation_id。
+ */
 #include "dummy_motion_client/action_coordinator.hpp"
 
+/**
+ * @brief 只允许原request接受正确operation，再只接受该operation结果。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * Queued的receipt仍kQueued/statusWaiting/op0；错误request接受或错误operation结果返回空；精确operation后结果才Succeeded。
+ */
 int main() {
   using dummy_motion_client::ManagementOperationTracker;
   using dummy_motion_client::OperationStatus;

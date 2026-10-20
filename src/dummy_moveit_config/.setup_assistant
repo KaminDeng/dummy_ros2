@@ -1,3 +1,7 @@
+# @file .setup_assistant
+# @brief MoveIt Setup Assistant的历史生成来源/包作者和控制接口记录。
+# @details 这里有两段同名control_xacro且内容相同，原结构保留；按当前YAML读取器最后同名映射生效。它不是实机许可或运行期参数总表。
+# 本节点下记录URDF来源包/路径、SRDF路径及生成元数据；时间戳是历史生成时间，不是当前构建时间。
 moveit_setup_assistant_config:
   urdf:
     package: dummy-ros2_description
@@ -14,6 +18,7 @@ moveit_setup_assistant_config:
     state:
       - position
       - velocity
+# 记录生成时插入的control_xacro名；实际控制接口定义仍在对应Xacro文件中，不能仅凭记录认定已启动硬件。
   modified_urdf:
     xacros:
       - control_xacro

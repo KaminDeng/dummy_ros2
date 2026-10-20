@@ -1,8 +1,12 @@
+# @file initial_positions.yaml
+# @brief mock/Gazebo初始位置，六轴按rad给出；不是实测状态、机械校准或运行期Home命令。
 # Default initial positions for dummy-ros2's ros2_control fake system
 
+# 控制Xacro按此键取映射；Joint3=π/2，对应本仿真默认Home形态。
 initial_positions:
   Joint1: 0
   Joint2: 0
+# 只有第三轴默认90°，其余为0；不要将这些初始化值写回真机来假造编码器零点。
   Joint3: 1.5707963267948966
   Joint4: 0
   Joint5: 0

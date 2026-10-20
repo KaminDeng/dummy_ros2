@@ -1,3 +1,11 @@
+/**
+ * @file raw_evidence_collector_tests.cpp
+ * @brief 离线验证原始证据收集器的哈希链、文件writer和共享回执边界。
+ *
+ * 页面和管理帧全部由本文件合成；SHA-256在夹具端按规范前缀重算，避免篡改正文却意外只测试坏hash。
+ * 测试涉及本地临时文件、writer线程、并发reader和fork隔离的文件大小限制；不连接peer或操作硬件。
+ * 所有offer的接收时间是人工Host µs，与设备Source时钟无映射关系。first-page-written/terminal-flushed是采集文件写入/flush回执，不表示电机运动完成、物理停止或管理release提交。
+ */
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -25,6 +33,10 @@ using dummy_ros_control::RawEvidencePage;
 namespace wire = dp::protocol::dummy_robot_v2;
 
 namespace {
+/**
+ * @brief 建立固定采集信任锚；client和四种hash首字节故意各异。
+ * @return 其余字节为零的测试身份，不是已部署设备真实身份。
+ */
 RawEvidenceIdentity identity() {
   RawEvidenceIdentity value{};
   value.client_id[0] = 1U;
@@ -35,6 +47,13 @@ RawEvidenceIdentity identity() {
   return value;
 }
 
+/**
+ * @brief 按小端run/boot和信任身份组成192字节genesis输入并求SHA-256。
+ * @param trust 本次采集使用的client/contract/model/profile/firmware锚。
+ * @param run 逻辑attempt/run标识，非时间。
+ * @param boot 设备启动代次，非主机进程号。
+ * @return 固定32字节链起点；尾部未写入区保持零填充。
+ */
 std::array<std::uint8_t, 32U> genesis(const RawEvidenceIdentity &trust,
                                        std::uint64_t run, std::uint64_t boot) {
   std::array<std::uint8_t, 192U> input{};
@@ -52,6 +71,21 @@ std::array<std::uint8_t, 32U> genesis(const RawEvidenceIdentity &trust,
   return result;
 }
 
+/**
+ * @brief 同时生成页面元数据与可解码wire正文，并计算当前链摘要。
+ * @param run 写入run_id和attempt_id的同一运行标识。
+ * @param seq 此run内证据序号，首个页面应为0。
+ * @param previous 前一页摘要；首个页面使用genesis。
+ * @param terminal true生成category=4终态，false生成category=2组页。
+ * @param group_count 报告组数；UINT32_MAX选择夹具默认（无组的首终态为0，否则1）。
+ * @param final_flag 页面final位，不等于运动完成标志。
+ * @param kind attempt_kind夹具值，默认为1。
+ * @param parent 后继attempt的父run标识，普通run为0。
+ * @param mask 非终态页的expected/submitted轴位掩码，默认63表示六轴。
+ * @param sent_mask 实际发送位夹具；UINT8_MAX表示与mask相同。
+ * @param failed_mask 发送失败轴位夹具。
+ * @return boot=11/session=12的独立页面；编码失败abort使夹具构造立即失败。
+ */
 RawEvidencePage page(std::uint64_t run, std::uint32_t seq,
                      const std::array<std::uint8_t, 32U> &previous,
                      bool terminal, std::uint32_t group_count = UINT32_MAX,
@@ -100,6 +134,10 @@ RawEvidencePage page(std::uint64_t run, std::uint32_t seq,
   result.previous_chain_sha256 = previous;
   if (wire::DummyAttemptEvidenceV2Codec::encode(
           message, result.raw.data(), result.raw.size()) != wire::CodecResult::kOk) std::abort();
+  /**
+   * @brief 链输入为previous摘要、wire规范前缀及evidence_lost字节。
+   * 先编码获得规范正文，算hash后再把chain写回wire；不是对含自身摘要的完整帧求hash。
+   */
   std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize + 1U> input{};
   std::copy(previous.begin(), previous.end(), input.begin());
   std::copy_n(result.raw.begin(), wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize,
@@ -114,6 +152,13 @@ RawEvidencePage page(std::uint64_t run, std::uint32_t seq,
   return result;
 }
 
+/**
+ * @brief 改过字段后重新编码与重算hash，以隔离语义负例和坏链负例。
+ * @param value 要更新raw及chain_sha256的页面；previous_chain_sha256沿用其现值。
+ * @param message 调用方已修改的wire正文，previous/chain字段由此函数覆盖。
+ * @return 无；任一步编码失败立即abort。
+ * @note 不自动同步所有页面外层元数据，测试若改category/final_state等需自行同步相应字段。
+ */
 void rewrite_page(RawEvidencePage &value, wire::DummyAttemptEvidenceV2 &message) {
   std::uint8_t previous_bytes[32]{};
   std::copy(value.previous_chain_sha256.begin(), value.previous_chain_sha256.end(), previous_bytes);
@@ -135,6 +180,12 @@ void rewrite_page(RawEvidencePage &value, wire::DummyAttemptEvidenceV2 &message)
           message, value.raw.data(), value.raw.size()) != wire::CodecResult::kOk) std::abort();
 }
 
+/**
+ * @brief 重新计算合法hash后拒绝attempt_id与run_id不同的页面。
+ *
+ * 解码首组页后将attempt_id改为4、run保持3；应归类kInvalid，而不是仅因链摘要不匹配被拒绝。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_attempt_id_mismatch_rejected() {
   const auto trust = identity();
   auto first = page(3U, 0U, genesis(trust, 3U, 11U), false);
@@ -148,6 +199,12 @@ bool test_attempt_id_mismatch_rejected() {
       collector.failure() == RawEvidenceCollector::Failure::kInvalid;
 }
 
+/**
+ * @brief 区分组数预报领先与非终态回退。
+ *
+ * 非终态报告2→4→4可领先于已见组数，终态以实际3组闭合；另建collector把非终态4回退3必须报kSequence。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_reported_group_count_may_lead_but_not_regress() {
   const auto trust = identity();
   auto first = page(3U, 0U, genesis(trust, 3U, 11U), false, 2U);
@@ -169,6 +226,12 @@ bool test_reported_group_count_may_lead_but_not_regress() {
 }
 
 
+/**
+ * @brief 覆盖完整/缺终态run、缺页和坏链的收尾判定。
+ *
+ * 已expect的run只有组页或完全没页，stop后均kIncomplete；非final组页kInvalid、首终态声称存在未见组kSequence，genesis或当前hash破坏kChain。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_lifecycle_and_chain() {
   const auto trust = identity();
   const auto group = page(3U, 0U, genesis(trust, 3U, 11U), false);
@@ -206,6 +269,12 @@ bool test_lifecycle_and_chain() {
       bad_digest.failure() == RawEvidenceCollector::Failure::kChain;
 }
 
+/**
+ * @brief 逐字节读回管理请求/响应的采集文件。
+ *
+ * 以request_id80/request_seq81及终态响应写入，读入8字节magic但此用例不比较其内容；检查39字节记录头中的选定字节、完整wire载荷及EOF。未完整解码Host接收时刻，也不校验远端执行。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_management_wire_records() {
   const auto trust = identity();
   char path[] = "/tmp/dummy-raw-management-XXXXXX";
@@ -275,6 +344,12 @@ bool test_management_wire_records() {
       recorded_response == response_raw;
 }
 
+/**
+ * @brief 管理记录必须位于已打开且未stop的capture窗口。
+ *
+ * 未start或stop后offer应kIo；关闭后文件仅8字节magic、written=0，分别覆盖请求和响应。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_management_offers_require_open_capture() {
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
@@ -324,6 +399,12 @@ bool test_management_offers_require_open_capture() {
   return rejected && only_magic && request_rejected && request_only_magic;
 }
 
+/**
+ * @brief 采集器忠实记录不相关管理ID，不把关联过滤当作采集职责。
+ *
+ * request_id999/run4响应可入原始文件，读回必须保持原始字节；接收原文不是将该响应判定为当前请求成功。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_management_wrong_ids_are_preserved() {
   char path[] = "/tmp/dummy-raw-management-ids-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -358,6 +439,12 @@ bool test_management_wrong_ids_are_preserved() {
       std::equal(raw.begin(), raw.end(), recorded.begin() + 47U);
 }
 
+/**
+ * @brief 截短管理请求在文件生命周期检查前按形状拒绝。
+ *
+ * 固定长度减1应kInvalid；此处collector没有start，故同时可辨认错误应来自长度而非kIo。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_management_length_fails_closed() {
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
@@ -373,6 +460,12 @@ bool test_management_length_fails_closed() {
   return true;
 }
 
+/**
+ * @brief 拒绝重复/跳跃证据序号与会话漂移。
+ *
+ * seq0重复和从0跳2均kSequence；新页面外层session由12改13，应kIdentity。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_sequence_and_identity() {
   const auto trust = identity();
   const auto group = page(3U, 0U, genesis(trust, 3U, 11U), false);
@@ -390,6 +483,12 @@ bool test_sequence_and_identity() {
       identity_check.failure() == RawEvidenceCollector::Failure::kIdentity;
 }
 
+/**
+ * @brief 覆盖固定队列溢出和单终态页落盘格式。
+ *
+ * 未启动writer时填满kCapacity观测记录，额外Status必须kOverflow；独立capture记录无组终态，检查DPRAW01、总长度和raw字节。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_bounded_queue_and_file() {
   const auto trust = identity();
   RawEvidenceCollector full(trust);
@@ -422,6 +521,12 @@ bool test_bounded_queue_and_file() {
       std::equal(terminal.raw.begin(), terminal.raw.end(), bytes.begin() + 47U);
 }
 
+/**
+ * @brief 拒绝符号链接父目录和不存在的父目录。
+ *
+ * 先将real移到moved再以symlink替换real，start必须失败且目标文件不产生；仅覆盖这个确定的路径替换fixture，不宣称验证所有文件系统竞态。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_capture_path_rejects_swapped_parent() {
   char root[] = "/tmp/dummy-raw-path-XXXXXX";
   if (!::mkdtemp(root)) return false;
@@ -443,6 +548,12 @@ bool test_capture_path_rejects_swapped_parent() {
   return rejected && no_output && missing_rejected;
 }
 
+/**
+ * @brief 用reader观察链失败码首次出现后不回到零。
+ *
+ * reader在2s窗口内应看到kChain，且stop后错误仍保留；线程标志只是主机测试同步，不对应设备故障时钟。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_shared_failure_is_sticky_for_concurrent_readers() {
   dummy_ros_control::DeviceManagementChannel channel({});
   if (channel.raw_evidence_capture_enabled.load(std::memory_order_acquire)) return false;
@@ -475,6 +586,12 @@ bool test_shared_failure_is_sticky_for_concurrent_readers() {
   return channel.raw_evidence_failure.load(std::memory_order_acquire) == code;
 }
 
+/**
+ * @brief 检查三类本地采集失败同步到管理共享通道。
+ *
+ * 队列满为Overflow、缺父目录为Io、expect后无终态stop为Incomplete；溢出不能发布伪terminal-flushed。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_shared_failure_reports_overflow_io_and_incomplete() {
   dummy_ros_control::DeviceManagementChannel overflow_channel({});
   RawEvidenceCollector overflow(identity(), &overflow_channel);
@@ -500,11 +617,28 @@ bool test_shared_failure_reports_overflow_io_and_incomplete() {
       static_cast<std::uint8_t>(RawEvidenceCollector::Failure::kIncomplete);
 }
 
+/**
+ * @brief 暂停writer终态flush阶段的测试门闩。
+ * entered由writer release-store发布，release由主线程放行；acquire读取使等待者看见对应阶段。
+ * 这是一种人为阻塞钩子，只安排可重复时序，不是生产实时路径。
+ */
 struct FlushGate {
+  /**
+   * @brief writer已到达flush前钩子；main用期限等待它，避免未进入即开始溢出/回执检查。
+   */
   std::atomic<bool> entered{false};
+  /**
+   * @brief 允许writer继续；所有正常/超时收尾都应放行后再stop，避免join卡在钩子。
+   */
   std::atomic<bool> release{false};
 };
 
+/**
+ * @brief 在writer线程等待主线程放开终态flush测试阶段。
+ * @param context 指向生命周期覆盖collector.stop的FlushGate。
+ * @return true 表示放行后继续正常flush；不在本钩子注入I/O失败。
+ * @note 每次等待sleep 1ms，属于测试同步，不应解释成实际设备flush耗时。
+ */
 bool wait_before_terminal_flush(void *context) noexcept {
   auto &gate = *static_cast<FlushGate *>(context);
   gate.entered.store(true, std::memory_order_release);
@@ -513,6 +647,12 @@ bool wait_before_terminal_flush(void *context) noexcept {
   return true;
 }
 
+/**
+ * @brief 暂停终态flush，使正在运行的writer仍能确定触发队列满。
+ *
+ * 先等writer进入门闩，再塞入管理请求；额外记录应Overflow，放行并stop后仍保持首个溢出失败。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_management_overflow_with_running_writer() {
   char path[] = "/tmp/dummy-raw-management-overflow-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -551,6 +691,12 @@ bool test_management_overflow_with_running_writer() {
   return accepted && overflow && collector.failure() == RawEvidenceCollector::Failure::kOverflow;
 }
 
+/**
+ * @brief 终态回执只能在writer完成受控flush阶段后出现。
+ *
+ * writer在门闩中暂停时terminal_written_run_id和共享run均为0；reader不能看到提前或拼接身份，放行后应见boot11/session12/run3。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_terminal_ack_waits_for_flush() {
   char path[] = "/tmp/dummy-raw-flush-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -601,6 +747,12 @@ bool test_terminal_ack_waits_for_flush() {
       after.run_id == 3U && collector.failure() == RawEvidenceCollector::Failure::kNone;
 }
 
+/**
+ * @brief 允许当前run等待flush时先接收后继run页面。
+ *
+ * run3终态在门闩中时排入run4组/终态；共享回执仍为0。放行并stop应无失败，最终回执run4，避免writer进度阻塞合法序列验证。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_successor_queued_before_terminal_flush() {
   char path[] = "/tmp/dummy-raw-successor-pending-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -632,6 +784,12 @@ bool test_successor_queued_before_terminal_flush() {
       channel.raw_evidence_terminal_flushed().run_id == 4U;
 }
 
+/**
+ * @brief 在子进程文件大小受限时，终态写失败不能发布flush回执。
+ *
+ * 429字节上限允许magic和完整首组页，但容不下完整终态记录；等待首组页写成后提供终态，应kIo且共享run仍0。fork隔离RLIMIT_FSIZE/SIGXFSZ，不影响父进程。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_terminal_write_error_never_acknowledges() {
   char path[] = "/tmp/dummy-raw-write-error-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -671,6 +829,12 @@ bool test_terminal_write_error_never_acknowledges() {
   return waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+/**
+ * @brief 压力读取terminal-flushed三字段快照不能跨发布拼接。
+ *
+ * writer依次写50,000个boot，并使session=boot+100/run=boot+200；reader验证关系，join后核对最后值。此调度样本不代替形式化内存模型证明。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_terminal_snapshot_is_coherent() {
   dummy_ros_control::DeviceManagementChannel channel({});
   std::atomic<bool> done{false};
@@ -692,6 +856,12 @@ bool test_terminal_snapshot_is_coherent() {
       final.run_id == 50200U;
 }
 
+/**
+ * @brief 首组页完整写入并flush后发布包含轴掩码的首写回执。
+ *
+ * 回执必须携带run3/motion10/seq0、全六轴且无失败、chain_valid/final；随后补终态避免stop报Incomplete。首写回执本身不是terminal回执。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_first_page_receipt_after_write() {
   char path[] = "/tmp/dummy-raw-first-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -726,6 +896,12 @@ bool test_first_page_receipt_after_write() {
   return valid && ended && collector.failure() == RawEvidenceCollector::Failure::kNone;
 }
 
+/**
+ * @brief 首页面链锚错误时绝不发布首写回执。
+ *
+ * 只翻转外层previous摘要，offer应失败，channel first-page-written run仍0。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_first_page_receipt_rejects_bad_chain() {
   char path[] = "/tmp/dummy-raw-first-chain-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -744,6 +920,12 @@ bool test_first_page_receipt_rejects_bad_chain() {
   return rejected;
 }
 
+/**
+ * @brief 首记录只写了一部分时不能确认首写成功。
+ *
+ * 子进程文件限制100字节，小于magic+完整首记录；等待Io失败后stop，首写共享run必须仍0。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_first_page_partial_write_never_publishes() {
   char path[] = "/tmp/dummy-raw-first-partial-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -775,15 +957,31 @@ bool test_first_page_partial_write_never_publishes() {
   return waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+/**
+ * @brief 首页flush故障注入计数；calls由writer更新，主线程原子读取。
+ */
 struct FirstPageFlushProbe {
   std::atomic<unsigned> calls{0U};
 };
 
+/**
+ * @brief 替代首记录flush并确定返回失败。
+ * @param context 指向FirstPageFlushProbe，记录被调用次数。
+ * @par 未命名参数
+ * FILE*是writer提供的输出流；钩子故意不操作它。
+ * @return EOF，模拟flush失败，collector应发布kIo而不是首写回执。
+ */
 int fail_first_page_flush(std::FILE *, void *context) noexcept {
   static_cast<FirstPageFlushProbe *>(context)->calls.fetch_add(1U, std::memory_order_relaxed);
   return EOF;
 }
 
+/**
+ * @brief 注入首记录flush返回EOF时不发布首写回执。
+ *
+ * 即使offer已接收，writer的flush钩子一次失败也应kIo，run仍0；不把排队/写部分字节当作采集完成。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_first_page_flush_failure_never_publishes() {
   char path[] = "/tmp/dummy-raw-first-flush-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -809,6 +1007,12 @@ bool test_first_page_flush_failure_never_publishes() {
   return rejected;
 }
 
+/**
+ * @brief 首写回执按run更新，full_six要求发送完整且无失败。
+ *
+ * run3仅mask3，run4六轴但sent62/failed1，run5六轴全发送；只有run5 full_six=true，三个run均等待各自终态flush。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_first_page_mask_and_next_run() {
   char path[] = "/tmp/dummy-raw-first-next-XXXXXX";
   const int fd = ::mkstemp(path);
@@ -846,6 +1050,12 @@ bool test_first_page_mask_and_next_run() {
   return collector.failure() == RawEvidenceCollector::Failure::kNone;
 }
 
+/**
+ * @brief 覆盖strict_refresh_successor派生位的组号条件。
+ *
+ * 把首组页category改1并重算hash；group_id非零时run3/4应true，run5清零组号后应false，不将组数预报2误判为非后继。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_strict_refresh_successor_receipt() {
   const auto trust = identity();
   char path[] = "/tmp/dummy-raw-strict-first-XXXXXX";
@@ -885,6 +1095,12 @@ bool test_strict_refresh_successor_receipt() {
   return collector.failure() == RawEvidenceCollector::Failure::kNone;
 }
 
+/**
+ * @brief 从完整链提取干净取消终态与安全hold证明字段。
+ *
+ * run3三个组motion_epoch递进5/6/7，取消终态回到原motion5；回执应safety_hold_valid、hold_epoch7，但motion_complete/release_committed均false。后续run4缺后继组、run5发送不全、run6运动代次回退均不得产生有效安全hold。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_flushed_clean_cancel_receipt() {
   const auto trust = identity();
   char path[] = "/tmp/dummy-raw-cancel-terminal-XXXXXX";
@@ -926,6 +1142,9 @@ bool test_flushed_clean_cancel_receipt() {
   while (channel.raw_evidence_terminal_flushed().run_id != 3U &&
          std::chrono::steady_clock::now() < deadline)
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  /**
+   * @brief 保留run3干净取消回执再执行负例，避免用后续run覆盖的共享快照冒充run3证明。
+   */
   const auto receipt = channel.raw_evidence_terminal_flushed();
   for (std::uint64_t run = 4U; run <= 6U; ++run) {
     auto next_first = page(run, 0U, genesis(trust, run, 11U), false);
@@ -992,6 +1211,12 @@ bool test_flushed_clean_cancel_receipt() {
       receipt.safety_hold_valid && receipt.safety_hold_motion_epoch == 7U;
 }
 
+/**
+ * @brief 同一capture内boot切换必须失败关闭。
+ *
+ * run3完整后构造以boot12为genesis的新run4；即使run不同，也不能在一个capture混入新启动身份，预期kIdentity。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_same_capture_reboot_fails_closed() {
   const auto trust = identity();
   RawEvidenceCollector collector(trust);
@@ -1004,6 +1229,12 @@ bool test_same_capture_reboot_fails_closed() {
       collector.failure() == RawEvidenceCollector::Failure::kIdentity;
 }
 
+/**
+ * @brief 首写页必须从seq0开始，且共享回执具备一致性和旧值保护。
+ *
+ * 首seq1拒kSequence、UINT32_MAX拒kInvalid；writer发布20,000组相关字段，reader检查不拼接，最后发布run1旧值也不能覆盖较新run20200。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_first_page_sequence_and_snapshot() {
   dummy_ros_control::DeviceManagementChannel channel({});
   const auto trust = identity();
@@ -1046,6 +1277,12 @@ bool test_first_page_sequence_and_snapshot() {
   return coherent && channel.raw_evidence_first_page_written().run_id == 20200U;
 }
 
+/**
+ * @brief 循环run回收有限binding槽，拒绝已经退休的迟到旧run。
+ *
+ * run3..104共102个run、204页，末两run使用不同attempt_kind及父run。每轮等待写页与终态flush后再复用槽；旧run3不能再find/observe，另一capture超过槽窗口后offer旧页应kIdentity。
+ * @return true 表示本用例全部预期成立；false表示夹具准备、异步期限或结果断言失败。
+ */
 bool test_many_runs_and_recycled_late_page() {
   const auto trust = identity();
   char path[] = "/tmp/dummy-raw-many-XXXXXX";
@@ -1059,6 +1296,11 @@ bool test_many_runs_and_recycled_late_page() {
   RawEvidenceCollector collector(trust, &channel);
   RawEvidenceBindings bindings;
   if (!collector.start(path)) return false;
+  /**
+   * @par 内部wait_written回调
+   * count是期望累计页数，run是期望最新终态flush标识；在steady_clock的3s窗口内等待两者同时满足。
+   * 返回时要求页数恰好相等，防止只检查终态ID而漏掉重复落盘；不等待真实设备运动。
+   */
   auto wait_written = [&](std::uint64_t count, std::uint64_t run) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while ((collector.pages_written() < count ||
@@ -1071,6 +1313,10 @@ bool test_many_runs_and_recycled_late_page() {
   for (std::uint64_t run = 3U; run <= 104U; ++run) {
     const std::uint8_t kind = run == 103U ? 2U : run == 104U ? 3U : 1U;
     const std::uint64_t parent = kind == 1U ? 0U : run - 1U;
+    /**
+     * @brief binding把run与boot/session/parent/kind关联。
+     * 回收水位使用terminal_written_run_id，只有已完成文件终态flush的run才能让有限槽位安全复用。
+     */
     const RawEvidenceBinding binding{run, 11U, 12U, parent, kind};
     if (!bindings.observe(binding, collector.terminal_written_run_id()) ||
         !bindings.find(run)) return false;
@@ -1119,6 +1365,12 @@ bool test_many_runs_and_recycled_late_page() {
 }
 }  // namespace
 
+/**
+ * @brief 顺序运行27个raw采集生命周期、序列、链与writer用例。
+ *
+ * 遇第一个false打印对应stderr标签并返回1；每个异步用例用自身steady_clock期限协调线程。测试执行会创建本地临时文件/子进程，但不连接硬件。
+ * @return 0 全部用例通过；1 第一个失败用例返回false。
+ */
 int main() {
   if (!test_management_wire_records()) { std::fprintf(stderr, "management records failed\n"); return 1; }
   if (!test_management_offers_require_open_capture()) { std::fprintf(stderr, "management lifecycle failed\n"); return 1; }

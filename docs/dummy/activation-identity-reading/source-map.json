@@ -1,0 +1,71 @@
+{
+  "originals": [
+    {
+      "path": "contracts/dummy_robot_v1/policy/validate_activation.py",
+      "sha256": "9a7d16215030132eac0cede2476bc198725c9a83869cadd1f1e64fe0563ca59f"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/evidence/wire-v1-validation.md",
+      "sha256": "a804e3969189a2325e6e007df41e1bc32abfa6cb75c7dbfd62c8683c2700245b"
+    }
+  ],
+  "functions": [
+    {
+      "name": "strict_load",
+      "line": 10,
+      "parameters": [
+        "path"
+      ]
+    },
+    {
+      "name": "is_hash",
+      "line": 20,
+      "parameters": [
+        "value"
+      ]
+    },
+    {
+      "name": "is_device_id",
+      "line": 21,
+      "parameters": [
+        "value"
+      ]
+    },
+    {
+      "name": "canonical_policy",
+      "line": 22,
+      "parameters": [
+        "policy"
+      ]
+    },
+    {
+      "name": "parse_time",
+      "line": 25,
+      "parameters": [
+        "value"
+      ]
+    },
+    {
+      "name": "positive_int",
+      "line": 30,
+      "parameters": [
+        "value"
+      ]
+    },
+    {
+      "name": "validate",
+      "line": 32,
+      "parameters": [
+        "activation",
+        "policy",
+        "runtime",
+        "evidence_root"
+      ]
+    },
+    {
+      "name": "main",
+      "line": 121,
+      "parameters": []
+    }
+  ]
+}

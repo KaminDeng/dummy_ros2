@@ -1,4 +1,9 @@
 <?xml version="1.0"?>
+<!--
+@file package.xml
+@brief MoveIt配置/启动与示例程序的ROS格式3依赖声明。
+@details 包版本0.3.0和原作者信息保留；设备合同/模型/固件摘要由部署链路另行核验。
+-->
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>dummy_moveit_config</name>
@@ -16,8 +21,14 @@
 
   <author email="xin.li@switchpi.com">muzixiaowen</author>
 
+<!--
+本包使用ament_cmake；配置文件也随包安装，不能因无大型核心库就省略构建安装步骤。
+-->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+<!--
+运行依赖包含规划、IK、执行适配、TF、控制器管理和GUI。部分条目在历史清单中重复，保留原值，不把重复理解为需启动多个实例。
+-->
   <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>moveit_kinematics</exec_depend>
   <exec_depend>moveit_planners</exec_depend>
@@ -41,6 +52,9 @@
   <exec_depend>warehouse_ros_sqlite</exec_depend>
   <exec_depend>xacro</exec_depend>
 
+<!--
+C++/Servo及Gazebo相关运行依赖；安装依赖不代表本包CMake构建了所有遗留示例源码。
+-->
   <exec_depend>rclcpp</exec_depend>
   <exec_depend>control_msgs</exec_depend>
   <exec_depend>moveit_msgs</exec_depend>
@@ -49,6 +63,9 @@
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>gz_ros2_control</exec_depend>
 
+<!--
+模型回归的Python基础依赖；完整几何测试还需requirements-geometry.txt中的对应包。
+-->
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>python3-yaml</test_depend>
   <test_depend>python3-numpy</test_depend>
@@ -56,6 +73,9 @@
   <test_depend>python3-shapely</test_depend>
 
 
+<!--
+向ament导出CMake包类型；由CMake安装launch/config/worlds和setup-assistant元数据。
+-->
   <export>
       <build_type>ament_cmake</build_type>
   </export>

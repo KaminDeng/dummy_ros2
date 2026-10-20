@@ -1,3 +1,10 @@
+/**
+ * @file management_logging_scope_tests.cpp
+ * @brief 并发读诊断JSON时复用有界Query重试负例并核饱和日志。
+ *
+ * 通过宏重命名wire_management_tests.cpp入口，仅调用release_query_backoff_guards模式20次；未运行其原默认main全部case。
+ * 另100次DeviceWorker facade无ready发送均本地拒绝，不启动provider或真实TCP peer；线程只并发读journal，assert须启用。
+ */
 #define main original_wire_management_main
 #include "wire_management_tests.cpp"
 #undef main
@@ -6,6 +13,12 @@
 #include <atomic>
 #include <cassert>
 #include <thread>
+/**
+ * @brief 填满detail槽，竞争读取时仍保首拒/计数与分reason记录。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 复用分支分别测Renew普通退避与Disable快速Query；每种Query只可同字节重试2次，第三次超时抛错，不能重发原mutation。
+ * reader循环输出到内存string后yield，不写外部sink；最后join再核rejections≥140/detail_dropped>0及ManagementRejected。
+ */
 int main() {
   dummy_ros_control::DiagnosticJournal journal;
   dummy_ros_control::HostDiagnosticScope scope(journal);

@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+##
+# @file application_e2e.py
+# @brief 离线核六轴ROS动作、Gate时间线、原页链及管理强回执的关联。
+#
+# 本文件只读已有JSON/raw字段并写报告，不启动ROS/串口/设备；传入手写JSON的结构验证与四份采集重放验证是两个等级。
+# 最终即使ROS_BENCH_E2E_POSITIVE也固定UNQUALIFIED/NOT_ASSERTED，不能签发运动或机械资格。
+# 现有校验硬编码schema2.4及372字节页/固定偏移；布局读取当前合同不代表本验证自动支持其后全部minor版本。
 """六轴 ROS/MoveIt 无负载 E2E 原始证据门禁。"""
 
 import argparse
@@ -10,12 +17,20 @@ from pathlib import Path
 import struct
 
 
+##
+# @brief 导入时读取本地wire布局；TYPES按小端格式解码整数/浮点/布尔。
+# 此依赖是源码中的格式定义，不是采集时固件身份的独立认证。
 LAYOUT = json.loads((Path(__file__).resolve().parents[2] /
     "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
 WIRE_TYPES = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
               "float64": "d", "bool": "B"}
 
 
+##
+# @brief 从管理记录raw_hex解出固定布局字段。
+# @param item kind4请求或kind5响应的JSON记录。
+# @return 字段dict；不支持kind、长度或schema非2.4时ValueError。
+# uint8数组转hex字符串，其它数组转list，标量取单值；此函数不判断事务是否成功。
 def _manage_fields(item):
     kind = item.get("kind") if isinstance(item, dict) else None
     if kind not in (4, 5):
@@ -34,6 +49,14 @@ def _manage_fields(item):
     return fields
 
 
+##
+# @brief 核每个目标完成/取消与最终释放的唯一COMMITTED回执。
+# @param evidence 含identity与management_records的已拼接证据。
+# @param goals 按时间排列的目标对象。
+# @param release 最终release对象及boot/run/session/request/operation身份。
+# @return None；缺关联、冲突/重复请求、错事务阶段或顺序不符ValueError。
+# 相同QueryResult请求可在未答复前原字节重试至多4次；其它逻辑请求ID不允许重用。
+# 记录头boot/session/run/seq与wire核对，client/device全程相同，Host接收时刻允许相等但不能回退；Queued/Pending不是Commit。
 def _validate_management(evidence, goals, release):
     records = _required(evidence, "management_records")
     if not isinstance(records, list) or not records:
@@ -80,6 +103,10 @@ def _validate_management(evidence, goals, release):
                             "expected_profile_id", "configured_mask")
     terminal_flags = {8: (1, 0), 9: (0, 0), 10: (0, 1)}
 
+    ##
+    # @par 内部回调 committed
+    # 输入operation/run/session以及可选before/after Hostµs窗；寻找原请求或精确Query绑定的响应。
+    # 返回唯一(请求记录,请求字段,响应记录,响应字段)；任何终态冲突/多operation或非唯一匹配拒绝。operation8要求motion_complete，9两完成标志均0，10要求release_committed且回执session0。
     def committed(operation, run, session, before=None, after=0):
         requests = [(item, fields) for item, fields in decoded if item["kind"] == 4 and
                     fields["operation"] == operation and
@@ -165,6 +192,11 @@ def _validate_management(evidence, goals, release):
         raise ValueError("release request precedes final HOLD observation")
 
 
+##
+# @brief 取必需非空字段。
+# @param record 应为dict的记录。
+# @param name 字段名。
+# @return 原值；None、空文本或空list拒绝，0/False不由本函数单独排除。
 def _required(record, name):
     if not isinstance(record, dict):
         raise ValueError(f"invalid record for {name}")
@@ -174,6 +206,11 @@ def _required(record, name):
     return value
 
 
+##
+# @brief 要求精确正int字段。
+# @param record 记录dict。
+# @param name 字段名。
+# @return 原正整数，bool不接受；不在此限制uint32/uint64上界。
 def _positive_int(record, name):
     value = _required(record, name)
     if type(value) is not int or value <= 0:
@@ -181,6 +218,12 @@ def _positive_int(record, name):
     return value
 
 
+##
+# @brief 核完整六轴有限数值数组。
+# @param record 输入dict。
+# @param name 数组字段名。
+# @param positive true时每项还必须>0。
+# @return 六元素原list；bool/NaN/Infinity或形状不符拒绝。
 def _six_finite(record, name, positive=False):
     values = _required(record, name)
     if (not isinstance(values, list) or len(values) != 6 or
@@ -190,6 +233,12 @@ def _six_finite(record, name, positive=False):
     return values
 
 
+##
+# @brief 将指定长度hex文本解为原始字节。
+# @param record 记录dict。
+# @param name hex字段名。
+# @param size 期望字节数，文本字符数需恰2×size。
+# @return bytes；形状或hex解码错误ValueError，不独立要求小写或非零。
 def _hex_bytes(record, name, size):
     value = _required(record, name)
     if not isinstance(value, str) or len(value) != size * 2:
@@ -200,6 +249,23 @@ def _hex_bytes(record, name, size):
         raise ValueError(f"invalid {name}") from error
 
 
+##
+# @brief 核单attempt的全六轴CAN组与唯一终页SHA链。
+# @param attempt 含evidence_pages的目标或release对象。
+# @param identity client及合同/模型/profile/固件hash。
+# @param run 预期run/attempt ID。
+# @param session 采集原owner session，release页仍用原owner。
+# @param boot 启动代次。
+# @param epoch 默认组motion代次和默认终页代次。
+# @param kind attempt_kind。
+# @param parent parent_run_id。
+# @param final_state 期望终页状态值。
+# @param group_ids 可选精确组ID顺序。
+# @param group_epochs 可选逐组motion代次。
+# @param terminal_epoch 可选终页原attempt代次，独立于保持/停止组代次。
+# @return None；页序号、身份、lost、组数/掩码/标志或链不符拒绝。
+# genesis=SHA256(run/boot小端+client+四hash补192字节)，每页SHA=previous+规范前307字节+lost字节。
+# 非终页必须组ID唯一、mask/submitted/sent63且failed0/final1；终页清组掩码并精确区分motion_complete和release_committed。这验证记录，不证明额外机械资格。
 def _validate_pages(attempt, identity, *, run, session, boot, epoch, kind,
                     parent, final_state, group_ids=None, group_epochs=None,
                     terminal_epoch=None):
@@ -257,6 +323,14 @@ def _validate_pages(attempt, identity, *, run, session, boot, epoch, kind,
         raise ValueError("CAN groups do not match terminal chain")
 
 
+##
+# @brief 核单目标Gate事件、反馈年龄和motion相位单向前进。
+# @param goal 目标对象及timeline/feedback预算。
+# @param final_goal true末尾还须post_release_status。
+# @param lag_budget 允许反馈接收相对Begin边缘的生产者滞后µs。
+# @return None；事件缺失、身份/请求键漂移、时序或反馈年龄不符拒绝。
+# 三前缀accepted/before_begin/after_begin，至少一条feedback，再terminal/Hold；最后目标另含release。
+# Cancel请求键仅出现在canceled终行，release键仅出现在最终Idle行；完整六轴seq和age绑定，不从Action状态名推断设备停止。
 def _validate_timeline(goal, final_goal, lag_budget):
     rows = _required(goal, "timeline")
     terminal = {"SUCCEEDED": "terminal_success", "CANCELED": "terminal_canceled",
@@ -365,6 +439,12 @@ def _validate_timeline(goal, final_goal, lag_budget):
         raise ValueError("unlinked final six-axis feedback")
 
 
+##
+# @brief 校验聚合证据的目标、保持、释放与管理/raw全链。
+# @param evidence source=ros_moveit_jtc_usb_ref_can、profile201/mask63的dict。
+# @return None；校验不符抛异常；此函数不重读provenance指向的源文件。
+# SUCCEEDED核终点/路径容差及MotionCompletedHolding；CANCELED核一次新stop epoch及新epoch六轴Hold SENT；ABORTED区分环境滞后和设备故障。
+# 拒绝纯ENVIRONMENT aborted集合作为设备正证据；最终release必须独立run/parent、Disable组、Idle与COMMITTED全部关联。
 def validate_evidence(evidence):
     if not isinstance(evidence, dict) or evidence.get("source") != "ros_moveit_jtc_usb_ref_can":
         raise ValueError("real ROS/MoveIt/JTC/CAN source required")
@@ -377,6 +457,9 @@ def validate_evidence(evidence):
     budget = environment.get("producer_lag_budget_us")
     if type(lag) is not int or type(budget) is not int or lag < 0 or budget <= 0:
         raise ValueError("invalid producer lag evidence")
+    ##
+    # @brief v2生产者滞后限定活动窗口及固定250000µs预算，须声明窗口起止/run/样本数。
+    # 这里只核聚合字段关系，原始offset跨度及源文件重放由context/joiner负责；不是绝对网络单向延迟测量。
     version = environment.get("producer_lag_gate_version")
     if version is not None:
         window = environment.get("producer_lag_window")
@@ -552,6 +635,9 @@ def validate_evidence(evidence):
     if (last["timeline"][-1].get("release_request_id") != release.get("request_id") or
             last["timeline"][-1].get("release_operation_id") != release.get("operation_id")):
         raise ValueError("release timeline request key is unlinked")
+    ##
+    # @brief active release继续同kind1并含Hold/Stop/Disable相位，独立release为kind3且parent指前run。
+    # 终页保留原attempt epoch；最终Idle必须推进1，不把release前的Motion完成当作owner已清。
     active = release["terminal"] == "CANCELED_AND_RELEASED"
     if last["action_status"] == "CANCELED" and (
             release["run_id"] != last["run_id"] + 1 or
@@ -600,6 +686,10 @@ def validate_evidence(evidence):
     _validate_management(evidence, goals, release)
 
 
+##
+# @brief 选择结构验证或完整源采集重放并输出受限判定。
+# @return 非FAIL为0，捕获输入/校验错误为1；KeyError等未列异常与报告I/O可能传播。
+# 没有四份capture仅SOFTWARE_EVIDENCE_VALIDATED；timeline/raw/action/context必须整组给，joiner重建结果完全相同才ROS_BENCH_E2E_POSITIVE，仍不主张硬件资格。
 def main():
     parser = argparse.ArgumentParser(description="校验真实六轴 ROS 原始证据关联")
     parser.add_argument("--evidence", type=Path, required=True)

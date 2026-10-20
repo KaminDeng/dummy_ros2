@@ -1,3 +1,11 @@
+/**
+ * @file queued_renew_completion_tests.cpp
+ * @brief 核续租与完成/取消冻结相遇时的严格身份、队列预约及原期限。
+ *
+ * 宏重命名包含wire_management_tests.cpp只为复用Transport/Port类型；DUMMY_ACTION_GATE_TEST再包含生产device_action_gate.cpp，排除其main但不自动创建DeviceActionGate节点。
+ * 实际实例是内存WireManagementClient与ActionGate，加生产纯queue/lease helper；不能称为完整ROS Node对象、远端设备或实机执行覆盖。
+ * 位置rad，轨迹time秒；gate/tick参数为人工Hostµs，续租时长30000000µs。assert须启用；模式仅由main字符串选择。
+ */
 #define main shared_wire_fixture_main
 #include "wire_management_tests.cpp"
 #undef main
@@ -5,11 +13,35 @@
 #include "../src/device_action_gate.cpp"
 #include <cassert>
 
+/**
+ * @brief 派生自复用Port计数夹具，增加executing布尔模拟producer状态；不是实际JTC线程。
+ */
 struct CompletionPort : Port {
+  /**
+   * @brief start置true、disable置false；冻结资格读取此字段，不能据true声称电机在Run。
+   */
   bool executing=false;
+  /**
+   * @brief 沿用Port启动次数统计，再标executing。
+   * @param t 轨迹夹具，仅传给无执行副作用的基类。
+   * @param g 目标generation。
+   * @return 无。
+   */
   void start(const Trajectory &t,std::uint64_t g) override {Port::start(t,g);executing=true;}
+  /**
+   * @brief 停本地executing标志。
+   * @return 无；不发送硬件Disable或等待回执。
+   */
   void disable() override {executing=false;}
 };
+/**
+ * @brief 冻结末目标且正式State ACK后，核Complete意图与未发续租撤回。
+ * @param argc 参数个数（含程序名）。
+ * @param argv 参数数组，模式/路径位置见下述说明。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 末seq17 ACK经当前State codec/公共observe_state输入；inner_result后冻结producer但尚未发送Complete，queue仍只有op20预约。
+ * 正例允许bounded completion；sent_complete已发operation8仍须保持相同有界意图，原始目标/身份/末ACK不可丢。
+ */
 int main(int argc,char **argv) {
   const std::string mode=argc>1?argv[1]:"positive";
   Transport transport;WireManagementClient client(transport);CompletionPort port;
@@ -18,6 +50,11 @@ int main(int argc,char **argv) {
   auth.identity.set_expected_boot_epoch(7);auth.identity.set_expected_session_id(9);
   auth.identity.set_expected_reference_epoch(1);auth.identity.set_expected_profile_id(201);
   auth.identity.set_expected_management_epoch(1);auth.identity.set_configured_mask(1);
+  /**
+   * @par 内部commit回调
+   * epoch为合成新motion代次；从Transport最后实际请求取request_id，构造固定boot7/session9/ref1/management1/profile201的Committed响应并poll原请求。
+   * 返回client解析结果；此处不模拟设备真实操作，只保证测试确经当前wire codec/请求关联路径。
+   */
   auto commit=[&](std::uint32_t epoch) {
     const auto request=transport.requests.back();
     wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
@@ -27,6 +64,10 @@ int main(int argc,char **argv) {
     response.set_operation_id(request.request_id()+100);response.set_transaction_phase(3);
     transport.respond(response);return client.poll(request.request_id());
   };
+  /**
+   * @brief 通过Enable首样本及Begin首样本双屏障到J1 Running，保留当前完整身份供随后续租/完成/取消匹配。
+   * prime只是Port计数，accepted_seq1为人工回执，不能把它当六轴CAN组实测。
+   */
   assert(gate.enable(auth,1));auto reply=commit(1);assert(reply);
   reply->snapshot_valid=true;reply->hold_available=true;reply->hold_ready=false;gate.observe(*reply,2);
   assert(gate.record_update(gate.generation(),1,1,Position{}));reply->hold_ready=true;reply->accepted_seq=1;gate.observe(*reply,3);
@@ -53,6 +94,10 @@ int main(int argc,char **argv) {
   assert(gate.observe_state(state_bytes.data(),state_bytes.size(),22));
   if(mode!="not_frozen")gate.inner_result(gate.generation(),Terminal::kSucceeded,"",23);
   if(mode=="sent_complete") {reply->accepted_seq=17;gate.observe(*reply,24);assert(transport.requests.back().operation()==8);}
+  /**
+   * @brief 复现旧资格合取在冻结producer时的冲突输入，但断言修正后的continuation不再original_fault。
+   * 名字含red不表示该分支必须失败，也不实例化完整Node对象。
+   */
   if(mode=="original_policy_red") {
     const RunLeaseEligibility observed{true,true,true,true,port.executing && gate.phase()==Phase::kRunning,true,true};
     const bool deferred=gate.completion_waiting_for_renewal(25);
@@ -64,6 +109,10 @@ int main(int argc,char **argv) {
               <<" original_fault="<<original_fault<<'\n';
     assert(!original_fault);
   }
+  /**
+   * @brief wrong_boot/session/reference/motion/management/profile/mask/device/client、missing_ack/old_ack、expired、not_frozen均要求bounded_completion_intent=false。
+   * Status稀疏不能替代当前State末ACK，seq16与17需精确区别。
+   */
   if(mode=="wrong_boot")live.set_expected_boot_epoch(8);
   if(mode=="wrong_session")live.set_expected_session_id(10);
   if(mode=="wrong_reference")live.set_expected_reference_epoch(2);
@@ -76,6 +125,10 @@ int main(int argc,char **argv) {
   const auto ack=mode=="missing_ack"?0U:mode=="old_ack"?16U:17U;
   const auto now=mode=="expired"?2000023U:25U;
   const bool intent=gate.bounded_completion_intent(live,ack,now);
+  /**
+   * @brief withdraw_positive/explicit/status_lag可撤未发预约；owns_busy、started、nonrenew、not_reserved、not_running、actual_inflight均不得撤且保原槽状态。
+   * stale_state/wrong_run在本源仅显式把bounded设false，未通过真实State/Status回调制造对应负例；不能扩大为隔离了在线新鲜性/场景run检查。
+   */
   if(mode.rfind("withdraw_",0U)==0U) {
     std::atomic<bool> running{true};
     BootstrapCoordinator bootstrap(client,auth.identity,{},0);
@@ -86,6 +139,10 @@ int main(int argc,char **argv) {
     if(mode=="withdraw_not_reserved")reserved=false;
     if(mode=="withdraw_not_running")running=false;
     if(mode=="withdraw_explicit")explicit_status=1;
+    /**
+     * @brief 通过同client的Bootstrap CaptureReference准备完成后真实submit Renew，核renewal_request_inflight仍true。
+     * 该inflight不得按“仅预约”撤回；fixture响应仍为合成wire，不是远端续租完成。
+     */
     if(mode=="withdraw_actual_inflight") {
       BootstrapSnapshot snapshot{7,9,1,2,1,55,201,1,true,true};
       snapshot.core_state=snapshot.state_core_state=wire_value(WireCoreState::kRunning);snapshot.run_id=5;
@@ -115,6 +172,10 @@ int main(int argc,char **argv) {
     if(expect) {
       assert(queued==0&&!reserved&&!running&&!started);
       assert(client.matching_inflight_renewal(live)==0U);
+      /**
+       * @brief 显式pending状态1撤回为−1，不能误consume为已确认续租。
+       * 之后自动预约可继续但保留typed撤回提示；take_withdrawn只消费一次−1→0，不签发新permit。
+       */
       if(mode=="withdraw_explicit") {
         assert(explicit_status==-1);
         assert(!take_confirmed_lease_renewal(explicit_status,true,true,true,ManageOperation::kRenewLease));
@@ -124,6 +185,10 @@ int main(int argc,char **argv) {
         assert(!take_withdrawn_lease_renewal(explicit_status));
         queued=0;reserved=false;
       }
+      /**
+       * @brief 撤预约后恰新增一条Complete8且terminal_producer_seq17、身份原样，terminal仍None。
+       * 此测试到“Complete已发送”为止，没有完成后续Complete COMMITTED/Hold/机械到位的全过程。
+       */
       reply->accepted_seq=17;gate.observe(*reply,26);
       assert(gate.terminal()==Terminal::kNone && transport.requests.back().operation()==8);
       assert(transport.requests.size()==wire_count_before_freeze+1U);

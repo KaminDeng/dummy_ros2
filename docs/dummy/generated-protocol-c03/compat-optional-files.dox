@@ -1,0 +1,69 @@
+/**
+ * @file dp_protocol_messages.h
+ * @brief canonical C拥有式数组+独立len消息；直接encoder可能信任len，caller须保证真实容量。它们不是packed wire，不能整体memcpy当协议payload。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_messages.h
+原始SHA-256：721d8aa36a530c6573b0d599e22461e29865eb16295512ffb068b0c5bf83bbb5
+原始行数：232。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_codec_types.h
+ * @brief 通用profile与codec状态枚举；和Lite codec位、TLV bool结果并非同一集合。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_codec_types.h
+原始SHA-256：dc2a5f113005ebf5b629e3825751ee1169ffaea686b0e29701eb054bf36ff2f2
+原始行数：19。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_raw_fixed_payloads.h
+ * @brief 显式小端scalar accessor+旧崩溃/文件packed布局，构造参数/索引/CRC不验证。Crash task/user字段按宏选；frames getter按byte而非frame取，user_data offset helper即使禁用字段仍存在。C/C++ static_assert核选定ABI尺寸/偏移，不保证输入合法。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_raw_fixed_payloads.h
+原始SHA-256：476fb2c706307755f5397949cd143be3cd1deb0ed3edac06960c336d94169de2
+原始行数：1260。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_offline_log_codecs.h
+ * @brief 手写有界Protobuf wire0/2兼容路径，函数名nanopb不表示调用Nanopb库。decoder先清目标再逐字段写，拒绝不回滚；命令缺必填检查、重复覆盖，文件oneof允许多项。文件CRC仅搬运。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_offline_log_codecs.h
+原始SHA-256：ab187e67263196b93875161ffe4cf9227f4225a203b3f7a299fab03579c0a789
+原始行数：624。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_codecs.h
+ * @brief 只对两Protobuf profile和6个schema表项分发到offline实现；Tiny raw/多数schema UNSUPPORTED，void类型匹配由caller保证。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_codecs.h
+原始SHA-256：8e3ae5961abf28e58d600de09def3e1bf0527937f2e68866e177e642a5fe7f42
+原始行数：145。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_bridge_converters.h
+ * @brief 7字节状态/92字节公告/变长旧文件raw与平面Protobuf转换；未知字段、必填、LOSSY和部分写入各方向不同。tiny↔nanopb为unsupported stubs。converter不执行文件IO或设备动作。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_bridge_converters.h
+原始SHA-256：7f39178a381a4a76edfcfcdb8838621d74c33b336fa85d05c2f2e52696ee79ac
+原始行数：754。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_bridge_routes.h
+ * @brief 六条converter函数指针路由表；描述输入输出预算，不创建桥进程、不验证身份或强制授权。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_bridge_routes.h
+原始SHA-256：18c29c19a391c8782ba885c71e4cef2be777fd7b4d26ab517895567091068d17
+原始行数：52。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @page c03_offline_codes_compat_optional
+ * @brief offline兼容常量的解释。
+ *
+ * 匿名opcode枚举Open1/Chunk2/Close3/Cancel4；匿名status枚举OK0/NOT_FOUND1/IO_ERROR2/INVALID_REQ3/CRC_MISMATCH4/BUSY5/OUT_OF_RANGE6/CAPABILITY_MISSING7。只是协议声明；encoder/decoder不会自行检查文件存在、核CRC或执行权限判断。
+ */

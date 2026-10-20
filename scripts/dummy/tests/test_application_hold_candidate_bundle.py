@@ -1,4 +1,9 @@
 """Offline identity and deny-gate checks for the F405 no-load candidate."""
+##
+# @file test_application_hold_candidate_bundle.py
+# @brief 既有F405默认deny候选与SDK来源/固件产物的离线身份检查。
+#
+# 读取固定兄弟dpsdk_consolidated路径及20260930固件文件，不生成/flash固件，不连接设备。payload原SHA、policy去note后规范JSON SHA、source聚合和model文件SHA是不同对象；文件一致不等于QUALIFIED或runtime许可。
 
 import hashlib
 import json
@@ -17,10 +22,17 @@ IMAGE = DPSDK / "build_dummy/reports/f405-p7-app-48c8-20260930.bin"
 SOURCE_CONTRACT = DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json"
 
 
+##
+# @brief 读既有文件原字节并求SHA，缺文件直接异常，不替造产物。
+# @param path 目标文件Path，读取原字节；是否原始被替换见函数职责。
+# @return 文件原字节SHA-256 hex。
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+##
+# @brief 逐payload与聚合核SHA，再与既有policy/firmware/source/model绑定，profile策略/时序字段须同源；不验证真实机械模型。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_candidate_payloads_and_frozen_d_identity():
     manifest = json.loads((BUNDLE / "manifest.json").read_text())
     payloads = manifest["payloads"]
@@ -50,6 +62,9 @@ def test_candidate_payloads_and_frozen_d_identity():
         assert profile["timing"][key] == source["timing"][key]
 
 
+##
+# @brief 核默认runtime=false/无post_build、profile实机许可false，inspect_bundle只得到verified而非motion_eligible，固定拒绝原因保持。
+# @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_candidate_stays_unqualified_and_preflight_denies_motion():
     manifest = json.loads((BUNDLE / "manifest.json").read_text())
     profile = yaml.safe_load((BUNDLE / "profiles/f405_6dof_bench.yaml").read_text())

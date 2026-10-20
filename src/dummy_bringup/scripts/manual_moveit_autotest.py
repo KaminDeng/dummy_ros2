@@ -1,3 +1,7 @@
+##
+# @file manual_moveit_autotest.py
+# @brief 组织限时随机目标测试、下一段预规划和同 RUN 连续链续接。
+# 测试以一次明确确认建立当前 boot/reference/session 与场景版本；随机候选被拒绝可继续搜索，但服务失联、身份/反馈/授权变化会退出。到期停止补充并在当前已检查路径结束后回 Home；故障或立即中断不强行回程。
 """限时随机位姿测试：下一段预规划、完整碰撞检查、到期回Home、错误即退出。"""
 import math
 import random
@@ -11,6 +15,13 @@ from pathlib import Path
 from manual_panel_messages import moveit_error
 
 
+##
+# @brief 以会话起点建立固定的随机测试包络。
+# 前三轴半宽至少 45°或两倍幅度，后三轴至少 90°或三倍幅度；不是在每个新目标上重新扩张活动区域。
+# @param limits 六轴度制工作范围。
+# @param anchor 本轮开始时六轴位置 rad，后续不随随机游走移动。
+# @param amplitude small/medium/large 变化幅度键。
+# @return tuple：六对 ° 区间，工作范围内保留 2° 余量并围绕 anchor 限制漂移。
 def session_envelope(limits, anchor, amplitude):
     step = dict((key,value) for key,_,value in MOTION_AMPLITUDES)[amplitude]
     return tuple((max(lo+2.,math.degrees(origin)-(max(45.,step*2) if axis<3 else max(90.,step*3))),
@@ -18,6 +29,13 @@ def session_envelope(limits, anchor, amplitude):
                  for axis,((lo,hi),origin) in enumerate(zip(limits,anchor)))
 
 
+##
+# @brief 判断候选是否未进一步远离原会话包络。
+# 若构型改变使起点已在包络外，允许朝包络收回而不要求一步回到包络内。
+# @param goal 候选目标六轴 rad。
+# @param start 当前规划起点六轴 rad。
+# @param envelope 固定六轴 [lo,hi] 包络，°。
+# @return bool：每轴目标到区间的距离不比起点更大，容差 1e-5°。
 def goal_respects_envelope(goal, start, envelope):
     for q,actual,(lo,hi) in zip(goal,start,envelope):
         q,actual = math.degrees(q),math.degrees(actual)
@@ -26,6 +44,17 @@ def goal_respects_envelope(goal, start, envelope):
     return True
 
 
+##
+# @brief 采样符合幅度、方向连续性和腕部偏好的下一随机目标。
+# 生成 32 个局部候选，缩放最大轴差不超过幅度并拒绝过小运动；包络外轴只向原包络收回。按上一段方向余弦选连续候选，near_home 另按 Home 距离优先；无候选抛 ValueError。
+# @param start 下一段规划起点六轴 rad。
+# @param limits 六轴工作范围 °。
+# @param anchor 测试开始时固定六轴 rad。
+# @param direction 上一段六轴位移方向，用于减少无谓折返。
+# @param rng 提供 uniform 的随机源，默认 random 模块。
+# @param amplitude 变化幅度键 small/medium/large。
+# @param preference IK 偏好键，约束腕部符号及候选排序。
+# @return tuple：六轴候选目标 rad，尚待状态有效性和整路径检查。
 def next_test_goal(start, limits, anchor, direction, rng=random, amplitude='small', preference='nearest'):
     step = dict((key,value) for key,_,value in MOTION_AMPLITUDES)[amplitude]
     local = []
@@ -57,6 +86,11 @@ def next_test_goal(start, limits, anchor, direction, rng=random, amplitude='smal
     return min(candidates,key=lambda item:item[0])[1]
 
 
+##
+# @brief 把 ROS Pose 转成末端界面使用的 XYZ 和 RPY。
+# 反三角输入夹到 [-1,1] 以防浮点舍入超域；不改变原 Pose，也不请求执行。
+# @param pose geometry_msgs/Pose，位置米、方向四元数。
+# @return tuple[tuple,tuple]：XYZ 毫米和 roll/pitch/yaw 度。
 def pose_values(pose):
     q = pose.orientation
     roll = math.atan2(2*(q.w*q.x+q.y*q.z),1-2*(q.x*q.x+q.y*q.y))
@@ -65,7 +99,16 @@ def pose_values(pose):
     return (pose.position.x*1000,pose.position.y*1000,pose.position.z*1000),tuple(map(math.degrees,(roll,pitch,yaw)))
 
 
+##
+# @class AutoTestSession
+# @brief 维护测试时间、预规划候选及设备已确认的连续链。
+# active 表示测试生命周期，returning 表示不再加随机目标，executing_home 表示正执行回程。future/stage/samples/checks 属于未来规划，queued 属于完整检查后的候选；chain_pending 尚未收到 Native 续接确认，不能提前作为已生效尾部。
 class AutoTestSession:
+    ##
+    # @brief 创建尚未启动的测试状态和空未来链。
+    # chain_origin 是当前缓存块对应的全局样本索引，chain_phase 是设备报告的微秒相位；chain_version 从 1 起，markers 统计连续跨过的随机目标附近位置，不要求逐目标停车。
+    # @param tab MoveItTab，提供 planner、执行接口、主面板及日志。
+    # @return None；执行上述状态更新、界面或日志操作。
     def __init__(self, tab):
         self.tab = tab
         self.active = False
@@ -85,11 +128,18 @@ class AutoTestSession:
         self.chain_pending = None
         self.chain_version = 1
         self.chain_origin = 0
+        ##
+        # chain_phase 单位 µs；chain_origin/markers 为 20 ms 全局样本索引，比较时乘 20000。chain_received_at 为宿主 monotonic 秒。
         self.chain_phase = 0
         self.chain_received_at = None
         self.chain_markers = []
         self.chain_draining = False
 
+    ##
+    # @brief 确认条件后冻结测试身份、场景、幅度与动态参数并开始预规划。
+    # 连续模式还要求底层连续执行开启；chain_budget=seconds+60 s 留链尾预算。确认前后重新检查可执行条件，先 invalidate 旧手工规划，再记录本轮实际 anchor 和身份；不会用前一轮授权或场景版本。
+    # @param seconds 随机测试宿主时长秒数，允许 0.1..86400；连续模式最多 3420。
+    # @return bool：测试成功进入活动状态为 True；忙、拒绝确认或初始准备失败为 False。
     def start(self, seconds):
         t = self.tab
         if self.active or t.executing or t.pending or t.panel.busy or not t.request_ready():return False
@@ -107,6 +157,8 @@ class AutoTestSession:
         t.invalidate();t.preview_timer.stop()
         self.active,self.returning,self.executing_home = True,False,False
         self.completed,self.result = 0,None
+        ##
+        # 冻结本轮运动身份和本地场景版本；后续即使参考不变，只要 session 改变也必须退出，不能借旧自动确认继续。
         self.identity = t.execution_identity()
         self.scene_version = t.scene_revision()
         self.started_at = time.monotonic();self.deadline = self.started_at+seconds
@@ -130,11 +182,20 @@ class AutoTestSession:
         t.collision_timer.start()
         return True
 
+    ##
+    # @brief 本地取消未来规划/碰撞等待并丢弃尚未提交候选。
+    # 清 future、checks、samples、queued、stage；不撤回 Native 已确认的运行路径，也不保证 MoveIt 服务端已经停止计算。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _drop_planning(self):
         if self.future is not None:self.future.cancel()
         for future in self.checks:future.cancel()
         self.future = None;self.checks = [];self.samples = deque();self.queued = None;self.stage = None
 
+    ##
+    # @brief 请求结束随机阶段并在安全尾段后回 Home。
+    # 设置 returning，丢弃未来规划，但不立即停止当前设备路径；后续 tick 等既有路径排空再规划 Home。已 returning 时不重复处理。
+    # @param reason 结束原因；“测试时长到期”区别于用户提前结束。
+    # @return None；执行上述状态更新、界面或日志操作。
     def request_finish(self, reason='用户提前结束'):
         if not self.active or self.returning:return
         self.returning = True
@@ -142,14 +203,31 @@ class AutoTestSession:
         self._drop_planning()
         self.tab.record('AUTO_TEST_RETURNING',reason=reason,completed=self.completed)
 
+    ##
+    # @brief 更新可选自动测试状态标签与颜色。
+    # 仅影响 UI；结果是否完成仍由实际路径与 Home 确认决定。
+    # @param text 操作员状态说明。
+    # @param color Qt CSS 颜色字符串。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _status(self, text, color):
         if hasattr(self.tab,'auto_status'):
             self.tab.auto_status.setText(text)
             self.tab.auto_status.setStyleSheet(f'color: {color}; font-weight: 600;')
 
+    ##
+    # @brief 把用户立即中断转换为橙色 interrupted 结果。
+    # 委托 abort 默认请求受控停车保持；不设置 returning，不自动回 Home。
+    # @return None；执行上述状态更新、界面或日志操作。
     def interrupt(self):
         self.abort('用户手动中断', result='interrupted')
 
+    ##
+    # @brief 终止测试、释放未来规划资源并按需请求停车。
+    # 先置 active=False，再调用 tab.cancel_execution，避免相互递归；删除未确认续接临时文件，清未来队列和 busy。不能把本地清理视为已停车，真正确认由面板取消/释放流程负责。
+    # @param reason 中断原因，写入日志并显示。
+    # @param stop True 请求 CANCEL_HOLD，缺接口时 STOP；False 表示外层已负责停止或尚未运动。
+    # @param result error 为异常红色，interrupted 等其他结果为提示橙色。
+    # @return None；执行上述状态更新、界面或日志操作。
     def abort(self, reason, stop=True, result='error'):
         if not self.active:return
         if self.chain_pending is not None:
@@ -165,6 +243,10 @@ class AutoTestSession:
             if hasattr(self.tab.panel,'cancel_motion_hold'):self.tab.panel.cancel_motion_hold()
             else:self.tab.panel.release('STOP')
 
+    ##
+    # @brief 确认实际新鲜 Home 到位后结束本轮并保留使能。
+    # 要求 actual_q 距配置 Home 逐轴 ≤0.003 rad；不符合则 abort。结果为 completed 或 finished_early，记录真实经过秒数及完成数量，不以目标虚影或时长到期直接判通过。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _complete(self):
         home = tuple(math.radians(q) for q in self.tab.panel.cfg['home_deg'])
         if not self.tab.panel.fresh() or max(abs(a-b) for a,b in zip(self.tab.panel.actual_q,home)) > .003:
@@ -177,6 +259,10 @@ class AutoTestSession:
         self.tab.status.setText(text)
         self._status(text, '#15803d' if self.result == 'completed' else '#b45309')
 
+    ##
+    # @brief 消费 MoveIt 页已用设备收据确认的整路径完成。
+    # Home 路径完成后调用 _complete；普通分段模式累计一个目标。连续链排空时统计尚未跨过的 markers 和终点，清链缓存，未 returning 才从实际位置重新启动规划。
+    # @return None；执行上述状态更新、界面或日志操作。
     def on_path_completed(self):
         if not self.active:return
         if self.executing_home:
@@ -193,6 +279,10 @@ class AutoTestSession:
         self.tab.panel.busy = True
         self.tab.record('AUTO_TEST_CYCLE_COMPLETED',completed=self.completed)
 
+    ##
+    # @brief 为一个新候选建立独立服务截止并请求状态有效性。
+    # attempts 递增，每候选重新给 12 s 服务预算；首候选沿上一运动方向，后续失败重采样取消方向偏置。正常碰撞/无逆解只筛选候选，不能把整轮搜索时间误判成服务失联。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _candidate(self):
         self.attempts += 1
         # 候选碰撞/无逆解是正常筛选，持续搜索直到总测试到期或用户中断。
@@ -204,6 +294,12 @@ class AutoTestSession:
         self.future = self.tab.planner.request_validity(self.goal)
         self.stage = 'validity'
 
+    ##
+    # @brief 以指定六轴起点开始随机候选或 Home 回程规划。
+    # 起点到 Home 已在 0.003 rad 内则直接调用实际 Home 完成检查；否则先查询目标状态有效性，并启动高频轮询。
+    # @param start 预定段起点六轴 rad；可为未来已检查段末点，非总是当前实测值。
+    # @param home True 直接以配置 Home 为目标；False 采样随机目标。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _begin(self, start, home=False):
         self.plan_start = tuple(start);self.plan_home = home
         self.plan_deadline = time.monotonic()+12.;self.attempts = 0
@@ -215,6 +311,10 @@ class AutoTestSession:
         else:self._candidate()
         self.tab.collision_timer.start()
 
+    ##
+    # @brief 非阻塞推进候选有效性、FK、IK、规划、拼接及完整曲线检查。
+    # random: validity→FK→IK→selected-validity→plan→checking；Home 保持显式关节目标不再做 IK。普通候选碰撞/规划失败重采样，Home 失败则退出。核对路径首点 1e-9 rad、末点 0.003 rad；连续插值/拼接后重新采样检查，最多八个并行请求，全部通过才生成 queued。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _poll_plan(self):
         if self.stage is None:return
         if time.monotonic() >= self.plan_deadline:raise ValueError('规划或碰撞服务长时间无响应')
@@ -267,6 +367,8 @@ class AutoTestSession:
                 # 随机测试无需执行低质量的多圈绕路。允许局部窗口的一次完整
                 # 往返余量（两侧各30°，额外行程120°），其余继续寻找新目标。
                 # 人工指定目标及Home回程仍保留完整工作域，不受此候选筛选限制。
+                ##
+                # 随机目标质量筛选只拒绝 J6 额外绕行超过 120° 的候选；Home 回程和人工目标保留完整工作域，不把性能偏好当关节硬限位。
                 wrist_travel=sum(abs(b[5]-a[5]) for a,b in zip(self.path,self.path[1:]))
                 wrist_direct=abs(self.path[-1][5]-self.path[0][5])
                 if not self.plan_home and wrist_travel-wrist_direct>math.radians(120.):
@@ -289,6 +391,8 @@ class AutoTestSession:
                         self._candidate();return
                 actual_path = (self.joined_path.points[self.join_cut:] if self.joined_path else
                                self.continuous_path.points if self.continuous_path else execution_polyline(self.path))
+                ##
+                # 待检查样本来自真实要送设备的连续曲线或拼接后修改区，非只检查原规划路点；碰撞结果全部完成才设置 queued。
                 self.samples = deque(collision_samples(actual_path));self.stage = 'checking'
         if self.stage == 'checking':
             remaining = []
@@ -313,6 +417,10 @@ class AutoTestSession:
                                    goal=self.goal,start=self.plan_start,checked_at=time.monotonic())
                 self.stage = None
 
+    ##
+    # @brief 把已完整检查的候选交给正常执行链。
+    # 实测位置须距候选 start ≤0.003 rad；检查已超 2 s 则从实际位置重新规划，不复用旧结果。填目标/位姿、绑定当前场景后 confirmed=True 调 start_execution；确认对象仍不活动则报错。非连续随机段起步后立即从该段目标预规划下一段。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _submit(self):
         item = self.queued
         if max(abs(a-b) for a,b in zip(self.tab.panel.actual_q,item['start'])) > .003:
@@ -332,6 +440,10 @@ class AutoTestSession:
         if not t.executing:raise ValueError('设备未接受自动测试运动段')
         if not self.executing_home and not self.chain_enabled:self._begin(item['goal'])
 
+    ##
+    # @brief 轮询测试安全条件、时长到期、未来规划和链续接。
+    # 每轮校验场景就绪/版本、反馈新鲜、授权、boot/reference/session 及生命周期；任何异常统一 abort。到期 request_finish，既有执行结束后规划 Home；链与普通 queued 提交分开处理，未来规划不越过设备接收回执。
+    # @return None；执行上述状态更新、界面或日志操作。
     def tick(self):
         if not self.active:return
         try:
@@ -359,6 +471,10 @@ class AutoTestSession:
         except Exception as error:
             self.abort(str(error))
 
+    ##
+    # @brief 按 Native 已确认缓冲的进度播放目标虚影。
+    # chain_phase 为设备微秒；从最近回执宿主时间仅外推最多 150 ms，再给 150 ms 预览前瞻。丢进度时不无限推进虚影，插值结果只写目标，不改实际反馈。
+    # @return None；执行上述状态更新、界面或日志操作。
     def update_preview(self):
         """播放Native已确认的命令缓冲，前瞻150ms；失去进度时不无限外推。"""
         if (not self.active or not self.chain_live or self.chain_path is None or
@@ -371,6 +487,14 @@ class AutoTestSession:
         q=tuple(a+(b-a)*ratio for a,b in zip(path.points[first],path.points[last]))
         self.tab.panel.set_preview_pose([math.degrees(v) for v in q],announce=False)
 
+    ##
+    # @brief 在本地安装启动前曲线或已被 Native 确认的新尾部。
+    # 更新方向和末目标；未 returning 且运行前/剩余缓冲少于 10 s 时从新末点开始下一候选。运行中的更新必须等 PATH_UPDATED 后才能调用。
+    # @param item 对应已检查目标的候选字典。
+    # @param path 已检查的 PreparedPath。
+    # @param origin 该缓存块第一个样本在整条链中的全局索引。
+    # @param marker 可选经过上一目标附近的全局样本索引，统计连续目标完成。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _chain_install(self, item, path, origin, marker=None):
         self.chain_path = path;self.chain_origin = origin;self.chain_last = item
         if marker is not None:self.chain_markers.append(marker)
@@ -379,6 +503,10 @@ class AutoTestSession:
             remaining=(origin+len(path.points)-1)*.02-self.chain_phase/1e6
             if not self.chain_live or remaining<10.:self._begin(path.points[-1])
 
+    ##
+    # @brief 准备足够前瞻后启动同 RUN 链并滚动补充已检查尾部。
+    # 起步前至少 6 s、至少两个连接 marker；运行中等待 MOVE_STARTED 后才续接。新曲线修改点须领先当前相位至少 400 ms；迟到则沿原已检查尾段停车。只裁掉已过前缀并保留四点回看，EXTEND_PATH 带 motion/version/origin/unchanged_through 和摘要，2 s 内等确认，确认前禁止从旧尾点再规划。
+    # @return None；执行上述状态更新、界面或日志操作。
     def _chain_tick(self):
         if self.chain_live and self.tab.started_motion is None:return
         if self.chain_pending is not None:
@@ -396,6 +524,8 @@ class AutoTestSession:
                 marker=self.chain_origin+closest
             if self.chain_live:
                 cut_absolute=self.chain_origin+item['join_cut']
+                ##
+                # 400000 µs 是续接修改点最小前瞻；不足时不强行改在途命令，只停止补充并排空既有安全尾段。
                 if cut_absolute*20000-self.chain_phase<400000:
                     self.tab.record('AUTO_TEST_CHAIN_LATE',phase_us=self.chain_phase,cut=cut_absolute)
                     # 原尾段已经过完整检查，更新迟到只排空，不修改在途命令。
@@ -428,6 +558,12 @@ class AutoTestSession:
             remaining=(self.chain_origin+len(self.chain_path.points)-1)*.02-self.chain_phase/1e6
             if remaining<10. and self.chain_phase>0:self._begin(self.chain_path.points[-1])
 
+    ##
+    # @brief 消费连续链进度、更新成功或安全拒绝回执。
+    # 核对当前 boot/reference/session 和启动 motion，更新相位与接收时刻。成功须版本恰好 +1 才安装 pending 尾部并延长段等待；更新拒绝清未来规划但沿原安全尾部排空。markers 按设备相位跨越统计，不意味着目标处实际停稳。
+    # @param event PATH_PROGRESS、PATH_UPDATED 或 PATH_UPDATE_REJECTED。
+    # @param parts 包含身份、motion、path_phase_us 与 path_version 的事件字段。
+    # @return bool：属于活动连续链的上述事件时 True，其他 False 交普通执行处理。
     def native_event(self, event, parts):
         if not self.active or not self.chain_enabled:return False
         if event not in ('PATH_PROGRESS','PATH_UPDATED','PATH_UPDATE_REJECTED'):return False
@@ -437,6 +573,8 @@ class AutoTestSession:
         self.chain_phase=int(parts['path_phase_us'])
         self.chain_received_at=time.monotonic()
         if event=='PATH_UPDATED':
+            ##
+            # PATH_UPDATED 是替换尾部的提交点：先核对待确认请求与新版本，才能换 chain_path 并从新终点预规划。
             pending=self.chain_pending
             if pending is None or int(parts['path_version'])!=self.chain_version+1:
                 self.abort('连续轨迹回执版本不匹配');return True

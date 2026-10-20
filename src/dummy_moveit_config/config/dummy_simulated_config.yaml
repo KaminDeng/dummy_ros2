@@ -1,12 +1,18 @@
+# @file dummy_simulated_config.yaml
+# @brief 历史MoveIt Servo演示参数；位置轨迹话题需与所启动控制器实际匹配。
+# @details 它与当前Qt面板的MoveIt服务及设备许可是不同入口，不能因Servo开启碰撞检查就当作已建立实机授权。
 ###############################################
 # Modify all parameters related to servoing here
 ###############################################
 # adapt to Dummy by Muzhxiaowen, check out the details on bilibili.com
 
+# 演示模式选择，当前false；它不会自行启动Gazebo或创建真实硬件连接。
 use_gazebo: false # Whether the robot is started in a Gazebo simulation environment
 
 ## Properties of incoming commands
+# unitless将输入按下面scale缩放；speed_units则由调用方提供物理速度。不要把[-1,1]输入直接当rad。
 command_in_type: "unitless" # "unitless"> in the range [-1:1], as if from joystick. "speed_units"> cmds are in m/s and rad/s
+# 无量纲输入到物理速度的比例：linear为m/s、rotational和本机器人joint为rad/s。
 scale:
   # Scale parameters are only used if command_in_type=="unitless"
   linear:  0.4  # Max linear velocity. Unit is [m/s]. Only used for Cartesian commands.
@@ -18,11 +24,13 @@ scale:
 # override_velocity_scaling_factor = 0.0 # valid range [0.0:1.0]
 
 ## Properties of outgoing commands
+# 输出名义周期0.034秒；low_latency_mode=false使用周期模式，不保证系统调度没有抖动。
 publish_period: 0.034  # 1/Nominal publish rate [seconds]
 low_latency_mode: false  # Set this to true to publish as soon as an incoming Twist command is received (publish_period is ignored)
 
 # What type of topic does your robot driver expect?
 # Currently supported are std_msgs/Float64MultiArray or trajectory_msgs/JointTrajectory
+# 输出JointTrajectory；publish_joint_*选择携带的位置/速度/加速度字段，不是修改硬件接口能力。
 command_out_type: trajectory_msgs/JointTrajectory
 
 # What to publish? Can save some bandwidth as most robots only require positions or velocities
@@ -31,15 +39,18 @@ publish_joint_velocities: true
 publish_joint_accelerations: false
 
 ## Plugins for smoothing outgoing commands
+# 平滑插件类名；平滑只改变指令整形，不替代碰撞、动力学限额或设备守卫。
 smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
 
 # If is_primary_planning_scene_monitor is set to true, the Servo server's PlanningScene advertises the /get_planning_scene service,
 # which other nodes can use as a source for information about the planning environment.
 # NOTE: If a different node in your system is responsible for the "primary" planning scene instance (e.g. the MoveGroup node),
 # then is_primary_planning_scene_monitor needs to be set to false.
+# 本演示提供主规划场景服务；若同域另有主场景实例，须由装配配置避免重复服务，而不是自动合并。
 is_primary_planning_scene_monitor: true
 
 ## MoveIt properties
+# 组名与SRDF对应，planning_frame及下面两个frame名都须在所加载TF/模型中存在。
 move_group_name:  dummy_arm  # Often 'manipulator' or 'arm'
 planning_frame: base_link  # The MoveIt planning frame. Often 'base_link' or 'world'
 
@@ -48,25 +59,31 @@ ee_frame_name: link6_1_1 # The name of the end effector link, used to return the
 robot_link_command_frame:  base_link  # commands must be given in the frame of a robot link. Usually either the base or end effector
 
 ## Stopping behaviour
+# 输入静默0.1秒触发Servo停止输出策略；下项仅重复发布4条halt指令，不构成实体已静止/失能的证明。
 incoming_command_timeout:  0.1  # Stop servoing if X seconds elapse without a new command
 # If 0, republish commands forever even if the robot is stationary. Otherwise, specify num. to publish.
 # Important because ROS may drop some messages and we need the robot to halt reliably.
 num_outgoing_halt_msgs_to_publish: 4
 
 ## Configure handling of singularities and joint limits
+# 按运动学条件数开始减速，hard_stop阈值更高；这两项无长度/角度单位，不是几何距离。
 lower_singularity_threshold:  17.0  # Start decelerating when the condition number hits this (close to singularity)
 hard_stop_singularity_threshold: 30.0 # Stop when the condition number hits this
+# 关节限位缓冲为rad；离开奇异位形阈值另由乘子调整。
 joint_limit_margin: 0.1 # added as a buffer to joint limits [radians]. If moving quickly, make this larger.
 leaving_singularity_threshold_multiplier: 2.0 # Multiply the hard stop limit by this when leaving singularity (see https://github.com/ros-planning/moveit2/pull/620)
 
 ## Topic names
+# ~前缀是当前节点私有话题；实际名称随节点名/namespace展开，joint_topic则为绝对/joint_states。
 cartesian_command_in_topic: ~/delta_twist_cmds  # Topic for incoming Cartesian twist commands
 joint_command_in_topic: ~/delta_joint_cmds # Topic for incoming joint angle commands
 joint_topic: /joint_states
 status_topic: ~/status # Publish status to this topic
+# 历史演示输出到/dummy_arm_controller/joint_trajectory；与本包_internal_arm_controller及公开Action入口不同，必须由所选演示launch明确匹配。
 command_out_topic: /dummy_arm_controller/joint_trajectory # Publish outgoing commands here
 
 ## Collision checking for the entire robot body
+# 启用Servo自体/场景接近减速；collision_check_rate为Hz，两个proximity_threshold为米。离散检测频率不能直接当连续时间的安全保证。
 check_collisions: true # Check collisions?
 collision_check_rate: 10.0 # [Hz] Collision-checking can easily bog down a CPU if done too often.
 self_collision_proximity_threshold: 0.001 # Start decelerating when a self-collision is this far [m]

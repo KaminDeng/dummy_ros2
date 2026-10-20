@@ -1,4 +1,9 @@
 """Case-specific evidence adapter for the native Gazebo R02 runtime."""
+##
+# @file r02.py
+# @brief 按单case实际Gazebo探针观测生成证据的R02适配器。
+#
+# 先ros2 service list确认controller_manager，再运行gazebo_runtime_probe.py；入口不自行启动Gazebo。runtime缺失/退出3为NOT_RUN，已执行但观测不全为FAIL。source哈希只绑定所列当前文件，不证明运行进程由该源码新鲜构建。
 
 from __future__ import annotations
 
@@ -36,6 +41,9 @@ SOURCES = (
 RUNTIME_CASES = {"FRE11", "ROS01", "ROS02", "ROS03", "ROS11"}
 
 
+##
+# @brief 依固定SOURCES拼相对名和原字节，缺失文件用missing占位；本函数不判文件是否足够完整。
+# @return 所列文件内容/缺失占位的SHA-256。
 def _source_hash() -> str:
     digest = sha256()
     for relative in SOURCES:
@@ -45,6 +53,10 @@ def _source_hash() -> str:
     return digest.hexdigest()
 
 
+##
+# @brief 用8s服务列表检查再以75s期限跑单case探针、读临时JSON；区分_runtime_unavailable与_probe_failure。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return probe观测dict，或带_runtime_unavailable/_probe_failure的字典。
 def _run_runtime_probe(case_id: str) -> dict[str, Any]:
     """Run exactly one live observation; exit code 3 means no usable runtime."""
     try:
@@ -84,16 +96,29 @@ def _run_runtime_probe(case_id: str) -> dict[str, Any]:
         return observations
 
 
+##
+# @brief 接受int/float排除bool，不额外核finite。
+# @param value 待核对象，仅类型检查，bool排除。
+# @return 是否int/float且非bool；NaN/inf仍可能True。
 def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+##
+# @brief 仅要求list长度及每项dict/time_sec数值形状；不核单调、有限或真实采样来源。
+# @param value 待核list/dict/time_sec形状对象。
+# @param minimum 时序list最少样本数，默认2。
+# @return 是否满足最小长度和time_sec类型形状。
 def _valid_time_series(value: object, minimum: int = 2) -> bool:
     return isinstance(value, list) and len(value) >= minimum and all(
         isinstance(sample, dict) and _is_number(sample.get("time_sec")) for sample in value
     )
 
 
+##
+# @brief 核所有component名称/类型含gazebo、计数一致及三个后端边界布尔；是报告字段校验，不是独立鉴别运行进程。
+# @param observed 已读取或人工注入的观测字典，字段不是本函数独立测量。
+# @return 报告声明/计数是否同时满足native后端边界。
 def _valid_native_gazebo_identity(observed: dict[str, Any]) -> bool:
     components = observed.get("hardware_components")
     if not isinstance(components, list) or not components:
@@ -113,6 +138,10 @@ def _valid_native_gazebo_identity(observed: dict[str, Any]) -> bool:
     )
 
 
+##
+# @brief 核Gazebo身份、pause/resume请求及暂停前后clock推进/暂停停止标记，重复clock消息不等于时间推进。
+# @param observed 已读取或人工注入的观测字典，字段不是本函数独立测量。
+# @return 该case所列字段门槛是否全部满足。
 def _validate_fre11(observed: dict[str, Any]) -> bool:
     return (
         _valid_native_gazebo_identity(observed)
@@ -129,6 +158,10 @@ def _validate_fre11(observed: dict[str, Any]) -> bool:
     )
 
 
+##
+# @brief 核controller_manager、控制器列表/active计数、至少两State样本及公开Action/Gazebo组件声明。
+# @param observed 已读取或人工注入的观测字典，字段不是本函数独立测量。
+# @return 该case所列字段门槛是否全部满足。
 def _validate_ros01(observed: dict[str, Any]) -> bool:
     return (
         _valid_native_gazebo_identity(observed)
@@ -142,6 +175,10 @@ def _validate_ros01(observed: dict[str, Any]) -> bool:
     )
 
 
+##
+# @brief 核目标accepted/状态4、至少三时序样本、J1变化>0.02rad及末误差<0.05rad。
+# @param observed 已读取或人工注入的观测字典，字段不是本函数独立测量。
+# @return 该case所列字段门槛是否全部满足。
 def _validate_ros02(observed: dict[str, Any]) -> bool:
     return (
         _valid_native_gazebo_identity(observed)
@@ -157,6 +194,10 @@ def _validate_ros02(observed: dict[str, Any]) -> bool:
     )
 
 
+##
+# @brief 核无发命令、六轴漂移<0.02rad、基座平移<0.002m、固定基座和protobuf缺省轴声明。
+# @param observed 已读取或人工注入的观测字典，字段不是本函数独立测量。
+# @return 该case所列字段门槛是否全部满足。
 def _validate_ros03(observed: dict[str, Any]) -> bool:
     axis_drift = observed.get("joint_axis_drift_rad")
     return (
@@ -178,6 +219,10 @@ def _validate_ros03(observed: dict[str, Any]) -> bool:
     )
 
 
+##
+# @brief 核锁定_internal_arm_controller及JTC类型/配置接受声明，不仅凭列表非空就PASS。
+# @param observed 已读取或人工注入的观测字典，字段不是本函数独立测量。
+# @return 该case所列字段门槛是否全部满足。
 def _validate_ros11(observed: dict[str, Any]) -> bool:
     return (
         _valid_native_gazebo_identity(observed)
@@ -201,8 +246,16 @@ VALIDATORS = {
 }
 
 
+##
+# @brief 不可用观测转NOT_RUN，其余按case专属validator归PASS/FAIL并保留probe观测及JSON trace。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param observations 要验证/嵌入结果的观测字典，保留其原有证据层级。
+# @return 含Gazebo结果、trace和原观测的证据字典。
 def _runtime_result(case_id: str, observations: dict[str, Any]) -> dict[str, Any]:
     source_hash = _source_hash()
+    ##
+    # @par 未运行与失败
+    # 运行时缺失单独NOT_RUN；已有probe执行却字段不全/失败为FAIL且executed=True。不能把两者都显示为通过。
     unavailable = observations.get("_runtime_unavailable")
     if isinstance(unavailable, str):
         return not_run_case(
@@ -230,6 +283,11 @@ def _runtime_result(case_id: str, observations: dict[str, Any]) -> dict[str, Any
     }
 
 
+##
+# @brief 严格校验三字段stimulus；运行时case真跑probe，MOD05转离线J3范围unittest，未知case拒绝。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r02_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     expected = {"case_id": case_id, "hardware": "none", "test_only": True}
     if stimulus != expected:

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """构造哈希自洽但未受信任的独立契约，保留原 C++ 拒绝断言。"""
+##
+# @file run_device_profile_fixture.py
+# @brief 构造摘要自洽但不受信任的外来bundle并运行原C++拒绝断言。
+#
+# 只在临时副本sil_j1追加注释、重算全部payload及聚合hash，再运行传入程序比较trusted/foreign。自洽SHA并不证明trusted pin或授权；不修改原冻结bundle。
 
 from pathlib import Path
 import hashlib
@@ -10,6 +15,9 @@ import sys
 import tempfile
 
 
+##
+# @brief argv给测试程序/trusted bundle，copytree后变异并重签manifest，返回C++退出码；不改变其拒绝oracle。
+# @return C++测试真实退出码；临时副本随后删除。
 def main() -> int:
     executable, trusted_bundle = map(Path, sys.argv[1:])
     with tempfile.TemporaryDirectory(prefix="dummy-foreign-profile-test-") as temporary:

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file optimize_step_visuals.py
+# @brief 按材质组离线简化毫米OBJ视觉网格。
+#
+# 写候选OBJ、复制MTL并生成每组面数/采样误差和原始文件SHA报告；不修改URDF或碰撞体。
+# 输出只禁止与源目录resolve完全相同，未禁止其成为源目录子目录；误差是有限双向采样，不是连续Hausdorff上界或机械间隙证明。
 """离线优化 STEP 彩色 OBJ；只输出视觉资源，不连接 ROS 或改动碰撞几何。
 
 依赖 numpy、trimesh、vtk。输入为毫米，输出目录必须与源目录分离。
@@ -15,6 +21,11 @@ import vtk
 from vtk.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray, vtk_to_numpy
 
 
+##
+# @brief 读取三角OBJ顶点和材质面组。
+# @param path 文本OBJ，顶点坐标按mm，面必须在usemtl后且恰3个顶点。
+# @return (numpy顶点数组,材质名到零基面索引列表的dict)；形状不支持ValueError。
+# 只处理v/usemtl/f；忽略法线/纹理等行，面引用只取斜杠前整数并减1。不是完整OBJ语法实现，不额外核任意负索引或越界引用。
 def read_obj(path):
     vertices, groups, name = [], {}, None
     for line in path.read_text().splitlines():
@@ -33,6 +44,10 @@ def read_obj(path):
     return np.array(vertices), groups
 
 
+##
+# @brief 把三角Trimesh转换为VTK多边形数据。
+# @param mesh 顶点/三角面数组对象，调用者保证形状。
+# @return vtkPolyData；numpy_to_vtk使用deep拷贝，避免返回对象依赖临时numpy存储。
 def polydata(mesh):
     points = vtk.vtkPoints()
     points.SetData(numpy_to_vtk(mesh.vertices, deep=True))
@@ -46,6 +61,12 @@ def polydata(mesh):
     return result
 
 
+##
+# @brief 测源所有顶点及三角中心到目标面的最大绝对距离。
+# @param source 采样源网格，单位mm。
+# @param target VTK隐式距离的目标网格。
+# @return 有限采样最大距离mm；只单向，双向误差由调用者两次取max。
+# 不检查连续三角面上所有点，也不提供Hausdorff严格上界；空采样可能使max报错。
 def sample_error(source, target):
     distance = vtk.vtkImplicitPolyDataDistance()
     distance.SetInput(polydata(target))
@@ -54,6 +75,12 @@ def sample_error(source, target):
     return max(abs(distance.EvaluateFunction(p)) for p in points)
 
 
+##
+# @brief 用VTK DecimatePro构造一个保拓扑候选。
+# @param source 源三角网格mm。
+# @param ratio 请求保留比例，实际SetTargetReduction为1−ratio；此函数不独立检查范围。
+# @return process=False的Trimesh候选；不在此判定其是否满足调用者误差阈值。
+# 绝对误差参数0.025mm、特征角40度、保边界顶点；这些是简化器输入，仍须sample_error独立核对。
 def simplify(source, ratio):
     decimator = vtk.vtkDecimatePro()
     decimator.SetInputData(polydata(source))
@@ -69,6 +96,14 @@ def simplify(source, ratio):
     return trimesh.Trimesh(vertices=vtk_to_numpy(result.GetPoints().GetData()), faces=faces, process=False)
 
 
+##
+# @brief 逐材质尝试简化并写单个OBJ/MTL候选。
+# @param path 输入OBJ，要求同目录有同stem的MTL。
+# @param output 已存在候选输出目录。
+# @param max_error 双向采样误差上限mm。
+# @return 文件名、源/输出原字节SHA及各材质统计dict；文件/几何错误传播。
+# 面数>500从保留比例0.12尝试，每次乘1.8直到小于0.95；首个采样合格候选保留，否则使用原网格、误差记0。
+# 重新串接每组顶点并累加offset生成1基面索引，保材质标签；只复制MTL，未额外复制其可能引用的纹理文件。
 def optimize_file(path, output, max_error):
     vertices, groups = read_obj(path)
     lines, offset, stats = ['mtllib ' + path.with_suffix('.mtl').name], 0, []
@@ -97,6 +132,10 @@ def optimize_file(path, output, max_error):
                 sha256=hashlib.sha256(destination.read_bytes()).hexdigest(), groups=stats)
 
 
+##
+# @brief 校验输出及误差阈值，批处理full_step彩色OBJ。
+# @return 无显式返回值；缺文件/相同目录/阈值不在(0,1]mm由parser.error拒绝，其它异常传播。
+# 默认阈值0.15mm，写visual-mesh-verification.json并打印总面数；没有修改碰撞模型/运动学或实机资格。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='含 full_step_*-colors.obj/mtl 的源目录')

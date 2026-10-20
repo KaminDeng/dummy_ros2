@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """Contract-consumption tests for the R01 model task."""
+##
+# @file test_r01_contract.py
+# @brief 当前镜像bundle文件SHA、聚合摘要及兄弟SDK字节一致性检查。
+#
+# 只读原始manifest/payload和固定dpsdk_consolidated/contracts路径，不运行codec/设备。摘要一致证明文件完整/镜像一致，不等于模型真实校准、runtime activation或执行许可。
 
 from __future__ import annotations
 
@@ -14,7 +19,12 @@ BUNDLE = WORKSPACE_ROOT / "contracts" / "dummy_robot_v2"
 DPSDK_BUNDLE = WORKSPACE_ROOT.parent / "dpsdk_consolidated" / "contracts" / "dummy_robot_v2"
 
 
+##
+# @brief 本套件unittest验收集合；实际子进程与证据层级见文件职责，各方法断言原样保留。
 class R01ContractTest(unittest.TestCase):
+    ##
+    # @brief 核固定release/schema、14个payload排序去重、各文件原SHA，以及path:sha换行清单聚合SHA。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_model_bundle_is_complete_and_hash_verified(self):
         manifest_path = BUNDLE / "manifest.json"
         self.assertTrue(manifest_path.is_file(), "wire-v2 bundle is missing")
@@ -56,6 +66,9 @@ class R01ContractTest(unittest.TestCase):
             hashlib.sha256(listing.encode()).hexdigest(),
         )
 
+    ##
+    # @brief 要求固定兄弟SDK镜像目录、manifest完整相等并逐payload字节一致；不自动从环境变量选择SDK。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_wire_v2_mirror_matches_current_dpsdk_release(self):
         self.assertTrue(DPSDK_BUNDLE.is_dir(), "sibling DPSDK contract bundle is missing")
         ros_manifest = json.loads((BUNDLE / "manifest.json").read_text())

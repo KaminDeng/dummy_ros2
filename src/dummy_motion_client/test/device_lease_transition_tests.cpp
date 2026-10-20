@@ -1,18 +1,46 @@
+/**
+ * @file device_lease_transition_tests.cpp
+ * @brief 直接复用device_action_gate实现的租约、释放和准入helper测试。
+ *
+ * DUMMY_ACTION_GATE_TEST去掉产品main；include生产cpp让本编译单元检查真实helper，不代表启动该ROS节点。
+ * 本文件只构造内存对象/人工快照，未发设备请求。有限续租资格、重试拒绝凭据与实际许可严格分开。
+ */
 #define DUMMY_ACTION_GATE_TEST
 #include "../src/device_action_gate.cpp"
 #include "action_test_support.hpp"
 
 #include <cassert>
 
+/**
+ * @brief 仅记Enable请求且始终无回执的管理端。
+ */
 struct EnableClient final : dummy_motion_client::ManagementClient {
   dummy_motion_client::ManageRequest submitted{};
+  /**
+   * @brief 保存最近请求，固定逻辑ID1。
+   * @param request 待核Enable身份。
+   * @par 未命名参数
+   * Hostµs忽略。
+   * @return 1，非设备接受确认。
+   */
   std::uint64_t submit(const dummy_motion_client::ManageRequest &request,std::uint64_t) override {
     submitted=request;
     return 1U;
   }
+  /**
+   * @brief 始终无回执。
+   * @par 未命名参数
+   * 请求ID忽略。
+   * @return 空optional。
+   */
   std::optional<dummy_motion_client::ManageReply> poll(std::uint64_t) override { return {}; }
 };
 
+/**
+ * @brief 终点Hold仅在完整ReleaseAvailability下可排队DisableAndRelease。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * status新鲜/management相干、FUNCTIONAL依据、enabled、permit-refresh、bootstrap及双Hold/transport逐项置false均拒绝；pending/busy/releasing也拒绝。内部reject通过成员指针翻转一个前提，不发送管理请求。
+ */
 void release_after_completed_goal() {
   using dummy_motion_client::ReleaseAvailability;
   using dummy_motion_client::release_operation_available;
@@ -61,6 +89,11 @@ void release_after_completed_goal() {
   assert(release_operation_available(blocked));
 }
 
+/**
+ * @brief 只把wire UnreferencedIdle1、session/ref清零视为释放。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * ReferencedIdle2或ref残留都不够，且仍需匹配boot/motion/management。
+ */
 void unreferenced_idle_is_the_only_release_observation() {
   using namespace dummy_motion_client;
   wire::DummyDeviceStatusV2 status;
@@ -82,6 +115,11 @@ void unreferenced_idle_is_the_only_release_observation() {
   assert(!released_idle_observation(status,state));
 }
 
+/**
+ * @brief 释放Idle还需bootstrap同boot、session与epoch相干。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 测试使用64位boot；不能只凭某一流Idle覆盖另一流旧授权。
+ */
 void released_idle_requires_coherent_bootstrap_authority() {
   using namespace dummy_motion_client;
   wire::DummyDeviceStatusV2 status;
@@ -103,6 +141,11 @@ void released_idle_requires_coherent_bootstrap_authority() {
   assert(!bootstrap_authority_coherent(status,state));
 }
 
+/**
+ * @brief Enable只在boot/session/reference吻合时将授权motion注入GuardedPort。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 当前motion或允许的下一motion可核，跨boot/session/ref或跳两代拒绝；没有真实Enable动作。
+ */
 void same_boot_enable_seeds_pending_port_authority() {
   using namespace dummy_motion_client;
   constexpr std::uint64_t boot=9541039847285119850ULL;
@@ -146,6 +189,11 @@ void same_boot_enable_seeds_pending_port_authority() {
   assert(!state_authority_is_valid({boot,session+1U,2U,4U},expected(),false,false));
 }
 
+/**
+ * @brief 只为实际RENEWAL_PENDING保存有界重试拒绝凭据。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * UUID匹配且年龄≤2s才可读，超过1ns即失效；此凭据不恢复授权，也不自动重放目标。内部deny逐项翻转六个准入前提。
+ */
 void goal_rejection_receipt_is_typed_and_bounded() {
   using namespace dummy_motion_client;
   using Clock=std::chrono::steady_clock;
@@ -196,6 +244,11 @@ void goal_rejection_receipt_is_typed_and_bounded() {
   assert(!receipt.message(start));
 }
 
+/**
+ * @brief Idle与RUN失权均阻断新目标，晚到正回执不能重启。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 核Port start计数不变，失权不是缓存目标等待自动补发的理由。
+ */
 void authorization_loss_blocks_admission_without_replaying_a_goal() {
   using namespace dummy_motion_client;
   using action_test::require;
@@ -221,6 +274,12 @@ void authorization_loss_blocks_admission_without_replaying_a_goal() {
   require(active.port.starts==starts);
 }
 
+/**
+ * @brief 核租约范围、七项RUN续租资格及显式状态回执消费。
+ * @return 0表示所选断言通过；非零、assert或检查异常表示失败。
+ * requested permit须正且不超过已验证profile最大值（例60s/650s），不是允许任意申请长租约。
+ * RUN续租只占自己busy；失败清理不能清掉目标占用。显式LEASE_RENEWED只在操作完成且Hold时消费一次；自动续租不伪装显式用户确认。
+ */
 int main() {
   using namespace dummy_motion_client;
   DeviceProfile short_candidate{};

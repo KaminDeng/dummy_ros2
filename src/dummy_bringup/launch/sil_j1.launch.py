@@ -1,3 +1,7 @@
+##
+# @file sil_j1.launch.py
+# @brief 装配 J1 软件在环 peer、受保护 ROS 门控和单轴模型。
+# 固定测试身份、profile_id=2、configured_mask=1 区分于六轴 SIL。该入口会启动软件 peer，不连接真实 USB；会话许可与控制组件激活仍由运行时校验，启动描述本身不构成运动授权。
 """Production J1 SIL: committed DPSDK peer plus guarded ROS device gate."""
 
 from launch import LaunchDescription
@@ -6,6 +10,11 @@ from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJ
 from launch_ros.actions import Node
 
 
+##
+# @brief 构造单轴 SIL 的最小 URDF 与受保护接口。
+# 位置限位 ±0.5 rad、速度 0.25 rad/s；固定设备/客户端身份和 profile 2、mask 1 与门控一致。无真实连杆碰撞几何，不应当作六轴模型使用。
+# @param endpoint 软件 peer 的传输端点。
+# @return str：Joint1 的 URDF，位置命令及位置/速度状态接口。
 def _robot_description(endpoint):
     return f'''<robot name="dummy_sil_j1"><link name="base_link"/><link name="link1"/>
 <joint name="Joint1" type="revolute"><parent link="base_link"/><child link="link1"/>
@@ -20,6 +29,11 @@ def _robot_description(endpoint):
 <state_interface name="velocity"/></joint></ros2_control></robot>'''
 
 
+##
+# @brief 创建绑定单轴测试身份的 gate 和状态发布器动作。
+# session=11、状态年龄上限 1000000 µs、测试许可 60000000 µs；profile_name=sil_j1。dummy 初始 inactive 是传入的生命周期配置，不把进程创建等同控制组件已激活。
+# @param context 含 endpoint/contract_bundle 的 launch 上下文。
+# @return list[Node]：device_action_gate 与 robot_state_publisher。
 def _nodes(context):
     endpoint = LaunchConfiguration("endpoint").perform(context)
     parameters = {
@@ -38,6 +52,10 @@ def _nodes(context):
     ]
 
 
+##
+# @brief 声明单轴 SIL 路径/端点并创建软件 peer 和 ROS 动作。
+# 默认端点 tcp/127.0.0.1:17447，避免与六轴默认端口混用；从 DPSDK_ROOT 拼接明确 peer 和契约路径，命令携带 profile 2、mask 1。未设置 use_sim_time，使用默认墙上时钟。
+# @return LaunchDescription：声明参数和延迟求值的启动动作；构造描述本身不等于节点已运行。
 def generate_launch_description():
     endpoint = LaunchConfiguration("endpoint")
     executable = LaunchConfiguration("dpsdk_executable")

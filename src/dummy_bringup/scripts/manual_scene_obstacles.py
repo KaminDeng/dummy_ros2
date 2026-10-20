@@ -1,3 +1,7 @@
+##
+# @file manual_scene_obstacles.py
+# @brief 维护可编辑圆柱场景及“停车后再应用”的持久化事务。
+# 所有界面坐标为毫米，安装孔基准仅为地面 XY 平移；MoveIt 几何统一转到 base_link 米制。修改先作废旧规划/未来连续链，再等待设备取消事件和后续新鲜 Hold，最后读取/应用场景并保存，成功前一直封锁规划执行。
 """可持久化圆柱场景；只有MoveIt确认和停车确认均完成后才开放规划。"""
 import json
 import copy
@@ -9,9 +13,19 @@ import time
 import uuid
 from manual_moveit_planner import require_unique_moveit, MoveItDiscoveryPending
 
+##
+# 仅管理此前缀的世界圆柱；known_ids 保留删除历史，避免重启后旧障碍留在 MoveIt。
+##
+# @par 历史ID与实际世界
+# known_ids只给删除候选；tick先Get WORLD_OBJECT_NAMES，scene_message过滤真实不存在ID，不能把持久化删除历史当当前世界仍存在。
 PREFIX = 'manual_cylinder_'
 
 
+##
+# @brief 校验地面 XY 基准并补入不可修改的 base_link 原点。
+# 名称非空且不超过 80 字符；每轴有限、非 bool 且绝对值不超过 100000 mm；base_link 必须为 (0,0)。此基准不接受旋转或 Z 偏移。
+# @param frames 基准名到 [X,Y] 毫米偏移的映射。
+# @return dict：偏移转换为 float 二元组后的独立字典。
 def validate_origins(frames):
     result = {'base_link': (0., 0.)}
     for name, offset in frames.items():
@@ -25,6 +39,12 @@ def validate_origins(frames):
     return result
 
 
+##
+# @brief 校验圆柱 ID、参考基准和有限毫米尺寸。
+# ID 仅允许 1..80 位字母、数字、下划线和连字符且不得重复；直径/高度必须正，位置/尺寸绝对值至多 100000 mm，拒绝布尔值。
+# @param rows 各圆柱字典，含 id/frame/x_mm/y_mm/diameter_mm/height_mm。
+# @param frames 允许的基准名称集合或字典，默认只有 base_link。
+# @return list[dict]：规范化 float 毫米值后的新行列表。
 def validate_obstacles(rows, frames=('base_link',)):
     result, seen = [], set()
     for row in rows:
@@ -46,6 +66,12 @@ def validate_obstacles(rows, frames=('base_link',)):
     return result
 
 
+##
+# @brief 将基准内的贴地圆柱换算为 base_link 几何。
+# 中心 Z=高度/2，轴向保持竖直，底面恒为 Z=0；安装孔偏移只作用于 XY。
+# @param row 经过校验的毫米制圆柱字典。
+# @param frames 基准名到 XY 毫米偏移的映射。
+# @return tuple：中心 x/y/z、完整高度、半径，全部为米。
 def cylinder_geometry(row, frames):
     """基准仅平移地面XY原点；统一在base_link中保持竖直，底面Z=0。"""
     origin = frames[row['frame']]
@@ -53,6 +79,14 @@ def cylinder_geometry(row, frames):
             row['height_mm'] / 2000., row['height_mm'] / 1000., row['diameter_mm'] / 2000.)
 
 
+##
+# @brief 构造当前圆柱集合的 MoveIt 增删差量。
+# 对象 ID 添加 manual_cylinder_ 前缀，避免误删其他场景实体；CYLINDER dimensions 顺序为 [高度,半径] 米。函数不调用服务。
+# @param rows 待应用的已验证圆柱行。
+# @param known_ids 本面板历次管理过的无前缀 ID 集合，用于识别删除对象。
+# @param frames 毫米 XY 基准映射。
+# @param existing_world_ids 可选 MoveIt 现存完整 ID 集合；提供时不发送不存在对象的删除。
+# @return PlanningScene：is_diff=True，包含旧圆柱 REMOVE 与当前圆柱 ADD。
 def scene_message(rows, known_ids, frames, existing_world_ids=None):
     from geometry_msgs.msg import Pose
     from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneWorld
@@ -74,6 +108,14 @@ def scene_message(rows, known_ids, frames, existing_world_ids=None):
     return PlanningScene(is_diff=True, world=PlanningSceneWorld(collision_objects=objects))
 
 
+##
+# @brief 持久化已确认圆柱及历史 ID 和基准。
+# 先写同目录 .tmp 文件、flush 和 fsync，再 replace 目标；保存版本固定为 1。文件成功写入不代替 MoveIt 应用回执，外层在服务成功后调用。
+# @param path 目标 JSON 文件路径，自动创建父目录。
+# @param rows 已确认的圆柱行，数值单位 mm。
+# @param known_ids 全部历史管理 ID，排序后保存以支持重启删除。
+# @param frames 可选基准映射；省略时保存 base_link 零原点。
+# @return None；执行上述状态更新、界面或日志操作。
 def save_obstacles(path, rows, known_ids, frames=None):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.tmp')
@@ -84,6 +126,12 @@ def save_obstacles(path, rows, known_ids, frames=None):
     temporary.replace(path)
 
 
+##
+# @brief 生成用于 RViz 的圆柱可视化数组。
+# 直径/高度转为米制 marker.scale；这些可视标记与 MoveIt 碰撞体分别发布，标记出现本身不证明场景事务成功。
+# @param rows 已确认圆柱行，单位 mm。
+# @param frames 基准 XY 毫米偏移。
+# @return MarkerArray：先 DELETEALL，再发布 base_link 中橙色圆柱。
 def obstacle_markers(rows, frames):
     from visualization_msgs.msg import Marker, MarkerArray
     from std_msgs.msg import Header
@@ -100,6 +148,12 @@ def obstacle_markers(rows, frames):
     return MarkerArray(markers=markers)
 
 
+##
+# @brief 在已有允许碰撞矩阵中仅豁免保护地面与圆柱重叠。
+# 校验原矩阵为方阵；新增默认项为 False，仅 manual_base_floor 与圆柱配对改为 True。机器人连杆与圆柱的碰撞检查不会被整体豁免。
+# @param existing MoveIt 读取的 AllowedCollisionMatrix。
+# @param identifiers 要加入矩阵的圆柱无前缀 ID 集合。
+# @return AllowedCollisionMatrix：独立深拷贝，保留原矩阵并对称扩展所需项。
 def obstacle_acm(existing, identifiers):
     """保留SRDF/guard矩阵；只豁免附着安全地面与场景圆柱之间的重叠。"""
     from moveit_msgs.msg import AllowedCollisionEntry
@@ -121,8 +175,19 @@ def obstacle_acm(existing, identifiers):
     return acm
 
 
+##
+# @class ObstacleScene
+# @brief 把停车屏障、场景读取/应用和持久化组成单次事务。
+# desired 是待应用输入，rows 是成功确认的行；scene_revision 在请求变更时递增；blocked/scene_ready 门控规划；future 只允许一个在途服务。失败保持封锁，服务超时保留 future 防止旧请求迟到乱序应用。
 class ObstacleScene:
     """可测试事务状态机。更新失败保持封锁，重试必须重新获服务成功回执。"""
+    ##
+    # @brief 创建场景服务及持久化标记发布器并恢复期望场景。
+    # 初始 phase=read、blocked=True；等待 MoveIt 确认后才允许规划。已保存版本必须为 1，历史 ID 也检查格式；读文件失败调用 fail，不应用部分数据。
+    # @param panel 主面板，提供 ROS 节点、设备状态、取消及 MoveIt 页。
+    # @param path 圆柱配置 JSON 路径。
+    # @param frames 未保存用户基准时使用的默认毫米 XY 映射。
+    # @return None；执行上述状态更新、界面或日志操作。
     def __init__(self, panel, path, frames):
         from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
         self.panel, self.path, self.frames = panel, Path(path), validate_origins(frames)
@@ -133,6 +198,8 @@ class ObstacleScene:
         self.publisher = panel.node.create_publisher(MarkerArray, '/manual_obstacle_markers',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.rows, self.desired, self.known_ids = [], [], set()
+        ##
+        # scene_revision 代表本面板期望场景版本，不是 MoveIt 全局版本；规划和自动测试保存此版本并在变化时作废。
         self.scene_revision = 0
         self.scene_ready = False
         self.blocked = True
@@ -157,10 +224,21 @@ class ObstacleScene:
         except (OSError, ValueError, TypeError, KeyError) as error:
             self.fail('读取障碍物失败：'+str(error))
 
+    ##
+    # @brief 记录场景失败并持续封锁规划入口。
+    # 设置 error/status/blocked，清 scene_ready 并通知 UI；不隐式取消 future 或把未知服务状态当作未应用。
+    # @param text 供操作员显示的失败原因。
+    # @return None；执行上述状态更新、界面或日志操作。
     def fail(self, text):
         self.error = text; self.status = text; self.blocked = True; self.scene_ready = False
         self.on_change()
 
+    ##
+    # @brief 受理场景变更并按是否运动建立停车屏障。
+    # 在途服务或等待 Hold 时拒绝新事务。检测 busy、生命周期、速度、执行及自动测试；先提高版本、封锁场景并清理旧规划。若可能运动则记下 boot/reference/session 与 state_seq，给 6 s 停车期限，再调用受控取消；随后才进入最多 20 s 场景同步。
+    # @param rows 期望的完整圆柱集合。
+    # @param frames 可选新基准映射；省略使用当前基准。
+    # @return None；执行上述状态更新、界面或日志操作。
     def request_change(self, rows, frames=None):
         if self.future is not None or self.wait_hold:
             raise ValueError('场景更新仍在等待回执或停车，请稍后重试')
@@ -180,6 +258,9 @@ class ObstacleScene:
         self.known_ids |= {r['id'] for r in rows}
         self.scene_revision += 1
         self.scene_ready = False; self.blocked = True; self.error = None
+        ##
+        # @brief 显式新场景事务撤去上次公共/Get owner组合锚。
+        # 只有重新拓扑验证及Get→Apply成功才可ready；图恢复本身不复活旧path。初次对象未置该字段时validate_topology以getattr视为未绑定。
         self.service_owner = None
         self.phase = 'read'
         self.hold_marker = None
@@ -199,6 +280,12 @@ class ObstacleScene:
         self.deadline = time.monotonic()+20.
         self.on_change()
 
+    ##
+    # @brief 保存与停车事务身份相符的取消保持事件水位。
+    # 只在 wait_hold 且 MOVE_CANCELED_HOLD 时接受；身份必须相同，事件 state_seq 不早于请求前状态。此事件本身不解除封锁，还须 hold_confirmed 核对后续实际反馈。
+    # @param event Native 事件标识。
+    # @param parts 解析得到的事件键值字典，boot 为十六进制文本。
+    # @return None；执行上述状态更新、界面或日志操作。
     def native_event(self, event, parts):
         if self.wait_hold and event == 'MOVE_CANCELED_HOLD':
             try:
@@ -208,6 +295,12 @@ class ObstacleScene:
             except (KeyError, ValueError):
                 pass
 
+    ##
+    # @brief 新增/修改孔基准，或删除基准并保持圆柱世界位置。
+    # 删除时把受影响圆柱坐标加上旧基准偏移并改成 base_link；修改时圆柱随基准一起平移。所有变更交给 request_change 走同一停车/同步流程。
+    # @param name 基准名称；base_link 禁止修改/删除。
+    # @param offset 新 XY 毫米二元组；None 表示删除。
+    # @return None；执行上述状态更新、界面或日志操作。
     def request_origin_change(self, name, offset=None):
         if name == 'base_link': raise ValueError('base_link原点不可修改或删除')
         frames = dict(self.frames)
@@ -222,6 +315,10 @@ class ObstacleScene:
             frames[name] = offset
         self.request_change(rows, frames)
 
+    ##
+    # @brief 核对取消事件之后的新鲜实际 Hold 已稳定。
+    # 要求 core_state=4、hold_ready、六轴掩码 63；保持位置与 actual_q 逐轴误差 ≤0.003 rad，速度绝对值 ≤0.01 rad/s。位置接近或收到取消事件单独都不足以放行。
+    # @return bool：同身份、同 motion、新 state_seq、六轴 Hold/位置/速度全有效且保持位置吻合。
     def hold_confirmed(self):
         p, marker = self.panel, self.hold_marker
         if not marker or not p.fresh() or not hasattr(p, 'actual_q'): return False
@@ -236,6 +333,11 @@ class ObstacleScene:
             all(math.isfinite(h) and math.isfinite(q) and abs(h-q) <= .003 for h,q in zip(held,p.actual_q)) and
             all(math.isfinite(v) and abs(v) <= .01 for v in velocities))
 
+    ##
+    # @brief 复核并锚定当前公共/Get服务owner组合，失效撤ready/旧路径且按实测运动请求Hold。
+    # 初次尚无owner、无future、未ready且仍在20s场景期限内，MoveItDiscoveryPending只等待；已有事务/ready后缺服务、重复、换owner或未知查询失败均fail闭锁。
+    # 首次fail才通知MoveIt页清路径/自动队列，并检查busy、执行/自动会话、State core3/5/6或非有限/超过0.01rad/s速度决定受控Hold。Hold请求不是停车确认。
+    # @return bool：当前图满足唯一实例/同owner组合且未换来源为True；等待或故障False。
     def validate_topology(self):
         """每次使用场景前复核唯一服务来源；失效立即撤销路径，运动中请求停车。"""
         try:
@@ -267,6 +369,11 @@ class ObstacleScene:
                     self.panel.cancel_motion_hold()
             return False
 
+    ##
+    # @brief 推进停车、读取 ACM、应用差量、保存和解除封锁。
+    # 先等待 Hold 屏障，再请求当前 ACM/世界对象名，构造差量及保留原有豁免的 ACM，随后 ApplyPlanningScene。成功回执、发布标记及保存均完成才置 scene_ready；异常保持封锁。服务回执超时不丢弃 future，也不允许新事务与迟到应用竞争。
+    # @return None；执行上述状态更新、界面或日志操作。
+    # error为空时每tick先重核拓扑，scene_ready也不能跳过；已有error则持续闭锁，不因服务自行恢复就重用旧规划。
     def tick(self):
         if self.error: return
         if not self.validate_topology(): return
@@ -280,6 +387,8 @@ class ObstacleScene:
                 # 不允许失败后直接重试绕过停车屏障。
                 return
             else: return
+        ##
+        # future 回执串行推进 read→apply；收到响应仍需核对 success 并完成本地保存，不能仅因 future.done() 解除门控。
         if self.future is not None:
             if self.future.done():
                 future, self.future = self.future, None
@@ -325,6 +434,11 @@ class ObstacleScene:
                 self.fail('提交场景失败：'+str(error))
 
 
+##
+# @brief 创建圆柱/安装孔编辑界面及事务控制器。
+# 输入全部为毫米；无默认 CAD 安装孔位置。列表展示 desired，状态文字明确是否已同步；修改动作不直接写 MoveIt，统一经过 scene.request_change。
+# @param panel 主面板，含默认基准和可选 obstacles_file 配置。
+# @return tuple[QWidget,ObstacleScene]：页内容和由主面板 tick/native_event 驱动的状态机。
 def create_obstacle_tab(panel):
     from PyQt5 import QtWidgets
     widget = QtWidgets.QWidget(panel)
@@ -370,6 +484,11 @@ def create_obstacle_tab(panel):
     layout.addLayout(buttons)
     status = QtWidgets.QLabel(); status.setWordWrap(True); layout.addWidget(status)
     layout.addWidget(QtWidgets.QLabel('障碍修改会作废全部旧规划；运动中会先受控停车并确认Hold，再更新场景。'))
+    ##
+    # @par 内部回调 create_obstacle_tab.refresh
+    # 从期望场景重绘列表并按事务状态启停编辑按钮。
+    # 场景尚未确认时列表仍可显示 desired；pending 为 future 或等待 Hold，期间禁用变更。超时保留 future 时重试按钮也保持禁用。
+    # 返回：None；执行上述状态更新、界面或日志操作。
     def refresh():
         rows = scene.desired
         frame = combo.currentText()
@@ -387,12 +506,23 @@ def create_obstacle_tab(panel):
         origin_save.setEnabled(not pending)
         origin_delete.setEnabled(not pending and combo.currentText() != 'base_link')
         retry.setEnabled(bool(scene.error) and not pending)
+    ##
+    # @par 内部回调 create_obstacle_tab.selected
+    # 把所选圆柱的基准和毫米值填回编辑表单。
+    # 只改变编辑器，不发起场景更新；用户须点击修改后才进入事务。
+    # 返回：None；执行上述状态更新、界面或日志操作。
     def selected():
         index = table.currentRow()
         if 0 <= index < len(scene.desired):
             row = scene.desired[index]; combo.setCurrentText(row['frame'])
             for box,key in zip(inputs,('x_mm','y_mm','diameter_mm','height_mm')): box.setValue(row[key])
     table.itemSelectionChanged.connect(selected)
+    ##
+    # @par 内部回调 create_obstacle_tab.change
+    # 按按钮动作生成新期望圆柱列表。
+    # 新增 ID 取 UUID 前 12 位；修改保留原 ID，删除只移除所选行。校验错误显示在状态标签，既有确认场景不被此回调直接改写。
+    # 参数 action：add/update/delete/retry；retry 保持当前列表重新请求同步。
+    # 返回：None；执行上述状态更新、界面或日志操作。
     def change(action):
         rows = [dict(row) for row in scene.desired]; index = table.currentRow()
         row = dict(zip(('x_mm','y_mm','diameter_mm','height_mm'), (b.value() for b in inputs)))
@@ -404,11 +534,22 @@ def create_obstacle_tab(panel):
             else: row['id'] = rows[index]['id']; rows[index] = row
         try: scene.request_change(rows)
         except ValueError as error: status.setText(str(error))
+    ##
+    # @par 内部回调 create_obstacle_tab.origin_selected
+    # 显示当前地面或孔基准的名称及偏移。
+    # base_link 名称输入留空、删除入口禁用；事务在途时也不允许删除孔基准。
+    # 返回：None；执行上述状态更新、界面或日志操作。
     def origin_selected():
         name=combo.currentText()
         origin_name.setText('' if name == 'base_link' else name)
         for box,value in zip(origin_inputs,scene.frames.get(name,(0.,0.))): box.setValue(value)
         origin_delete.setEnabled(name != 'base_link' and scene.future is None and not scene.wait_hold)
+    ##
+    # @par 内部回调 create_obstacle_tab.change_origin
+    # 将孔基准保存或删除操作交给场景事务。
+    # 校验错误只显示原因；删除后选回 base_link，保存后选择相应孔名。
+    # 参数 delete：True 删除下拉选中基准；False 按名称输入与 XY 编辑值新增/修改。
+    # 返回：None；执行上述状态更新、界面或日志操作。
     def change_origin(delete=False):
         name = combo.currentText() if delete else origin_name.text().strip()
         try: scene.request_origin_change(name,None if delete else tuple(box.value() for box in origin_inputs))

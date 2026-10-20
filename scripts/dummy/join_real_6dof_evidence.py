@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file join_real_6dof_evidence.py
+# @brief 离线关联Gate CSV、Action反馈、DPRAW原页和显式context。
+#
+# 不启动ROS/设备；重新读取SHA固定的源快照，按Host接收时刻及位置包络匹配反馈，并调用application_e2e作最终全链检查。
+# 解码支持2.4/2.5不等于最终E2E校验全部minor均可通过；后者现有页/管理断言仍限定2.4。所有正证据仍需独立资格流程。
 """将同一次 ROS Gate 时间线与 DeviceTransport DPRAW01 原始流离线关联。"""
 
 import argparse
@@ -20,10 +26,19 @@ LAYOUT = json.loads((ROOT / "contracts/dummy_robot_v2/codec/wire_layout.json").r
 LEGACY_LAYOUT = json.loads((ROOT / "contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json").read_text())
 TYPES = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
          "float64": "d", "bool": "B"}
+##
+# @brief DPRAW头39字节，按小端kind/size/Host when/boot/session/run/seq解包。
+# when为Host传输steady µs，消息produced/CAN时间为设备Source域；STATUS_MAX_AGE_US为1,000,000µs关联上限。
 RECORD_HEADER = struct.Struct("<B H Q Q Q Q I")
 STATUS_MAX_AGE_US = 1000000
 
 
+##
+# @brief 用同一fd读取字节，核前后stat稳定并可比对外部SHA。
+# @param path 输入路径；O_NOFOLLOW拒绝最终symlink，不逐级拒绝父路径symlink。
+# @param expected 可选期望64字符摘要，必须与实际SHA相等。
+# @return (bytes,小写SHA256)；读取期间inode/size/mtime/ctime变化或摘要不符拒绝。
+# 未要求fstat为普通文件，不是任意路径的无阻塞/原子文件系统防攻击保证；返回字节供后续解析避免二次读产生不同版本。
 def _snapshot(path, expected=None):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -45,6 +60,11 @@ def _snapshot(path, expected=None):
     return data, digest
 
 
+##
+# @brief 按wire前4字节选择2.4历史布局或2.5当前布局。
+# @param name 指定payload类型名。
+# @param raw 完整消息bytes。
+# @return 解码字段dict；schema/固定长度不符拒绝，未作业务成功判定。
 def _decode(name, raw):
     if len(raw) < 4:
         raise ValueError(f"invalid {name} wire size")
@@ -70,6 +90,11 @@ def _decode(name, raw):
     return result
 
 
+##
+# @brief 解析有COMPLETE尾标的严格Gate CSV并按goal分组。
+# @param data UTF-8 CSV字节。
+# @return 目标行组list；缺字段、重复列、错事件/UUID/请求键位置或尾标数量不符拒绝。
+# accepted/before_begin/after_begin后须有feedback，再success/canceled终态与Hold，最后目标另需release；CSV尾标表示Gate记录完整，不是物理完成。
 def _timeline(data):
     rows = list(csv.reader(io.StringIO(data.decode("utf-8", errors="strict"))))
     if (not rows or len(rows[-1]) != 2 or rows[-1][0] != "COMPLETE" or
@@ -159,10 +184,20 @@ def _timeline(data):
     return groups
 
 
+##
+# @brief 有序记录tuple及State/Status时间索引；顶层记录复制后只读，fields等嵌套对象未深冻结。
 class _IndexedRecords(tuple):
+    ##
+    # @brief 复制每条顶层记录并包装只读映射。
+    # @param records 按Host when排序的原记录序列。
+    # @return tuple派生对象；不递归复制fields/raw内对象。
     def __new__(cls, records):
         return super().__new__(cls, (MappingProxyType(record.copy()) for record in records))
 
+    ##
+    # @brief 建立kind2/3及相同顺序Host when的只读索引。
+    # @param records 与构造时相同输入；索引实际从self已封装元素生成。
+    # @return None；索引用于bisect，不改变原记录排序。
     def __init__(self, records):
         self.by_kind = MappingProxyType({
             kind: tuple(record for record in self if record["kind"] == kind)
@@ -172,6 +207,11 @@ class _IndexedRecords(tuple):
             for kind, items in self.by_kind.items()})
 
 
+##
+# @brief 严格解析DPRAW01流和每条记录头/载荷身份。
+# @param data 完整捕获bytes。
+# @return _IndexedRecords；magic、截断、kind、wire schema或元数据/时刻回退不符拒绝。
+# kind1页、2State、3Status、4管理请求、5响应；Host when允许相等。原页在此只核元数据，SHA链由后续完整关联校验。
 def _raw_records(data):
     if not data.startswith(b"DPRAW01\0"):
         raise ValueError("invalid DPRAW01 header")
@@ -209,6 +249,12 @@ def _raw_records(data):
     return _IndexedRecords(records)
 
 
+##
+# @brief 取指定时刻之前最近一条该kind记录。
+# @param records 有序记录或_IndexedRecords。
+# @param kind 记录类型，2/3可用二分索引。
+# @param when Host steady µs截止（含等于）。
+# @return 最近记录或None；不按预期身份向后挑选旧的匹配消息。
 def _latest(records, kind, when):
     if isinstance(records, _IndexedRecords) and kind in records.by_kind:
         index = bisect_right(records.times_by_kind[kind], when) - 1
@@ -217,6 +263,15 @@ def _latest(records, kind, when):
                  record["kind"] == kind and record["when"] <= when), None)
 
 
+##
+# @brief 要求最近原始观测在年龄与完整执行身份内。
+# @param records 有序raw记录。
+# @param kind State2或Status3。
+# @param when 关联Gate/ROS的Host时刻µs。
+# @param identity (boot,session,reference,motion)精确tuple。
+# @param max_age_us Host接收年龄上限µs。
+# @param run 可选Status run精确要求。
+# @return 最近记录；错身份即拒绝，不跳过冲突新记录去找更早匹配值。
 def _prior(records, kind, when, identity, max_age_us, *, run=None):
     latest = _latest(records, kind, when)
     name = "status" if kind == 3 else "state"
@@ -230,6 +285,19 @@ def _prior(records, kind, when, identity, max_age_us, *, run=None):
     return latest
 
 
+##
+# @brief 取得已完成run的Hold观测或严格证明其先到刷新后继。
+# @param records 有序raw流。
+# @param when Hold确认的Host时刻µs。
+# @param identity 同boot/session/ref/保持motion tuple。
+# @param run 待证明的已完成/已取消run。
+# @param state_max_age Hold State与后继关联年龄上限µs。
+# @param terminal_when 该run原始终页Host时刻。
+# @param client_id 可选client hex，缺原Status而要从原链派生时必须提供。
+# @param final_state 6完成保持或7取消保持。
+# @return (Status证明,State证明)；后继run/链/全SENT/新鲜性/Source先后不符拒绝。
+# 若最近Status已进入新run，仅允许紧邻run+1的motion首页且前run完整原链已验证；必要时构造proof_source=terminal_state_successor的派生Status。
+# 派生证明有明确来源，不能冒充真实收过缺失Status；新鲜State produced还须晚于后继六轴sent Source时间，Host与Source不混比。
 def _hold_observations(records, when, identity, run, state_max_age, terminal_when,
                        client_id=None, final_state=6):
     latest_status = _prior(records, 3, when, identity, STATUS_MAX_AGE_US)
@@ -387,6 +455,11 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
     return status, state
 
 
+##
+# @brief 要求六项有限位置/容差。
+# @param values 六元素list，bool拒绝。
+# @param name 诊断字段名。
+# @return 原list；不独立要求正值或限位。
 def _six(values, name):
     if not isinstance(values, list) or len(values) != 6 or any(
             type(value) not in (int, float) or not math.isfinite(value) for value in values):
@@ -394,6 +467,12 @@ def _six(values, name):
     return values
 
 
+##
+# @brief 在按时刻排序的desired样本间线性插值。
+# @param samples 非空(Hostµs,六轴位置rad)序列。
+# @param when 目标Host时刻µs。
+# @return 插值六轴rad；边缘采用首/末值，前置流程保证时刻严格前进。
+# 这是反馈包络关联的参考插值，不是重建JTC内部完整控制曲线或连续轨迹资格证明。
 def _desired_at(samples, when):
     index = bisect_left(samples, when, key=lambda sample: sample[0])
     if index == 0:
@@ -406,6 +485,19 @@ def _desired_at(samples, when):
     return [a + fraction * (b - a) for a, b in zip(start, end)]
 
 
+##
+# @brief 核ROS尾反馈与随后raw/Gate接力观测的有界衔接。
+# @param records raw记录。
+# @param sample_time ROS样本Hostµs。
+# @param sample_state ROS样本前最近raw State。
+# @param actual 该ROS实际六轴rad。
+# @param identity 精确执行tuple。
+# @param ros_budget 接力间隔µs。
+# @param path_tolerance 六轴位置包络rad。
+# @param raw_states 已核目标窗口State集合。
+# @param gate_feedback (Hostµs,原State)关联序列。
+# @param feedback_age_budget 各轴CAN接收年龄µs上限。
+# @return 全部身份、序号/Source推进、位置及后继Gate反馈关系成立True，否则False。
 def _raw_ros_handoff(records, sample_time, sample_state, actual, identity,
                      ros_budget, path_tolerance, raw_states, gate_feedback,
                      feedback_age_budget):
@@ -447,6 +539,20 @@ def _raw_ros_handoff(records, sample_time, sample_state, actual, identity,
                     zip(gate_seq, fields["feedback_seq"])))
 
 
+##
+# @brief 核目标窗口所有raw State单向相位与位置路径包络。
+# @param records 有序raw。
+# @param before before_begin Hostµs。
+# @param begin after_begin Hostµs。
+# @param hold 最终Hold Hostµs。
+# @param boot 启动身份。
+# @param session 会话身份。
+# @param reference 参考代次。
+# @param allowed_epochs 允许的Begin/Run/Complete或Stop运动相位集合。
+# @param desired_samples 已核ROS desired时序。
+# @param path_tolerance 六轴误差上限rad。
+# @return (窗口State,六轴最大误差rad)；序号重放、Source回退、epoch回退/越界或位置超限拒绝。
+# seq用32位半环前进，产生时间不回退可相等；Begin前样本只核身份/序列，Begin后还逐点核路径包络。
 def _goal_raw_states(records, before, begin, hold, boot, session, reference,
                      allowed_epochs, desired_samples, path_tolerance):
     states = [record for record in records if record["kind"] == 2 and
@@ -485,6 +591,14 @@ def _goal_raw_states(records, before, begin, hold, boot, session, reference,
     return states, path_error
 
 
+##
+# @brief 在ROS样本前后预算内取时间最近raw State并核完整身份。
+# @param records raw记录。
+# @param sample_time ROS Host样本µs。
+# @param identity 预期tuple。
+# @param lag_budget 允许双向Host时间距离µs。
+# @param age_budget 每轴CAN反馈年龄µs上限。
+# @return 最近记录；不是任意找一个位置接近就接受，最近身份冲突会拒绝。
 def _near_ros_state(records, sample_time, identity, lag_budget, age_budget):
     states = (record for record in records if record["kind"] == 2 and
               abs(record["when"] - sample_time) <= lag_budget)
@@ -502,6 +616,16 @@ def _near_ros_state(records, sample_time, identity, lag_budget, age_budget):
     return nearest
 
 
+##
+# @brief 按run提取唯一终页收尾的完整页序列。
+# @param records raw记录。
+# @param run run/attempt ID。
+# @param boot 启动身份。
+# @param session 原owner会话。
+# @param kind attempt_kind。
+# @param parent 父run。
+# @return 至少一组页加终页list；跨身份、序号不连续、lost或终页非最后拒绝。
+# 此辅助不独立重算链，完整调用链后续核SHA和组/终态字段。
 def _pages(records, run, boot, session, kind, parent):
     pages = [record for record in records if record["kind"] == 1 and record["run"] == run]
     if len(pages) < 2:
@@ -517,6 +641,10 @@ def _pages(records, run, boot, session, kind, parent):
     return pages
 
 
+##
+# @brief 读取外部context字节与SHA并要求必要预算字段。
+# @param path context JSON路径。
+# @return (context dict,原文件SHA)；缺字段/非对象拒绝，不把context本身当签名许可。
 def _context(path):
     data, digest = _snapshot(Path(path))
     value = json.loads(data)
@@ -532,6 +660,12 @@ def _context(path):
     return value, digest
 
 
+##
+# @brief v2时从原始捕获重算活动窗及offset跨度。
+# @param context 显式context。
+# @param timeline_data SHA固定CSV字节。
+# @param records SHA固定raw解码结果。
+# @return None；v1未声明版本直接返回，v2版本/方法/250ms预算或重算值不符拒绝。
 def _verify_window_context(context, timeline_data, records):
     if "producer_lag_gate_version" not in context:
         return
@@ -565,6 +699,11 @@ def _verify_window_context(context, timeline_data, records):
         raise ValueError("window producer lag budget exceeded")
 
 
+##
+# @brief 识别Action层取消成功但raw停止/释放仍待独立核的报告。
+# @param action 单目标取消报告。
+# @return 精确UNCONFIRMED_STOP/CANCELED和RELEASE_QUEUED/RELEASED_IDLE文字组合为True。
+# 只识别报告形状；返回true不确认Stop，后续必须由原请求/强回执/原页/Idle证明补全。
 def _unconfirmed_cancel_observation(action):
     release = action.get("release_observation")
     return (action.get("status") == "UNCONFIRMED_STOP" and
@@ -582,6 +721,17 @@ def _unconfirmed_cancel_observation(action):
             release.get("bootstrap_reply") == "RELEASED_IDLE")
 
 
+##
+# @brief 核A取消、B重叠拒绝、C未提交的受限抢占观察。
+# @param action 含A/B/C及overlap_probe的报告。
+# @param rows A的Gate行组。
+# @param records raw流。
+# @param goal 已拼接A目标。
+# @param release 最终独立释放。
+# @param client client身份。
+# @param state_max_age 新鲜Hold关联µs预算。
+# @return A Begin请求/operation/run/goal绑定dict；多Begin、其它run或错相位拒绝。
+# B的ROS拒绝不能单独证明第二Begin未发，故raw必须恰一个Begin且run集合只A/release；允许严证取消Hold刷新后继，但不宣称C恢复完成。
 def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
     reported = action.get("preempt_goals")
     mirrored = action.get("goals")
@@ -682,6 +832,15 @@ def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
             "run_id": goal["run_id"], "goal_id": goal["goal_id"]}
 
 
+##
+# @brief 核A取消/B拒绝后C成功的双Begin与新permit原链。
+# @param action ROS_PREEMPT_RECOVERY报告。
+# @param timelines A/C两组Gate行。
+# @param records raw流。
+# @param goals A/C已拼接目标。
+# @param release 最终release。
+# @param client 同一client。
+# @return A/C Begin绑定list；boot/session/ref变更、run/epoch不连续、重复请求或缺新permit拒绝。
 def _preempt_recovery(action, timelines, records, goals, release, client):
     reported = action.get("preempt_goals")
     if (not isinstance(reported, dict) or set(reported) != {"A", "B", "C"} or
@@ -714,6 +873,9 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
             {goals[0]["run_id"], goals[1]["run_id"], release["run_id"]}:
         raise ValueError("unexpected recovery raw motion run")
 
+    ##
+    # @par 内部回调 operation_records
+    # operation与kind筛选本次raw管理请求；返回记录list，仅用于本次A/C数量和顺序检查。
     def operation_records(operation, kind):
         return [record for record in records if record["kind"] == kind and
                 record["fields"].get("operation") == operation]
@@ -745,6 +907,9 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
                       "expected_motion_epoch", "expected_management_epoch",
                       "expected_profile_id", "configured_mask")
 
+    ##
+    # @par 内部回调 committed_receipts
+    # request为原操作、latest为Host截止µs；返回关联direct/Query的Committed响应。中间回执仅允许精确Pending形状，不把超时Query任意当作原请求成功。
     def committed_receipts(request, latest):
         fields = request["fields"]
         queries = [item for item in operation_records(12, 4) if
@@ -837,6 +1002,15 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
     return bindings
 
 
+##
+# @brief 关联一个ROS目标的时序、raw反馈、完整原页与Hold终态。
+# @param rows 该目标Gate行组。
+# @param records 同次raw。
+# @param action 对应Action报告。
+# @param context SHA绑定及各容差/年龄预算。
+# @return (目标dict,四hash,Hold行,终页,首页)；错身份/路径/取消请求关系拒绝。
+# Action actual与附近raw位置在显式误差包络内，raw全窗口再对desired插值核路径；这是有界时空关联，不主张逐回调一一对应或证明连续未采样空间。
+# 取消必须先观察实际位移触发，再有原Cancel请求、新epoch Stop页、精确强回执和canceled终行，不能从CANCELED状态单字段推出设备停机。
 def _joined_goal(rows, records, action, context):
     state_max_age = context["gate_state_max_age_us"]
     goal_id = rows[0]["goal_uuid"]
@@ -1070,6 +1244,9 @@ def _joined_goal(rows, records, action, context):
                "axis_mask": page["fields"]["expected_mask"],
                "sent_mask": page["fields"]["sent_mask"],
                "committed": page["fields"]["final"] == 1} for page in pages[:-1]]
+    ##
+    # @par 内部page_json映射
+    # 输入页记录，返回raw_hex及原boot/session包装，不改原始载荷；完整链摘要仍来自原页，不是此JSON包装的hash。
     page_json = lambda items: [{"raw_hex": item["raw"].hex(), "boot_epoch": item["boot"],
                                 "session_id": item["session"]} for item in items]
     goal = {"goal_id": goal_id, "action_status": "CANCELED" if canceled else "SUCCEEDED",
@@ -1152,6 +1329,12 @@ def _joined_goal(rows, records, action, context):
     return goal, hashes, hold_row, pages[-1], pages[0]
 
 
+##
+# @brief 核active release请求后到Disable原页的有界派发。
+# @param pages release组/终页记录。
+# @param request_when 原Disable请求Hostµs。
+# @param budget_us 正观察预算µs。
+# @return 首Disable在预算内且请求后Hold/Stop页均不晚于它为True；只核原记录Host时序，不是设备执行WCET。
 def _release_dispatch_within_budget(pages, request_when, budget_us):
     if request_when <= 0 or budget_us <= 0:
         return False
@@ -1165,6 +1348,17 @@ def _release_dispatch_within_budget(pages, request_when, budget_us):
                page["fields"]["category"] in (1, 2))
 
 
+##
+# @brief 核最终独立release或active release原页、强回执及新鲜Idle。
+# @param records raw流。
+# @param goal 最终目标。
+# @param hold_row 目标保持确认行。
+# @param terminal 目标原终页。
+# @param state_max_age release观测Host年龄µs。
+# @param hashes 目标期间固定的四种身份hash。
+# @return confirmed release映射；唯一run/请求/回执/页/Idle链关系不符拒绝。
+# active kind1允许Idle Status链暂为零但需精确operation及其它证明；独立kind3要求parent旧run和完整链。
+# 最终session/reference清零与原页仍保存原owner session分别核，不能用零owner抹去原attempt归属。
 def _release(records, goal, hold_row, terminal, state_max_age, hashes):
     boot, session, run, motion = (goal[key] for key in
                                   ("boot_epoch", "session_id", "run_id", "motion_epoch"))
@@ -1249,6 +1443,9 @@ def _release(records, goal, hold_row, terminal, state_max_age, hashes):
            (("contract_hash", "contract_sha256"), ("model_hash", "model_sha256"),
             ("profile_hash", "profile_sha256"), ("firmware_hash", "firmware_sha256"))):
         raise ValueError("device identity hash changed during goal")
+    ##
+    # @par 内部page_json映射
+    # 将release原页附raw_hex和捕获boot/session，返回序列化列表；不把释放后清零session写回原页身份。
     page_json = lambda items: [{"raw_hex": item["raw"].hex(), "boot_epoch": item["boot"],
                                 "session_id": item["session"]} for item in items]
     return {"run_id": release_run, "parent_run_id": run,
@@ -1258,6 +1455,15 @@ def _release(records, goal, hold_row, terminal, state_max_age, hashes):
             "evidence_pages": page_json(release_pages)}
 
 
+##
+# @brief 从四个实际快照重建全套目标和释放证据并作最终验证。
+# @param timeline_path Gate CSV路径。
+# @param raw_path DPRAW01路径。
+# @param action_path ROS Action JSON路径。
+# @param context_path 源SHA及容差预算context路径。
+# @return 拼接结果dict；任一源不匹配、跨设备/会话/run、缺收尾或最终E2E失败抛异常。
+# 所有输入SHA固定；先重放window上下文，再拼目标、释放、抢占附加证据，最后动态调用application_e2e.validate_evidence。
+# provenance标bounded_temporal_and_position_envelope，保留来源及方法，不能将自洽结果当独立外部认证或运动授权。
 def join_evidence(timeline_path, raw_path, action_path, context_path):
     context, context_hash = _context(context_path)
     state_max_age = context["gate_state_max_age_us"]
@@ -1379,6 +1585,9 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
     return result
 
 
+##
+# @brief 离线重建并写joined JSON。
+# @return 成功0；错误传播；output父目录不在此创建，既有同名文件会覆盖。
 def main():
     parser = argparse.ArgumentParser(description="拼接真实六轴 ROS 与 DeviceTransport 原始证据")
     parser.add_argument("--timeline", type=Path, required=True)

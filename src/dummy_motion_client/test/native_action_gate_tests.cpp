@@ -1,6 +1,17 @@
+/**
+ * @file native_action_gate_tests.cpp
+ * @brief 核Native六轴输入形状及严格容差向内部轨迹转换。
+ *
+ * 纯ROS消息数据校验，未启动Action服务器/规划器；有限位置/时间验证不是避碰或实机资格。位置rad、末速rad/s、goal_time秒。
+ */
 #include "dummy_motion_client/native_goal_validation.hpp"
 #include <iostream>
 #include <limits>
+/**
+ * @brief 拒绝缺轴、NaN、越界、非零终速、减弱容差及坏时间。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 另外内部Trajectory NaN时间也拒；严格goal0.005rad/path0.03rad及2.3s goal_time须完整保留，不能静默改回默认。
+ */
 int main() {
   using namespace dummy_motion_client;
   NativeGoal goal;

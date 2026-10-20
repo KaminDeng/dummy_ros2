@@ -1,4 +1,9 @@
 """R02 only reports runtime behavior from a corresponding live probe."""
+##
+# @file test_r02_acceptance.py
+# @brief R02证据validator注入测试与少量探针源码/解析子进程检查。
+#
+# runtime case主要patch _run_runtime_probe喂人工字典，PASS证明字段门槛与路由，绝非新Gazebo观测；MOD05仍实际跑离线unittest。pose解析用/usr/bin/python3导入probe仅调用parser，不启动ROS。
 
 from pathlib import Path
 import subprocess
@@ -11,17 +16,29 @@ sys.path.insert(0, str(TEST_ROOT))
 from dummy_test_support.task_adapters import run_case
 
 
+##
+# @brief 本套件unittest验收集合；实际子进程与证据层级见文件职责，各方法断言原样保留。
 class R02Acceptance(unittest.TestCase):
+    ##
+    # @brief 实际调用R02公共分派并写trace；是否真探针取决于当前patch及case。
+    # @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+    # @return R02结果及已物化trace字段。
     def evidence(self, case_id: str) -> dict:
         return run_case("R02", case_id, {
             "case_id": case_id, "hardware": "none", "test_only": True,
         })
 
+    ##
+    # @brief 运行J3全零拒绝的离线目标，要求PASS及正确case_target。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_mod05_uses_the_joint3_range_probe(self):
         result = self.evidence("MOD05")
         self.assertEqual("PASS", result["status"], result["reason"])
         self.assertIn("all_zero_pose_is_rejected", result["observations"]["case_target"])
 
+    ##
+    # @brief patch不可用标记，五runtime case均NOT_RUN/未执行并给reason，不真实查询Gazebo。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_runtime_cases_are_not_claimed_when_the_live_gazebo_runtime_is_absent(self):
         from dummy_test_support.adapters import r02
 
@@ -32,6 +49,9 @@ class R02Acceptance(unittest.TestCase):
                 self.assertFalse(result["executed"])
                 self.assertTrue(result["reason"])
 
+    ##
+    # @brief 注入五套完整观测核PASS及原样保留；缺末误差或非native声明须FAIL，整个过程不跑live probe。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_each_runtime_case_requires_its_own_complete_probe_observations(self):
         from dummy_test_support.adapters import r02
 
@@ -117,24 +137,36 @@ class R02Acceptance(unittest.TestCase):
             result = self.evidence("ROS11")
         self.assertEqual("FAIL", result["status"])
 
+    ##
+    # @brief 只查probe源码含名称识别路径，不实际获取组件列表。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_ros01_recognizes_the_live_gazebo_component_name_when_type_is_empty(self):
         probe = TEST_ROOT.parents[2] / "src/dummy_bringup/scripts/gazebo_runtime_probe.py"
         source = probe.read_text()
         self.assertIn("_is_gazebo_component", source)
         self.assertIn('item["name"]', source)
 
+    ##
+    # @brief 只查gz topic/pose路径文本，不执行gz命令。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_ros03_reads_fixed_base_pose_from_the_gazebo_pose_topic(self):
         probe = TEST_ROOT.parents[2] / "src/dummy_bringup/scripts/gazebo_runtime_probe.py"
         source = probe.read_text()
         self.assertIn('"gz", "topic", "-e", "-n", "1"', source)
         self.assertIn("/pose/info", source)
 
+    ##
+    # @brief 只核暂停clock判断helper文本存在，不真实pause/resume。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_fre11_distinguishes_frozen_clock_values_from_repeated_clock_messages(self):
         probe = TEST_ROOT.parents[2] / "src/dummy_bringup/scripts/gazebo_runtime_probe.py"
         source = probe.read_text()
         self.assertIn("clock_advanced_while_paused", source)
         self.assertIn("_wait_for_clock_quiescence", source)
 
+    ##
+    # @brief 核SOURCES覆盖九个关键路径，不证明正在运行进程来自这些文件。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_sources_bind_the_native_gazebo_launch_and_model_inputs(self):
         from dummy_test_support.adapters import r02
 
@@ -151,6 +183,9 @@ class R02Acceptance(unittest.TestCase):
         }
         self.assertTrue(required.issubset(r02.SOURCES))
 
+    ##
+    # @brief 实际Python子进程核精确base_link块、protobuf缺省x/y及坏/重复块拒绝；并不要求文本显式含所有轴。
+    # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_pose_parser_uses_one_complete_base_link_block_and_requires_all_axes(self):
         probe = TEST_ROOT.parents[2] / "src/dummy_bringup/scripts/gazebo_runtime_probe.py"
         code = """

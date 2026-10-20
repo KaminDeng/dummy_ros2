@@ -1,3 +1,7 @@
+##
+# @file manual_moveit_tab.py
+# @brief 连接末端目标编辑、异步 MoveIt 规划、目标虚影与设备路径执行。
+# 目标输入 XYZ 为毫米、RPY 为度；规划和执行内部六轴位置为弧度。只读服务结果必须通过完整路径验证、实际命令插值碰撞检查、场景版本及实测起点检查后才可单独确认执行；预览本身不会发送设备运动命令。
 """末端位姿、规划与独立虚影播放；运动接入由原面板管理。"""
 import math
 import time
@@ -16,7 +20,16 @@ from manual_moveit_target import target_markers
 from manual_moveit_autotest import AutoTestSession
 
 
+##
+# @class MoveItTab
+# @brief 管理规划版本、异步请求及有设备收据的执行流程。
+# revision 是用户规划内容版本；identity=(boot,reference) 绑定只读规划，execution.identity=(boot,reference,session) 绑定运动。pending 保存请求及截止/版本/起点；samples/checks 为实际命令曲线的待查样本和在途碰撞 future，全部通过后才允许执行。
 class MoveItTab(QtWidgets.QWidget):
+    ##
+    # @brief 建立目标编辑页、规划器、预览/微调和双频率轮询定时器。
+    # 段等待预算必须为有限 (0,660] 秒，bool 被拒绝。60 ms 定时器刷新 UI，2 ms 定时器有界消费异步碰撞响应；微调 10 ms 仅改变 XYZ 输入，100 ms 停更后自动规划，不自动执行。
+    # @param panel 主面板实例，提供真实反馈、状态权限、动态参数及单 owner 命令入口。
+    # @return None；执行上述状态更新、界面或日志操作。
     def __init__(self, panel):
         super().__init__(panel)
         self.panel = panel
@@ -28,6 +41,8 @@ class MoveItTab(QtWidgets.QWidget):
         self.planner = MoveItPlanner(panel.node, [j['name'] for j in panel.cfg['joints']], panel.limits)
         self.planner.motion_parameters=lambda:(panel.speed_input.value(),panel.acceleration_input.value(),
             panel.cfg.get('motion_speed_max_deg_s',63.),panel.cfg.get('motion_acceleration_max_rad_s2',4.))
+        ##
+        # pending=(阶段,future,截止秒,revision,参考身份,起点rad)；planning_deadline 为整个手工规划链的宿主秒数截止，而非每阶段重新放宽。
         self.pending = None
         self.planning_deadline = None
         self.planning_started_at = None
@@ -45,6 +60,8 @@ class MoveItTab(QtWidgets.QWidget):
         self.execution = None
         self.completed_marker = None
         self.started_motion = None
+        ##
+        # execution 是本地执行进度对象；started_motion 来自 MOVE_STARTED，completed_marker=(motion,state_seq) 来自完成事件，只有后续实际 State 覆盖水位才确认到位。
         self.auto_test = AutoTestSession(self)
         self.previewed = False
         self.checks = []
@@ -100,6 +117,8 @@ class MoveItTab(QtWidgets.QWidget):
                 grid.addWidget(slider, i, 2, 1, 2)
                 self.jog_sliders.append(slider)
             self.inputs.append(box)
+        ##
+        # step 为目标编辑微调速度 mm/s；play_speed 是无量纲动画倍率；两者均不改变实际设备上限 speed_input/acceleration_input。
         self.step = QtWidgets.QDoubleSpinBox()
         self.step.setRange(.1, 200.)
         self.step.setValue(panel.cfg.get('moveit_jog_speed_default_mm_s', 100.))
@@ -170,6 +189,8 @@ class MoveItTab(QtWidgets.QWidget):
         layout.addLayout(presets)
         test_row = QtWidgets.QHBoxLayout()
         test_row.addWidget(QtWidgets.QLabel('自动测试时长'))
+        ##
+        # 界面自动测试时长以分钟显示，start 调用前乘 60 转秒；连续链限制 57 分钟，给回程与停车预留预算。
         self.auto_duration = QtWidgets.QDoubleSpinBox()
         self.auto_duration.setRange(.01,1440.)
         self.auto_duration.setDecimals(2)
@@ -214,16 +235,27 @@ class MoveItTab(QtWidgets.QWidget):
         panel.speed_input.valueChanged.connect(self.motion_parameters_changed)
         panel.acceleration_input.valueChanged.connect(self.motion_parameters_changed)
 
+    ##
+    # @brief 查询本面板圆柱场景是否已确认且未封锁。
+    # @return bool：没有圆柱控制器时 True；否则 scene_ready 且 not blocked。
     def scene_ready(self):
         scene=getattr(self.panel,'obstacle_tab',None)
         if scene is not None and hasattr(scene, 'validate_topology') and not scene.validate_topology():
             return False
         return scene is None or scene.scene_ready and not scene.blocked
 
+    ##
+    # @brief 取得当前手动障碍场景版本。
+    # 这是本地场景事务版本，记录在规划上以防旧场景路径执行，不是 MoveIt 所有外部修改的全局版本。
+    # @return int 或 None：圆柱控制器的 scene_revision；没有控制器时 None。
     def scene_revision(self):
         scene=getattr(self.panel,'obstacle_tab',None)
         return scene.scene_revision if scene is not None else None
 
+    ##
+    # @brief 在障碍改变前清空旧场景的规划、未来链和预览。
+    # 自动测试按 interrupted 结束、现有执行本地取消但 stop=False；真正受控停车和新鲜 Hold 屏障由 ObstacleScene 随后发起。取消 pending future 后 invalidate，停止目标自动规划和微调，不能让旧队列与停车回执竞争。
+    # @return None；执行上述状态更新、界面或日志操作。
     def scene_change_requested(self):
         # 障碍控制器随后请求Cancel并等待真实Hold；此处先清空所有旧场景工作。
         if self.auto_test.active:self.auto_test.abort('障碍场景已改变，停止旧场景测试',stop=False,result='interrupted')
@@ -234,11 +266,20 @@ class MoveItTab(QtWidgets.QWidget):
         self.preview_timer.stop();self.jog_timer.stop()
         self.status.setText('等待停车与新碰撞场景确认；确认后请重新规划。')
 
+    ##
+    # @brief 空闲路径的速度/加速度改变时作废既有检查。
+    # 执行中或自动测试中不在此重定时；空闲有 path/pending 时要求重新规划实际命令曲线。
+    # @param _ Qt valueChanged 附带参数，不使用。
+    # @return None；执行上述状态更新、界面或日志操作。
     def motion_parameters_changed(self, *_):
         if not self.executing and not self.auto_test.active and (self.path or self.pending):
             self.invalidate()
             self.status.setText('速度或加速度已改变，请重新规划；未发送运动。')
 
+    ##
+    # @brief 以短时间预算驱动 ROS 响应并推进规划状态机。
+    # 关闭或 ROS 不可用时 invalidate；没有请求/检查/自动测试则停高频定时器。最多 16 次非阻塞 spin 且约 2 ms 后让出，保持八个在途碰撞请求以免 UI 被长循环占据。
+    # @return None；执行上述状态更新、界面或日志操作。
     def poll_collision_checks(self):
         if getattr(self.panel, 'closing', False):
             self.invalidate()
@@ -258,11 +299,20 @@ class MoveItTab(QtWidgets.QWidget):
                     break
         self.tick()
 
+    ##
+    # @brief 更新偏好说明并使旧解与路径失效。
+    # 重新触发目标停更规划；偏好改变不直接修改实测状态或发送运动。
+    # @param _ Qt 下拉框变化附带参数，不使用。
+    # @return None；执行上述状态更新、界面或日志操作。
     def preference_changed(self, *_):
         self.ik_preference.setToolTip(self.ik_preference.currentData(QtCore.Qt.ToolTipRole))
         self.invalidate()
         self.target_changed()
 
+    ##
+    # @brief 在当前新鲜姿态附近开始只规划的随机目标生成。
+    # 要求场景确认、无执行/忙/请求且 FK/规划/有效性服务就绪；清旧路径后最多搜索八个候选。失败标红目标并说明未执行，不自动尝试设备运动。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_random_pose(self):
         if not self.scene_ready():return
         if self.executing or self.panel.busy or self.pending or not self.panel.fresh() or not hasattr(self.panel,'actual_q'):
@@ -280,6 +330,11 @@ class MoveItTab(QtWidgets.QWidget):
             self.status.setText(str(error)+'；未发送运动，请检查当前位置后重试。')
             if hasattr(self.panel,'message'):self.panel.message(self.status.text())
 
+    ##
+    # @brief 采样一个范围内目标并异步验证其碰撞状态。
+    # random_attempts 超过 8 抛 ValueError；按界面幅度及腕部偏好调用 sample_reasonable_joints，成功候选还需 FK、规划及完整曲线检查。
+    # @param start 本次固定实测起点六轴 rad。
+    # @return None；执行上述状态更新、界面或日志操作。
     def request_random_candidate(self, start):
         self.random_attempts += 1
         if self.random_attempts > 8:
@@ -288,6 +343,11 @@ class MoveItTab(QtWidgets.QWidget):
                                                    self.ik_preference.currentData(),self.amplitude.currentData())
         self.begin('random-validity',self.planner.request_validity(self.random_goal),start)
 
+    ##
+    # @brief 批量填入末端预设后触发一次目标规划。
+    # 忙碌或执行时拒绝；QSignalBlocker 避免逐个编辑触发中间目标规划，填完后 target_changed 统一发布/启动防抖计时。
+    # @param values [X,Y,Z,roll,pitch,yaw]，前三项 mm、后三项 °。
+    # @return None；执行上述状态更新、界面或日志操作。
     def apply_target_preset(self, values):
         if self.executing or self.panel.busy:
             self.status.setText('正在执行，请停止后设置快捷目标。')
@@ -299,6 +359,11 @@ class MoveItTab(QtWidgets.QWidget):
         del blockers
         self.target_changed()
 
+    ##
+    # @brief 作废路径、碰撞结果与预览并推进用户规划版本。
+    # 自动测试活动时先中止，执行活动时请求 STOP。清 path/continuous_path/noop 和检查队列，取消 preset_fk 与 checks；主 pending 通过 revision 不匹配由 start_plan/tick 取消，不能误读为远端计算已撤销。
+    # @param _ Qt 信号附带参数，不使用。
+    # @return None；执行上述状态更新、界面或日志操作。
     def invalidate(self, *_):
         if self.auto_test.active:self.auto_test.abort('规划内容已改变，停止自动测试')
         self.collision_timer.stop()
@@ -324,25 +389,49 @@ class MoveItTab(QtWidgets.QWidget):
         self.checks = []
         self.samples = ()
 
+    ##
+    # @brief 发布输入位置和姿态的独立 RViz 目标标记。
+    # marker_publisher 存在且六个输入建立后才发布；目标点即使逆解失败也保留，标记不作为测量或执行回执。
+    # @return None；执行上述状态更新、界面或日志操作。
     def publish_target(self):
         if self.marker_publisher is not None and len(self.inputs) == 6:
             self.marker_publisher.publish(target_markers([box.value() for box in self.inputs], self.target_failed))
 
+    ##
+    # @brief 同步目标点与机器人虚影的失败外观。
+    # 调用主面板预览描述颜色接口并重新发布目标 marker；不修改 /joint_states 或控制权限。
+    # @param failed 失败标记，True 时显示红色失败预览。
+    # @return None；执行上述状态更新、界面或日志操作。
     def set_target_failed(self, failed):
         self.target_failed = failed
         if hasattr(self.panel, 'set_preview_failed'):
             self.panel.set_preview_failed(failed)
         self.publish_target()
 
+    ##
+    # @brief 按住 XYZ 微调滑块时启动输入更新定时器。
+    # 微调作用于目标毫米输入，不能解释为设备连续 jog 控制。
+    # @param axis XYZ 轴零基索引，由各滑块绑定；本方法只启动共用 timer。
+    # @return None；执行上述状态更新、界面或日志操作。
     def begin_jog(self, axis):
         self.jog_timer.start()
 
+    ##
+    # @brief 处理非拖拽的键盘/程序滑块增量并回中。
+    # 当滑块未按住时，按 value/100×step(mm/s)×0.01s 改一次目标，再 end_jog 回零；按住期间由 advance_jog 定时更新。
+    # @param axis XYZ 轴索引 0..2。
+    # @param value 滑块整数值 -100..100，作为速度比例。
+    # @return None；执行上述状态更新、界面或日志操作。
     def jog_axis(self, axis, value):
         slider = self.jog_sliders[axis]
         if not slider.isSliderDown():
             self.inputs[axis].setValue(self.inputs[axis].value()+value*self.step.value()/100.*.01)
             self.end_jog(axis)
 
+    ##
+    # @brief 每 10 ms 按拖拽偏移比例改变 XYZ 目标。
+    # 执行中立即返回；每个按住且非零的滑块按界面最大微调速度积分 0.01 s，触发目标变化及规划防抖，不发设备命令。
+    # @return None；执行上述状态更新、界面或日志操作。
     def advance_jog(self):
         if self.executing:
             return
@@ -350,6 +439,11 @@ class MoveItTab(QtWidgets.QWidget):
             if slider.isSliderDown() and slider.value():
                 self.inputs[axis].setValue(self.inputs[axis].value()+slider.value()*self.step.value()/100.*.01)
 
+    ##
+    # @brief 让指定微调滑块回中，全部松开后停定时器。
+    # 回中时屏蔽信号避免额外位移；当前目标数值保留，不恢复到拖拽前位置。
+    # @param axis XYZ 滑块索引。
+    # @return None；执行上述状态更新、界面或日志操作。
     def end_jog(self, axis):
         blocker = QtCore.QSignalBlocker(self.jog_sliders[axis])
         self.jog_sliders[axis].setValue(0)
@@ -357,11 +451,21 @@ class MoveItTab(QtWidgets.QWidget):
         if not any(slider.isSliderDown() for slider in self.jog_sliders):
             self.jog_timer.stop()
 
+    ##
+    # @brief 发布新目标并在空闲时排队停更后规划。
+    # 100 ms singleShot 防抖计时在每次变化时重置；执行或自动测试中不自动开始新的人工作业规划。
+    # @param _ Qt 目标控件附带信号参数，不使用。
+    # @return None；执行上述状态更新、界面或日志操作。
     def target_changed(self, *_):
         self.publish_target()
         if not self.executing and not self.auto_test.active:
             self.preview_timer.start(100)
 
+    ##
+    # @brief 将 ROS 米制 Pose 转为毫米/角度填入目标控件。
+    # asin 输入夹到 [-1,1] 避免数值溢出；逐框屏蔽信号，最后只发布目标。不会触发六次 invalidate，也不直接提交规划/运动。
+    # @param pose 基座下 geometry_msgs/Pose，四元数 (x,y,z,w)。
+    # @return None；执行上述状态更新、界面或日志操作。
     def fill_pose(self, pose):
         q = pose.orientation
         roll = math.atan2(2*(q.w*q.x+q.y*q.z), 1-2*(q.x*q.x+q.y*q.y))
@@ -375,14 +479,25 @@ class MoveItTab(QtWidgets.QWidget):
             del blocker
         self.publish_target()
 
+    ##
+    # @brief 查询是否存在尚未完成且未中止的执行对象。
+    # @return bool：execution 非空且 not done、not aborted。
     @property
     def executing(self):
         return self.execution is not None and not self.execution.done and not self.execution.aborted
 
+    ##
+    # @brief 从新鲜反馈取得运动绑定身份。
+    # 含 session，因此同 boot/reference 重新授权仍不能继承旧执行队列。
+    # @return tuple 或 None：(boot_epoch,reference_epoch,session_id)；反馈失鲜/缺失返回 None。
     def execution_identity(self):
         s = self.panel.last_state
         return (s['boot_epoch'], s['reference_epoch'], s['session_id']) if self.panel.fresh() and s else None
 
+    ##
+    # @brief 检查执行请求的基本状态、权限和场景条件。
+    # 不在此要求速度数值接近零，也不排除 panel.busy；具体提交入口叠加 busy，并由 ready 检查 Hold 或静止。
+    # @return bool：场景确认、反馈新鲜、已授权有零点、允许态 2/4、起点工作范围及速度字段有效。
     def request_ready(self):
         p = self.panel
         return (self.scene_ready() and p.fresh() and p.control_state_allowed((2,4)) and p.authorized and
@@ -390,6 +505,10 @@ class MoveItTab(QtWidgets.QWidget):
                 p.last_state['velocity_valid_mask'] == 63 and
                 all(math.isfinite(v) for v in p.last_state['estimated_velocity_rad_s']))
 
+    ##
+    # @brief 判定下一运动段起步或完成确认所需保持/静止条件。
+    # Hold 要求 hold_valid_mask=63 和六轴保持位置距 actual_q ≤0.003 rad；否则普通 |v|≤0.01 rad/s，自动测试容许 ≤0.02 rad/s。不会单凭目标动画判定实际静止。
+    # @return bool：满足 request_ready 且可靠 Hold 位置吻合，或速度低于相应静止阈值。
     def ready(self):
         if not self.request_ready():return False
         state = self.panel.last_state
@@ -400,6 +519,12 @@ class MoveItTab(QtWidgets.QWidget):
         limit = .02 if self.auto_test.active else .01
         return all(abs(v)<=limit for v in state['estimated_velocity_rad_s'])
 
+    ##
+    # @brief 记录结构化 MoveIt 事件和少量操作员摘要。
+    # moveit-events.jsonl 采用 monotonic_ns；仅已登记事件同步显示中文消息。日志记录是宿主观察，不代替设备原始 transport 收据。
+    # @param event 稳定事件标识，未登记者保留原名。
+    # @param fields 附加 JSON 可序列化观测，如身份、路径、耗时、散列。
+    # @return None；执行上述状态更新、界面或日志操作。
     def record(self, event, **fields):
         descriptions = {
             'IK_SELECTED': '已按所选偏好选择范围内的关节解和等效圈数',
@@ -423,10 +548,21 @@ class MoveItTab(QtWidgets.QWidget):
             detail = f'；耗时 {fields["total_elapsed_s"]:.3f}秒' if 'total_elapsed_s' in fields else ''
             self.panel.message(description+detail)
 
+    ##
+    # @brief 从新鲜反馈取得只读规划参考身份。
+    # 只读规划不绑定 session；真正执行还要再次核对 execution_identity 和 authorized。
+    # @return tuple 或 None：(boot_epoch,reference_epoch)；反馈失鲜时 None。
     def current_identity(self):
         state = self.panel.last_state
         return (state['boot_epoch'], state['reference_epoch']) if state and self.panel.fresh() else None
 
+    ##
+    # @brief 将一个异步阶段绑定到目标版本、参考身份、起点和总截止。
+    # 场景未就绪则本地取消 future。整个链首次 begin 建立 12 s 总截止，后续阶段沿用；pending 保存六元组供 tick 拒绝迟到/过期响应。path_scene_revision 固定当前场景版本。
+    # @param phase fk/ik/plan/random-validity/random-fk 阶段键。
+    # @param future 对应只读 MoveIt 服务或组合 future。
+    # @param start 本次规划实测起点六轴 rad。
+    # @return None；执行上述状态更新、界面或日志操作。
     def begin(self, phase, future, start):
         if not self.scene_ready():
             future.cancel();self.status.setText('碰撞场景尚未确认，等待场景同步后重新规划。');return
@@ -441,6 +577,10 @@ class MoveItTab(QtWidgets.QWidget):
                              'plan': '规划自碰撞有效路径…', 'random-validity': '检查随机目标是否碰撞…',
                              'random-fk': '生成随机目标的末端位姿…'}[phase])
 
+    ##
+    # @brief 从新鲜实测关节状态请求 FK 以填入当前末端位姿。
+    # 自动测试、有 pending 或无 actual_q 时拒绝；作废旧规划并停止防抖后请求 FK。只填目标，不采零、不发送运动。
+    # @return None；执行上述状态更新、界面或日志操作。
     def capture_actual(self):
         if self.auto_test.active or not self.panel.fresh() or self.pending or not hasattr(self.panel, 'actual_q'):
             return
@@ -449,6 +589,10 @@ class MoveItTab(QtWidgets.QWidget):
         start = tuple(self.panel.actual_q)
         self.begin('fk', self.planner.request_fk(start), start)
 
+    ##
+    # @brief 从输入 XYZ/RPY 与实测起点发起 IK→规划流程。
+    # 先取消旧 revision 的 pending；无新鲜反馈或服务未就绪时每 100 ms 等待重试，保留输入。空闲才 invalidate 并保存实际起点，经所选偏好求 IK；没有自动运动提交。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_plan(self):
         if self.auto_test.active:return
         self.preview_timer.stop()
@@ -471,6 +615,11 @@ class MoveItTab(QtWidgets.QWidget):
         self.begin('ik', self.planner.request_ik(start,values[:3],values[3:],self.ik_preference.currentData(),
                                                self.panel.cfg['home_deg'],self.panel.cfg['rest_deg']),start)
 
+    ##
+    # @brief 对 Home/Rest 等显式关节目标做完整路径规划。
+    # 将目标虚影更新为该姿态，同时请求预设目标 FK 填末端框和关节路径规划；两条响应分别绑定 revision。执行仍须后续碰撞检查和明确确认。
+    # @param degrees 明确六轴目标 °，不会按 IK 重新选择等效圈数。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_joint_plan(self, degrees):
         if self.auto_test.active or not self.panel.fresh() or self.pending or self.executing or not hasattr(self.panel, 'actual_q'):
             return
@@ -481,6 +630,10 @@ class MoveItTab(QtWidgets.QWidget):
         self.preset_fk = (self.planner.request_fk([math.radians(v) for v in degrees]), self.revision)
         self.begin('plan', self.planner.request_plan(start, [math.radians(v) for v in degrees]), start)
 
+    ##
+    # @brief 切换原规划时间轴的目标虚影播放。
+    # noop 仅显示当前位置；普通路径从零启动/停止播放，tick 依据 play_speed 倍速插值。预览不是设备命令序列的真实耗时，也不会自动执行。
+    # @return None；执行上述状态更新、界面或日志操作。
     def toggle_preview(self):
         if self.noop_goal is not None:
             if self.current_identity() == self.identity and hasattr(self.panel, 'actual_q') and all(
@@ -495,6 +648,11 @@ class MoveItTab(QtWidgets.QWidget):
             self.play_elapsed = 0.
             self.status.setText('仅播放虚影；预览结束后需单独点击“执行规划路径”，不会自动运动。')
 
+    ##
+    # @brief 在完整检查和明确确认后建立路径执行对象。
+    # 要求场景版本相同、所有 samples/checks 已清空、无忙/请求且状态允许。连续模式核对已准备曲线的速度/加速度；确认后重查 revision/path/session/起点，再创建 SegmentedExecution。连续模式以首尾代表一条设备路径，分段模式只删严格共线冗余点。
+    # @param confirmed 自动测试已经统一确认时可为 True；人工入口仍需面板确认。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_execution(self, confirmed=False):
         if not self.scene_ready() or getattr(self,'path_scene_revision',None)!=self.scene_revision():
             self.status.setText('碰撞场景尚未确认或路径场景版本已改变，请重新规划。');return
@@ -535,6 +693,12 @@ class MoveItTab(QtWidgets.QWidget):
         except ValueError as error:
             self.cancel_execution(str(error), stop=False)
 
+    ##
+    # @brief 撤销后续路径并按需要请求设备停止。
+    # 自动测试活动时委托其 abort，避免留未来链；清 started/completed 标记及 busy。调用方若使用 stop=False，必须明确由其他流程负责停车或确保设备尚未起步。
+    # @param reason 日志/界面中的取消原因。
+    # @param stop True 且原先执行活动时调用主面板 STOP；False 仅清本地执行。
+    # @return None；执行上述状态更新、界面或日志操作。
     def cancel_execution(self, reason, stop=False):
         if self.auto_test.active:
             self.auto_test.abort(reason,stop=stop)
@@ -551,6 +715,12 @@ class MoveItTab(QtWidgets.QWidget):
         if was_active and stop:
             self.panel.release('STOP')
 
+    ##
+    # @brief 把设备事件绑定身份并记录开始/完成水位或拒绝。
+    # 先交自动链处理进度/续接回执。MOVE_STARTED 记 motion 并删除已被接受的临时路径文件；完成只记水位，等待实际反馈再确认。仅自动测试在起步前同身份 MOVE_NOT_READY 可在 2 s 内每 0.1 s 重试；显式起步拒绝保留 Hold，起步后异常请求 STOP。
+    # @param event Native 事件名。
+    # @param parts 含 boot/reference/session/motion/state_seq 的事件字典。
+    # @return None；执行上述状态更新、界面或日志操作。
     def native_event(self, event, parts):
         if self.auto_test.native_event(event,parts):return
         if not self.executing:
@@ -585,6 +755,10 @@ class MoveItTab(QtWidgets.QWidget):
         elif event.startswith('MOVE_REJECTED') or event in ('MOVE_NOT_READY', 'READONLY_FAULT', 'EXIT_CLEANUP', 'RELEASE_CONFIRMED', 'RELEASE_UNCONFIRMED'):
             self.cancel_execution('Native 拒绝或退出：'+event, stop=True)
 
+    ##
+    # @brief 用新鲜反馈和完成收据逐段确认，再提交下一段。
+    # 完成事件的 motion/state_seq 水位必须已被 State 覆盖，且 ready、身份和实际目标位置一致才 confirm。全部完成才通知自动测试；下一段先等静止/重试预算，再经主面板单 owner 发 MOVE_SPEED、MOVE_PATH 或 MOVE_CHAIN。连续路径写 /tmp 并复制报告证据，设备接受后才删除临时文件。
+    # @return None；执行上述状态更新、界面或日志操作。
     def advance_execution(self):
         if not self.executing:
             return
@@ -646,6 +820,10 @@ class MoveItTab(QtWidgets.QWidget):
             except ValueError as error:
                 self.cancel_execution(str(error), stop=True)
 
+    ##
+    # @brief 推进异步阶段、完整曲线碰撞检查、预览及执行超时。
+    # 更新控件后校验场景、参考身份和实测起点；过期/旧版本 future 本地取消并保留目标输入。规划结果保留全部路点，连续模式重采样后检查实际曲线；最多八个碰撞请求并行。预览仅改目标输入。执行中失鲜、失权或超时按是否已提交决定 STOP，最后推进自动测试。
+    # @return None；执行上述状态更新、界面或日志操作。
     def tick(self):
         if not self.scene_ready() and (self.path or self.pending):
             self.scene_change_requested()
@@ -690,6 +868,8 @@ class MoveItTab(QtWidgets.QWidget):
         if (self.path or self.noop_goal is not None) and not self.executing and available and any(abs(a-b) > .003 for a, b in zip(self.panel.actual_q, self.start)):
             self.invalidate()
             self.status.setText('实测起点已改变，请重新规划；未发送运动。')
+        ##
+        # 异步请求消费前核对总截止、用户 revision 和新鲜参考身份；只在目标仍有效且暂时失鲜时排队重新规划，不能用迟到结果继续执行。
         if self.pending:
             phase, future, deadline, revision, identity, start = self.pending
             if time.monotonic() >= deadline or revision != self.revision or identity != feedback_identity:
@@ -764,6 +944,8 @@ class MoveItTab(QtWidgets.QWidget):
                                 self.panel.acceleration_input.value(),velocities=trajectory_velocities(
                                     result.trajectory.joint_trajectory,self.planner.names,
                                     required=self.panel.cfg.get('backend')=='real')) if self.continuous_enabled else None)
+                            ##
+                            # 碰撞样本来自最终要执行的命令曲线，不能只验证 MoveIt 原采样点或仅检查末点；Hermite 插值/重新限速后的曲线也须完整检查。
                             actual_path = self.continuous_path.points if self.continuous_path else execution_polyline(self.path)
                             self.samples = list(collision_samples(actual_path))
                             self.checked_count = 0
@@ -813,6 +995,8 @@ class MoveItTab(QtWidgets.QWidget):
             now = time.monotonic()
             self.play_elapsed += max(0., now-self.play_clock)*self.play_speed.value()
             self.play_clock = now
+            ##
+            # 动画按规划原时间及倍率播放；真正运动可能由 Native 重新限速，不能用虚影进度认定实测到位。
             elapsed = self.play_elapsed+self.times[0]
             while self.play_index+1 < len(self.times) and elapsed >= self.times[self.play_index+1]:
                 self.play_index += 1

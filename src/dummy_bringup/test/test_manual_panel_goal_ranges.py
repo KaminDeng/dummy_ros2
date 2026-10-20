@@ -1,4 +1,9 @@
 """真实Qt范围控件的离线回归；只执行产品类，不启动ROS、Native或USB。"""
+##
+# @file test_manual_panel_goal_ranges.py
+# @brief 真实Qt范围控件搭配AST产品方法的名义请求/工作范围回归。
+#
+# 真实QApplication/JointPanel控件；仅编译所选生产定义，start_worker/tick、ROS发布及xacro由替身隔离。输入目标单位deg，slider为百分之一度整数；实际State位置rad、速度rad/s。能证明UI与控制前重核，不证明Native/ROS/实机执行。
 import ast
 import json
 import math
@@ -15,12 +20,21 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'scripts/manual_joint_panel.py'
 
 
+##
+# @brief 模块级复用或创建offscreen QApplication，供控件fixture使用。
+# @return yield QApplication；不启动ROS。
 @pytest.fixture(scope='module')
 def qt_application():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     yield app
 
 
+##
+# @brief 编译JointPanel和valid_goal并实际构造Qt面板，停timer且替换连接/轮询；yield后补QProcess对象再close。
+# @param tmp_path pytest临时目录Path；所有本用例产物限制在该目录。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @param qt_application 供真实Qt控件使用的QApplication fixture。
+# @return yield (真实Qt面板, 编译scope)；退出关闭面板。
 @pytest.fixture
 def goal_panel(tmp_path, monkeypatch, qt_application):
     # 使用真实产品构造与方法；替换的仅是ROS发布端和不应运行的连接/轮询边界。
@@ -47,6 +61,11 @@ def goal_panel(tmp_path, monkeypatch, qt_application):
     panel.close()
 
 
+##
+# @brief 逐轴核spinbox名义硬界、slider×100边界及端点目标valid_goal，未向设备发送。
+# @param panel 面板对象，具体是Qt还是逻辑替身见本文件职责。
+# @param scope 由产品AST编译得到的全局作用域，含函数及可变依赖替身。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def assert_nominal_request_endpoints(panel, scope):
     for axis, (box, slider, limits) in enumerate(zip(panel.inputs, panel.sliders, [j['nominal_limits_deg'] for j in panel.cfg['joints']])):
         lower, upper = limits
@@ -60,6 +79,11 @@ def assert_nominal_request_endpoints(panel, scope):
             assert scope['valid_goal'](target, [j['nominal_limits_deg'] for j in panel.cfg['joints']])
 
 
+##
+# @brief 两类CALIBRATION事件仅恢复六轴名义请求控件范围并置pending_authorization，不能仅凭文本授权。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @param event CALIBRATION_READY或CALIBRATION_RESUMED人工stdout事件。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 @pytest.mark.parametrize('event', ['CALIBRATION_READY', 'CALIBRATION_RESUMED'])
 def test_calibration_preview_resets_all_six_ordinary_endpoints(goal_panel, event):
     panel, scope = goal_panel
@@ -73,6 +97,10 @@ def test_calibration_preview_resets_all_six_ordinary_endpoints(goal_panel, event
     assert not panel.authorized and panel.pending_authorization is not None
 
 
+##
+# @brief 预览Home/Rest/双限位姿势不改变普通输入硬界，不发命令。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_home_rest_previews_do_not_expand_ordinary_ranges_or_send_commands(goal_panel):
     panel, scope = goal_panel
     panel.restore_ordinary_goal_ranges()
@@ -87,6 +115,10 @@ def test_home_rest_previews_do_not_expand_ordinary_ranges_or_send_commands(goal_
     assert_nominal_request_endpoints(panel, scope)
 
 
+##
+# @brief announce=False更新六轴目标虚影输入，但不发MOVE也不逐帧记message。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_trajectory_preview_updates_without_commands_or_per_frame_log(goal_panel):
     panel,_=goal_panel
     from unittest.mock import Mock
@@ -96,6 +128,12 @@ def test_trajectory_preview_updates_without_commands_or_per_frame_log(goal_panel
     panel.command.assert_not_called();panel.message.assert_not_called()
 
 
+##
+# @brief 人工置可操作状态，记录command和确认框文本，提供Yes/No答案，隔离实际设备。
+# @param panel 面板对象，具体是Qt还是逻辑替身见本文件职责。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @param answer 确认框替身返回Yes或No，默认Yes。
+# @return (commands, prompts)记录列表，不代表真实发送队列。
 def prepare_move(panel, monkeypatch, answer=QtWidgets.QMessageBox.Yes):
     panel.restore_ordinary_goal_ranges()
     panel.authorized, panel.calibration, panel.busy = True, (123, 1), False
@@ -108,6 +146,12 @@ def prepare_move(panel, monkeypatch, answer=QtWidgets.QMessageBox.Yes):
     return commands, prompts
 
 
+##
+# @brief 名义J2−73°/J3 180°投影到−72.45°/179.45°并说明未发送；只有Yes才发一次工作范围目标。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @param answer Yes发送投影目标，No只更新预览不发送。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 @pytest.mark.parametrize('answer', [QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.No])
 def test_nominal_stop_request_is_explicitly_projected_to_existing_working_goal(goal_panel, monkeypatch, answer):
     panel, scope = goal_panel
@@ -133,6 +177,13 @@ def test_nominal_stop_request_is_explicitly_projected_to_existing_working_goal(g
         assert commands == [] and not panel.busy
 
 
+##
+# @brief 六轴两端各投影至既有working限位；外部强塞超名义0.01°值仍直接拒绝，不夹紧成合法请求。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @param axis 0..5对应J1..J6。
+# @param side 0下端，1上端。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 @pytest.mark.parametrize('axis', range(6))
 @pytest.mark.parametrize('side', [0, 1])
 def test_every_nominal_endpoint_is_projected_but_outside_hard_range_is_rejected(goal_panel, monkeypatch, axis, side):
@@ -156,10 +207,23 @@ def test_every_nominal_endpoint_is_projected_but_outside_hard_range_is_rejected(
     assert commands == [] and prompts == [] and not panel.busy
 
 
+##
+# @brief 确认框期间撤authorized后即便Yes也不发MOVE，防止确认前旧状态被沿用。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_projection_confirmation_does_not_bypass_changed_control_authority(goal_panel, monkeypatch):
     panel, _ = goal_panel
     commands, prompts = prepare_move(panel, monkeypatch)
     panel.inputs[1].setValue(-73)
+    ##
+    # @par 内部回调 decline_authority
+    # 记录弹框并撤panel.authorized，再返回Yes制造确认期间失权。
+    # 参数 _parent：对话框父对象，替身忽略。
+    # 参数 _title：确认标题，替身忽略。
+    # 参数 text：确认正文，记录供断言。
+    # 参数 _：位置参数，替身忽略。
+    # 返回：QMessageBox.Yes，但此时授权已撤。
     def decline_authority(_parent, _title, text, *_):
         prompts.append(text);panel.authorized = False
         return QtWidgets.QMessageBox.Yes
@@ -168,6 +232,10 @@ def test_projection_confirmation_does_not_bypass_changed_control_authority(goal_
     assert len(prompts) == 1 and commands == [] and not panel.busy
 
 
+##
+# @brief 只提取tick中move.setEnabled表达式求值：小速度不抖动禁用，但速度mask缺失或fresh=false仍阻断。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_ordinary_move_button_accepts_request_but_preserves_invalid_and_stale_guards(goal_panel):
     panel, scope = goal_panel
     panel.authorized, panel.calibration, panel.busy = True, (123, 1), False
@@ -189,6 +257,10 @@ def test_ordinary_move_button_accepts_request_but_preserves_invalid_and_stale_gu
     assert not eval(condition, scope, dict(self=panel, state=state, fresh=False))
 
 
+##
+# @brief 只编译speed_note两条语句，核±约0.01rad/s变化不反复重排Hold文本；不是完整tick或动态控制测试。
+# @param goal_panel goal_panel fixture的真实Qt面板及替身scope。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_hold_status_text_does_not_reformat_instantaneous_velocity(goal_panel):
     panel, scope = goal_panel
     panel.authorized, panel.calibration, panel.busy = True, (123, 1), False

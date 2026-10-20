@@ -1,17 +1,30 @@
 <?xml version="1.0"?>
+<!--
+@file package.xml
+@brief ROS控制包的ament依赖元数据；组件实现与插件绑定分别见src和插件XML。
+@details format=3是ROS包元数据格式，不是Dummy线协议版本。这里的包版本0.1.0
+也不能替代部署时核验的合同/固件摘要。构建还会从CMake查找OpenSSL和明确导出的
+DPSDKHostSDK；本清单本身不会创建SDK安装区、启动设备或授予运动许可。
+-->
 <package format="3">
+  <!-- 包名用于ament索引与下游find_package；description和maintainer是发布元数据。 -->
   <name>dummy_ros_control</name>
   <version>0.1.0</version>
   <description>Guard and wire integration components for the Dummy ROS control path.</description>
   <maintainer email="maintainer@example.invalid">Dummy ROS maintainers</maintainer>
   <license>Apache-2.0</license>
+  <!-- 使用ament_cmake装配C++共享库/测试；依赖安装不等于插件已加载。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- 控制器接口/JTC提供轨迹更新基类；硬件接口提供SystemInterface。 -->
   <depend>controller_interface</depend>
   <depend>joint_trajectory_controller</depend>
   <depend>hardware_interface</depend>
+  <!-- pluginlib按类名动态加载两类守卫插件；trajectory_msgs承载轨迹消息。 -->
   <depend>pluginlib</depend>
   <depend>trajectory_msgs</depend>
+  <!-- 测试由CMake注册，实际运行范围以CTest/colcon结果为准。 -->
   <test_depend>ament_cmake</test_depend>
+  <!-- 向ament声明构建类型；插件资源索引由CMake中的pluginlib导出调用生成。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>

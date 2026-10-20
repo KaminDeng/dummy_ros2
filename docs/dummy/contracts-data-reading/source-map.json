@@ -1,0 +1,1079 @@
+{
+  "schema": "ros_frozen_contract_data_reading_v1",
+  "source_HEAD": "7c9285f6c63cc162245df1299a0b6b8522044d38",
+  "source_count": 119,
+  "unique_sha256_count": 80,
+  "sources": [
+    {
+      "path": "contracts/dummy_robot_v1/c03_prototype/generated/dummy_robot_v1/wire_layout.json",
+      "sha256": "100c1b18642f3409badb973de3d96f8ad963c25d8d1cb8022da61df302b1994b",
+      "bytes": 27192,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_100c1b18642f3409",
+      "representative": "contracts/dummy_robot_v1/c03_prototype/generated/dummy_robot_v1/wire_layout.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/codec/wire_layout.json",
+      "sha256": "100c1b18642f3409badb973de3d96f8ad963c25d8d1cb8022da61df302b1994b",
+      "bytes": 27192,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_100c1b18642f3409",
+      "representative": "contracts/dummy_robot_v1/c03_prototype/generated/dummy_robot_v1/wire_layout.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/enums/dummy_enum_values_v1.json",
+      "sha256": "97ef4b52ad34afec8c94e74e45a3c427ee8bd7b4eeac7a1dcc8bc4c4078a7e12",
+      "bytes": 1706,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_97ef4b52ad34afec",
+      "representative": "contracts/dummy_robot_v1/enums/dummy_enum_values_v1.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/evidence/C04.json",
+      "sha256": "ad5155bcbfe0906549417fc01dd4fa18957cf467935b9c4702eddd9215a2b176",
+      "bytes": 157,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_ad5155bcbfe09065",
+      "representative": "contracts/dummy_robot_v1/evidence/C04.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/evidence/R03-to-C04.json",
+      "sha256": "50fa4b30a5d06c833e27a05a841e38f4697c02791d90a40208f7dd302697273f",
+      "bytes": 1447,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_50fa4b30a5d06c83",
+      "representative": "contracts/dummy_robot_v1/evidence/R03-to-C04.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/evidence/fk_random_cases.json",
+      "sha256": "8422881c141e350bf5f9bd001e0f3518a6f99f49335a44c4aea1b20936e74cbe",
+      "bytes": 85866,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_8422881c141e350b",
+      "representative": "contracts/dummy_robot_v1/evidence/fk_random_cases.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/evidence/source_hashes.json",
+      "sha256": "b602eaea81e93ec6c7bf8d65e303bece52cb4d4700d80558fe67266d9fc4bdfb",
+      "bytes": 172,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_b602eaea81e93ec6",
+      "representative": "contracts/dummy_robot_v1/evidence/source_hashes.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/fixtures/can_golden.json",
+      "sha256": "2e03cc58215e934adacd9485fbd790f890ed9bc28b12ee5550a618d528ace9e6",
+      "bytes": 4089,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_2e03cc58215e934a",
+      "representative": "contracts/dummy_robot_v1/fixtures/can_golden.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/fixtures/fk_cases.json",
+      "sha256": "fdd4e563fbac24d16ce85187cd1755664fb5a47c800764a513404ea5bbb35d64",
+      "bytes": 1140,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_fdd4e563fbac24d1",
+      "representative": "contracts/dummy_robot_v1/fixtures/fk_cases.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/idl/DummyDeviceStatusV1.msg",
+      "sha256": "0512857fb959d5f3db0189930e705ade5addc574235d61507043df5836f62d9b",
+      "bytes": 805,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_0512857fb959d5f3",
+      "representative": "contracts/dummy_robot_v1/idl/DummyDeviceStatusV1.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/idl/DummyJointCommandV1.msg",
+      "sha256": "08243121628086a2c4cece5a651c14883ab82231db135f9959ec9b8662736a97",
+      "bytes": 276,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_08243121628086a2",
+      "representative": "contracts/dummy_robot_v1/idl/DummyJointCommandV1.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/idl/DummyJointStateV1.msg",
+      "sha256": "7e91ee5d0b550c891c50e32f0d5e0a96d765478f50fea1f9d220d6a7342eb6ed",
+      "bytes": 853,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_7e91ee5d0b550c89",
+      "representative": "contracts/dummy_robot_v1/idl/DummyJointStateV1.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/idl/DummyManageV1.srv",
+      "sha256": "71c4f4178b8f7ff2fa7d668e20d224df8beefddadd1822a7fdfbf72b2d9248c8",
+      "bytes": 2170,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_71c4f4178b8f7ff2",
+      "representative": "contracts/dummy_robot_v1/idl/DummyManageV1.srv"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/manifest.json",
+      "sha256": "4a2f5b938027080f93c19b4425d23f0995cfffd871d63b5d99c1896eef107a3b",
+      "bytes": 4875,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_4a2f5b938027080f",
+      "representative": "contracts/dummy_robot_v1/manifest.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/metadata/dummy_robot_v1.yaml",
+      "sha256": "0c3cb3cf6c808f3e45fa8be30518e60708bb7bc031767a129523b5013e829cc4",
+      "bytes": 6627,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_0c3cb3cf6c808f3e",
+      "representative": "contracts/dummy_robot_v1/metadata/dummy_robot_v1.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/model/geometry_reference.yaml",
+      "sha256": "4bf97f5ba919e7aac4599b8066423f825c6052df225257445f13fc679cf9133d",
+      "bytes": 805,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_4bf97f5ba919e7aa",
+      "representative": "contracts/dummy_robot_v1/model/geometry_reference.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/model/model.yaml",
+      "sha256": "b1ebe5560acc25ae9d02ecdbef37cf4c81bf8bb05f1e174e041faf8cde07e0f5",
+      "bytes": 1737,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_b1ebe5560acc25ae",
+      "representative": "contracts/dummy_robot_v1/model/model.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/policy/f405_j1_activation.template.json",
+      "sha256": "56f6406680f24701a587e96c487f747b1b5c4a04fb3e2426d13b72d558b6f037",
+      "bytes": 1794,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_56f6406680f24701",
+      "representative": "contracts/dummy_robot_v1/policy/f405_j1_activation.template.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/policy/f405_j1_policy.template.json",
+      "sha256": "f36a529448bfe7bd8dc15c9bc12de95a63129b29d2bb19b8792b59088b72eaff",
+      "bytes": 1531,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_f36a529448bfe7bd",
+      "representative": "contracts/dummy_robot_v1/policy/f405_j1_policy.template.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac",
+      "bytes": 637,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_facc243a92779d6f",
+      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/profiles/f405_j1_passive.yaml",
+      "sha256": "6553078601365a93cba86ab8a2a7f0b4a244cf7b196dccae759df834690df98c",
+      "bytes": 639,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_6553078601365a93",
+      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_passive.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/profiles/gazebo_6dof.yaml",
+      "sha256": "699f78969aee46961e353459a0d360f733a3c55d85eb420a13d48a8481f9ba7f",
+      "bytes": 2030,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_699f78969aee4696",
+      "representative": "contracts/dummy_robot_v1/profiles/gazebo_6dof.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/profiles/profile_schema.json",
+      "sha256": "23d033d6711a0bfae96bd141f078f142ec1577098fc6637f5f79e3dad0e9567a",
+      "bytes": 954,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_23d033d6711a0bfa",
+      "representative": "contracts/dummy_robot_v1/profiles/profile_schema.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml",
+      "sha256": "59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2",
+      "bytes": 2023,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_59e7a8cc580c9541",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v1/profiles/sil_j1.yaml",
+      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c",
+      "bytes": 1982,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_765311d93bfdeddb",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/codec/wire_layout.json",
+      "sha256": "0dbc0611cfacfd28da35d3431470be071dea0823350c4bffd96a091da83ccbb2",
+      "bytes": 29616,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_0dbc0611cfacfd28",
+      "representative": "contracts/dummy_robot_v2/codec/wire_layout.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/enums/dummy_enum_values_v2.json",
+      "sha256": "6a09d91e591d2615b2e9e59aeb9a316ffa8b6f43043799cf88908e66fe1db694",
+      "bytes": 2709,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_6a09d91e591d2615",
+      "representative": "contracts/dummy_robot_v2/enums/dummy_enum_values_v2.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/evidence/release_manifest.schema.json",
+      "sha256": "9eb1d92746595146a77c3978306b284ec3ce11adcdae3e7daae622420b58d092",
+      "bytes": 1460,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_9eb1d92746595146",
+      "representative": "contracts/dummy_robot_v2/evidence/release_manifest.schema.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/idl/DummyAttemptEvidenceV2.msg",
+      "sha256": "848daa404280f3424ab675f7cbae542b38a3e597ad1eb847609829896a50d265",
+      "bytes": 640,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_848daa404280f342",
+      "representative": "contracts/dummy_robot_v2/idl/DummyAttemptEvidenceV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/idl/DummyDeviceStatusV2.msg",
+      "sha256": "dca9436dc60101d3e25875a2d1bc0e069512a966085394bb583e92a8a4fd7c4c",
+      "bytes": 1414,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_dca9436dc60101d3",
+      "representative": "contracts/dummy_robot_v2/idl/DummyDeviceStatusV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/idl/DummyJointCommandV2.msg",
+      "sha256": "302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714",
+      "bytes": 296,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_302f007f28b25864",
+      "representative": "contracts/dummy_robot_v2/idl/DummyJointCommandV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/idl/DummyJointStateV2.msg",
+      "sha256": "daea24db35c5f4bbb0f1210d989d77b073d74b34b104d50f913190e8a1daf8a2",
+      "bytes": 899,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_daea24db35c5f4bb",
+      "representative": "contracts/dummy_robot_v2/idl/DummyJointStateV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/idl/DummyManageV2.srv",
+      "sha256": "7dcec4292e1d2e156b6642bf1bf22b316a0947c614bc06bbabdcaabdbcca08d9",
+      "bytes": 1204,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_7dcec4292e1d2e15",
+      "representative": "contracts/dummy_robot_v2/idl/DummyManageV2.srv"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/manifest.json",
+      "sha256": "43f9bc908bc1715c1c083a7efa3657f0ad6cda93986c199bb12c8fa7c9ac1564",
+      "bytes": 6204,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_43f9bc908bc1715c",
+      "representative": "contracts/dummy_robot_v2/manifest.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/metadata/dummy_robot_v2.yaml",
+      "sha256": "da6285d054ec6b8e71d68d0e4cbbd361445898148fbbc02a818369bc8bfcc6d8",
+      "bytes": 782,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_da6285d054ec6b8e",
+      "representative": "contracts/dummy_robot_v2/metadata/dummy_robot_v2.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/model/model.yaml",
+      "sha256": "bbbfbf070281a2e63a09061830d6dc79a9e1d7206e1e4754c53a0fc8545bdfb0",
+      "bytes": 1738,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_bbbfbf070281a2e6",
+      "representative": "contracts/dummy_robot_v2/model/model.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/profiles/f405_6dof_bench.yaml",
+      "sha256": "4079ab9a8ef2bcecfc0bd06d9de7a6f6cd503cb6a00458b7b129e3ff2a0ecb51",
+      "bytes": 2087,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_4079ab9a8ef2bcec",
+      "representative": "contracts/dummy_robot_v2/profiles/f405_6dof_bench.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac",
+      "bytes": 637,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_facc243a92779d6f",
+      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/profiles/sil_6dof.yaml",
+      "sha256": "59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2",
+      "bytes": 2023,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_59e7a8cc580c9541",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2/profiles/sil_j1.yaml",
+      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c",
+      "bytes": 1982,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_765311d93bfdeddb",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
+      "sha256": "b8f5554df04b2b090b85454784587e12626a6079e003ccef9b7baa80839d953a",
+      "bytes": 1991,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_b8f5554df04b2b09",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate/model/model.yaml",
+      "sha256": "5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14",
+      "bytes": 1738,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_5f222ca6d5bb46e4",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/model/model.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate/policy/application_hold_no_load.json",
+      "sha256": "aaa96b6445209b9d4e9a8327d4b0e21b275866960f890599438d6ba51849eacd",
+      "bytes": 4141,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_aaa96b6445209b9d",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/policy/application_hold_no_load.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate/profiles/f405_6dof_bench.yaml",
+      "sha256": "90e5a970cd213a2c40cc92242b512d4b608657912a19f02189c524e74a67b0a4",
+      "bytes": 1103,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_90e5a970cd213a2c",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/profiles/f405_6dof_bench.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
+      "sha256": "1717985d07d923ab5194f4cf110da5ddb42d0369b1aa2b1cbc57f52301fb66ce",
+      "bytes": 1920,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_1717985d07d923ab",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml",
+      "sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713",
+      "bytes": 1737,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_a2ed010f4a5e3d49",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/policy/application_hold_no_load.json",
+      "sha256": "adba10b17088c6db6e8d96b44f8d390fd5a6dc0f5f7cb65c4cdb9e946fd36575",
+      "bytes": 4312,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_adba10b17088c6db",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/policy/application_hold_no_load.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/profiles/f405_6dof_bench.yaml",
+      "sha256": "90e5a970cd213a2c40cc92242b512d4b608657912a19f02189c524e74a67b0a4",
+      "bytes": 1103,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_90e5a970cd213a2c",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/profiles/f405_6dof_bench.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json",
+      "sha256": "df7eb59f512b9e246bf00e52264fd916e55f6633b355ebcca9e594ef99712ff7",
+      "bytes": 29307,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_df7eb59f512b9e24",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/enums/dummy_enum_values_v2.json",
+      "sha256": "2e7237e8793f26508830b3fa960c1beadd413920d21b816429d1b45db279eafb",
+      "bytes": 2709,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_2e7237e8793f2650",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/enums/dummy_enum_values_v2.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/evidence/release_manifest.schema.json",
+      "sha256": "9eb1d92746595146a77c3978306b284ec3ce11adcdae3e7daae622420b58d092",
+      "bytes": 1460,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_9eb1d92746595146",
+      "representative": "contracts/dummy_robot_v2/evidence/release_manifest.schema.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyAttemptEvidenceV2.msg",
+      "sha256": "848daa404280f3424ab675f7cbae542b38a3e597ad1eb847609829896a50d265",
+      "bytes": 640,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_848daa404280f342",
+      "representative": "contracts/dummy_robot_v2/idl/DummyAttemptEvidenceV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyDeviceStatusV2.msg",
+      "sha256": "dca9436dc60101d3e25875a2d1bc0e069512a966085394bb583e92a8a4fd7c4c",
+      "bytes": 1414,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_dca9436dc60101d3",
+      "representative": "contracts/dummy_robot_v2/idl/DummyDeviceStatusV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyJointCommandV2.msg",
+      "sha256": "302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714",
+      "bytes": 296,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_302f007f28b25864",
+      "representative": "contracts/dummy_robot_v2/idl/DummyJointCommandV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyJointStateV2.msg",
+      "sha256": "4c68ebf3664488169e31b13e5ad2d240a62cadde93c3bb3ace916a1b28263b1f",
+      "bytes": 750,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_4c68ebf366448816",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyJointStateV2.msg"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyManageV2.srv",
+      "sha256": "7dcec4292e1d2e156b6642bf1bf22b316a0947c614bc06bbabdcaabdbcca08d9",
+      "bytes": 1204,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_7dcec4292e1d2e15",
+      "representative": "contracts/dummy_robot_v2/idl/DummyManageV2.srv"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/manifest.json",
+      "sha256": "f167d6f145e1f8675199f35a36af9f8048847aadd20d34e90410819b49b8c42a",
+      "bytes": 6202,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_f167d6f145e1f867",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/manifest.json"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/metadata/dummy_robot_v2.yaml",
+      "sha256": "309d77ef1e58942235627ef6a40ac2a7d639770ded31b19d69d97fce6bd7d1a0",
+      "bytes": 782,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_309d77ef1e589422",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/metadata/dummy_robot_v2.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/model/model.yaml",
+      "sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713",
+      "bytes": 1737,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_a2ed010f4a5e3d49",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/f405_6dof_bench.yaml",
+      "sha256": "9087f1b68042b72e9706d143ecfb2055ed28cddd16755a4f92dc508943194af7",
+      "bytes": 1857,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_9087f1b68042b72e",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/profiles/f405_6dof_bench.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac",
+      "bytes": 637,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_facc243a92779d6f",
+      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_6dof.yaml",
+      "sha256": "08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb",
+      "bytes": 2066,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_08f7b2a5e475c9a3",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_6dof.yaml"
+    },
+    {
+      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_j1.yaml",
+      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c",
+      "bytes": 1982,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_765311d93bfdeddb",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+    },
+    {
+      "path": "docs/dummy/handoffs/R03-to-C04.json",
+      "sha256": "50fa4b30a5d06c833e27a05a841e38f4697c02791d90a40208f7dd302697273f",
+      "bytes": 1447,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_50fa4b30a5d06c83",
+      "representative": "contracts/dummy_robot_v1/evidence/R03-to-C04.json"
+    },
+    {
+      "path": "docs/dummy/handoffs/R06-to-DPSDK-operation-enum-blocker.json",
+      "sha256": "7297d7259a5be59a379dd6e9c31c55e114c3588146e4b2f95709262549a1b2f9",
+      "bytes": 2068,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_7297d7259a5be59a",
+      "representative": "docs/dummy/handoffs/R06-to-DPSDK-operation-enum-blocker.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R00.json",
+      "sha256": "7cf06ec8e2aa444ec5a1ad4c9809c5332608c5fa5f871d88963415b1b9582977",
+      "bytes": 1673,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_7cf06ec8e2aa444e",
+      "representative": "docs/dummy/task-reports/R00.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R01.blocked.json",
+      "sha256": "8595debc01c85a43707dc3ea9057759ddbabfb4879eda668b74eb8ea71c74bc6",
+      "bytes": 1673,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_8595debc01c85a43",
+      "representative": "docs/dummy/task-reports/R01.blocked.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R01.json",
+      "sha256": "eec298b63b3130af150bdb51e89e771b59910a46d80f0e5c236a95ace2987205",
+      "bytes": 2314,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_eec298b63b3130af",
+      "representative": "docs/dummy/task-reports/R01.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R02.json",
+      "sha256": "d5060317c419cd4d2487bab206424acaab03f27ef32a675b5b41b6ccd57a517c",
+      "bytes": 2127,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_d5060317c419cd4d",
+      "representative": "docs/dummy/task-reports/R02.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R03.json",
+      "sha256": "fbd8550d9ea9a25e073a247b35969a4294e973d86d351fed9eb631dfc7e034ab",
+      "bytes": 3036,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_fbd8550d9ea9a25e",
+      "representative": "docs/dummy/task-reports/R03.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R04.json",
+      "sha256": "912e04c4165c69755a8ae8947fcd6fdd7bbefadea7e04e39591ee7e69a76f7a6",
+      "bytes": 2415,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_912e04c4165c6975",
+      "representative": "docs/dummy/task-reports/R04.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R05.json",
+      "sha256": "3e949aa5cf97c7a3ada3d3b8fa03aa794b7644aae221cee23ef64315adb41da5",
+      "bytes": 3104,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_3e949aa5cf97c7a3",
+      "representative": "docs/dummy/task-reports/R05.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R06.json",
+      "sha256": "e1a54f69993114e267f3445befb5cdbad07d055ab42174960f3d4ebed61bea09",
+      "bytes": 1233,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_e1a54f69993114e2",
+      "representative": "docs/dummy/task-reports/R06.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R07.json",
+      "sha256": "6cb0aa42bc835ac12bcaba8782d143ee5a182042b4ead41dea2239a5898c4d65",
+      "bytes": 1265,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_6cb0aa42bc835ac1",
+      "representative": "docs/dummy/task-reports/R07.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/R08.json",
+      "sha256": "ac3ebb1d37ace302cda7c06479cf9916661c6ee2a6f0b6780bab262b0d07922d",
+      "bytes": 669,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_ac3ebb1d37ace302",
+      "representative": "docs/dummy/task-reports/R08.json"
+    },
+    {
+      "path": "docs/dummy/task-reports/v3-repair-checkpoint.json",
+      "sha256": "7eb35c512be17f1f1cccb2a21724e950cc4b2beaa0c9ad921f1c775371a10275",
+      "bytes": 1285,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_7eb35c512be17f1f",
+      "representative": "docs/dummy/task-reports/v3-repair-checkpoint.json"
+    },
+    {
+      "path": "docs/dummy/versions.lock",
+      "sha256": "3f796c491eb1b6ad9ac78bb3045d2eb01a26559ea249aa6d7f493d21de737076",
+      "bytes": 375,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_3f796c491eb1b6ad",
+      "representative": "docs/dummy/versions.lock"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R00.json",
+      "sha256": "7c0dc846673e8e9e415c3f7fd481e763206d0fac8df8a12ab0f6fb53b8fbac47",
+      "bytes": 92,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_7c0dc846673e8e9e",
+      "representative": "scripts/dummy/tests/fixtures/R00.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R01.json",
+      "sha256": "9ceb2e30ba5b5548fcbe82b3e42f3d2f53e43566837a98cee0597a54e74da340",
+      "bytes": 119,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_9ceb2e30ba5b5548",
+      "representative": "scripts/dummy/tests/fixtures/R01.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R02.json",
+      "sha256": "2bfc02ffbe04e9e30c490cd0284c64bf02f58cbbab24ae4df0668c676d88bb46",
+      "bytes": 110,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_2bfc02ffbe04e9e3",
+      "representative": "scripts/dummy/tests/fixtures/R02.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R03.json",
+      "sha256": "eea82f8a3510d079a5c34ec2605e0df87ca6435de15616bd6fc4e48cedd40be9",
+      "bytes": 119,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_eea82f8a3510d079",
+      "representative": "scripts/dummy/tests/fixtures/R03.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R04.json",
+      "sha256": "63b83c6be9b0e4c6f17c3e8805204826693db714d61516887e0e2424d8965926",
+      "bytes": 146,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_63b83c6be9b0e4c6",
+      "representative": "scripts/dummy/tests/fixtures/R04.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R05.json",
+      "sha256": "323fe42bf170f3140e5717b3dd7147435af0f6dda73f6a945bd0278ba87a68f0",
+      "bytes": 119,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_323fe42bf170f314",
+      "representative": "scripts/dummy/tests/fixtures/R05.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R06.json",
+      "sha256": "8f5dfc3e88d4c9da90cfcf422e2528d591ed79884ba39f1a27adaaf67864cacb",
+      "bytes": 2403,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_8f5dfc3e88d4c9da",
+      "representative": "scripts/dummy/tests/fixtures/R06.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R07.json",
+      "sha256": "6d83996389f941c0ca149b89e8fb5aadd28a21a236ff753840361b0f941d35a3",
+      "bytes": 127,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_6d83996389f941c0",
+      "representative": "scripts/dummy/tests/fixtures/R07.json"
+    },
+    {
+      "path": "scripts/dummy/tests/fixtures/R08.json",
+      "sha256": "27ce8b72b3d1aa673c2f61c19708e2e76e313d73a03952474105d1ce1967ec39",
+      "bytes": 65,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_27ce8b72b3d1aa67",
+      "representative": "scripts/dummy/tests/fixtures/R08.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source.origin.json",
+      "sha256": "a4346f4ef41913a33c50cef3a6af2395321034d637c84312f3d31b41344c7522",
+      "bytes": 506,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_a4346f4ef41913a3",
+      "representative": "src/dummy_motion_client/test/fixtures/application_wire_source.origin.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/codec/wire_layout.json",
+      "sha256": "0dbc0611cfacfd28da35d3431470be071dea0823350c4bffd96a091da83ccbb2",
+      "bytes": 29616,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_0dbc0611cfacfd28",
+      "representative": "contracts/dummy_robot_v2/codec/wire_layout.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/enums/dummy_enum_values_v2.json",
+      "sha256": "6a09d91e591d2615b2e9e59aeb9a316ffa8b6f43043799cf88908e66fe1db694",
+      "bytes": 2709,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_6a09d91e591d2615",
+      "representative": "contracts/dummy_robot_v2/enums/dummy_enum_values_v2.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/idl/DummyAttemptEvidenceV2.msg",
+      "sha256": "848daa404280f3424ab675f7cbae542b38a3e597ad1eb847609829896a50d265",
+      "bytes": 640,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_848daa404280f342",
+      "representative": "contracts/dummy_robot_v2/idl/DummyAttemptEvidenceV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/idl/DummyDeviceStatusV2.msg",
+      "sha256": "dca9436dc60101d3e25875a2d1bc0e069512a966085394bb583e92a8a4fd7c4c",
+      "bytes": 1414,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_dca9436dc60101d3",
+      "representative": "contracts/dummy_robot_v2/idl/DummyDeviceStatusV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/idl/DummyJointCommandV2.msg",
+      "sha256": "302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714",
+      "bytes": 296,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_302f007f28b25864",
+      "representative": "contracts/dummy_robot_v2/idl/DummyJointCommandV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/idl/DummyJointStateV2.msg",
+      "sha256": "daea24db35c5f4bbb0f1210d989d77b073d74b34b104d50f913190e8a1daf8a2",
+      "bytes": 899,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_daea24db35c5f4bb",
+      "representative": "contracts/dummy_robot_v2/idl/DummyJointStateV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/idl/DummyManageV2.srv",
+      "sha256": "7dcec4292e1d2e156b6642bf1bf22b316a0947c614bc06bbabdcaabdbcca08d9",
+      "bytes": 1204,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_7dcec4292e1d2e15",
+      "representative": "contracts/dummy_robot_v2/idl/DummyManageV2.srv"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/manifest.json",
+      "sha256": "9758da28017b3c01255c61da2ff4df76eea9bda8eebfcf2513a957e3fbef6de0",
+      "bytes": 6204,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_9758da28017b3c01",
+      "representative": "src/dummy_motion_client/test/fixtures/application_wire_source/manifest.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/metadata/dummy_robot_v2.yaml",
+      "sha256": "da6285d054ec6b8e71d68d0e4cbbd361445898148fbbc02a818369bc8bfcc6d8",
+      "bytes": 782,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_da6285d054ec6b8e",
+      "representative": "contracts/dummy_robot_v2/metadata/dummy_robot_v2.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/model/model.yaml",
+      "sha256": "5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14",
+      "bytes": 1738,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_5f222ca6d5bb46e4",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/model/model.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/f405_6dof_bench.yaml",
+      "sha256": "d6f55e42a41c4dea0c4dbe4f460030adbb3e11722629f0c3add37f8af44ca819",
+      "bytes": 2087,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_d6f55e42a41c4dea",
+      "representative": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/f405_6dof_bench.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac",
+      "bytes": 637,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_facc243a92779d6f",
+      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/sil_6dof.yaml",
+      "sha256": "59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2",
+      "bytes": 2023,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_59e7a8cc580c9541",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/sil_j1.yaml",
+      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c",
+      "bytes": 1982,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_765311d93bfdeddb",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
+      "sha256": "79298aa0c2f6bb36fc5d10e7316df12511f1afd453f154c3cadfbfb525b799fe",
+      "bytes": 4836,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_79298aa0c2f6bb36",
+      "representative": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/codec/wire_layout.json",
+      "sha256": "0dbc0611cfacfd28da35d3431470be071dea0823350c4bffd96a091da83ccbb2",
+      "bytes": 29616,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_0dbc0611cfacfd28",
+      "representative": "contracts/dummy_robot_v2/codec/wire_layout.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/enums/dummy_enum_values_v2.json",
+      "sha256": "6a09d91e591d2615b2e9e59aeb9a316ffa8b6f43043799cf88908e66fe1db694",
+      "bytes": 2709,
+      "page": "ros_contract_layouts_enums",
+      "document": "20-layouts-enums.dox",
+      "anchor": "raw_6a09d91e591d2615",
+      "representative": "contracts/dummy_robot_v2/enums/dummy_enum_values_v2.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/idl/DummyAttemptEvidenceV2.msg",
+      "sha256": "848daa404280f3424ab675f7cbae542b38a3e597ad1eb847609829896a50d265",
+      "bytes": 640,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_848daa404280f342",
+      "representative": "contracts/dummy_robot_v2/idl/DummyAttemptEvidenceV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/idl/DummyDeviceStatusV2.msg",
+      "sha256": "dca9436dc60101d3e25875a2d1bc0e069512a966085394bb583e92a8a4fd7c4c",
+      "bytes": 1414,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_dca9436dc60101d3",
+      "representative": "contracts/dummy_robot_v2/idl/DummyDeviceStatusV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/idl/DummyJointCommandV2.msg",
+      "sha256": "302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714",
+      "bytes": 296,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_302f007f28b25864",
+      "representative": "contracts/dummy_robot_v2/idl/DummyJointCommandV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/idl/DummyJointStateV2.msg",
+      "sha256": "daea24db35c5f4bbb0f1210d989d77b073d74b34b104d50f913190e8a1daf8a2",
+      "bytes": 899,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_daea24db35c5f4bb",
+      "representative": "contracts/dummy_robot_v2/idl/DummyJointStateV2.msg"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/idl/DummyManageV2.srv",
+      "sha256": "7dcec4292e1d2e156b6642bf1bf22b316a0947c614bc06bbabdcaabdbcca08d9",
+      "bytes": 1204,
+      "page": "ros_contract_wire_fields",
+      "document": "10-wire-fields.dox",
+      "anchor": "raw_7dcec4292e1d2e15",
+      "representative": "contracts/dummy_robot_v2/idl/DummyManageV2.srv"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/manifest.json",
+      "sha256": "c2b25d9b33b517671f02dca680754b754e6dc3ae8c6f9a97835865ff5a61854f",
+      "bytes": 6204,
+      "page": "ros_contract_manifests_origins",
+      "document": "50-manifests-origins.dox",
+      "anchor": "raw_c2b25d9b33b51767",
+      "representative": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/manifest.json"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/metadata/dummy_robot_v2.yaml",
+      "sha256": "da6285d054ec6b8e71d68d0e4cbbd361445898148fbbc02a818369bc8bfcc6d8",
+      "bytes": 782,
+      "page": "ros_contract_policy_metadata",
+      "document": "40-policy-metadata.dox",
+      "anchor": "raw_da6285d054ec6b8e",
+      "representative": "contracts/dummy_robot_v2/metadata/dummy_robot_v2.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/model/model.yaml",
+      "sha256": "5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14",
+      "bytes": 1738,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_5f222ca6d5bb46e4",
+      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/model/model.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/profiles/f405_6dof_bench.yaml",
+      "sha256": "d6f55e42a41c4dea0c4dbe4f460030adbb3e11722629f0c3add37f8af44ca819",
+      "bytes": 2087,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_d6f55e42a41c4dea",
+      "representative": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/f405_6dof_bench.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/profiles/f405_j1_bench.yaml",
+      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac",
+      "bytes": 637,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_facc243a92779d6f",
+      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/profiles/sil_6dof.yaml",
+      "sha256": "08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb",
+      "bytes": 2066,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_08f7b2a5e475c9a3",
+      "representative": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_6dof.yaml"
+    },
+    {
+      "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/profiles/sil_j1.yaml",
+      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c",
+      "bytes": 1982,
+      "page": "ros_contract_models_profiles",
+      "document": "30-models-profiles.dox",
+      "anchor": "raw_765311d93bfdeddb",
+      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+    },
+    {
+      "path": "src/dummy_ros_control/test/guarded_probe.yaml",
+      "sha256": "cb0329c8387ea50f4a1bbe6160e9cda085cf19e2f50992cca15763cfebb54879",
+      "bytes": 262,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_cb0329c8387ea50f",
+      "representative": "src/dummy_ros_control/test/guarded_probe.yaml"
+    },
+    {
+      "path": "docs/dummy/rest-planning-evidence.json",
+      "sha256": "14cccf7d3768cca59953e7ad6dd380229ebff4713baaa8841aed6ab14912131d",
+      "bytes": 17732,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_14cccf7d3768cca5",
+      "representative": "docs/dummy/rest-planning-evidence.json"
+    },
+    {
+      "path": "docs/dummy/cylinder-service-topology-evidence.json",
+      "sha256": "646d32078897b626685a5ab92149f810fbea88a76078419ac2802c5a8a0d916c",
+      "bytes": 2242,
+      "page": "ros_contract_evidence_fixtures",
+      "document": "60-evidence-fixtures.dox",
+      "anchor": "raw_646d32078897b626",
+      "representative": "docs/dummy/cylinder-service-topology-evidence.json"
+    }
+  ]
+}

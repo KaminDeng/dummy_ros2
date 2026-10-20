@@ -1,11 +1,15 @@
 <?xml version="1.0"?>
+<!-- @file world_template.sdf
+     @brief 场景生成器的无障碍物world模板，动态对象由canonical scene.yaml注入。
+     world名default供仿真入口使用，模板自身不引用DPSDK或控制设备。 -->
 <sdf version="1.10">
   <world name="default">
-    <physics name="1ms" type="ignored">
+    <!-- max_step_size为0.001秒，real_time_factor=1是目标实时倍率；实际算力不保证达到。
+         type=ignored由Gazebo Sim系统/引擎处理，不能读作物理仿真被关闭。 --><physics name="1ms" type="ignored">
       <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
-    <gravity>0 0 -9.81</gravity>
+    <!-- 重力向世界-Z，单位m/s²；三个系统分别提供物理、用户命令、场景广播。 --><gravity>0 0 -9.81</gravity>
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics" />
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands" />
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster" />

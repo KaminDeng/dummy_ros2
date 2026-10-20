@@ -1,4 +1,9 @@
 """R07 backend and SIL fault acceptance."""
+##
+# @file test_r07_acceptance.py
+# @brief 按R07既有fixture注册后端/SIL验收方法。
+#
+# fixture只提供case名；真正运行方法会调用adapter启动CTest、上游/本机peer或Action。real_hardware_accessed=False是返回范围字段，不是独立硬件审计；第一条断言已强制PASS，下面else分支不能作为本oracle接受NOT_RUN的证据。
 
 import json
 from pathlib import Path
@@ -14,11 +19,21 @@ ROOT = Path(__file__).resolve().parents[3]
 CASES = json.loads((ROOT / "scripts/dummy/tests/fixtures/R07.json").read_text())["cases"]
 
 
+##
+# @brief 本套件unittest验收集合；实际子进程与证据层级见文件职责，各方法断言原样保留。
 class R07Acceptance(unittest.TestCase):
     pass
 
 
+##
+# @brief 按case_id生成并注册unittest闭包，不在导入时运行ROS/peer。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @return 闭包test函数，尚未执行其adapter。
 def _make_case(case_id: str):
+    ##
+    # @par 内部回调 test
+    # 先强制PASS，再核摘要及每case要求字段、上游trace、J1接口/steady/无自动管理声明；条件else因前置PASS断言不会成为成功路径。
+    # 返回：None；通过assert/unittest断言报告结果，失败抛异常。
     def test(self):
         observed = run_case("R07", case_id, {
             "case_id": case_id, "hardware": "none", "test_only": True,

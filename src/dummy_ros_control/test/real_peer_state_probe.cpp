@@ -1,3 +1,10 @@
+/**
+ * @file real_peer_state_probe.cpp
+ * @brief 观察指定peer的冷启动raw位置或缺轴Fault状态。
+ *
+ * 这是需要显式端点的生产transport探针，本轮不运行。冷态raw有效值不等于已建立reference后的position有效值；session=0时仍不能执行目标。
+ * 固定身份/hash和数值界限是此探针所用画像，不能自动适配任意设备。
+ */
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -10,6 +17,14 @@
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
+/**
+ * @brief 在最多7s内采样State/Status并按冷态或缺轴条件检查。
+ *
+ * 调用约定：endpoint profile_id configured_mask [missing_axis]。mask只支持1/63，missing_axis为0或配置内1..6轴；strtoul只提供当前代码的数字转换，不是严格全字符串语法验证。
+ * @param argc 命令行参数个数（含程序名）。
+ * @param argv 命令行字符串数组，具体位置见上述调用约定。
+ * @return 0 观察值符合所选条件；2 参数数量错误；3 数值/轴掩码不符；4 启动失败；5 未取得观测；6 解码失败；7 条件不符。
+ */
 int main(int argc, char **argv) {
   if (argc != 4 && argc != 5) return 2;
   const auto profile = static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10));
@@ -24,6 +39,11 @@ int main(int argc, char **argv) {
   parameters.profile_id = profile;
   parameters.configured_mask = mask;
   parameters.max_state_age_us = 1000000U;
+  /**
+   * @par 内部parse_hash回调
+   * text是本文件已知足长的64位十六进制字面量，out指向32字节目标数组；每两字符sscanf转换，失败返回false。
+   * 调用处使用固定常量且未检查返回值；不可把此局部辅助当作任意外部字符串的完整长度/语法验证器。
+   */
   const auto parse_hash = [](const char *text, std::array<std::uint8_t, 32> *out) {
     for (std::size_t i = 0; i < out->size(); ++i) {
       unsigned value = 0U;
@@ -37,6 +57,10 @@ int main(int argc, char **argv) {
   parse_hash("9678a26c2614e02e715ca037d8c5512e6536b44fdf91385d96b50145a852373e", &parameters.profile_hash);
   parse_hash("aa9e703cb390518d01e2ae46af1b84989ad33a70f60e7b16c9ec11c89bce67dc", &parameters.firmware_hash);
   parse_hash("9678a26c2614e02e715ca037d8c5512e6536b44fdf91385d96b50145a852373e", &parameters.policy_hash);
+  /**
+   * @brief 六轴位置界限rad、速度上限0.5rad/s、加速度1rad/s²。
+   * 控制周期10ms，State周期50ms，最大反馈年龄1,000,000µs；这些不是ROS仿真时间。
+   */
   parameters.position_min = {-3.2, -1.2740903539558606, 0.6108652381980153,
                              -3.141592653589793, -2.0943951023931953, -12.566370614359172};
   parameters.position_max = {3.2, 1.5707963267948966, 3.141592653589793,
@@ -51,6 +75,10 @@ int main(int argc, char **argv) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(7);
   std::optional<dummy_ros_control::DeviceManagementObservation> observation;
   const auto channel = dummy_ros_control::DeviceTransport::management_channel(parameters);
+  /**
+   * @brief channel互斥锁内复制原始观测；收到State和Status之后才保留副本。
+   * 缺轴模式继续等core_state=9且对应raw位清零；到期限仍由末尾valid判断失败，不能仅因收过消息就算通过。
+   */
   while (std::chrono::steady_clock::now() < deadline) {
     if (channel) {
       std::lock_guard<std::mutex> lock(channel->mutex);
@@ -92,6 +120,10 @@ int main(int argc, char **argv) {
           wire::CodecResult::kOk)
     return 6;
   const auto missing_mask = missing_axis == 0U ? 0U : static_cast<std::uint8_t>(1U << (missing_axis - 1U));
+  /**
+   * @brief 冷态要求配置轴raw全有效、reference位置全无效、session=0。
+   * 缺轴模式要求Fault、缺轴raw位无效且配置mask保持；JSON auto_degraded=false是固定报告字段，不能单独证明所有降级路径。
+   */
   const bool cold_valid = (state.raw_position_valid_mask() & mask) == mask &&
       (state.position_valid_mask() & mask) == 0U && state.session_id() == 0U;
   const bool fault_valid = missing_axis != 0U && status.core_state() == 9U &&

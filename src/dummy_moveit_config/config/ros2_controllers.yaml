@@ -1,15 +1,21 @@
+# @file ros2_controllers.yaml
+# @brief 通用mock/Gazebo的controller_manager与内部六轴JTC配置；真实设备守卫链另由所选launch装配。
 # This config file is used by ros2_control
+# 该节点的ros__parameters注册控制器类型，update_rate=100为Hz；不等同设备State发布率或CAN采样周期。
 controller_manager:
   ros__parameters:
     update_rate: 100  # Hz
 
+# 下划线入口是内部JointTrajectoryController；MoveIt公开Action入口在另一个配置/守卫层，名称不能混用。
     _internal_arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 
+# 从硬件状态接口发布关节状态，注册类型不代表已被spawner激活。
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
+# 这是同名控制器自身的参数空间，与controller_manager下面的类型注册是两个层级。
 _internal_arm_controller:
   ros__parameters:
     joints:
@@ -19,13 +25,16 @@ _internal_arm_controller:
       - Joint4
       - Joint5
       - Joint6
+# 六轴位置命令；状态同时消费位置与速度，单位分别rad和rad/s。
     command_interfaces:
       - position
     state_interfaces:
       - position
       - velocity
+# 拒绝部分轴目标；末端非零速度也禁用，防止普通完成流程继续运动。
     allow_partial_joints_goal: false
     allow_nonzero_velocity_at_trajectory_end: false
+# trajectory/goal为每轴位置容差rad；max_deceleration_on_cancel为该控制器配置的取消减速度rad/s²，不能替代设备真实停止/SENT确认。
     constraints:
       Joint1: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}
       Joint2: {trajectory: 0.05, goal: 0.01, max_deceleration_on_cancel: 0.5}

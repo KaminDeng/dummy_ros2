@@ -1,0 +1,17 @@
+/**
+ * @file dp_lite_control_v1.h
+ * @brief Lite2.0发现/QoS/route与5个链路控制raw消息45/41/6/8/13字节codec；各decoder局部对象成功后提交，但不核声明版本、fingerprint、页号范围或安全profile。不执行reset/key rotate/heartbeat调度。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_lite_control_v1.h
+原始SHA-256：da6f27ff8751afd3adba0c2377d253a86a66876ddd765088f9a8d28f061c6cd8
+原始行数：362。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_tiny_device_status.h
+ * @brief 7字节packed状态的宿主端序memcpy accessor与部分字段view。try_get电压1800..3600mV；view OK只代表有完整字段，须逐字段核valid。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_tiny_device_status.h
+原始SHA-256：08d5f6f458b2a5cff32d89d9cb2b6e5314301116c1fdf1f8916b4812a855b8e6
+原始行数：226。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */

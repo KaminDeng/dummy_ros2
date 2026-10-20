@@ -1,3 +1,10 @@
+/**
+ * @file serial_pty_bridge.cpp
+ * @brief 在调用方提供的两个fd间双向转发并输出有界块级时序诊断。
+ *
+ * 本程序不创建PTY、也不解析Dummy/ROS协议；启动后会实际读写给定fd，可连到任何调用方传入的端点，因此不是纯值单测。
+ * 时间为本机steady_clock µs；chunk seq是read批次号，不是消息producer_seq或USB/CAN帧号。观察间隔与write耗时不等于端到端设备执行时延或硬实时上界。
+ */
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -14,14 +21,26 @@
 #include <unistd.h>
 
 namespace {
+/**
+ * @brief 最近一个read批次：seq为方向内批次号，ingress/egress为Hostµs，bytes为本次read长度。
+ * stopping期间可能尚未写完整批即结束，egress仅表示forward返回时刻，不能据此证明全部bytes已发出。
+ */
 struct Chunk {
   std::uint64_t seq, ingress_at_us, egress_at_us, bytes;
 };
 
+/**
+ * @brief 相邻read批次的Host接收间隙；保存前后chunk号/时刻及差值µs，不提供协议级丢帧判断。
+ */
 struct Gap {
   std::uint64_t before_seq, after_seq, before_at_us, after_at_us, gap_us;
 };
 
+/**
+ * @brief 单方向唯一writer持有的统计，join两个线程后才由main读取打印。
+ * bytes/chunks统计read输入；max_gap记录最大read间隔及两端锚，max_write记录forward历时。
+ * recent_chunks和long_gaps各只留最近16项，未保存完整历史或对每个wire序号建账。
+ */
 struct Diagnostics {
   std::uint64_t bytes = 0, chunks = 0, last_at_us = 0, max_gap_us = 0, max_write_us = 0;
   std::uint64_t max_gap_before_chunk = 0, max_gap_after_chunk = 0;
@@ -30,16 +49,35 @@ struct Diagnostics {
   std::deque<Gap> long_gaps;
 };
 
+/**
+ * @brief 取本机steady_clock绝对epoch微秒。
+ * @return 单调时钟µs，非UTC、ROS /clock或设备Source时间。
+ */
 std::uint64_t now_us() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+/**
+ * @brief 保留原fd flags并追加O_NONBLOCK。
+ * @param fd 已打开的描述符。
+ * @return fcntl读取/设置都成功true，否则false；不拥有或关闭fd。
+ */
 bool nonblocking(int fd) {
   const int flags = fcntl(fd, F_GETFL);
   return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
+/**
+ * @brief 读最多4096字节并尽力非阻塞写到另一端，更新块级诊断。
+ * @param source 输入fd。
+ * @param target 输出fd。
+ * @param threshold_us 长间隙记录阈值µs。
+ * @param observed 当前方向统计，须非空且只有该方向线程写。
+ * @param stopping 两线程共享的退出标志。
+ * @return 暂时EAGAIN/EINTR或完成处理true，EOF/硬读写/poll错误false。
+ * @details 短写按实际offset续写，EAGAIN/EINTR用10ms POLLOUT轮询；stopping可中止未写完批次，统计仍保read字节数而不是实际输出字节总数。
+ */
 bool forward(int source, int target, std::uint64_t threshold_us, Diagnostics *observed,
              const std::atomic<bool> &stopping) {
   std::array<char, 4096> data{};
@@ -85,6 +123,15 @@ bool forward(int source, int target, std::uint64_t threshold_us, Diagnostics *ob
   return true;
 }
 
+/**
+ * @brief 一个方向的10ms poll/转发线程，任一硬错误停止整座桥。
+ * @param source 源fd。
+ * @param target 目标fd。
+ * @param threshold_us 长read间隙阈值µs。
+ * @param observed 本线程独占统计。
+ * @param stopping 共享原子退出指针，须在join前存活。
+ * @return 无；HUP/ERR/forward失败置stopping=true，不解释底层故障原因。
+ */
 void forward_loop(int source, int target, std::uint64_t threshold_us, Diagnostics *observed,
                   std::atomic<bool> *stopping) {
   while (!stopping->load()) {
@@ -107,6 +154,11 @@ void forward_loop(int source, int target, std::uint64_t threshold_us, Diagnostic
   }
 }
 
+/**
+ * @brief 向stdout写一个方向的JSON统计对象。
+ * @param value 已停止writer后的统计引用。
+ * @return 无；不清空统计或核stdout写成功。
+ */
 void print(const Diagnostics &value) {
   std::cout << "{\"bytes\":" << value.bytes << ",\"chunks\":" << value.chunks
             << ",\"last_at_us\":" << value.last_at_us << ",\"max_gap_us\":" << value.max_gap_us
@@ -136,6 +188,12 @@ void print(const Diagnostics &value) {
   std::cout << "]}";
 }
 
+/**
+ * @brief 用strtoull十进制解析参数并要求消费完整文本。
+ * @param text 非空C字符串，开头负号直接拒绝；仍沿用strtoull对空白/加号等的语义。
+ * @param value 可写uint64结果指针。
+ * @return 无errno且至少消费一位并到串尾true；不在此限制fd范围或threshold正值。
+ */
 bool number(const char *text, std::uint64_t *value) {
   if (text[0] == '-') return false;
   char *end = nullptr;
@@ -147,6 +205,14 @@ bool number(const char *text, std::uint64_t *value) {
 }
 }  // namespace
 
+/**
+ * @brief 解析两fd与正阈值，启动两个方向线程，stdin事件触发收尾。
+ * @param argc 参数个数（含程序名）。
+ * @param argv 参数数组，模式/路径位置见下述说明。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * argv1/2必须≤INT32_MAX且可设非阻塞，argv3为非零µs。stdout READY只说明线程已创建；stdin有数据/HUP/ERR或方向错误即停，join后输出两方向有限统计。
+ * 本程序不显式close传入fd，不承诺可靠转存停止时的半批字节；参数失败2，正常结束0也不代表设备会话成功。
+ */
 int main(int argc, char **argv) {
   std::uint64_t first = 0, second = 0, threshold = 0;
   if (argc != 4 || !number(argv[1], &first) || !number(argv[2], &second) ||

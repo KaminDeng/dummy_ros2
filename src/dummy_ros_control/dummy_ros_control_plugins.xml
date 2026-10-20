@@ -1,5 +1,14 @@
 <?xml version="1.0"?>
+<!--
+@file dummy_ros_control_plugins.xml
+@brief pluginlib中的类名、实际C++类型、基接口与共享库映射。
+@details name是配置文件选择插件时的键，type必须与C++导出类型相同；library path
+不带lib前缀/共享库后缀，由插件加载器按平台解析。以下是两个顶层library片段，
+由pluginlib的描述文件解析器读取，不应擅自增加会改变其结构的包装根节点。
+-->
+<!-- 控制器侧：关闭普通JTC输入，经同进程凭据入口核对后交给守卫的更新链。 -->
 <library path="dummy_guarded_joint_trajectory_controller">
+  <!-- base_class_type决定注册到controller_interface的基类，而不是硬件SystemInterface。 -->
   <class
       name="dummy_ros_control/GuardedJointTrajectoryController"
       type="dummy_ros_control::GuardedJointTrajectoryController"
@@ -7,6 +16,9 @@
     <description>JTC with base ROS inputs disabled and same-process credential admission.</description>
   </class>
 </library>
+<!-- 硬件侧：守卫SystemInterface通过有界非阻塞交接与设备worker通信；write成功
+只是本地接口步骤，不能单独证明设备接纳、CAN SENT或机械完成。历史description中的
+wire-v1不应被当作当前Dummy消息major；实际codec身份由构建锁与部署摘要决定。 -->
 <library path="dummy_guarded_zenbedded_system">
   <class
       name="dummy_ros_control/GuardedZenbeddedSystem"

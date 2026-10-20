@@ -1,0 +1,33 @@
+/**
+@page ros_contract_data_reading 冻结合同数据阅读入口
+
+
+本组说明把冻结输入与它的用途分开：先确认原SHA及版本，再查字段/模型/策略，最后判断历史证据能支持哪一级结论。119个物理文件、80种唯一原文，所有原件以ROS Git基线 `7c9285f6c63cc162245df1299a0b6b8522044d38` 对照并保持原字节；同内容只解释一次，每条物理路径仍有独立SHA/页锚映射。
+
+@section data_reading_route 新读者顺序
+
+1. @ref ros_contract_layouts_enums ：先辨v1、wire2.5/current和legacy2.4，核payload ID/尺寸；State 350/301B不能按同名类型猜解码。
+2. @ref ros_contract_wire_fields ：按消息/服务request与response查每个字段的类型、offset、单位、有效性及receipt/阶段/终态分层。
+3. @ref ros_contract_models_profiles ：核direction、gear ratio、模型/相对参考、Home/Rest与限位，不把旧deg/math seed变成当前rad指令。
+4. @ref ros_contract_policy_metadata ：区分默认deny、可支持、许可、lease/goal/Hold/试用预算与未资格no-load candidate。
+5. @ref ros_contract_manifests_origins ：区分原文件SHA、payload聚合、compiled策略和image；application/trusted/current base三个身份各自保留。
+6. @ref ros_contract_evidence_fixtures ：读历史R阶段、软件peer与NOT_RUN，数学/CAN golden和只读规划不证明物理执行。
+7. @ref ros_contract_data_sources ：按任何原路径查全SHA、字节数和实际解释页；机器可读映射与字段/病例覆盖账同目录提供。
+
+@section data_version_examples 三个容易混淆的例子
+
+- `contracts/dummy_robot_v1/manifest.json`的历史release_id写dummy-wire-v2，但IDL/schema/ABI是major1。当前V2.5 manifest才写schema2/minor5，不能按字符串含“v2”猜布局。
+- 当前State在301B旧前缀后加6×float64 Hold目标及1B有效mask，共350B；legacy2.4仍301B。其它V2 IDL SHA可能完全相同，仍须各自metadata/enums/bundle身份。
+- 模型 `bbbfbf…` 将J5限位±100deg，APP/application/trusted `5f222c…`仍±120deg；即使都all50/方向相同，原model身份不同，旧软件资格/策略pin不能静默迁移。
+
+@section data_evidence_boundary 本页验证的实际范围
+
+原文校验是文件bytes/SHA及Git HEAD对照；manifest引用另读原件重SHA，聚合按已读消费者的明确算法静态重算。文档验证是实际Doxygen 1.9.8提取页/锚/表项，不是原生ROS IDL/proto符号绑定；没有运行rosidl、protoc、任何产品生成器、validator、test/collect、CMake/编译、SDK、ROS节点或设备。
+
+因此“页存在/表项全”不等“设备可执行”。`operator_confirmed`不是认证，Queued不是accepted/Committed，Committed不是CAN SENT，SENT不是物理Disable，Motion完成Holding不是Release child完成，原页链自洽不是现场来源认证。每一层都需要相应独立前置与原件。
+
+@section data_changes_policy 为什么说明在外部
+
+原件的注释/格式也可能参与hash；更改JSON/YAML/IDL/lock、fixture或manifest会改变身份甚至破坏既有证据。这里仅在新阅读目录补说明，不替原件重排/补默认/改名或把历史矛盾修成一致。历史报告记载的失败/局限也不直接断言当前HEAD仍有该问题，更不因后来的修复把过去NOT_RUN改成PASS。
+
+*/

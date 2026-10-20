@@ -1,3 +1,9 @@
+/**
+ * @file dp_comm_worker_tests.cpp
+ * @brief 用进程内dp_comm发布/订阅检查命令worker与State接收桥。
+ *
+ * StaticStorage和StaticExecutor提供本地消息调度；没有生产设备bootstrap、USB或CAN链路。大于2^53的身份值用于发现错误的浮点中转；J6=3πrad用于发现角度折回。
+ */
 #include <cstdint>
 
 #include "dp_comm/dp_comm.hpp"
@@ -6,13 +12,28 @@
 
 namespace {
 using Message = dp::protocol::dummy_robot_v2::DummyJointCommandV2;
+/**
+ * @brief 订阅观测槽；count只在借用消息成功复制后递增，message拥有拷贝后的值。
+ */
 struct Received { unsigned count = 0; Message message{}; };
+/**
+ * @brief 在借用消息有效期内复制到测试自己的槽位。
+ * @param borrowed 本次回调借用视图，返回后不可继续保存/解引用。
+ * @param context 指向生命周期覆盖执行器spin的Received对象。
+ * @return 无；复制失败保持count不变，由main最终检查发现。
+ */
 void receive(dp::comm::BorrowedMessage<Message> borrowed, void *context) {
   auto *received = static_cast<Received *>(context);
   if (borrowed.copy_to(&received->message) == dp::comm::Result::kOk) ++received->count;
 }
 }  // namespace
 
+/**
+ * @brief 验证一份目标只发布一次，并能接收匹配State。
+ *
+ * fixture身份和Source produced_at_us均由测试构造。expectation中的时间字段处于同一人工域；本测试不完成Source到Host时钟标定。
+ * @return 0 表示本文件全部检查通过；非零定位失败检查。
+ */
 int main() {
   dp::comm::StaticStorageConfig config{1U, 2U, 2U, 0U, 6U,
       dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kEncodedSize, 96U};
@@ -44,6 +65,9 @@ int main() {
   auto state_publisher = std::move(state_publisher_result).take_value();
   auto state_subscription = std::move(state_subscription_result).take_value();
   if (node.activate() != dp::comm::Result::kOk) return 4;
+  /**
+   * @brief uint64身份逐位保留；position是期望rad值，与随后合成的反馈分别经过命令/State路径。
+   */
   const dummy_ros_control::CommandIdentity identity{
       9007199254740993ULL, 9007199254740995ULL, 3U, 4U, 9007199254740997ULL};
   const std::array<double, 6> position{0.1, 0.2, 0.7, 0.4, 0.5, 9.42477796076938};
@@ -52,6 +76,10 @@ int main() {
   dummy_ros_control::DpCommCommandWorker worker(&system, &publisher, 7U, 0x3FU);
   if (worker.publish_one() != dp::comm::Result::kOk ||
       worker.publish_one() != dp::comm::Result::kNotReady) return 6;
+  /**
+   * @brief 用匹配boot/profile、递增seq和全位置有效掩码构造反馈。
+   * 第二次publish_one应NotReady，最终同时检查订阅命令数量与State缓存，避免只验证编码半边。
+   */
   State feedback;
   feedback.set_schema_major(2U);
   feedback.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);

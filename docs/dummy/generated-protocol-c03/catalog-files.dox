@@ -1,0 +1,62 @@
+/**
+ * @file dp_protocol_schemas.h
+ * @brief canonical、legacy、ROS接口、源schema路径的静态字符串索引；非动态schema加载器。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_schemas.h
+原始SHA-256：590b271c1b81f6e4edae898e3cc4dd0cadaa416dc4a5639dd9935e17aae2a5d0
+原始行数：111。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_profiles.h
+ * @brief Embedded4096/Full65536/Tiny128最大payload与bridge需求配置声明，不自动分配容量或启动桥。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_profiles.h
+原始SHA-256：2bff7b185e729d999791b243882f4d77c346370ca5a327f5a587b3a50105e325
+原始行数：14。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_topics.h
+ * @brief 静态topic/publish pattern与snprintf formatter；不注册网络，不验证通用device_id文本格式，截断时可留前缀。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_topics.h
+原始SHA-256：7fe79bdf7c86b6ca2f6302d0a8f3062ceaf21bd712418fc7f686ad1edf6b0542
+原始行数：112。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_capabilities.h
+ * @brief 18项稳定能力catalog与16字节位图辅助；has接受1..128保留位，set只查已知名；能力公告不是真实功能资格。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_capabilities.h
+原始SHA-256：41126f3bddc42584f7457a0b9dac2570dba8cbf6368d36c4188cb0adf8e28d7c
+原始行数：94。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_legacy_payloads.h
+ * @brief 旧SDK结构/头路径到canonical投影的静态来源索引；不改变ABI、不执行兼容转换。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_legacy_payloads.h
+原始SHA-256：955bad408079fab1b89933d3a5b4a40b89a122c0cd6ff7ebab23f0099ed70470
+原始行数：38。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_lite_routes.h
+ * @brief 仅一条device.status tiny路由，区别于另一个C链路13行interface路由和6行bridge表。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_lite_routes.h
+原始SHA-256：c060887f9cc79ea8447bce4197dc18e3dfc5d9afa701e0b26a7253dcc41012d0
+原始行数：17。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */
+
+/**
+ * @file dp_protocol_lite_topics.h
+ * @brief 设备状态Lite16位hash0x00B4与topic模板，不保证hash唯一或消息可信。
+ *
+ * 冻结物理原件：contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_lite_topics.h
+原始SHA-256：995b57ad5dc3deb96a6438527feb6a986e98568f193c67b2aa6ca395230258d9
+原始行数：11。这是外部说明，不改原件/产品manifest/生成器，文档索引不是可信pin或运行授权。
+ */

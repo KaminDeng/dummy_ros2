@@ -1,3 +1,7 @@
+##
+# @file manual_panel_simulator.py
+# @brief 提供主面板兼容的六轴纯软件运动学后端。
+# SixAxisSimulator 维护本地位置与模拟身份；SimulatorWorker 以 Qt 定时器和进程式信号适配面板。模拟状态明确标记 PANEL_KINEMATIC_SIMULATOR，不生成真实 USB/CAN 收据，不能据此证明硬件动作完成。
 """面板专用六轴运动学模拟；不打开串口/网络，不生成硬件收据或CAN证据。"""
 import math
 import time
@@ -7,7 +11,16 @@ from pathlib import Path
 from PyQt5 import QtCore
 
 
+##
+# @class SixAxisSimulator
+# @brief 在本地推进六轴平滑目标或 20 ms 采样轨迹。
+# q 为 rad，velocity 为 rad/s；boot/reference/session/motion/management 是此模型的本地状态身份。trajectory 是否存在决定运动态；session 非零且无轨迹时才表示模拟 Hold。
 class SixAxisSimulator:
+    ##
+    # @brief 以配置 Rest 姿态初始化尚未授权的本地模型。
+    # Rest 初值只建立软件显示，不代表实际机械臂姿态；session 初始为零，仍须通过模拟恢复或标定流程建立会话。
+    # @param config 面板配置，提供 rest_deg、home_deg、关节 limits_deg 和可选运动上限。
+    # @return 无；通过实例状态或界面产生作用。
     def __init__(self, config):
         self.config = config
         self.q = list(map(math.radians, config['rest_deg']))
@@ -21,12 +34,18 @@ class SixAxisSimulator:
         self.trajectory = None
         self.sampled = None
         self.elapsed = 0.
+        ##
+        # sample_origin 为当前采样块在整条链中的全局样本索引；path_version 校验续接版本，chain_budget 为链总时长秒数。
         self.sample_origin = 0
         self.path_version = 0
         self.chain_budget = 0.
         self.chain_limits = (60.,4.)
         self.completion = 'MOVE_COMPLETED'
 
+    ##
+    # @brief 生成与主面板状态字段兼容的模拟快照。
+    # 掩码 63 表示六轴有效，can_rx_age_us=0 是模拟占位值，不能解释成真实 CAN 新鲜度证据。core_state 为运动 5、保持会话 4 或无会话 2。
+    # @return dict：六轴位置/速度、有效位、Hold 和各 epoch；每次调用递增 state_seq。
     def snapshot(self):
         self.sequence += 1
         return dict(boot_epoch=self.boot, state_seq=self.sequence,
@@ -42,6 +61,14 @@ class SixAxisSimulator:
                     schema_major=2, schema_minor=5, profile_id=0,
                     source='PANEL_KINEMATIC_SIMULATOR')
 
+    ##
+    # @brief 为简单目标建立五次平滑插值轨迹。
+    # 时长取至少 0.03 s 及满足五次曲线峰值速度/加速度所需时长；仅建立轨迹，advance 才更新位置。输入范围和动态参数由命令入口校验。
+    # @param goal 目标六轴 rad。
+    # @param speed 用于时长估算的各轴速度上限 rad/s。
+    # @param acceleration 各轴加速度上限 rad/s²。
+    # @param completion 抵达轨迹终点时返回的模拟事件名。
+    # @return 无；通过实例状态或界面产生作用。
     def plan(self, goal, speed, acceleration, completion='MOVE_COMPLETED'):
         distance = max(abs(a-b) for a,b in zip(self.q, goal))
         duration = max(.03, 1.875*distance/speed, math.sqrt(5.774*distance/acceleration))
@@ -50,6 +77,11 @@ class SixAxisSimulator:
         self.motion += 1
         self.completion = completion
 
+    ##
+    # @brief 解释面板发来的单行命令并更新模拟会话或轨迹。
+    # 先处理取消、释放、恢复、标定和路径延长，再要求运动提交时已有 session 且当前无轨迹。MOVE_CHAIN 校验动态与链预算；MOVE_PATH 分支校验文件结构/摘要/身份，不复用全部链动态校验。模拟接受不代表真机策略或碰撞检查通过。
+    # @param text 去除换行的 Native 风格命令字符串。
+    # @return str：模拟事件名，由 Worker 作为文本事件输出。
     def command(self, text):
         if text == 'CANCEL_HOLD':
             self.sampled = None
@@ -79,6 +111,8 @@ class SixAxisSimulator:
                 if len(parts)!=7:raise ValueError()
                 motion,version,origin,through=map(int,parts[1:5])
                 points=self.read_sampled(parts[5],parts[6])
+                ##
+                # phase 为当前链全局样本相位；through 必须至少领先 10 点，并验证已承诺的重叠前缀逐点完全相同。
                 phase=int(self.elapsed/.02)
                 if (not self.sampled or motion!=self.motion or version!=self.path_version+1 or
                         origin<self.sample_origin or origin>phase or through-phase<10 or
@@ -135,6 +169,12 @@ class SixAxisSimulator:
         except (ValueError, OverflowError, OSError, struct.error):
             return 'MOVE_REJECTED'
 
+    ##
+    # @brief 加载并验证绑定本次模拟身份的路径文件。
+    # 核对 magic、20 000 µs 周期、4..40000 点、40+48×点数字节长度和 boot/reference/session；不在此检查限位或动态。
+    # @param digest 期望的完整 SHA-256 十六进制摘要。
+    # @param filename write_path 格式的二进制文件路径。
+    # @return tuple[tuple]：解包得到的六轴 rad 路点。
     def read_sampled(self,digest,filename):
         payload=Path(filename).read_bytes()
         magic,count,period,boot,reference,session=struct.unpack('<8sIIQQQ',payload[:40])
@@ -144,6 +184,14 @@ class SixAxisSimulator:
             raise ValueError('轨迹文件无效')
         return tuple(struct.iter_unpack('<6d',payload[40:]))
 
+    ##
+    # @brief 按 20 ms 离散差分校验采样路径的范围和动态。
+    # 末两点必须相同；逐点检查工作范围，逐段检查速度，再检查相邻速度差。续接非零初速时跳过第一段相对零速度的加速度比较。此处不做碰撞检查。
+    # @param points 完整六轴 rad 采样序列，由读取路径入口保证结构。
+    # @param speed 每轴速度上限 °/s，范围 (0,63]。
+    # @param acceleration 每轴加速度上限 rad/s²，范围 (0,4]。
+    # @param stationary_start True 要求重复首点和零初速；续接片段可从非零速度开始。
+    # @return 无；通过实例状态或界面产生作用。
     def validate_samples(self,points,speed,acceleration,stationary_start=True):
         if not math.isfinite(speed) or not 0<speed<=63 or not math.isfinite(acceleration) or not 0<acceleration<=4:
             raise ValueError('运动参数无效')
@@ -159,6 +207,11 @@ class SixAxisSimulator:
                     raise ValueError('超加速度')
                 previous=velocity
 
+    ##
+    # @brief 根据经过时间推进正在执行的模拟轨迹。
+    # 采样轨迹按 20 ms 邻点线性插值；普通目标使用五次平滑函数。结束时固定到终点、归零速度、清除轨迹并递增 motion；只生成软件完成事件。
+    # @param dt 距上次推进的秒数；负值按零处理。
+    # @return str 或 None：到达终点返回 completion，未完成或无轨迹返回 None。
     def advance(self, dt):
         if not self.trajectory:
             return None
@@ -175,6 +228,8 @@ class SixAxisSimulator:
                 self.velocity=[0.]*6;self.motion+=1
                 return self.completion
             return None
+        ##
+        # u 是 [0,1] 的归一化时间；五次 smoothstep 令普通目标轨迹首末速度和加速度为零。
         u = self.elapsed/duration
         blend = 10*u**3 - 15*u**4 + 6*u**5
         derivative = (30*u**2 - 60*u**3 + 30*u**4)/duration
@@ -189,12 +244,21 @@ class SixAxisSimulator:
         return None
 
 
+##
+# @class SimulatorWorker
+# @brief 用 QObject 模拟面板需要的 QProcess 子集。
+# readyReadStandardOutput、readyReadStandardError、finished 与主面板已有连接兼容；内部只有 QTimer，不创建子进程或硬件连接。状态快照由主面板直接读取 model.snapshot()。
 class SimulatorWorker(QtCore.QObject):
     """兼容面板的进程事件接口，内部只有本地定时器。"""
     readyReadStandardOutput = QtCore.pyqtSignal()
     readyReadStandardError = QtCore.pyqtSignal()
     finished = QtCore.pyqtSignal(int, int)
 
+    ##
+    # @brief 创建模型、输出缓冲和推进定时器。
+    # @param config 传给 SixAxisSimulator 的面板配置。
+    # @param parent 可选 Qt 父对象，管理 Worker 生命周期。
+    # @return 无；通过实例状态或界面产生作用。
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.model = SixAxisSimulator(config)
@@ -203,15 +267,28 @@ class SimulatorWorker(QtCore.QObject):
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.advance)
 
+    ##
+    # @brief 返回兼容 QProcess 的运行状态枚举。
+    # @return QProcess.Running 或 QProcess.NotRunning，取决于本地 running 标记。
     def state(self):
         return QtCore.QProcess.Running if self.running else QtCore.QProcess.NotRunning
 
+    ##
+    # @brief 启动 20 ms 定时推进并排队发出初始等待事件。
+    # 使用 monotonic 秒计时；singleShot(0) 等待 Qt 事件循环，且回调执行前再次检查 running。启动不建立控制会话。
+    # @param _ 与 QProcess.start 调用兼容的额外参数；模拟模式忽略。
+    # @return 无；通过实例状态或界面产生作用。
     def start(self, *_):
         self.running = True
         self.previous = time.monotonic()
         self.timer.start(20)
         QtCore.QTimer.singleShot(0, lambda: self.emit_event('WAIT_MANUAL_HOME') if self.running else None)
 
+    ##
+    # @brief 将当前模拟事件与身份序列写入标准输出缓冲。
+    # snapshot 会递增 state_seq；path_phase_us 从经过秒数换算为微秒。发信号通知面板读取缓冲，事件文本本身不是硬件收据。
+    # @param name 模拟事件标识，例如 MOVE_STARTED 或 RELEASE_CONFIRMED。
+    # @return 无；通过实例状态或界面产生作用。
     def emit_event(self, name):
         state = self.model.snapshot()
         fields = (f'boot={state["boot_epoch"]:x} reference={state["reference_epoch"]} '
@@ -221,10 +298,20 @@ class SimulatorWorker(QtCore.QObject):
         self.output += f'home_rest_event={name} {fields}\n'.encode()
         self.readyReadStandardOutput.emit()
 
+    ##
+    # @brief 将字节命令排队交给 Qt 事件循环处理。
+    # bytes(data) 在回调时解码并 strip；面板接口按单行命令使用此方法，模拟器不实现完整流式分帧。
+    # @param data 面板写入的字节数据，通常为带换行的一个命令。
+    # @return int：接收字节数；表示排队接收，不表示命令成功或动作完成。
     def write(self, data):
         QtCore.QTimer.singleShot(0, lambda: self.apply(bytes(data).decode().strip()) if self.running else None)
         return len(data)
 
+    ##
+    # @brief 在事件循环中执行一个模拟命令并发事件。
+    # STOP/RELEASE 先输出释放事件，再停止本地定时器并发 finished(0,0)；其他命令只根据模型结果输出事件。
+    # @param command 已解码的命令字符串。
+    # @return 无；通过实例状态或界面产生作用。
     def apply(self, command):
         event = self.model.command(command)
         self.emit_event(event)
@@ -233,6 +320,10 @@ class SimulatorWorker(QtCore.QObject):
             self.timer.stop()
             self.finished.emit(0, 0)
 
+    ##
+    # @brief 在定时器触发时按实际单调经过时间推进模型。
+    # 完成时输出结束事件；连续链尚在运行且具有 path_version 时输出 PATH_PROGRESS。普通运动中间位置通过主面板直接取得 snapshot。
+    # @return 无；通过实例状态或界面产生作用。
     def advance(self):
         now = time.monotonic()
         event = self.model.advance(now-self.previous)
@@ -242,17 +333,31 @@ class SimulatorWorker(QtCore.QObject):
         elif self.model.trajectory and self.model.path_version:
             self.emit_event('PATH_PROGRESS')
 
+    ##
+    # @brief 取出并清空积累的模拟标准输出。
+    # @return bytes：自上次读取后产生的事件行。
     def readAllStandardOutput(self):
         result, self.output = self.output, b''
         return result
 
+    ##
+    # @brief 提供兼容 QProcess 的空错误输出。
+    # @return bytes：始终为空字节串。
     def readAllStandardError(self):
         return b''
 
+    ##
+    # @brief 将运行中的模拟 Worker 按 RELEASE 流程结束。
+    # 不直接杀进程；本对象没有子进程。未运行时无动作。
+    # @return 无；通过实例状态或界面产生作用。
     def terminate(self):
         if self.running:
             self.apply('RELEASE')
 
+    ##
+    # @brief 处理一次 Qt 待办事件并查询是否结束。
+    # @param _timeout 为兼容 QProcess 保留的超时参数；此处不执行阻塞等待。
+    # @return bool：一次 processEvents 后 running 是否为 False。
     def waitForFinished(self, _timeout):
         QtCore.QCoreApplication.processEvents()
         return not self.running

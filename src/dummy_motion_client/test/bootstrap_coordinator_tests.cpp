@@ -1,9 +1,23 @@
+/**
+ * @file bootstrap_coordinator_tests.cpp
+ * @brief 以人工Host时间和管理回执覆盖bootstrap、RUN有限续租及释放闭合。
+ *
+ * 所有请求只进入Client向量，Status/State快照和Committed均为合成数据；未运行ROS/设备，40轮续租只推进数值时间，不是600秒现场运行。
+ * 管理回执完成、状态授权可用和释放Idle确认分开断言；Queued/Prepared不能替代Committed及相干观测。
+ */
 #include "dummy_motion_client/bootstrap_coordinator.hpp"
 
 #include <cassert>
 #include <vector>
 
+/**
+ * @brief 可注入拒绝、排队、缺失/错身份及弱阶段回执的内存管理端。
+ */
 struct Client final : dummy_motion_client::ManagementClient {
+  /**
+   * @brief 保存请求；布尔开关控制poll故障形态，operation_id空值时使用本地ID。
+   * release_committed与普通succeeded独立，prepared_success只改变transaction_phase为2。
+   */
   std::vector<dummy_motion_client::ManageRequest> requests;
   bool reject=false;
   bool pending=false;
@@ -12,9 +26,24 @@ struct Client final : dummy_motion_client::ManagementClient {
   bool prepared_success=false;
   bool release_committed=false;
   std::optional<std::uint64_t> operation_id;
+  /**
+   * @brief 记录请求并返回顺序ID。
+   * @param request 待检查的原请求。
+   * @par 未命名参数
+   * 人工Hostµs不参与本夹具发送。
+   * @return requests.size()；不表示设备已接受。
+   */
   std::uint64_t submit(const dummy_motion_client::ManageRequest &request, std::uint64_t) override {
     requests.push_back(request); return requests.size();
   }
+  /**
+   * @brief 用实际发送序号重算permit摘要后记录请求。
+   * @param request 提供owner/session的请求。
+   * @param binding trusted_bench_permit_digest的合同/模型/profile等绑定。
+   * @par 未命名参数
+   * Hostµs被忽略。
+   * @return 顺序ID；摘要生成失败触发assert。
+   */
   std::uint64_t submit_permit(const dummy_motion_client::ManageRequest &request,
                               const dummy_motion_client::PermitBinding &binding,
                               std::uint64_t) override {
@@ -29,6 +58,11 @@ struct Client final : dummy_motion_client::ManagementClient {
     sent.set_permit_sha256(bytes);
     requests.push_back(sent); return requests.size();
   }
+  /**
+   * @brief 按故障开关返回空、Queued或合成事务结果。
+   * @param id 本地请求ID；wrong_request_id时故意加1。
+   * @return 合成回执或空；默认Committed成功不是现场证据。
+   */
   std::optional<dummy_motion_client::ManageReply> poll(std::uint64_t id) override {
     if (pending) return {};
     if (queued) {
@@ -46,6 +80,12 @@ struct Client final : dummy_motion_client::ManagementClient {
   }
 };
 
+/**
+ * @brief 断言bootstrap各步、原时间锚有限续租及双流UnreferencedIdle释放。
+ * @return 0表示所选断言通过；非零、assert或检查异常表示失败。
+ * Host时间单位µs，轨迹不参与；默认session42，boot/参考/motion/management/run均由测试明确推进。
+ * SelectMode→GrantSession→CaptureReference→SetPermit后仍需新鲜状态permit；新boot不得沿用旧授权。续租同时绑定RUN身份与原请求deadline，失败不转成新授权。
+ */
 int main() {
   using namespace dummy_motion_client;
   Client client;
@@ -101,6 +141,9 @@ int main() {
   explicit_state.contract_sha256=state.contract_sha256;
   explicit_state.model_sha256=state.model_sha256;
   explicit_state.profile_sha256=state.profile_sha256;
+  /**
+   * @brief 显式分步路径：回执operation_complete后再观察相应状态，SetPermit回执先到仍无authorization。
+   */
   const ManageOperation explicit_operations[]{ManageOperation::kSelectMode,ManageOperation::kGrantSession,
       ManageOperation::kCaptureReference,ManageOperation::kSetPermit};
   for (const auto operation : explicit_operations) {
@@ -127,6 +170,9 @@ int main() {
   assert(explicit_bootstrap.authorization().has_value());
   explicit_state.motion_epoch=7U;
   explicit_state.management_epoch=4U;
+  /**
+   * @brief 租约单位µs，0及超过3600s拒绝；30s配置的5s due点和25s保留截止均按原提交锚计算。
+   */
   assert(!explicit_bootstrap.start_renew_lease(explicit_state,0U,40U));
   assert(!explicit_bootstrap.start_renew_lease(explicit_state,3600000001ULL,40U));
   auto new_boot = explicit_state;
@@ -162,6 +208,10 @@ int main() {
   explicit_state.state_core_state=wire_value(WireCoreState::kRunning);
   explicit_state.run_id=8U;
   std::uint64_t last_submit=15000020U;
+  /**
+   * @brief 人工模拟40轮同RUN续租，累计Host时间超过600s仍保持motion7/run8。
+   * 这只证明计算及绑定规则，不是实际等待、机械运动或真实链路续租成功率。
+   */
   for(unsigned goal=0;goal<40U;++goal) {
     const auto due=last_submit+5000000U;
     const auto hold=due+10000000U;
@@ -191,6 +241,10 @@ int main() {
   // A late or unbound RUN renewal cannot be accepted as another lease receipt.
   assert(!mismatch.start_renew_lease(explicit_state,30000000U,UINT64_MAX));
   assert(mismatch_client.requests.empty());
+  /**
+   * @par 内部seed_run_lease回调
+   * coordinator是待测对象，transport保存请求；先合成Grant成功，再观察RUN并于due点发Renew。无返回值，不创建ROS节点。
+   */
   const auto seed_run_lease=[&](BootstrapCoordinator &coordinator,Client &transport) {
     auto initial=explicit_state;
     initial.session_id=0U;
@@ -207,6 +261,9 @@ int main() {
     assert(coordinator.renewal_due(5000001U,30000000U));
     assert(coordinator.start_renew_lease(explicit_state,30000000U,5000001U));
   };
+  /**
+   * @brief 拒绝、operation_id0、错request_id、仅Queued直至截止均为LEASE_RENEWAL_UNCONFIRMED；不得借另一RUN回执续命。
+   */
   Client denied_client;
   BootstrapCoordinator denied(denied_client,identity,compiled_policy,1000000U,30000000U);
   seed_run_lease(denied,denied_client);
@@ -233,6 +290,9 @@ int main() {
   late_run.tick(25000001U);
   assert(late_run.phase()==BootstrapPhase::kFault);
   assert(std::string(late_run.error())=="LEASE_RENEWAL_UNCONFIRMED");
+  /**
+   * @brief UINT64_MAX附近不能安全相加deadline，要求LEASE_DEADLINE_OVERFLOW且不误发有效续租。
+   */
   Client overflow_client;
   BootstrapCoordinator overflow(overflow_client,identity,compiled_policy,1000000U,30000000U);
   auto overflow_state=explicit_state;
@@ -318,6 +378,10 @@ int main() {
   rejecting.tick(53U);
   assert(rejecting.phase()==BootstrapPhase::kFault);
   assert(std::string(rejecting.error())=="BOOTSTRAP_REJECTED phase=1 result=6 reason=7");
+  /**
+   * @brief DisableAndRelease先要求Hold，再要求强release_committed及非零operation_id。
+   * confirmed_release只证明管理事务；released还要Status与State同boot/motion/management且均UnreferencedIdle、session/ref清零。
+   */
   Client release_client;
   BootstrapCoordinator release(release_client,identity,compiled_policy,1000000U);
   auto holding=explicit_state;

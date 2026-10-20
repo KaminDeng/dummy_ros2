@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file ros_six_axis_long_goal.py
+# @brief 构造有界600秒六轴往返目标并可通过公开ROS Action执行。
+#
+# 默认要求--start仅离线构造；--execute会查在线Gate、读joint_states、可激活ROS组件并发实际FollowJointTrajectory，完成后请求release。
+# ROS Action成功与设备CAN/raw证据、机械资格分开；此脚本不自行启动launch/router或占有USB端点，依赖已有Gate。
 """Bounded BENCH_SESSION six-axis long goal; ROS action success is not hardware qualification."""
 
 import argparse
@@ -13,6 +19,9 @@ from typing import NamedTuple
 
 
 JOINTS = tuple(f"Joint{axis}" for axis in range(1, 7))
+##
+# @brief 轨迹时间用ns：600s总长、2s节点、20s周期，默认幅度0.01rad，共301点、六轴折线累计不超过10rad。
+# LONG_TIMING固定20ms控制/630s目标/660s试验/650s permit/30s租约；不是当前面板3530s策略的自动适配入口。
 DURATION_NS = 600_000_000_000
 KNOT_NS = 2_000_000_000
 CYCLE_NS = 20_000_000_000
@@ -29,6 +38,8 @@ LONG_TIMING = {"control_period_us": 20_000,
                "session_lease_us": 30_000_000}
 
 
+##
+# @brief 不可变轨迹节点：time_ns相对时间，positions rad、velocities rad/s、accelerations rad/s²，均六轴tuple。
 class Point(NamedTuple):
     time_ns: int
     positions: tuple
@@ -36,12 +47,18 @@ class Point(NamedTuple):
     accelerations: tuple
 
 
+##
+# @brief 不可变关节名/节点tuple及离散六轴累计行程rad；不包含碰撞资格结论。
 class TrajectoryPath(NamedTuple):
     joint_names: tuple
     points: tuple
     travel_rad: float
 
 
+##
+# @brief 显式加载同目录工具模块。
+# @param name 不带.py后缀的固定模块名。
+# @return 执行后的模块对象；缺loader或导入失败异常。
 def _load_neighbor(name):
     spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
     if spec is None or spec.loader is None:
@@ -51,10 +68,19 @@ def _load_neighbor(name):
     return module
 
 
+##
+# @brief 精确数值且有限谓词。
+# @param value 待核对象，bool拒绝。
+# @return int/float且有限为True。
 def _finite_number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
+##
+# @brief 要求固定无负载长目标策略形状和预算。
+# @param policy 解析后的策略dict。
+# @return None；预算非LONG_TIMING、非六轴BENCH或累计行程非10rad拒绝。
+# 不做完整compile_policy验证，也不从设备读取真实负载/permit；后续还需候选SHA绑定。
 def validate_long_policy(policy):
     if not isinstance(policy, dict):
         raise ValueError("bound long-goal policy object required")
@@ -73,6 +99,11 @@ def validate_long_policy(policy):
         raise ValueError("bound no-load six-axis long-goal policy required")
 
 
+##
+# @brief 核去顶层note后的策略规范SHA。
+# @param policy 固定长策略对象。
+# @param expected_sha256 候选绑定的64字符小写SHA。
+# @return 实际规范SHA，关系不符ValueError；不是外部签名。
 def validate_long_policy_binding(policy, expected_sha256):
     validate_long_policy(policy)
     canonical = json.dumps({key: value for key, value in policy.items() if key != "note"},
@@ -85,6 +116,12 @@ def validate_long_policy_binding(policy, expected_sha256):
     return actual
 
 
+##
+# @brief 复用开发限制验证器并绑定显式长策略。
+# @param limits_path NO_LOAD_DEV limits JSON。
+# @param candidate_manifest 绑定候选manifest。
+# @param long_policy_path 显式固定长策略JSON。
+# @return (每轴[min,max,v,a]tuple,policy SHA)；permit/lease必须匹配650s/30s。
 def load_bound_candidate(limits_path, candidate_manifest, long_policy_path):
     converter = _load_neighbor("convert_application_ros_limits")
     bound = converter.validate_bound(Path(limits_path), Path(candidate_manifest))
@@ -100,6 +137,11 @@ def load_bound_candidate(limits_path, candidate_manifest, long_policy_path):
     return rows, bound.limits["policy_sha256"]
 
 
+##
+# @brief 核六轴起点及逐轴位置/速度/加速度边界。
+# @param start 六轴BENCH参考位置rad。
+# @param limits 六行min/max rad、v rad/s、a rad/s²。
+# @return 六float tuple；形状/有限/正动态界限或起点越界拒绝。
 def _validate_start(start, limits):
     if (not isinstance(start, (list, tuple)) or len(start) != 6 or
             not isinstance(limits, (list, tuple)) or len(limits) != 6 or
@@ -114,6 +156,14 @@ def _validate_start(start, limits):
     return tuple(float(value) for value in start)
 
 
+##
+# @brief 离线生成平方余弦往返节点并核离散边界。
+# @param start 合法六轴起点rad。
+# @param limits 逐轴min/max/v/a。
+# @param amplitude_rad 有限(0,0.04]rad，默认0.01。
+# @return TrajectoryPath；越限、节点>301或六轴折线累计>10rad拒绝。
+# 各轴优先正向，不够空间则负向；位移A(1−cosθ)²/4及解析v/a，每2s采点，首末v/a强制0。
+# 只逐节点核v/a/位置，不做连续插值极值、碰撞或jerk资格验证。
 def build_path(start, limits, *, amplitude_rad=AMPLITUDE_RAD):
     start = _validate_start(start, limits)
     if not _finite_number(amplitude_rad) or not 0 < amplitude_rad <= 0.04:
@@ -155,6 +205,11 @@ def build_path(start, limits, *, amplitude_rad=AMPLITUDE_RAD):
     return TrajectoryPath(JOINTS, tuple(points), travel)
 
 
+##
+# @brief 核JointState完整顺序、年龄和近静止速度。
+# @param sample names/positions/velocities/age_s映射。
+# @param limits 逐轴BENCH限制。
+# @return 合法起点tuple；年龄0..1s、六轴|v|≤0.01rad/s才可继续。
 def validate_start_sample(sample, limits):
     if not isinstance(sample, dict) or tuple(sample.get("names", ())) != JOINTS:
         raise ValueError("fresh six-axis joint order required")
@@ -168,11 +223,22 @@ def validate_start_sample(sample, limits):
     return _validate_start(sample.get("positions"), limits)
 
 
+##
+# @brief 订阅joint_states取得两次新鲜近静止起点。
+# @param node ROS节点。
+# @param deadline Host monotonic绝对截止秒。
+# @param limits 逐轴边界。
+# @param movej 提供remaining_time的邻近模块。
+# @return 末次起点tuple；两次接收间隔>1s或位移>0.003rad拒绝，finally退订。
+# 消息年龄以node ROS clock减header stamp计算，等待期限用Host monotonic；不混同两钟，也不由两样本推导完整机械静止资格。
 def _fresh_start(node, deadline, limits, movej):
     from sensor_msgs.msg import JointState
 
     samples = []
 
+    ##
+    # @par 内部回调 on_state
+    # message为JointState；从node clock与header计算age_s，按validate_start_sample拒绝无效样本，只向samples记录Host接收秒和有效位置；返回None。
     def on_state(message):
         now_ns = node.get_clock().now().nanoseconds
         stamp_ns = message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
@@ -198,6 +264,10 @@ def _fresh_start(node, deadline, limits, movej):
         node.destroy_subscription(subscriber)
 
 
+##
+# @brief 把纯数据轨迹转换为ROS JointTrajectory。
+# @param path TrajectoryPath节点/名称。
+# @return 完整ROS消息，ns用divmod分sec/nanosec；不在此发送。
 def _ros_trajectory(path):
     from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -213,6 +283,19 @@ def _ros_trajectory(path):
     return trajectory
 
 
+##
+# @brief 记录至少600秒Action时长的范围受限结果。
+# @param path 已发送路径。
+# @param digest 语义轨迹SHA。
+# @param policy_sha256 绑定策略SHA。
+# @param goal_id 被接受UUID hex。
+# @param result 实际Action结果。
+# @param started_ns 发送前Host monotonic ns。
+# @param accepted_ns 接受回调后Host ns。
+# @param ended_ns 结果回调后Host ns。
+# @param feedback 已采反馈列表。
+# @return ROS_ACTION_ONLY SUCCEEDED报告；时序回退或接受到结束不足600s失败。
+# 不在此独立核result成功码，调用者先核；设备CAN/raw证据仍REQUIRED_SEPARATELY，资格NOT_CLAIMED。
 def success_report(path, digest, policy_sha256, goal_id, result,
                    started_ns, accepted_ns, ended_ns, feedback):
     if not started_ns <= accepted_ns <= ended_ns:
@@ -233,6 +316,18 @@ def success_report(path, digest, policy_sha256, goal_id, result,
             "device_qualification": "NOT_CLAIMED"}
 
 
+##
+# @brief 向公开守护Action发完整长轨迹并记录限频反馈。
+# @param node ROS节点。
+# @param client FollowJointTrajectory客户端。
+# @param adapter 已绑定Gate适配器，提供精确续租拒绝见证。
+# @param path 已校验600s轨迹。
+# @param deadline 原Host总截止秒。
+# @param policy_sha256 已绑定策略SHA。
+# @param movej 共用等待/恢复模块。
+# @return 成功ROS范围报告；失败包装GoalAttemptError保留目标ID/SHA。
+# 序列化限1MiB；仅无反馈且有精确UUID RENEWAL_PENDING回执时最多8次重试，不因泛化Rejected盲重送。
+# 反馈每秒最多存一次；ROS成功不独立验证raw时长/形状，这些由离线P9 join检查。
 def _send_goal(node, client, adapter, path, deadline, policy_sha256, movej):
     from action_msgs.msg import GoalStatus
     from control_msgs.action import FollowJointTrajectory
@@ -250,6 +345,9 @@ def _send_goal(node, client, adapter, path, deadline, policy_sha256, movej):
     started = time.monotonic_ns()
     last_sample_s = -1
 
+    ##
+    # @par 内部回调 on_feedback
+    # message为Action反馈；核六轴名称/actual/desired有限性，按相对发送Host秒限频记录elapsed_us和六轴rad；错误记feedback_error，返回None。
     def on_feedback(message):
         nonlocal last_sample_s
         sample = message.feedback
@@ -298,6 +396,16 @@ def _send_goal(node, client, adapter, path, deadline, policy_sha256, movej):
     return report
 
 
+##
+# @brief 在已有ROS栈内绑定Gate并执行长目标，成功或异常后受控释放。
+# @param limits 逐轴限制。
+# @param candidate_manifest 绑定候选路径。
+# @param activation_sha256 期望激活文件SHA。
+# @param device_id 32个hex字符的设备ID。
+# @param policy_sha256 期望策略SHA。
+# @param activate_controller true允许激活原先inactive组件并记录owned。
+# @return 含release确认的Action报告；恢复失败抛UnconfirmedStopError，已确认释放但原任务失败抛ConfirmedStopError。
+# 整段deadline固定640s；不启动launch/USB owner。bound前身份不符不做恢复，已尝试release不重复走失败释放；finally销毁ROS节点。
 def capture(limits, candidate_manifest, activation_sha256, device_id, policy_sha256,
             *, activate_controller=False):
     import rclpy
@@ -350,6 +458,10 @@ def capture(limits, candidate_manifest, activation_sha256, device_id, policy_sha
         rclpy.shutdown()
 
 
+##
+# @brief 明确选择离线起点或真实执行并归档报告。
+# @return 离线VALIDATED或Action SUCCEEDED为0，其余1；只捕获RuntimeError/ValueError，I/O等可传播。
+# --execute与--start互斥且必须选一种；--activate-controller仅执行模式。声明激活SHA/device非零形状仍需在线Gate比对，不把离线轨迹合格当设备许可。
 def main():
     parser = argparse.ArgumentParser(description="六轴 BENCH_SESSION 长目标，默认仅离线检查")
     parser.add_argument("--candidate-manifest", type=Path, required=True)

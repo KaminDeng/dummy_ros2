@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+##
+# @file test_r02_gazebo_contract.py
+# @brief 检查R02仿真入口与完整碰撞几何的静态前提。
+# @details 不启动仿真：核use_sim_time、入口安装、可用形状与本地STL结构，不代表运行时跟踪资格。
+
 """Static prerequisites for the R02 Gazebo runtime test."""
 
 from pathlib import Path
@@ -16,13 +21,19 @@ MOVEIT = WORKSPACE_ROOT / "src/dummy_moveit_config"
 BRINGUP = WORKSPACE_ROOT / "src/dummy_bringup"
 
 
+##
+# @brief R02仿真入口和碰撞资源结构回归。
 class R02GazeboContractTest(unittest.TestCase):
+    ##
+    # @brief 核launch至少三处use_sim_time为True，并拒绝串口/CAN/JLink/DPSDK/Zenoh禁用片段。
     def test_gazebo_nodes_use_sim_time_and_do_not_start_device_transport(self):
         source = (MOVEIT / "launch/gz_sim.launch.py").read_text()
         self.assertGreaterEqual(source.count('"use_sim_time": True'), 3)
         for forbidden in ("ttyACM", "SocketCAN", "JLink", "dpsdk", "zenoh"):
             self.assertNotIn(forbidden, source)
 
+    ##
+    # @brief 核组合launch声明并使用gui/rviz参数以及RViz条件启动表达式。
     def test_combined_launch_exposes_gui_and_rviz_controls(self):
         source = (MOVEIT / "launch/gz_moveit.launch.py").read_text()
         self.assertIn('DeclareLaunchArgument("gui"', source)
@@ -30,11 +41,15 @@ class R02GazeboContractTest(unittest.TestCase):
         self.assertIn('LaunchConfiguration("gui")', source)
         self.assertIn('IfCondition(LaunchConfiguration("rviz"))', source)
 
+    ##
+    # @brief 核标准Gazebo入口存在，且bringup CMake文本包含launch目录安装规则。
     def test_bringup_installs_canonical_gazebo_entrypoint(self):
         launch = BRINGUP / "launch/gazebo_6dof.launch.py"
         self.assertTrue(launch.is_file())
         self.assertIn("install(DIRECTORY launch", (BRINGUP / "CMakeLists.txt").read_text())
 
+    ##
+    # @brief 核完整link集合/视觉归属、fixed附属体、有限origin和正尺寸；STL核本地URI、mm缩放、长度、有限非退化顶点。
     def test_complete_collision_geometry_uses_supported_positive_shapes(self):
         description = WORKSPACE_ROOT / 'src/dummy-ros2_description'
         root = element_tree.fromstring(xacro.process_file(

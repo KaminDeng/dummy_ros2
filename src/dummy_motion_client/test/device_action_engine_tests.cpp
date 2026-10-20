@@ -1,36 +1,108 @@
+/**
+ * @file device_action_engine_tests.cpp
+ * @brief ActionGate纯内存生命周期、ACK/Hold排空及取消失败场景。
+ *
+ * Client为FIFO合成回执，Port只累计方法调用；State wire字节只注入内存ObservationTracker，没有ROS/USB/CAN。
+ * Host时间为人工µs，点时间秒、位置rad。Canceled/Succeeded、ready与强cancel receipt分别核，不将状态标签当物理停止。
+ */
 #include "dummy_motion_client/action_gate.hpp"
 #include <deque>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 using namespace dummy_motion_client;
+/**
+ * @brief 用异常保留Release构建中的断言。
+ * @param value 待核关系。
+ * @return 无；false抛runtime_error。
+ */
 void check(bool value) { if (!value) throw std::runtime_error("lifecycle assertion failed"); }
+/**
+ * @brief FIFO管理回执夹具，可使Cancel发送失败或poll抛异常。
+ */
 struct Client : ManagementClient {
+  /**
+   * @brief reject_cancel控制Cancel发送0，throw_on_poll持续控制异常；requests记录请求，replies由用例按需压入。
+   */
   bool reject_cancel=false;
   bool throw_on_poll=false;
   std::vector<ManageRequest> requests;
   std::deque<ManageReply> replies;
+  /**
+   * @brief 按需拒绝Cancel，否则保存请求并分配本地ID。
+   * @param request 管理请求。
+   * @par 未命名参数
+   * Hostµs被忽略。
+   * @return 0发送失败或requests.size()。
+   */
   std::uint64_t submit(const ManageRequest &request, std::uint64_t) override {
     if(reject_cancel && request.operation()==wire_value(ManageOperation::kCancel)) return 0;
     auto copy = request; copy.set_request_id(requests.size()+1); requests.push_back(copy);
     return copy.request_id();
   }
+  /**
+   * @brief 从FIFO取一份回执或触发注入异常。
+   * @par 未命名参数
+   * 本地请求ID不用于匹配，测试构造响应负责相关性。
+   * @return 首回执或空；throw_on_poll时抛runtime_error。
+   */
   std::optional<ManageReply> poll(std::uint64_t) override {
     if (throw_on_poll) throw std::runtime_error("management poll failed");
     if (replies.empty()) return {}; auto next = replies.front(); replies.pop_front(); return next;
   }
 };
+/**
+ * @brief 计数ActionPort；stream_hold只模拟存在持续Hold生产者，不执行轨迹。
+ */
 struct Port : ActionPort {
+  /**
+   * @brief prime/start/disable/cancel累计调用数；与producer_seq、CAN组或轴数不同。
+   */
   int primes=0, starts=0, disables=0, cancels=0;
   bool stream_hold=false;
+  /**
+   * @brief 未命名Position(rad)/epoch/generation只匹配接口，累加primes。
+   * @return 无。
+   */
   void prime(const Position &, std::uint32_t, std::uint64_t) override { ++primes; }
+  /**
+   * @brief 未命名Trajectory/generation不执行，累加starts。
+   * @return 无。
+   */
   void start(const Trajectory &, std::uint64_t) override { ++starts; }
+  /**
+   * @brief 累加disables，不发送设备失能。
+   * @return 无。
+   */
   void disable() override { ++disables; }
+  /**
+   * @brief 累加cancels，不构成停止回执。
+   * @return 无。
+   */
   void cancel() override { ++cancels; }
+  /**
+   * @brief 模拟冻结持续Hold生产者；stream_hold时调用本Port disable。
+   * @return 是否存在可冻结的流；这只是本夹具的排空前提。
+   */
   bool freeze_hold() override { if (!stream_hold) return false; disable(); return true; }
 };
+/**
+ * @brief 构造J1目标0.2rad、点时间1s、终速度0rad/s的单点轨迹。
+ * @return 仅运动学输入值，无碰撞/障碍物信息。
+ */
 Trajectory trajectory() { return {{"Joint1"}, {{{0.2},{0.0},{},1.0}}, {}, {},0.0}; }
+/**
+ * @brief 构造J1范围±1rad、速度1rad/s、加速度2rad/s²、path/goal容差0.1rad。
+ * @return 值类型profile；不从真实模型或设备加载。
+ */
 JointProfile profile() { return {{"Joint1"}, {-1}, {1}, {1}, {2}, {0.1}, {0.1}}; }
+/**
+ * @brief 合成管理快照及可选成功结果。
+ * @param id 关联请求ID，operation=id+100。
+ * @param epoch 人工motion epoch。
+ * @param success 同时置result_valid/succeeded/hold_ready。
+ * @return 位置0rad、accepted_seq1、session9的夹具回执。
+ */
 ManageReply reply(std::uint64_t id, std::uint32_t epoch, bool success=false) {
   ManageReply result; result.request_id=id; result.accepted=true; result.operation_id=id+100;
   result.result_valid=success; result.succeeded=success; result.snapshot_valid=true;
@@ -39,6 +111,11 @@ ManageReply reply(std::uint64_t id, std::uint32_t epoch, bool success=false) {
   result.session_id=9U;
   return result;
 }
+/**
+ * @brief 外来session/ref不得成为confirmed_cancel_receipt。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 即使路径最终为Canceled，强取消凭据仍须为空；终态标签和可信owner证明不可混同。
+ */
 void cancel_receipt_rejects_foreign_owner() {
   for (const bool wrong_session : {true,false}) {
     Client client; Port port; ActionGate gate(client,port,profile());
@@ -68,6 +145,11 @@ void cancel_receipt_rejects_foreign_owner() {
     check(!gate.confirmed_cancel_receipt());
   }
 }
+/**
+ * @brief 允许当前测量Hold在规划范围外，但不放行改变后的越界目标。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 正限位[0.6108,π]rad内的J3式profile中实际Hold0rad可作为原地参考，改到0.1rad则拒绝。
+ */
 void hold_prime_outside_planning_range() {
   Client client; Port port;
   auto limits=profile();
@@ -89,6 +171,11 @@ void hold_prime_outside_planning_range() {
   Position changed{}; changed[0]=0.1;
   check(!gate.record_update(gate.generation(),1U,3U,changed));
 }
+/**
+ * @brief 重复失权不重发disable/cancel或重复增加generation。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 保留第一次SESSION_CHANGED和Aborted，晚到的旧代回执不恢复权限。
+ */
 void repeated_authorization_loss_is_idempotent() {
   Client client; Port port; ActionGate gate(client,port,profile());
   Authorization authorization;
@@ -103,6 +190,11 @@ void repeated_authorization_loss_is_idempotent() {
   check(gate.generation()==generation && port.disables==disables && port.cancels==cancels);
   check(gate.terminal()==Terminal::kAborted && gate.error()=="SESSION_CHANGED");
 }
+/**
+ * @brief Enable以bootstrap motion4为锚，等新motion5才prime，Begin再转6。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 同时覆盖大于32位的逻辑ID，不能被截断或把旧epoch快照当新保持。
+ */
 void enable_preserves_bootstrap_motion_epoch() {
   Client client; Port port; ActionGate gate(client,port,profile());
   Authorization authorization;
@@ -137,6 +229,9 @@ void enable_preserves_bootstrap_motion_epoch() {
   gate.observe(reply(2U,6U,true),7U);
   Position terminal{}; terminal[0]=0.2;
   check(gate.record_update(generation,6U,2U,terminal));
+  /**
+   * @brief JTC式内部成功仅触发终点冻结，不能直接形成公开Succeeded；还须终点ACK、Complete及新Hold。
+   */
   gate.inner_result(generation,Terminal::kSucceeded,"",8U);
   auto accepted=reply(2U,6U,true);
   accepted.accepted_seq=2U;
@@ -144,6 +239,11 @@ void enable_preserves_bootstrap_motion_epoch() {
   check(client.requests.back().operation()==wire_value(ManageOperation::kComplete));
   check(client.requests.back().expected_motion_epoch()==6U);
 }
+/**
+ * @brief 六轴Hold全部submitted/sent及正式drain后才可发Begin。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 部分mask31、完整63但未排空都不够；管理回执不能代替最后一组Hold提交。
+ */
 void begin_waits_for_final_hold_commit() {
   namespace wire=dp::protocol::dummy_robot_v2;
   auto six_axis=profile();
@@ -191,6 +291,11 @@ void begin_waits_for_final_hold_commit() {
   check(client.requests.size()==2U &&
         client.requests.back().operation()==wire_value(ManageOperation::kBegin));
 }
+/**
+ * @brief 本地已处理但被丢弃的Hold代不要求不存在的CAN提交。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * processed generation343、committed342用于区分本地排队进度与实际发组水位。
+ */
 void discarded_local_hold_generation_does_not_block_begin() {
   namespace wire=dp::protocol::dummy_robot_v2;
   Client client; Port port; port.stream_hold=true;
@@ -225,6 +330,11 @@ void discarded_local_hold_generation_does_not_block_begin() {
   check(client.requests.size()==2U &&
         client.requests.back().operation()==wire_value(ManageOperation::kBegin));
 }
+/**
+ * @brief 等待Hold排空期间仍接受取消且遵守超时。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 内部make_ready(client,gate)只布置内存排空等待，无返回；超时走Cancel并保留HOLD_DRAIN_TIMEOUT。
+ */
 void pending_hold_drain_can_cancel_or_timeout() {
   const auto make_ready=[](Client &client,ActionGate &gate) {
     Authorization authorization;
@@ -253,6 +363,11 @@ void pending_hold_drain_can_cancel_or_timeout() {
         timed_client.requests.back().operation()==wire_value(ManageOperation::kCancel) &&
         timed.error()=="HOLD_DRAIN_TIMEOUT");
 }
+/**
+ * @brief ACK设备拒绝先发生时后续失权不得覆盖其类型错误。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 保留DEVICE_COMMAND_REJECTED_DURING_ACK，避免故障归因漂移。
+ */
 void typed_ack_reject_survives_session_invalidation() {
   Client client; Port port; port.stream_hold=true;
   ActionGate gate(client,port,profile());
@@ -269,6 +384,11 @@ void typed_ack_reject_survives_session_invalidation() {
   check(gate.terminal()==Terminal::kAborted &&
         gate.error()=="DEVICE_COMMAND_REJECTED_DURING_ACK");
 }
+/**
+ * @brief Hold排空与Begin结果共用原提交deadline。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * budget100µs；排空后才发Begin也不重新给100µs，超时停止并报RESULT_UNCONFIRMED。
+ */
 void begin_drain_and_reply_share_deadline() {
   Client client; Port port; port.stream_hold=true;
   ActionGate gate(client,port,profile(),100U);
@@ -301,6 +421,11 @@ void begin_drain_and_reply_share_deadline() {
         client.requests.back().operation()==wire_value(ManageOperation::kCancel) &&
         gate.error()=="RESULT_UNCONFIRMED");
 }
+/**
+ * @brief 排空序号接受MAX→1回绕，拒绝旧/半区歧义提交。
+ * @return 无；本用例的check/assert失败即终止或抛出。
+ * 0x80000001相对当前1不能作为明确新提交，后续准确seq1才释放等待。
+ */
 void hold_drain_accepts_wrap_but_rejects_old_commit() {
   namespace wire=dp::protocol::dummy_robot_v2;
   Client client; Port port; port.stream_hold=true;
@@ -337,6 +462,12 @@ void hold_drain_accepts_wrap_but_rejects_old_commit() {
   check(client.requests.size()==2U &&
         client.requests.back().operation()==wire_value(ManageOperation::kBegin));
 }
+/**
+ * @brief 执行十个边界用例及Enable→Begin→Complete/Cancel故障矩阵。
+ * @return 0表示所选断言通过；非零、assert或检查异常表示失败。
+ * 最终producer_seq17冻结后晚到18不能前移终点；Complete只在ACK17后发送。Succeeded不会直接ready，必须新permit。
+ * 覆盖Cancel发送/回执/超时失败、poll异常、旧generation回调及轨迹速度/加速度/时间/容差验证；轨迹验证不是碰撞检查。
+ */
 int main() {
   cancel_receipt_rejects_foreign_owner();
   discarded_local_hold_generation_does_not_block_begin();

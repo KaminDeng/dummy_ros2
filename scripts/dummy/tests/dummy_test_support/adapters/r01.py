@@ -1,4 +1,9 @@
 """R01 model-contract adapter using the real model validation tests."""
+##
+# @file r01.py
+# @brief 把R01模型/合同case映射到具体unittest目标的适配器。
+#
+# 实际启动目标测试进程，MOD02/03固定/usr/bin/python3，其余用当前解释器；证据来自这些离线模型/FK断言，不是新机械臂测量。TARGETS含MOD04/MOD06具体目标，当前实现不会因为旧验收期望而主动返回NOT_RUN。
 
 from __future__ import annotations
 
@@ -24,6 +29,11 @@ SOURCES = (
 )
 
 
+##
+# @brief 查TARGETS后调用run_unittest_case；未知case转ValueError，选定解释器仅改变子测试运行环境。
+# @param case_id 当前case标识；支持集合由本suite映射/分支决定。
+# @param stimulus 输入字典；公共runner要求恰为case_id、hardware=none、test_only=True，不是硬件沙箱。
+# @return 该suite所选执行路径返回的证据字典，状态/范围不自动升级。
 def run_r01_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     try:
         target = TARGETS[case_id]

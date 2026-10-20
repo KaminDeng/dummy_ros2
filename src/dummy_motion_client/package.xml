@@ -1,20 +1,26 @@
 <?xml version="1.0"?>
+<!-- @file package.xml
+     @brief 声明公共动作守卫包的ament构建类型、消息/控制/摘要/YAML依赖。
+     这些是现有包管理元数据；安装依赖不启动节点，也不代表profile或设备许可已核准。 -->
 <package format="3">
   <name>dummy_motion_client</name>
   <version>0.1.0</version>
   <description>Public guarded action entrypoint for Dummy motion.</description>
   <maintainer email="maintainer@example.invalid">Dummy ROS maintainers</maintainer>
   <license>Apache-2.0</license>
+  <!-- ament_cmake负责配置、安装和包索引；depend同时声明构建/运行依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>control_msgs</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
   <depend>controller_manager</depend>
   <depend>std_srvs</depend>
+  <!-- 接入受控硬件/管理/controller链路，不直接暴露内部JTC作为公共入口。 -->
   <depend>dummy_ros_control</depend>
   <depend>controller_interface</depend>
   <depend>joint_trajectory_controller</depend>
   <depend>trajectory_msgs</depend>
+  <!-- profile解析与摘要完整性依赖；成功解析不能替代运行资格。 -->
   <depend>yaml-cpp</depend>
   <depend>openssl</depend>
   <test_depend>ament_cmake</test_depend>

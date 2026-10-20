@@ -1,3 +1,8 @@
+##
+# @file test_j6_reducer.py
+# @brief 核J6减速器28mm输出偏置、固定壳体归属与碰撞覆盖。
+# @details 使用NumPy齐次变换和本地STL数据；关节角rad、URDF距离m、STL源顶点mm。
+
 """验证减速器安装后运动学、外壳归属和碰撞覆盖；不访问实机。"""
 import math
 from pathlib import Path
@@ -14,6 +19,11 @@ DESCRIPTION = ROOT / 'src/dummy-ros2_description'
 HOUSING = 'j6_reducer_housing'
 
 
+##
+# @brief 按Rz(yaw)Ry(pitch)Rx(roll)构建4×4齐次变换，右上为xyz平移。
+# @param xyz 三维平移，单位m，默认零。
+# @param rpy roll/pitch/yaw，单位rad，默认零。
+# @return NumPy 4×4齐次矩阵。
 def transform(xyz=(0., 0., 0.), rpy=(0., 0., 0.)):
     r, p, y = rpy
     rx = np.array([[1, 0, 0], [0, math.cos(r), -math.sin(r)],
@@ -28,6 +38,10 @@ def transform(xyz=(0., 0., 0.), rpy=(0., 0., 0.)):
     return result
 
 
+##
+# @brief 读取元素的origin为齐次变换；无origin返回单位阵，缺xyz/rpy分量属性按零向量处理。
+# @param element 可含origin子元素的URDF元素。
+# @return NumPy 4×4 origin矩阵。
 def origin(element):
     node = element.find('origin')
     if node is None:
@@ -36,9 +50,15 @@ def origin(element):
                        for key in ('xyz', 'rpy')])
 
 
+##
+# @brief 从base_link单位阵逐层解析关节，revolute用Rodrigues绕轴旋转，结果为各link到base的齐次变换。
+# @param root 展开URDF的XML根。
+# @param positions Joint名→rad映射；缺失转轴按0处理。
+# @return link名→base坐标齐次矩阵字典；断链抛AssertionError。
 def frames(root, positions):
     result = {'base_link': np.eye(4)}
     pending = list(root.findall('joint'))
+    # 父link已知才处理该joint，每轮须有进展，防止断链/环结构造成无限循环。
     while pending:
         progressed = False
         for joint in pending[:]:
@@ -61,12 +81,18 @@ def frames(root, positions):
     return result
 
 
+##
+# @brief J6减速器安装、壳体运动学与顶点覆盖回归。
 class J6ReducerTest(unittest.TestCase):
+    ##
+    # @brief 类级一次展开生产Xacro并缓存XML供各测试读取；需要合同的类同时读取当前合同关节表。
     @classmethod
     def setUpClass(cls):
         cls.root = ET.fromstring(xacro.process_file(
             str(DESCRIPTION / 'urdf/dummy-ros2.xacro')).toxml())
 
+    ##
+    # @brief 在三组六轴角度下核仍六个revolute，壳体在STEP安装面，输出法兰沿安装面局部+Y偏28mm。
     def test_output_flange_extends_28mm_without_changing_six_axes(self):
         self.assertEqual(6, len(self.root.findall("joint[@type='revolute']")))
         for angles in ([0, 0, 90, 0, 0, 0], [20, -60, 164, 40, 70, 160],
@@ -81,6 +107,8 @@ class J6ReducerTest(unittest.TestCase):
             self.assertAlmostEqual(.028, np.linalg.norm(
                 f['link6_1_1'][:3, 3] - mount[:3, 3]), places=12)
 
+    ##
+    # @brief 只改变J6时固定壳体变换保持，输出link6姿态改变，避免壳体错误随输出转动。
     def test_housing_does_not_rotate_with_joint6(self):
         first = frames(self.root, {'Joint3': math.pi / 2, 'Joint6': 0.})
         second = frames(self.root, {'Joint3': math.pi / 2, 'Joint6': 1.2})
@@ -89,6 +117,8 @@ class J6ReducerTest(unittest.TestCase):
         self.assertFalse(np.allclose(first['link6_1_1'][:3, :3],
                                      second['link6_1_1'][:3, :3]))
 
+    ##
+    # @brief 解析二进制STL所有三角顶点，缩放到m并变到每个collision局部，要求至少一个box/cylinder包含。
     def test_collision_primitives_cover_every_stl_vertex(self):
         housing = self.root.find(f"link[@name='{HOUSING}']")
         self.assertIsNotNone(housing, '缺少减速器碰撞模型')
@@ -102,6 +132,8 @@ class J6ReducerTest(unittest.TestCase):
         collisions = housing.findall('collision')
         self.assertEqual(2, len(collisions))
         localizers = [(np.linalg.inv(origin(c)), c.find('geometry')) for c in collisions]
+        # 每个源顶点先经visual缩放/原点，再逆变换到collision局部；只验证顶点覆盖，
+        # 不把跨多个碰撞体的并集顶点包含误称为任意三角形内部都已覆盖。
         for triangle in range(count):
             for vertex in range(3):
                 point = struct.unpack_from('<3f', data, 84 + triangle * 50 + 12 + vertex * 12)
@@ -119,6 +151,8 @@ class J6ReducerTest(unittest.TestCase):
                                     and abs(xyz[2]) <= float(cylinder.get('length')) / 2 + 1e-8)
                 self.assertTrue(covered, f'STL 顶点未被碰撞体覆盖：{point}')
 
+    ##
+    # @brief 只允许壳体与安装邻接link5/link6豁免，基座/前臂仍受检查，末端不继承旧前臂Never豁免。
     def test_only_mounting_neighbors_exempt_housing_collision(self):
         srdf = ET.parse(ROOT / 'src/dummy_moveit_config/config/dummy-ros2.srdf').getroot()
         pairs = {frozenset((p.get('link1'), p.get('link2')))

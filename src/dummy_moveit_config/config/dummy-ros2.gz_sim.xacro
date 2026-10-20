@@ -1,11 +1,25 @@
 <?xml version="1.0"?>
+<!--
+@file dummy-ros2.gz_sim.xacro
+@brief Gazebo Sim的共享几何、固定根和gz_ros2_control插件装配。
+@details 仅模型/仿真声明，不连接真实DPSDK设备；模型加载、控制器激活和动作执行各由后续节点完成。
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dummy-ros2">
+<!--
+Gazebo初始关节状态YAML，由控制宏读取；不是启动后每帧覆盖实际状态的命令。
+-->
   <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
 
+<!--
+复用完整CAD几何及所有碰撞保护；不加载旧数学参考链。
+-->
   <xacro:include filename="$(find dummy-ros2_description)/urdf/dummy-ros2.xacro" />
   <xacro:include filename="dummy-ros2.ros2_control.xacro" />
 
   <!-- Gazebo Sim needs a fixed base so gravity does not drop the arm out of view. -->
+<!--
+world与base_link固定连接，避免模型整机被重力拖离场景；这不锁定六个revolute关节。
+-->
   <link name="world" />
   <joint name="world_joint" type="fixed">
     <parent link="world" />
@@ -13,11 +27,17 @@
     <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
 
+<!--
+显式选择GazeboSimSystem硬件后端，沿用相同六轴position接口。
+-->
   <xacro:dummy-ros2_ros2_control
     name="GazeboSimSystem"
     initial_positions_file="$(arg initial_positions_file)"
     hardware_plugin="gz_ros2_control/GazeboSimSystem" />
 
+<!--
+Gazebo系统插件载入控制器YAML，并使用controller_manager名称前缀。hold_joints和position_proportional_gain是模拟后端参数，不是驱动板电流或PID配置。
+-->
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>$(find dummy_moveit_config)/config/ros2_controllers.yaml</parameters>

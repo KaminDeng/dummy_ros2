@@ -1,6 +1,11 @@
+# @file pilz_cartesian_limits.yaml
+# @brief Pilz笛卡尔规划器的平动/转动限额；与关节域限额共同约束所选流水线。
 # Limits for the Pilz planner
+# 仅供实际加载Pilz参数的规划流程使用；存在此文件不代表所有MoveIt请求都会选择Pilz。
 cartesian_limits:
+# 平动速度m/s；下两项平动加速度m/s²。max_trans_dec沿该配置约定写为负减速值，不能误转为正加速。
   max_trans_vel: 1.0
   max_trans_acc: 2.25
   max_trans_dec: -5.0
+# 转动角速度rad/s，不是关节最大速度或单位比例。
   max_rot_vel: 1.57

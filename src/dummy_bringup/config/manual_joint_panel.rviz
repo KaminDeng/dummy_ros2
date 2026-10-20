@@ -1,3 +1,8 @@
+# @file manual_joint_panel.rviz
+# @brief 手动面板的实际反馈、目标虚影、点位/障碍标记和GUI布局。
+# @details 本文件只配置显示订阅与RViz工具，不能通过目标虚影驱动电机。
+# 固定坐标base_link；实际与目标描述/TF分开，窗口状态缓存与真实URDF内容也分开。
+# 各Panel的Help/Tree Height、Expanded、Splitter只是RViz窗口布局，不是控制参数。
 Panels:
 - Class: rviz_common/Displays
   Help Height: 78
@@ -23,6 +28,7 @@ Panels:
   - /Current View1
   Name: Views
   Splitter Ratio: 0.5
+# 显示项按顺序为网格、可信实际模型、TF、目标模型、目标标记及确认的障碍物。
 Visualization Manager:
   Class: ''
   Displays:
@@ -49,6 +55,8 @@ Visualization Manager:
     Collision Enabled: false
     Description File: ''
     Description Source: Topic
+# 实际模型订阅/measured_robot_description，Reliable+Transient Local保留最近模型给后订阅者。
+# Collision Enabled=false只是不画碰撞外形，不能理解为MoveIt碰撞检查已关闭。
     Description Topic:
       Depth: 5
       Durability Policy: Transient Local
@@ -56,6 +64,8 @@ Visualization Manager:
       Reliability Policy: Reliable
       Value: /measured_robot_description
     Enabled: true
+# Links下back/front wheel/motor为历史GUI属性缓存，不创建URDF link或TF，
+# 真实六轴结构仍由收到的robot_description决定；每项Alpha/Axes/Trail控制显示。
     Links:
       All Links Enabled: true
       Expand Joint Details: false
@@ -112,6 +122,7 @@ Visualization Manager:
     Update Interval: 0
     Value: true
     Visual Enabled: true
+# TF仅显示选定base/link6坐标轴，Frame Timeout为秒，Marker Scale为显示比例。
   - Class: rviz_default_plugins/TF
     Enabled: true
     Frame Timeout: 15
@@ -131,6 +142,8 @@ Visualization Manager:
     Tree: {}
     Update Interval: 0
     Value: true
+# 目标描述走/target_preview/colored_robot_description，TF前缀target_preview，透明度0.4；
+# 它与真实反馈是独立显示层，目标存在不表示设备已到位。
   - Class: rviz_default_plugins/RobotModel
     Name: 目标虚影（不驱动实物）
     Enabled: true
@@ -146,6 +159,8 @@ Visualization Manager:
       Reliability Policy: Reliable
       History Policy: Keep Last
     TF Prefix: target_preview
+# 两个MarkerArray分别显示输入目标和已确认碰撞圆柱，Transient Local用于晚加入订阅者。
+# RViz收到标记不等于MoveIt场景服务已接受障碍物，需核面板对应确认流程。
   - Class: rviz_default_plugins/MarkerArray
     Name: 目标点位与姿态（输入即显示）
     Enabled: true
@@ -167,11 +182,13 @@ Visualization Manager:
       History Policy: Keep Last
       Reliability Policy: Reliable
   Enabled: true
+# 背景/30FPS与后续Orbit距离、视角、裁剪面均是渲染设置，不影响轨迹时序。
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: base_link
     Frame Rate: 30
   Name: root
+# 工具栏含initialpose/goal_pose/clicked_point通用发布工具；它们不会自行调用本项目设备执行链。
   Tools:
   - Class: rviz_default_plugins/Interact
     Hide Inactive Objects: true
@@ -229,6 +246,8 @@ Visualization Manager:
       Value: Orbit (rviz)
       Yaw: 0.5103846192359924
     Saved: null
+# 窗口尺寸、位置、Dock折叠与QMainWindow State十六进制是Qt布局缓存；
+# 不是设备状态、协议帧、模型SHA或运动授权。
 Window Geometry:
   Displays:
     collapsed: false

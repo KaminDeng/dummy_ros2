@@ -1,0 +1,30 @@
+{
+  "purpose": "保留技能流程与历史设计原件的阅读索引，不重写任务状态或授权。",
+  "files": [
+    {
+      "path": ".agents/skills/step-to-ros-model/SKILL.md",
+      "sha256": "ba6f830d0171b9a0133e8779c42380a464c83a4391662652d1f6ff7113e8d82c",
+      "lines": 69
+    },
+    {
+      "path": ".agents/skills/step-to-ros-model/references/conversion-details.md",
+      "sha256": "0b05ae40b1f6d09a0b0faa040e9a636bf7d331b1bddf48fbcaf0b03ceea34db3",
+      "lines": 149
+    },
+    {
+      "path": ".agents/skills/step-to-ros-model/references/dummy-b-v2-case.md",
+      "sha256": "bd517f339121021592b3167036e3c6342684dc5e8aa57e9500121d258ebaa398",
+      "lines": 76
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-15-v3-conformance-repair.md",
+      "sha256": "d272dfc4a24c2229bacfcd2799d6b8605776103b1cf4a4aaf2a3f552608f4f00",
+      "lines": 89
+    },
+    {
+      "path": "docs/superpowers/specs/2026-09-15-v3-conformance-repair-design.md",
+      "sha256": "39e1a071c044a13202a1726e43fa0ca2563830e577dabc6955e2b559890e2c96",
+      "lines": 79
+    }
+  ]
+}

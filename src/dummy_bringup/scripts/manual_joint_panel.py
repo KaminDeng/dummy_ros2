@@ -1,4 +1,8 @@
 #!/usr/bin/python3
+##
+# @file manual_joint_panel.py
+# @brief 以单一 Native 通信所有者组织六轴手动面板、只读反馈和显式执行。
+# Qt 主线程驱动界面和 rclpy 回调；ROS 发布测量状态与独立目标虚影，运动命令只经现有 worker。启动/重连只读，控制授权必须由设备事件和后续同身份新鲜反馈共同建立；管理辅助进程须在旧 worker 确认退出后串行接管，避免双 USB owner。
 """六轴空载交互面板：SDK单owner；ROS只发布实际关节状态，不在启动时运动。"""
 import argparse
 import json
@@ -18,17 +22,37 @@ from rclpy.qos import QoSProfile, DurabilityPolicy
 import xacro
 
 
+##
+# @brief 检查六轴角度输入是否有限且位于给定边界。
+# 假定配置提供完整六轴 limits；该轻量函数不独立检查 limits 长度，不进行碰撞或设备状态验证。
+# @param degrees 要求长度为六的目标角度序列，单位 °。
+# @param limits 调用方提供的六对 [下限,上限]，单位 °。
+# @return bool：输入长度为六，zip 配对各轴均有限且在闭区间内。
 def valid_goal(degrees, limits):
     return len(degrees) == 6 and all(
         math.isfinite(v) and lo <= v <= hi for v, (lo, hi) in zip(degrees, limits))
 
 
+##
+# @class JointPanel
+# @brief 管理设备连接、反馈授权、人工标定和各控制页。
+# calibration 仅表示 (boot,reference) 零点身份；authorized 表示当前 session 的控制资格，两者不可互换。last_state 为实际解码帧，inputs 为度制目标；目标虚影与 /joint_states 的测量发布严格分开。
 class JointPanel(QtWidgets.QWidget):
+    ##
+    # @brief 建立发布器、状态账本、页签和只读通信 worker。
+    # 展开 xacro 后分别建立测量/预览描述发布器；初始无会话授权。可选 MoveIt 页和圆柱场景，独立管理进程仅用于明确清故障。30 ms 定时器负责反馈及门控，不在初始化时运动。
+    # @param config 经部署校验的面板配置，含后端、描述模型及关节范围。
+    # @param report 本次全新报告目录 Path；已存在会报错，避免覆盖证据。
+    # @param decoder 部署随附的状态解码函数；模拟后端可为 None。
+    # @param node 外部持有的 rclpy 节点，由本窗口定时 spin。
+    # @return None；执行上述状态更新、界面或日志操作。
     def __init__(self, config, report, decoder, node):
         super().__init__()
         self.cfg, self.report, self.decode, self.node = config, report, decoder, node
         self.backend = config.get("backend", "real")
         self.pending_backend = None
+        ##
+        # /joint_states 仅来自新鲜测量/显示参考的 actual_q；/target_joint_states 独立表示未执行输入，两个描述 topic 也分开管理。
         self.publisher = node.create_publisher(JointState, '/joint_states', 10)
         self.target_publisher = node.create_publisher(JointState, '/target_joint_states', 10)
         self.description_publisher = node.create_publisher(String, '/measured_robot_description', QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
@@ -37,16 +61,22 @@ class JointPanel(QtWidgets.QWidget):
         self.preview_failed = None
         self.description_visible = None
         self.report.mkdir(parents=True, exist_ok=False)
+        ##
+        # raw 文件起始 24 字节为 transport 头；offset 是下一完整记录读取偏移，last_state_ns 记录帧实际到达时间而非文件读取时间。
         self.raw = self.report / 'transport.raw'
         self.offset = 24
         self.last_state = None
         self.last_state_ns = 0
+        ##
+        # calibration=(boot,reference)；control_session 是授权事件 session；pending_authorization 保存事件完整身份及各 epoch 水位，不能凭 stdout 文字直接使能 MOVE。
         self.calibration = None
         self.authorized = False
         self.control_session = None
         self.pending_authorization = None
         self.state_boot = None
         self.state_sequence = 0
+        ##
+        # pending_home 表示用户已明确确认新姿态但仍需旧 owner 释放；pending_home_generation 防止旧 worker 的 WAIT 事件提前触发捕获。
         self.retired_state_boots = set()
         self.restart_after_release = False
         self.readonly_handoff = None
@@ -54,6 +84,8 @@ class JointPanel(QtWidgets.QWidget):
         self.pending_home = False
         self.pending_home_generation = None
         self.closing = False
+        ##
+        # worker_generation 追踪重连世代；manage_generation 只区分清故障归档。connection_action 串行管理后端切换/重连/清故障。
         self.worker_generation = 0
         self.connection_action = None
         self.manage_generation = 0
@@ -65,6 +97,8 @@ class JointPanel(QtWidgets.QWidget):
         self.readonly_wait_generation = None
         self.readonly_wait_identity = None
         self.stdout_buffer = ''
+        ##
+        # anchor/previous_raw 只服务未标定显示；检测原始电机圈数突变即丢弃锚点，不写设备参考。limits 为度制工作范围。
         self.anchor = None
         self.display_initialized = False
         self.previous_raw = None
@@ -91,6 +125,12 @@ class JointPanel(QtWidgets.QWidget):
         self.timer.start(30)
         self.tick()
 
+    ##
+    # @brief 显示默认拒绝的执行确认，或遵循本窗口跳过确认选项。
+    # 跳过确认只省略对话框，调用者仍须执行反馈、身份、权限与范围检查；对话框期间事件循环继续，确认后需要重新检查条件。
+    # @param title 确认对话框标题。
+    # @param text 待执行动作、单位和人工确认条件说明。
+    # @return QMessageBox.StandardButton：Yes 或用户选择值。
     def confirm_execution(self, title, text):
         checkbox = getattr(self, 'skip_confirmations', None)
         if checkbox is not None and checkbox.isChecked():
@@ -99,6 +139,10 @@ class JointPanel(QtWidgets.QWidget):
         return QtWidgets.QMessageBox.question(self, title, text,
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
 
+    ##
+    # @brief 按后端创建通信对象并连接统一事件接口。
+    # real 使用 QProcess，simulator 使用本地 SimulatorWorker；本方法仅创建不启动。标准输出、错误和 finished 都进入同一面板处理流程，模拟来源在界面明确标识。
+    # @return None；执行上述状态更新、界面或日志操作。
     def create_worker(self):
         if self.backend == 'simulator':
             from manual_panel_simulator import SimulatorWorker
@@ -113,6 +157,11 @@ class JointPanel(QtWidgets.QWidget):
         self.worker.readyReadStandardError.connect(self.stderr_ready)
         self.worker.finished.connect(self.finished)
 
+    ##
+    # @brief 校验切换条件并请求串行移交到所选后端。
+    # 立即把下拉框复原到当前后端；有运动、管理、参数事务或连接动作时拒绝。切到真机先重新加载/校验部署配置和解码器；设置 pending_backend 后通过 RELEASE/退出确认移交，禁止直接并行启动。
+    # @param _index Qt 下拉框索引参数；实际选择从 currentData 读取。
+    # @return None；执行上述状态更新、界面或日志操作。
     def request_backend_change(self, _index=None):
         selected = self.backend_choice.currentData()
         self.backend_choice.blockSignals(True)
@@ -140,6 +189,10 @@ class JointPanel(QtWidgets.QWidget):
         self.pending_backend = selected
         self.queue_connection_action('backend')
 
+    ##
+    # @brief 在旧连接退出后切换对象并清除跨后端状态。
+    # 清实际反馈、零点和授权缓存、旧 boot 序列、显示锚点及规划；隐藏实测模型，重新创建并只读启动 worker。模拟与真机不继承彼此的控制身份或位置。
+    # @return None；执行上述状态更新、界面或日志操作。
     def apply_backend_change(self):
         self.worker.deleteLater()
         self.backend, self.pending_backend = self.pending_backend, None
@@ -165,6 +218,11 @@ class JointPanel(QtWidgets.QWidget):
         self.create_worker()
         self.start_worker()
 
+    ##
+    # @brief 按当前页签调整关节执行入口并按需读取实际末端。
+    # 仅关节页显示“执行六轴目标”和“实际角度→目标”，避免把规划末点当作整条路径执行。进入空闲且无路径的 MoveIt 页时只请求 FK，不执行运动。
+    # @param index 当前页签零基索引。
+    # @return None；执行上述状态更新、界面或日志操作。
     def planning_tab_changed(self, index):
         # 规划页只能走整条路径按钮，避免误把关节页的末点按钮当作规划执行。
         self.move.setVisible(index == 0)
@@ -172,20 +230,36 @@ class JointPanel(QtWidgets.QWidget):
         if hasattr(self, 'moveit_tab') and self.tabs.widget(index).widget() is self.moveit_tab and not self.moveit_tab.path and not self.moveit_tab.pending and not self.moveit_tab.executing:
             self.moveit_tab.capture_actual()
 
+    ##
+    # @brief 查询清故障管理进程是否仍占用生命周期。
+    # Starting 也视为活动，防止第二个通信进程在启动交叠窗口进入。
+    # @return bool：manage_worker 已创建且状态不是 NotRunning。
     def helper_active(self):
         helper = getattr(self, 'manage_worker', None)
         return helper is not None and helper.state() != QtCore.QProcess.NotRunning
 
+    ##
+    # @brief 判断是否允许明确启动清故障事务。
+    # 故障存在不会自动触发清除；操作者仍需单独请求并确认已处理根因。
+    # @return bool：真机新鲜故障态 9、session=0、未授权且没有忙碌/管理/连接动作。
     def fault_clear_available(self):
         return (getattr(self, 'backend', 'real') == 'real' and self.fresh() and self.last_state['core_state'] == 9 and
                 self.last_state['session_id'] == 0 and not self.authorized and
                 not self.busy and not self.helper_active() and getattr(self, 'connection_action', None) is None)
 
+    ##
+    # @brief 在空闲时排队只读重连。
+    # 关闭、忙碌、管理进程或已有连接动作时直接返回；重连仍先走旧连接释放屏障，不自动恢复使能。
+    # @return None；执行上述状态更新、界面或日志操作。
     def request_reconnect(self):
         if self.closing or self.busy or self.helper_active() or getattr(self, 'connection_action', None) is not None:
             return
         self.queue_connection_action('reconnect')
 
+    ##
+    # @brief 确认已处理故障后排队串行清故障操作。
+    # 确认前后均重新检查 fault_clear_available；只清故障与重新只读连接，不采零、不使能、不运动。恢复控制仍需另行操作。
+    # @return None；执行上述状态更新、界面或日志操作。
     def request_clear_fault(self):
         if self.closing or not self.fault_clear_available():
             return
@@ -195,6 +269,11 @@ class JointPanel(QtWidgets.QWidget):
         if answer == QtWidgets.QMessageBox.Yes and not self.closing and self.fault_clear_available():
             self.queue_connection_action('clear_fault')
 
+    ##
+    # @brief 撤销授权并等待原 worker 释放后执行连接动作。
+    # 保存有限的故障只读移交证据，清旧 pending 授权/标定意图并置 busy。worker 已退出才直接调度，否则发 RELEASE；写入失败撤销排队动作，不启动第二个进程。
+    # @param action backend、clear_fault 或 reconnect，由对应 UI 入口传入。
+    # @return None；执行上述状态更新、界面或日志操作。
     def queue_connection_action(self, action):
         if self.helper_active() or self.closing:
             return
@@ -214,6 +293,10 @@ class JointPanel(QtWidgets.QWidget):
             self.busy = False
             self.message('退出原连接失败，未启动第二个通信进程。')
 
+    ##
+    # @brief 仅在原通信进程和管理进程均停止后消费排队动作。
+    # backend 重建后端，clear_fault 启动短管理进程，reconnect 只读启动 worker。关闭期间不调度；调用来自 finished 的释放确认分支。
+    # @return None；执行上述状态更新、界面或日志操作。
     def run_connection_action(self):
         if self.closing or self.worker.state() != QtCore.QProcess.NotRunning or self.helper_active():
             return
@@ -226,6 +309,10 @@ class JointPanel(QtWidgets.QWidget):
             self.busy = False
             self.start_worker()
 
+    ##
+    # @brief 用身份参数白名单启动一次独立清故障管理进程。
+    # 只继承 endpoint/device/client/profile/mask/scope 及产物身份，不继承 home-rest 场景或运动授权参数。argv 与 raw 各按 manage_generation 归档；其结束后才重启只读 worker。正常入口由 run_connection_action 保证原 owner 已退出。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_fault_helper(self):
         # 只传身份白名单；绝不沿用home-rest场景或运动授权参数。
         identity_flags = {'--endpoint', '--device', '--client', '--profile', '--mask',
@@ -247,12 +334,23 @@ class JointPanel(QtWidgets.QWidget):
         self.message('仅执行明确清故障与模式选择；结束后重新只读连接，不自动使能。')
         self.manage_worker.start(self.cfg['native_binary'], args)
 
+    ##
+    # @brief 转交管理进程标准输出归档。
+    # @return None；执行上述状态更新、界面或日志操作。
     def manage_stdout_ready(self):
         self.manage_output(False)
 
+    ##
+    # @brief 转交管理进程标准错误归档。
+    # @return None；执行上述状态更新、界面或日志操作。
     def manage_stderr_ready(self):
         self.manage_output(True)
 
+    ##
+    # @brief 保存管理输出并把末段摘要送到面板日志。
+    # 解码错误用替换字符；完整数据写入本次 manage_prefix 文件，界面仅显示非空输出末 1200 字符。
+    # @param stderr True 读取标准错误并写 .stderr；False 读取标准输出并写 .stdout。
+    # @return None；执行上述状态更新、界面或日志操作。
     def manage_output(self, stderr):
         data = bytes(self.manage_worker.readAllStandardError() if stderr else self.manage_worker.readAllStandardOutput()).decode(errors='replace')
         with Path(str(self.manage_prefix) + ('.stderr' if stderr else '.stdout')).open('a') as output:
@@ -260,16 +358,31 @@ class JointPanel(QtWidgets.QWidget):
         if data.strip():
             self.message(data.strip()[-1200:])
 
+    ##
+    # @brief 处理管理进程无法启动的 Qt 错误。
+    # FailedToStart 按退出码 -1 进入统一结束处理，释放 busy 并重新只读连接；其他错误由进程后续生命周期处理。
+    # @param error QProcess.ProcessError 枚举。
+    # @return None；执行上述状态更新、界面或日志操作。
     def manage_error(self, error):
         if error == QtCore.QProcess.FailedToStart:
             self.manage_finished(-1, 0)
 
+    ##
+    # @brief 清理管理忙碌标记并重新只读获取设备真实状态。
+    # 无论清故障命令是否成功，都不直接置 authorized；非关闭时重新启动 worker，从新鲜设备反馈判定后续状态。
+    # @param code 管理 Native 进程退出码，仅记录，不用作控制授权。
+    # @param _status Qt 退出状态参数，本方法未使用。
+    # @return None；执行上述状态更新、界面或日志操作。
     def manage_finished(self, code, _status):
         self.busy = self.zero_busy = False
         self.message(f'清故障进程结束，code={code}；仅重新读取设备状态，未自动使能。')
         if not self.closing:
             self.start_worker()
 
+    ##
+    # @brief 为下一代只读连接准备独立证据文件并启动唯一 worker。
+    # 关闭、helper 活动或 worker 非 NotRunning 时拒绝。重置本地反馈时间、授权和只读事件缓存；raw 每代单独保留，记录 argv 与本地软件/展开模型哈希。模拟模式写独立来源声明，不能混作硬件证据。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_worker(self):
         if self.closing or self.helper_active() or self.worker.state() != QtCore.QProcess.NotRunning:
             return
@@ -303,10 +416,20 @@ class JointPanel(QtWidgets.QWidget):
         self.worker_generation += 1
         self.worker.start(self.cfg['native_binary'], args)
 
+    ##
+    # @brief 检查最近状态是否属于指定生命周期且未被只读故障锁住。
+    # 不单独检查反馈新鲜度或 session 授权，调用方须叠加 fresh/authorized 等条件。
+    # @param allowed 允许的 core_state 数值元组，默认 1/2/4。
+    # @return bool：有 last_state、无 readonly_fault 且 core_state 命中。
     def control_state_allowed(self, allowed=(1, 2, 4)):
         state = self.last_state
         return bool(state) and not getattr(self, 'readonly_fault', False) and state['core_state'] in allowed
 
+    ##
+    # @brief 进入故障只读显示并撤销全部控制准备。
+    # 清等待 Home、授权、忙碌与 pending 标定/授权；仅在保存了只读 handoff 时保留必要重启意图。不会自动发清故障或重采零命令。
+    # @param identity 可选 (boot_epoch,state_seq) 故障水位，用于后续新状态解除本地故障锁。
+    # @return None；执行上述状态更新、界面或日志操作。
     def enter_readonly_fault(self, identity=None):
         self.readonly_fault = True
         if identity is not None:
@@ -320,6 +443,11 @@ class JointPanel(QtWidgets.QWidget):
         self.readonly_wait_generation = None
         self.readonly_wait_identity = None
 
+    ##
+    # @brief 确认标定模式拒绝来自当前只读连接及其状态水位。
+    # 要求当前 session=0；旧 worker、旧 boot 或畸形事件不能恢复当前 wait_home 标志。
+    # @param parts CAPTURE_MODE_REJECTED 事件键值字典。
+    # @return bool：正在标定、反馈新鲜、只读态、worker 世代与 boot/reference/sequence 均对应。
     def capture_rejection_is_current_readonly(self, parts):
         marker = getattr(self, 'readonly_wait_identity', None)
         if (not self.zero_busy or not self.fresh() or not self.control_state_allowed((1, 2)) or
@@ -334,12 +462,23 @@ class JointPanel(QtWidgets.QWidget):
                 state['boot_epoch'] == marker[0] and state['reference_epoch'] == marker[1] and
                 state['state_seq'] >= marker[2] and state['session_id'] == 0)
 
+    ##
+    # @brief 查询部署是否使用人工双限位标定流程。
+    # @return bool：calibration_mode 等于 manual_limits。
     def manual_limits_mode(self):
         return self.cfg.get('calibration_mode') == 'manual_limits'
 
+    ##
+    # @brief 按配置选择需要明确姿态确认的捕获命令。
+    # 只生成字符串，不发送；命令后续还要由 Native 校验模式和参考条件。
+    # @return str：LIMITS CONFIRM_MARGIN 或 HOME CONFIRM_MARGIN。
     def calibration_command(self):
         return 'LIMITS CONFIRM_MARGIN' if self.manual_limits_mode() else 'HOME CONFIRM_MARGIN'
 
+    ##
+    # @brief 识别双限位模式可走专用 Rest 恢复链的实测姿态。
+    # 只支持 schema 2.5、profile 201 和完整位置。允许名义边界的原连续性带，但不夹紧实测 State；仅 J2 下侧/J3 上侧可触发，危险阈值是名义限位内 13°−0.003 rad。此返回值只用于恢复判断/说明，实际专用链由 Native 执行。
+    # @return list[float] 或 None：危险 J2/J3 回 Rest、其余轴冻结实测角度的度制目标；不可用时 None。
     def manual_limits_retreat_target(self):
         if not self.manual_limits_mode() or not self.last_state:
             return None
@@ -376,6 +515,10 @@ class JointPanel(QtWidgets.QWidget):
                 target.append(math.degrees(value))
         return target if boundary else None
 
+    ##
+    # @brief 双限位参考建立后恢复名义角度编辑范围。
+    # SpinBox 与滑块可编辑名义范围，预设同步更新；self.limits 工作范围不变，普通执行仍按停车余量内收，不能把输入范围扩大视为执行域扩大。
+    # @return None；执行上述状态更新、界面或日志操作。
     def restore_ordinary_goal_ranges(self):
         if not self.manual_limits_mode():
             return
@@ -389,6 +532,11 @@ class JointPanel(QtWidgets.QWidget):
                 for box, (lower, upper) in zip(row, nominal):
                     box.setRange(lower, upper)
 
+    ##
+    # @brief 校验同 boot 的人工显示锚点以解释未标定原始位置。
+    # 配置 boot 和锚点 boot 必须与状态相同，六轴数值有限，原始电机圈数偏差逐轴 ≤0.5 圈；不满足即忽略。该锚点仅供模型显示，绝不建立设备参考或运动授权。
+    # @param state 新鲜状态字典，含 raw_position_valid_mask 和 raw_motor_position_rev。
+    # @return dict 或 None：规范化 boot、motor_rev、home_rad 的显示专用锚点。
     def optional_display_anchor(self, state):
         candidate = self.cfg.get('initial_display_anchor')
         configured_boot = self.cfg.get('initial_display_boot')
@@ -413,6 +561,10 @@ class JointPanel(QtWidgets.QWidget):
         except (TypeError, ValueError, OverflowError):
             return None
 
+    ##
+    # @brief 检查实测关节是否满足普通运动的工作起点范围。
+    # position_rad 为 rad、limits 为 °；仅保留 0.003 rad 反馈容差，不把 near-limit 位置裁剪成合法状态。
+    # @return str 或 None：首个缺反馈/越界原因；全部符合则 None。
     def resume_position_issue(self):
         state = self.last_state
         if not state or state['position_valid_mask'] != 63:
@@ -423,6 +575,10 @@ class JointPanel(QtWidgets.QWidget):
                 return f'J{axis+1}实际 {math.degrees(value):.3f}°，工作范围 [{lower:g}, {upper:g}]°。'
         return None
 
+    ##
+    # @brief 为允许的普通 Home 模式计算低速向内恢复目标。
+    # 需要 inward_recovery_enabled、实际/配置 schema 2.5、profile 201、完整位置且仍在名义限位内；双限位模式不借此入口。返回目标仅用于判断，RECOVER 的限速策略由 Native 实现。
+    # @return list[float] 或 None：需恢复轴到名义限位内 15°、其余轴保持实测值的度制目标。
     def recovery_target(self):
         if (self.manual_limits_mode() or not self.cfg.get('inward_recovery_enabled',False) or not self.last_state or
                 self.last_state['position_valid_mask'] != 63 or
@@ -444,6 +600,10 @@ class JointPanel(QtWidgets.QWidget):
                 target.append(math.degrees(value))
         return target if danger else None
 
+    ##
+    # @brief 明确确认后提交固定低速向内恢复。
+    # 要求已授权、有零点、新鲜反馈、合法状态且不忙；提示最高 0.1°/s、0.01 rad/s²。确认后再次检查条件，再发 RECOVER；成功写入仅置 busy，等待设备结果。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_recovery(self):
         target=self.recovery_target()
         if not self.control_state_allowed((2, 4)) or not self.authorized or not self.calibration or not self.fresh() or self.busy or target is None:
@@ -455,6 +615,10 @@ class JointPanel(QtWidgets.QWidget):
             if self.command('RECOVER'):
                 self.busy=True
 
+    ##
+    # @brief 复用本 boot 参考并显式恢复控制会话。
+    # 只在等待人工命令的只读态 2 使用；检查工作起点，若需双限位 Rest 退让或专用低速恢复则给出对应说明。模态确认后重新检查反馈与恢复条件，发 RESUME 后仍不立即授权；CALIBRATION_* 事件和后续 State 才能建立 authorized。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_resume(self):
         if not self.control_state_allowed((2,)) or not self.wait_home or not self.calibration or not self.fresh() or self.busy:
             return
@@ -479,12 +643,23 @@ class JointPanel(QtWidgets.QWidget):
                 self.busy = True
                 self.wait_home = False
 
+    ##
+    # @brief 用信号屏蔽将度制目标同步到百分之一度滑块。
+    # QSignalBlocker 防止 slider.valueChanged 再反向触发递归更新；不发送设备命令。
+    # @param slider 该轴 QSlider，整数刻度为 0.01°。
+    # @param value QDoubleSpinBox 的目标角度，°。
+    # @return None；执行上述状态更新、界面或日志操作。
     @staticmethod
     def sync_slider(slider, value):
         blocker = QtCore.QSignalBlocker(slider)
         slider.setValue(round(value * 100))
         del blocker
 
+    ##
+    # @brief 按反馈可用性发布或隐藏测量模型。
+    # 仅在可见状态变化时发布到 measured_robot_description，避免反馈失鲜仍展示完整模型为可信实测。目标预览描述使用另一个 topic。
+    # @param visible True 发布展开的实测模型；False 发布仅有 base_link 的占位描述。
+    # @return None；执行上述状态更新、界面或日志操作。
     def show_actual_description(self, visible):
         if visible != self.description_visible:
             message = String()
@@ -492,6 +667,11 @@ class JointPanel(QtWidgets.QWidget):
             self.description_publisher.publish(message)
             self.description_visible = visible
 
+    ##
+    # @brief 更新目标虚影失败配色并缓存当前颜色状态。
+    # 只发布 target_preview 描述；不改测量模型、参考或命令授权，失败时虚影可能保留上一次有效关节姿态。
+    # @param failed 是否将预览模型染红。
+    # @return None；执行上述状态更新、界面或日志操作。
     def set_preview_failed(self, failed):
         if self.preview_failed != failed:
             from manual_moveit_target import colored_description
@@ -500,11 +680,22 @@ class JointPanel(QtWidgets.QWidget):
             self.preview_description_publisher.publish(message)
             self.preview_failed = failed
 
+    ##
+    # @brief 把六轴度制姿态填入目标输入并更新目标虚影。
+    # 不写 last_state/actual_q，不发布实测位置，不发送 MOVE；输入框仍按自身范围处理值。
+    # @param degrees 六轴目标角度，°；通过 zip 写入对应输入框。
+    # @param announce True 时记录“仅更新目标”说明；动画可设 False 降低日志量。
+    # @return None；执行上述状态更新、界面或日志操作。
     def set_preview_pose(self, degrees, announce=True):
         for box, value in zip(self.inputs, degrees):
             box.setValue(value)
         if announce:self.message('仅更新目标虚影，未发送实机命令。')
 
+    ##
+    # @brief 解释操作员日志并同时显示和追加本地文件。
+    # explain_panel_log 保留原编号；panel.log 使用墙上时间便于人工阅读，命令/事件 JSON 中的 host_ns 则使用单调时钟。
+    # @param text 任意可转为字符串的事件/说明。
+    # @return None；执行上述状态更新、界面或日志操作。
     def message(self, text):
         from manual_panel_messages import explain_panel_log
         explanation = explain_panel_log(str(text))
@@ -512,6 +703,11 @@ class JointPanel(QtWidgets.QWidget):
         with (self.report/'panel.log').open('a') as log:
             log.write(time.strftime('%Y-%m-%d %H:%M:%S')+' '+explanation+'\n')
 
+    ##
+    # @brief 将一条命令写入当前 worker 并记命令日志。
+    # True 只表示已交给通信对象，不代表设备接受、授权或动作完成。真实/模拟写入不同 JSONL；host_ns 为 monotonic_ns，业务入口负责在调用前检查权限和条件。
+    # @param text 不带末尾换行的 Native 风格单行命令。
+    # @return bool：worker 正在运行且已调用 write 时 True，否则 False。
     def command(self, text):
         if self.worker.state() != QtCore.QProcess.Running:
             self.message('通信进程已退出；需重新只读连接，零点以设备本次boot反馈为准。')
@@ -522,6 +718,10 @@ class JointPanel(QtWidgets.QWidget):
             f.write(json.dumps({'host_ns': time.monotonic_ns(), 'command': text}) + '\n')
         return True
 
+    ##
+    # @brief 同时计算宿主到达年龄和设备 CAN 反馈年龄。
+    # last_state_ns 与 monotonic_ns 同基准；can_rx_age_us 乘 1000 转 ns。读取旧 State 或只读移交凭证都不能延长这一时限。
+    # @return bool：有 last_state 且宿主年龄非负、单独及叠加最大 CAN 年龄均不超过 250 ms。
     def fresh(self):
         if self.last_state is None:
             return False
@@ -529,6 +729,10 @@ class JointPanel(QtWidgets.QWidget):
         return (0 <= age <= 250_000_000 and
                 max(self.last_state['can_rx_age_us']) * 1000 + age <= 250_000_000)
 
+    ##
+    # @brief 确认当次人工姿态后发起替换参考并低速回 Rest。
+    # 双限位配置必须精确符合当前模型 J2 下挡/J3 上挡姿态；普通模式要求人工 Home。若当前已有 owner，先 RELEASE 并绑定下一 worker_generation，待新只读连接和静止反馈后才捕获；不能自动把当前 Rest 当作 Home。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_zero(self):
         if (not self.control_state_allowed() or not self.fresh() or self.busy or self.closing or self.pending_home or
                 self.worker.state() != QtCore.QProcess.Running or
@@ -578,6 +782,10 @@ class JointPanel(QtWidgets.QWidget):
                 return
         self.message('已确认当次人工双限位；等待失能释放后捕获新参考并低速退工作Rest。' if self.manual_limits_mode() else '已确认当次人工Home；等待失能释放后捕获新参考并缓慢Rest。')
 
+    ##
+    # @brief 检查名义目标后按工作范围投影并明确提交六轴运动。
+    # 拒绝未确认场景、参数事务、其他路径执行或未授权状态。先验证用户输入在名义限位，再向 self.limits 内收并更新虚影/记录投影；确认后重查授权和新鲜度，发 MOVE_SPEED，速度 °/s、加速度 rad/s²、目标 °。这不是 MoveIt 整条避碰路径执行。
+    # @return None；执行上述状态更新、界面或日志操作。
     def start_move(self):
         if hasattr(self, 'obstacle_tab') and (self.obstacle_tab.blocked or not self.obstacle_tab.scene_ready):
             self.message('障碍物场景尚未确认，禁止提交运动。')
@@ -611,6 +819,10 @@ class JointPanel(QtWidgets.QWidget):
         if answer == QtWidgets.QMessageBox.Yes and self.control_state_allowed((2, 4)) and self.authorized and self.fresh() and self.command(f'MOVE_SPEED {self.speed_input.value():.1f} ACCEL {self.acceleration_input.value():.2f} ' + ' '.join(f'{v:.8f}' for v in goal)):
             self.busy = True
 
+    ##
+    # @brief 请求受控停车且保持使能，失败时退回 STOP 释放。
+    # 要求新鲜已授权反馈和允许生命周期；发 CANCEL_HOLD 后设置 cancel_hold_pending 并给 3 s 事件期限。该函数只请求取消，是否已停车需事件及具体调用方的后续 Hold 检查。
+    # @return None；执行上述状态更新、界面或日志操作。
     def cancel_motion_hold(self):
         if not self.fresh() or not self.authorized or not self.control_state_allowed((2,3,4,5,6)):
             self.release('STOP');return
@@ -621,12 +833,21 @@ class JointPanel(QtWidgets.QWidget):
         self.message('已请求受控停车并保持使能；等待设备确认。')
         QtCore.QTimer.singleShot(3000,self.check_cancel_hold)
 
+    ##
+    # @brief 在取消请求 3 秒后检查是否仍未收到保持事件。
+    # pending 未解除则清标志并转 STOP 释放，避免无限等待；已确认的取消不会在此重复停止。
+    # @return None；执行上述状态更新、界面或日志操作。
     def check_cancel_hold(self):
         if getattr(self,'cancel_hold_pending',False):
             self.cancel_hold_pending = False
             self.message('受控停车未确认，转入停止释放。')
             self.release('STOP')
 
+    ##
+    # @brief 取消后续规划并请求停止、失能和释放当前控制。
+    # 先结束自动测试/路径队列，撤销本地授权，保留必要只读移交证据并置 busy。非关闭时仅在原 worker 退出且释放被证实后只读重连；写命令和提示文字不等于 RELEASE_CONFIRMED。
+    # @param command STOP 或 RELEASE，由对应操作入口选择。
+    # @return None；执行上述状态更新、界面或日志操作。
     def release(self, command):
         if hasattr(self,'moveit_tab') and self.moveit_tab.auto_test.active:
             self.moveit_tab.auto_test.abort('已请求停止或释放设备',stop=False)
@@ -641,6 +862,10 @@ class JointPanel(QtWidgets.QWidget):
         self.command(command)
         self.message('已请求停止、失能并释放；等待设备确认。')
 
+    ##
+    # @brief 仅保存故障只读进程可移交读取者的有限凭证。
+    # 要求新鲜、未授权、core_state=9、session=0；记录 worker_generation/boot/reference。凭证只用于 finished 判断原只读进程正常退出，不授予命令权限，也不续延 State 新鲜度。
+    # @return None；执行上述状态更新、界面或日志操作。
     def remember_readonly_handoff(self):
         # This proves only that a stopped process can hand over its USB reader.
         # It grants no command authority and never extends State freshness.
@@ -649,6 +874,10 @@ class JointPanel(QtWidgets.QWidget):
                                  if state and self.fresh() and not self.authorized and
                                  state['core_state'] == 9 and state['session_id'] == 0 else None)
 
+    ##
+    # @brief 把新鲜实际关节角复制为目标输入。
+    # actual_q 单位 rad，写入输入框前转 °；只填目标，不提交命令或改变设备参考。
+    # @return None；执行上述状态更新、界面或日志操作。
     def copy_actual(self):
         if not self.fresh() or not hasattr(self, 'actual_q'):
             return
@@ -656,6 +885,10 @@ class JointPanel(QtWidgets.QWidget):
             box.setValue(math.degrees(radians))
         self.message('目标已填入；未发送运动命令。')
 
+    ##
+    # @brief 按行归档和处理 Native/模拟事件并分发各子状态机。
+    # 缓冲不完整行，优先让电机参数页消费 MOTOR_PARAM_RESULT。故障撤销授权；WAIT_MANUAL_HOME 记录当前世代与水位；CALIBRATION_* 只设置 pending_authorization，必须等后续 State。完成、拒绝和释放分别更新忙碌/释放标记，最后转交 MoveIt 与障碍事务。
+    # @return None；执行上述状态更新、界面或日志操作。
     def stdout_ready(self):
         text = bytes(self.worker.readAllStandardOutput()).decode(errors='replace')
         journal = 'simulator.events' if getattr(self, 'backend', 'real') == 'simulator' else 'native.stdout'
@@ -707,6 +940,8 @@ class JointPanel(QtWidgets.QWidget):
                 self.authorized = False
                 self.control_session = int(parts['session'])
                 # stdout事件不是反馈帧；等同tuple且达到事件State/epoch水位的新鲜反馈才开放MOVE。
+                ##
+                # 标定事件包含 boot/session/reference 和 state_seq、motion、management 水位；新鲜 State 到达并核对之前 authorized 保持 False。
                 self.pending_authorization = dict(
                     boot_epoch=int(parts['boot'],16),session_id=int(parts['session']),
                     reference_epoch=int(parts['reference']),state_seq=int(parts['state_seq']),
@@ -741,6 +976,10 @@ class JointPanel(QtWidgets.QWidget):
             if hasattr(self, 'obstacle_tab'):
                 self.obstacle_tab.native_event(event, parts)
 
+    ##
+    # @brief 完整归档通信错误输出并显示末段摘要。
+    # native.stderr 追加所有解码文本；界面仅显示非空末 1200 字符，不用 stderr 文本直接建立控制授权。
+    # @return None；执行上述状态更新、界面或日志操作。
     def stderr_ready(self):
         text = bytes(self.worker.readAllStandardError()).decode(errors='replace')
         with (self.report / 'native.stderr').open('a') as f:
@@ -748,6 +987,12 @@ class JointPanel(QtWidgets.QWidget):
         if text.strip():
             self.message(text.strip()[-1200:])
 
+    ##
+    # @brief 在通信进程终止后判定是否可以串行启动下一连接。
+    # 撤销授权并清忙；只在 code 为 0/130 且有 RELEASE_CONFIRMED，或 code=0 且有合法只读退出证据时移交/重连。未证实释放时取消连接动作及 pending_home，禁止自动创建第二 owner。
+    # @param code Native 或模拟 worker 退出码。
+    # @param _status Qt 退出状态，此处未使用。
+    # @return None；执行上述状态更新、界面或日志操作。
     def finished(self, code, _status):
         was_readonly = self.wait_home
         handoff = getattr(self, 'readonly_handoff', None)
@@ -779,6 +1024,12 @@ class JointPanel(QtWidgets.QWidget):
             self.pending_home = False
             self.pending_home_generation = None
 
+    ##
+    # @brief 按 boot、严格序号及待授权事件水位接收实际状态。
+    # 同 boot 必须 state_seq 增加；待授权事件前的帧及同水位错误 session/reference/motion/management 被丢弃。boot 变化将旧 boot 永久加入本窗口退役集合并撤销授权，防迟到旧帧回滚状态。
+    # @param state 部署解码器得到的状态字典。
+    # @param arrival_ns 该 transport 记录到达宿主的单调纳秒时间。
+    # @return bool：新状态被接受并更新 last_state 时 True；旧帧/退役 boot 时 False。
     def accept_state(self, state, arrival_ns):
         boot, sequence = state['boot_epoch'], state['state_seq']
         if boot in self.retired_state_boots:
@@ -801,6 +1052,10 @@ class JointPanel(QtWidgets.QWidget):
         self.last_state, self.last_state_ns = state, arrival_ns
         return True
 
+    ##
+    # @brief 用新鲜反馈兑现或撤销待授权、零点和会话状态。
+    # 先处理故障锁；只有同 boot/session/reference、达到事件 motion/management 水位且位置全有效才从 pending 升为 authorized。参考变化、无效位置或 session 改变撤销控制；设备同 boot 零点可存在而当前会话仍未授权。
+    # @return None；执行上述状态更新、界面或日志操作。
     def reconcile_control_state(self):
         if not self.fresh() or self.last_state is None:
             return
@@ -835,6 +1090,10 @@ class JointPanel(QtWidgets.QWidget):
         if self.authorized and state['session_id'] != self.control_session:
             self.authorized = False
 
+    ##
+    # @brief 有界读取模拟快照或 Native 原始 transport 中的 State。
+    # 真机验证 24 字节 transport 头，每 tick 最多读 128 个完整 4320 字节记录；检查传输结果、方向、接口和有效载荷长度后交给部署解码器。只推进完整记录 offset，半条留待下次；线协议长度来自 wire_layout，不维护另一个固定 State 尺寸。
+    # @return None；执行上述状态更新、界面或日志操作。
     def read_state(self):
         if getattr(self, 'backend', 'real') == 'simulator':
             if self.worker.state() == QtCore.QProcess.Running:
@@ -851,6 +1110,8 @@ class JointPanel(QtWidgets.QWidget):
                 record = f.read(4320)
                 if len(record) != 4320:
                     break
+                ##
+                # 完整记录已消费才推进 offset；无关接口或非法记录会跳过，但不会把残缺尾部当作完整证据。
                 self.offset += 4320
                 size, result = struct.unpack_from('<II', record, 48)
                 interface = struct.unpack_from('<I', record, 76)[0]
@@ -863,6 +1124,10 @@ class JointPanel(QtWidgets.QWidget):
                     continue
                 self.accept_state(state,struct.unpack_from('<Q',record,8)[0])
 
+    ##
+    # @brief 批量驱动 ROS 响应、状态接收、权限门控与独立目标/测量发布。
+    # 每轮最多 8 次非阻塞 spin；先读状态再推进障碍/参数页。始终发布目标 rad 到独立 topic；新鲜反馈才显示/发布实际关节。pending_home 必须等对应新 worker、只读状态及静止反馈。按钮可用性综合新鲜度、授权、场景、参数事务和路径执行；显示锚点仅提供未标定可视化，不能开运动入口。
+    # @return None；执行上述状态更新、界面或日志操作。
     def tick(self):
         if not rclpy.ok():
             self.timer.stop()
@@ -887,9 +1152,13 @@ class JointPanel(QtWidgets.QWidget):
         fresh = self.fresh()
         state = self.last_state
         self.reconcile_control_state()
+        ##
+        # 真实标定入口要求原始六轴位置有效；模拟器只提供运动学位置，因此单独按 position_valid_mask 判断，不能伪装 raw CAN 有效。
         position_ready = fresh and state['raw_position_valid_mask'] == 63
         if getattr(self, 'backend', 'real') == 'simulator':
             position_ready = fresh and state['position_valid_mask'] == 63
+        ##
+        # quiet 要求六轴速度掩码有效且 |v|≤0.01 rad/s；用于人工标定/恢复入口，不把肉眼静止或目标虚影当作实测静止。
         quiet = fresh and position_ready and state['velocity_valid_mask'] == 63 and all(math.isfinite(v) and abs(v) <= 0.01 for v in state['estimated_velocity_rad_s'])
         if (self.pending_home and self.wait_home and quiet and not self.closing and
                 self.pending_home_generation is not None and
@@ -943,6 +1212,8 @@ class JointPanel(QtWidgets.QWidget):
             q = state['position_rad']
             scope = '当前设备参考'
         elif self.anchor and state['boot_epoch'] == int(self.anchor['boot'], 16) and state['raw_position_valid_mask'] == 63:
+            ##
+            # 显示锚点用电机圈差×2π/减速比×方向恢复关节 rad；仅作为人工显示参考，后续控制仍须设备 reference 与 session。
             q = [h + j['direction'] * (m - a) * 2 * math.pi / j['gear_ratio']
                  for h, j, m, a in zip(self.anchor['home_rad'], self.cfg['joints'],
                                       state['raw_motor_position_rev'], self.anchor['motor_rev'])]
@@ -976,6 +1247,11 @@ class JointPanel(QtWidgets.QWidget):
         feedback_source = '纯软件模拟反馈' if getattr(self, 'backend', 'real') == 'simulator' else 'USB 实时反馈'
         self.status.setText(f'{feedback_source}{speed_note} · {zero} · {scope}{resume_note} · boot={state["boot_epoch"]:016x}')
 
+    ##
+    # @brief 有界等待管理/通信进程退出后才接受关闭窗口。
+    # 先关闭管理 helper，再取消重启/标定意图；对运行 worker 发 RELEASE，处理事件最多 6 s，必要时 terminate 再等 6 s。仍在运行则拒绝关闭；不把窗口退出请求当作设备释放证明。
+    # @param event Qt QCloseEvent；未能确认进程结束时 ignore 保持窗口。
+    # @return None；执行上述状态更新、界面或日志操作。
     def closeEvent(self, event):
         self.closing = True
         self.connection_action = None
@@ -1006,6 +1282,10 @@ class JointPanel(QtWidgets.QWidget):
         event.accept()
 
 
+##
+# @brief 加载配置并建立 Qt/ROS 面板主事件循环。
+# 解析参数前移除 ROS 参数；real 加载部署解码器，simulator 不加载。关闭 rclpy 自动信号处理，SIGINT/SIGTERM 排队调用 panel.close，使同一释放流程执行；finally 停定时器、销毁节点和 ROS 上下文。
+# @return int：Qt app.exec_() 返回的进程退出码。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)

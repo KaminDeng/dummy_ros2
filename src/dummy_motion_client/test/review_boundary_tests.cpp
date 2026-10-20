@@ -1,8 +1,19 @@
+/**
+ * @file review_boundary_tests.cpp
+ * @brief 按模式核枚举协议值、饱和期限、末点容差和单轴State边界。
+ *
+ * 复用Harness内存状态机；State走正式codec与公共observe_state，不启动ROS或设备。每次main只跑一个scenario。
+ */
 #include "action_test_support.hpp"
 #include <limits>
 #include <iostream>
 using namespace action_test;
 namespace wire=dp::protocol::dummy_robot_v2;
+/**
+ * @brief 构造J1 State，检查未使用轴NaN与Hold缺发送掩码的不同语义。
+ * @param partial_hold_mask false为EnablingHold3且J6 NaN（未配置轴允许），应prime一次；true为Hold4但组mask不足，不得prime。
+ * @return State接纳且prime计数符合所选条件。
+ */
 bool state_case(bool partial_hold_mask) {
   Harness harness; Authorization auth; auth.session=auth.reference=auth.permit=true;
   auth.identity.set_expected_session_id(1); auth.identity.set_configured_mask(1);
@@ -20,6 +31,14 @@ bool state_case(bool partial_hold_mask) {
   const bool observed=harness.gate.observe_state(bytes.data(),bytes.size(),2);
   return observed && harness.port.primes==(partial_hold_mask?0U:1U);
 }
+/**
+ * @brief 选择enum/deadline/tolerance/unused_nan/hold_mask边界。
+ * @param argc 参数个数（含程序名）。
+ * @param argv 参数数组，模式/路径位置见下述说明。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * enum核操作6/7/8/9/10/12与Queued1/Pending23及正式core编码；deadline核UINT64_MAX附近不回绕；tolerance末点0.15距目标0.2超过0.01rad应BAD_TERMINAL_POSITION。
+ * unused_nan只检查未配置轴，不能推广为任意NaN都可入库；未知scenario3、缺参数2。
+ */
 int main(int argc,char **argv) {
   if (argc!=2) return 2; const std::string scenario=argv[1];
   if (scenario=="enum") {

@@ -1,4 +1,9 @@
 """软件后端的六轴运动、限幅、停止与只读重连。"""
+##
+# @file test_manual_panel_simulator.py
+# @brief 六轴软件模型的明确恢复、限速/加速度与STOP回归。
+#
+# 只使用SixAxisSimulator内存时钟advance；命令速度deg/s、目标deg、accel rad/s²，snapshot位置rad。软件State/RELEASE_CONFIRMED不能作为实体设备反馈或停止证据。
 import importlib.util
 import math
 from pathlib import Path
@@ -8,6 +13,9 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/manual_panel_simulator.py'
 
 
+##
+# @brief 动态加载软件模型，初始Rest(0,−60,164,0,0,0)°、六轴±170°范围。
+# @return 尚未授权的纯软件SixAxisSimulator。
 def simulator():
     assert SCRIPT.exists(), '缺少面板纯软件模拟后端'
     spec = importlib.util.spec_from_file_location('manual_panel_simulator', SCRIPT)
@@ -18,6 +26,9 @@ def simulator():
         joints=[dict(limits_deg=[-170, 170]) for _ in range(6)]))
 
 
+##
+# @brief session0启动拒MOVE，只有显式RESUME后建立非零软件session。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_readonly_start_and_resume_are_explicit():
     sim = simulator()
     assert sim.snapshot()['session_id'] == 0
@@ -26,6 +37,9 @@ def test_readonly_start_and_resume_are_explicit():
     assert sim.snapshot()['session_id'] != 0
 
 
+##
+# @brief 按10ms推进1500步核六轴差分速度≤10°/s、加速度≤0.5rad/s²，最终目标rad及Hold4。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_six_axes_move_with_bounded_speed_and_acceleration():
     sim = simulator(); sim.command('RESUME')
     assert sim.command('MOVE_SPEED 10 ACCEL 0.5 10 -50 154 20 -10 30') == 'MOVE_STARTED'
@@ -41,6 +55,9 @@ def test_six_axes_move_with_bounded_speed_and_acceleration():
     assert sim.snapshot()['core_state'] == 4
 
 
+##
+# @brief NaN/171°越界/负速度均MOVE_REJECTED，推进后位置不变。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_invalid_goal_rejected_without_changing_motion():
     sim = simulator(); sim.command('RESUME'); before = sim.snapshot()['position_rad']
     for cmd in ('MOVE_SPEED 10 ACCEL 1 nan 0 0 0 0 0',
@@ -51,6 +68,9 @@ def test_invalid_goal_rejected_without_changing_motion():
     assert sim.snapshot()['position_rad'] == before
 
 
+##
+# @brief STOP清session但保留reference，后续advance10s位置冻结；必须再次显式RESUME。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_stop_and_reconnect_preserve_reference_but_never_resume_motion():
     sim = simulator(); sim.command('RESUME')
     sim.command('MOVE_SPEED 10 ACCEL 1 10 -50 154 20 -10 30'); sim.advance(.1)

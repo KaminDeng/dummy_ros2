@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """Exercise the actual public ROS action server before any device mutation."""
+##
+# @file device_action_public_probe.py
+# @brief 无设备授权时实际公开Action/管理门的攻击输入回归。
+#
+# 会运行Gate进程、创建ROS节点/服务/Action客户端，固定本机TCP端点但不启动设备peer。核缺bundle启动失败、Enable/lease/typed拒绝键关闭及七种非法轨迹被拒；component_only不表示已验证实体Stop或运动。
 import json
 import math
 import os
@@ -17,6 +22,9 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 from std_srvs.srv import Trigger
 
 
+##
+# @brief 先跑缺bundle应失败的Gate，再用SIL bundle起真实Action server；对比只读diagnostic计数/typed原因，最后SIGINT及有限terminate/kill回收Gate。
+# @return None；断言失败抛异常并回收本次Gate。
 def main():
     executable = pathlib.Path(sys.argv[1])
     assert executable.is_file(), "production device_action_gate executable is missing"

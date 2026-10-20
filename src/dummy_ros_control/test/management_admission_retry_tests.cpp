@@ -1,3 +1,10 @@
+/**
+ * @file management_admission_retry_tests.cpp
+ * @brief 验证管理请求进入本地发送队列时的有限重试策略。
+ *
+ * 这里模拟dp_comm返回结果，不发送管理请求；kAccepted是本地准入决策，不能读成设备事务Accepted/Committed。
+ * 所有时刻使用人工主机µs，退避2,000µs，总窗口100,000µs，重试不重建请求ID/seq。
+ */
 #include <cstdint>
 #include <cstdio>
 
@@ -9,11 +16,18 @@ using dummy_ros_control::ManagementAdmissionRetry;
 using Decision = ManagementAdmissionRetry::Decision;
 using dp::comm::Result;
 
+/**
+ * @brief 不可变请求夹具：id是逻辑请求标识，seq是请求序号；退避期间都必须冻结。
+ */
 struct Request {
   const std::uint64_t id;
   const std::uint32_t seq;
 };
 
+/**
+ * @brief 模拟QueueFull、WouldBlock、Ok，检查2ms准入节奏和单次capture。
+ * @return true 表示三次尝试中只有成功准入一次计submission/capture且身份未变。
+ */
 bool retry_preserves_request_and_captures_once() {
   constexpr std::uint64_t start_us = 1000000U;
   const Request request{47U, 47U};
@@ -21,6 +35,11 @@ bool retry_preserves_request_and_captures_once() {
   unsigned attempts = 0U;
   unsigned submissions = 0U;
   unsigned captures = 0U;
+  /**
+   * @par 内部attempt回调
+   * 以now_us和result作为一次本地准入结果；只有返回kAccepted才加submissions/captures。
+   * 计数器证明本地重试不重复记请求原文，不证明远端业务恰好执行一次。
+   */
   const auto attempt = [&](std::uint64_t now_us, Result result) {
     if (request.id != 47U || request.seq != 47U) return Decision::kFail;
     ++attempts;
@@ -43,6 +62,10 @@ bool retry_preserves_request_and_captures_once() {
          request.id == 47U && request.seq == 47U;
 }
 
+/**
+ * @brief 检查超时、Stop优先级和不可重试错误。
+ * @return true 表示超100ms不再尝试/接受，Stop即使伴随Ok也失败，InvalidArgument直接失败。
+ */
 bool retry_is_bounded_and_stop_has_priority() {
   constexpr std::uint64_t start_us = 1000000U;
   ManagementAdmissionRetry expired(start_us);
@@ -80,6 +103,11 @@ bool retry_is_bounded_and_stop_has_priority() {
   return non_retryable.on_result(Result::kInvalidArgument, start_us, false) ==
          Decision::kFail;
 }
+/**
+ * @brief Busy只有调用方明确知道尚未发送且零correlation时才可选择重试。
+ * @return true 表示默认Busy失败、opt-in按2ms退避，成功只采集一次，50次后在100ms边界失败。
+ * @note 夹具直接设置opt-in，不自行证明任意实际Busy一定未发送。
+ */
 bool busy_requires_unsent_zero_correlation_opt_in() {
   constexpr std::uint64_t start = 1000000U;
   ManagementAdmissionRetry correlated_or_dispatched(start);
@@ -107,6 +135,12 @@ bool busy_requires_unsent_zero_correlation_opt_in() {
 }
 }  // namespace
 
+/**
+ * @brief 汇总三个准入策略回归用例。
+ *
+ * 先检查Busy特殊前提，再检查请求冻结和有限窗口；stderr只在相应用例失败时输出。
+ * @return 0 全通过；3 Busy前提错误；1 身份/退避/单次采集错误；2 期限/Stop/硬错误优先级错误。
+ */
 int main() {
   if (!busy_requires_unsent_zero_correlation_opt_in()) return 3;
   if (!retry_preserves_request_and_captures_once()) {

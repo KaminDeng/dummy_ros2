@@ -1,4 +1,9 @@
 """部署后移走构建目录，固定入口仍能独立校验与运行。"""
+##
+# @file test_manual_panel_install_deployment.py
+# @brief 临时XDG部署副本可脱离原构建路径并拒绝字节漂移。
+#
+# deploy会真实写tmp_path下部署目录，输入native仅exit0 shell、firmware仅文本、摘要仅fixture常量；测试不运行native/flash，不验证真实设备身份。decoder通过load_decoder导入，但没有调用返回的解码函数。
 import hashlib
 import importlib.util
 import json
@@ -11,6 +16,11 @@ SCRIPTS=Path(__file__).resolve().parents[1]/'scripts'
 sys.path.insert(0,str(SCRIPTS))
 
 
+##
+# @brief 部署到固定current入口后删原native/firmware，real配置仍读副本且decoder可加载；随后篡改副本要求hash校验拒绝。
+# @param tmp_path pytest临时目录Path；所有本用例产物限制在该目录。
+# @param monkeypatch pytest替换/环境fixture，作用域结束自动恢复。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_deploy_copies_artifacts_and_rejects_unmatched_identity(tmp_path, monkeypatch):
     spec=importlib.util.spec_from_file_location('deploy_manual_panel',SCRIPTS/'deploy_manual_panel.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)

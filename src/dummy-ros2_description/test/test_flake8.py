@@ -12,12 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+##
+# @file test_flake8.py
+# @brief 描述包Python风格检查的ament入口。
+#
+# 实际调用ament_flake8扫描描述包路径，结果仅语法/风格lint，不证明模型或设备正确。保留原Apache许可。
 from pathlib import Path
 
 from ament_flake8.main import main_with_errors
 import pytest
 
 
+##
+# @brief 收集rc/errors，非零把原全部错误拼入断言，不禁用或吞掉警告。
+# @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 @pytest.mark.flake8
 @pytest.mark.linter
 def test_flake8():

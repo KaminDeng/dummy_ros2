@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file convert_application_ros_limits.py
+# @brief 把绑定候选身份的未合格无负载限制转换成隔离ROS配置。
+#
+# 只有schema/scope/qualification与源文件原始SHA等关系通过才写MoveIt/JTC YAML；输出仍为UNQUALIFIED NO_LOAD_DEV，硬件初始inactive。
+# 校验冻结候选数据不等于读取当前设备Status、认证真实机械模型或签发permit；FUNCTIONAL/生成成功也不能替代运行时Gate准入。
 """Convert bound no-load development limits to isolated MoveIt/JTC YAML."""
 
 from __future__ import annotations
@@ -15,6 +21,9 @@ from typing import NamedTuple
 import yaml
 
 
+##
+# @brief 六轴顺序Joint1..6；PAYLOADS限定恰三个候选文件及排序。
+# 默认permit20,000,000µs、session lease30,000,000µs，仅从受hash绑定策略导出GateLease，不接受未hash的limits顶层覆盖。
 JOINTS = [f"Joint{index}" for index in range(1, 7)]
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PAYLOADS = ("model/model.yaml", "policy/application_hold_no_load.json",
@@ -23,16 +32,32 @@ DEFAULT_MOTION_PERMIT_US = 20_000_000
 SESSION_LEASE_US = 30_000_000
 
 
+##
+# @brief 不可变租约二元组，保存供gate后续使用的µs预算，创建对象本身不授予租约。
 class GateLease(NamedTuple):
+    ##
+    # @brief 绑定策略选定的运动许可时长µs；不会在此向设备发送SetPermit。
     permit_remaining_us: int
+    ##
+    # @brief 请求的会话租约µs，固定匹配30s；与单目标/permit时限独立。
     requested_session_lease_us: int
 
 
+##
+# @brief 验证快照与租约预算的只读组合；limits递归冻结，不等于外部文件或设备状态从此不会变化。
 class ValidatedLimits(NamedTuple):
+    ##
+    # @brief 原limits JSON的递归只读快照，dict变MappingProxyType、list变tuple。
     limits: object
+    ##
+    # @brief 从同一验证策略抽出的租约值，防止转换后重新读取未绑定的覆盖字段。
     gate_lease: GateLease
 
 
+##
+# @brief 递归把JSON容器改成不可变快照。
+# @param value dict/list或标量；只递归这两种容器。
+# @return dict为只读映射、list为tuple，其余原值；不冻结任意自定义对象。
 def _freeze(value):
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
@@ -41,16 +66,32 @@ def _freeze(value):
     return value
 
 
+##
+# @brief 把失败条件转换为输入校验异常。
+# @param condition 为假时拒绝。
+# @param message ValueError诊断文字。
+# @return 满足条件返回None，否则抛ValueError。
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
 
 
+##
+# @brief 读取一次普通文件字节供摘要与解析共用。
+# @param path 要求is_file且最终路径不是symlink的输入。
+# @return 完整bytes；形状不符ValueError，读取失败OSError。
+# 此处不逐个拒绝父目录symlink、不做原子open/stat快照，也不限制候选路径根归属。
 def read_snapshot(path: Path) -> bytes:
     require(path.is_file() and not path.is_symlink(), f"{path}: regular file required")
     return path.read_bytes()
 
 
+##
+# @brief 从同一字节快照解析顶层JSON对象。
+# @param snapshot UTF-8原文字节。
+# @param path 仅用于报错上下文的路径。
+# @return dict；非标准NaN/Infinity、非object或解析/解码失败抛异常。
+# parse_constant内部回调调用require(False)拒绝非有限常量；未启用object_pairs_hook，因此不额外拒绝重复JSON键。
 def json_object(snapshot: bytes, path: Path) -> dict:
     data = json.loads(snapshot.decode("utf-8"),
                       parse_constant=lambda value: require(False, f"non-finite {value}"))
@@ -58,12 +99,24 @@ def json_object(snapshot: bytes, path: Path) -> dict:
     return data
 
 
+##
+# @brief 要求精确int/float且数值有限。
+# @param value 待核对象；bool被type检查排除。
+# @param field 错误定位字段名。
+# @return 原数值（未强制转float），不在本函数独立要求正数。
 def number(value: object, field: str) -> float:
     require(type(value) in (int, float) and math.isfinite(value),
             f"{field}: finite number required")
     return value
 
 
+##
+# @brief 验证候选文件绑定、六轴边界及预算并冻结结果。
+# @param limits_path ROS限制JSON输入，必须声明NO_LOAD_DEV/UNQUALIFIED且runtime与实机许可false。
+# @param manifest_path 固定dummy-wire-v2.4候选manifest，恰含PAYLOADS三个文件。
+# @return ValidatedLimits(只读limits,GateLease)；任何关系不符抛ValueError，I/O或解析异常向外传播。
+# 先比较manifest原字节SHA，再读取三份payload快照并重算排序聚合SHA；model/profile使用文件SHA，policy去顶层note后规范JSON SHA，三者含义不同。
+# 这里只核传入候选之间自洽与列出的模型/策略字段，没有独立外部信任锚或完整compile_policy动态约束验证，也没有设备在线实测。
 def validate_bound(limits_path: Path, manifest_path: Path) -> ValidatedLimits:
     data = json_object(read_snapshot(limits_path), limits_path)
     require("motion_permit_us" not in data and "requested_session_lease_us" not in data,
@@ -131,6 +184,9 @@ def validate_bound(limits_path: Path, manifest_path: Path) -> ValidatedLimits:
             "candidate BENCH_SESSION acceleration advisory required")
     device_limits = policy.get("limits")
     require(isinstance(device_limits, dict), "candidate device limits required")
+    ##
+    # @brief 按相同六轴槽核绝对模型界限、设备Status预期能力和相对BENCH试验边界。
+    # J1设备位置能力取公共device_limits，其余轴取模型界限；这里的device_*来自候选文件，不能当成已从当前设备读到的Status。
     for index, (joint, model_joint, policy_axis) in enumerate(
             zip(joints, model_joints, policy["axes"])):
         name = joint["name"]
@@ -158,6 +214,9 @@ def validate_bound(limits_path: Path, manifest_path: Path) -> ValidatedLimits:
                 number(joint["device_acceleration_max_rad_s2"], f"{name}.device_acceleration") >=
                 number(joint.get("acceleration_max_rad_s2"), f"{name}.planning_acceleration"),
                 f"{name}: device dynamic capability mismatch")
+        ##
+        # @brief planning_position使用相对BENCH_SESSION试验范围，不将其冒充绝对模型限位。
+        # 逐轴effective速度/加速度必须与策略相同，acceleration只ADVISORY、jerk仍None/UNQUALIFIED，不能因输出YAML有加速度项就宣称实机加速度已资格化。
         trial_min = number(joint.get("trial_relative_min_rad"), f"{name}.trial_min")
         trial_max = number(joint.get("trial_relative_max_rad"), f"{name}.trial_max")
         require(trial_min < trial_max, f"{name}: invalid relative trial")
@@ -197,6 +256,9 @@ def validate_bound(limits_path: Path, manifest_path: Path) -> ValidatedLimits:
                 f"{field}: positive integer required")
     require(timing["session_lease_us"] == SESSION_LEASE_US,
             "candidate session lease mismatch")
+    ##
+    # @brief permit只读受hash绑定策略，缺省20s；必须覆盖goal+stop+completion+hold且不超过trial。
+    # 顶层limits的未hash permit/lease覆盖已提前禁止；此处只算输入预算，不续租或产生运行授权。
     permit = timing.get("motion_permit_us", DEFAULT_MOTION_PERMIT_US)
     require(type(permit) is int and
             timing["max_goal_duration_us"] + timing["stop_max_duration_us"] +
@@ -206,10 +268,24 @@ def validate_bound(limits_path: Path, manifest_path: Path) -> ValidatedLimits:
     return ValidatedLimits(_freeze(data), GateLease(permit, timing["session_lease_us"]))
 
 
+##
+# @brief 提供只读limits兼容入口。
+# @param limits_path limits JSON路径。
+# @param manifest_path 候选manifest路径。
+# @return validate_bound的递归只读limits，丢弃GateLease包装但不重新读文件。
 def validate(limits_path: Path, manifest_path: Path):
     return validate_bound(limits_path, manifest_path).limits
 
 
+##
+# @brief 只向全新目录写两份带资格边界的ROS YAML。
+# @param limits_path 未合格开发限制JSON。
+# @param candidate_manifest 对应绑定候选清单。
+# @param output_dir 必须尚不存在且不是symlink的输出目录。
+# @param dev_cadence_1to1 true额外要求控制/State周期相同且对应整数Hz，写controller_manager update_rate。
+# @return None；校验或写入异常向外传播，失败可留下已创建/已写部分目录。
+# MoveIt写相对planning位置、有效速度及advisory加速度，jerk关闭；JTC要求完整六轴、终点速度为零，轨迹/goal容差分别取绑定值。
+# controller_manager把dummy_ref_real_6dof初始设inactive；生成配置不会加载或激活controller，更不会向电机发目标。
 def convert(limits_path: Path, candidate_manifest: Path, output_dir: Path,
             *, dev_cadence_1to1: bool = False) -> None:
     limits_path, candidate_manifest, output_dir = (
@@ -261,6 +337,9 @@ def convert(limits_path: Path, candidate_manifest: Path, output_dir: Path,
         header + yaml.safe_dump(controllers, sort_keys=False), encoding="utf-8")
 
 
+##
+# @brief 解析隔离输出参数，转换校验错误为argparse错误。
+# @return 成功0；OSError/ValueError/YAMLError由parser.error非零退出，其它异常可传播。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limits", type=Path, required=True)

@@ -1,4 +1,10 @@
+# @file kinematics.yaml
+# @brief dummy_arm的KDL逆运动学求解器参数；不定义碰撞与实机控制权限。
+# 组名须与SRDF一致；求解器只能在给定模型与限位内寻找IK解。
 dummy_arm:
+# pluginlib中的IK插件标识，不是规划流水线或运动控制器名。
   kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+# 搜索分辨率参数，角关节搜索按rad量级解释；不是末端位置精度承诺。
   kinematics_solver_search_resolution: 0.0050000000000000001
+# 一次IK求解的时间预算，单位秒；调大不修正无效碰撞模型，也不证明一定有解。
   kinematics_solver_timeout: 0.5

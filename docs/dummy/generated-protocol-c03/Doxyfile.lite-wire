@@ -1,0 +1,19 @@
+PROJECT_NAME = FrozenC03_lite-wire
+OUTPUT_DIRECTORY = /tmp/dummy-doxygen-audit/generated-protocol-c03/lite-wire-documented
+GENERATE_HTML = NO
+GENERATE_LATEX = NO
+GENERATE_XML = YES
+QUIET = YES
+WARN_IF_UNDOCUMENTED = NO
+EXTRACT_ALL = NO
+EXTRACT_STATIC = YES
+EXTRACT_PRIVATE = YES
+SEARCH_INCLUDES = NO
+ENABLE_PREPROCESSING = YES
+MACRO_EXPANSION = YES
+EXPAND_ONLY_PREDEF = YES
+MAX_INITIALIZER_LINES = 0
+INPUT_ENCODING = UTF-8
+EXTENSION_MAPPING = h=C
+PREDEFINED = __cplusplus=201703L DP_PROTOCOL_PACKED:= DP_PROTOCOL_PACKED_ALIGNED_4:= DP_PROTOCOL_PACKED_BEGIN:= DP_PROTOCOL_PACKED_END:=
+INPUT = contracts/dummy_robot_v1/c03_prototype/generated/include/dp_lite_control_v1.h contracts/dummy_robot_v1/c03_prototype/generated/include/dp_protocol_tiny_device_status.h docs/dummy/generated-protocol-c03/lite-wire-symbols.dox docs/dummy/generated-protocol-c03/lite-wire-files.dox

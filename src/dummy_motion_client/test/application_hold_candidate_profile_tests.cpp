@@ -1,3 +1,10 @@
+/**
+ * @file application_hold_candidate_profile_tests.cpp
+ * @brief 核NO_LOAD_DEV软件/功能/有限目标依据的完整文件绑定与拒绝边界。
+ *
+ * 绝大部分数据在临时目录构造，image/host/ELF/map及raw页都是文本夹具；只检验loader文件/字段/SHA合同，不执行CTests/HIL/USB或任何机械动作。
+ * FUNCTIONAL与LIMITED仍为UNQUALIFIED开发依据；索引页文件SHA及声明掩码匹配不等于本层重算真实CAN原页SHA链。assert须启用。
+ */
 #include <cassert>
 #include <algorithm>
 #include <array>
@@ -14,6 +21,11 @@
 #include "dummy_motion_client/device_profile.hpp"
 
 namespace {
+/**
+ * @brief 将夹具中的64字符hex转32字节。
+ * @param hex 预期长度64，由assert限制；每两字符stoul基16。
+ * @return 字节数组；不是完整外部hex规范验证器，异常可传播。
+ */
 std::array<std::uint8_t, 32U> digest(const std::string &hex) {
   assert(hex.size() == 64U);
   std::array<std::uint8_t, 32U> value{};
@@ -22,6 +34,11 @@ std::array<std::uint8_t, 32U> digest(const std::string &hex) {
   return value;
 }
 
+/**
+ * @brief 对ifstream读出的完整原字节求SHA-256。
+ * @param path 待核文件；本helper未显式检查stream open失败。
+ * @return 小写64字符文本；源对象/规范JSON摘要另有含义。
+ */
 std::string file_sha256(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
@@ -33,6 +50,14 @@ std::string file_sha256(const std::filesystem::path &path) {
 }
 }  // namespace
 
+/**
+ * @brief 加载候选静态身份后逐步构造软件依据、50轮功能及1轮LIMITED依据。
+ * @param argc 进程参数数量。
+ * @param argv 模式/输入路径见下述说明。
+ * @return 0表示所选断言通过；非零、assert或检查异常表示失败。
+ * argv[1]候选根；argc3时argv[2]为source合同根，argc2/4默认先取候选同级dummy_robot_v2。argc4在后段另把argv[2]作外部activation/fixture、argv[3]作source合同根；这个历史位置差异按代码保留。
+ * 静态contract_hash须源合同聚合、bundle_hash须候选聚合，firmware/policy分别绑定；默认无activation必须拒绝，不能直接翻runtime_enabled升级权限。
+ */
 int main(int argc, char **argv) {
   if (argc != 2 && argc != 3 && argc != 4) return 2;
   assert(std::filesystem::is_regular_file(std::filesystem::path(argv[1]) / "manifest.json"));
@@ -91,6 +116,10 @@ int main(int argc, char **argv) {
   std::filesystem::remove_all(flipped_root);
   assert(reason == "bench profile authority mismatch");
 
+  /**
+   * @brief 创建临时软件开发依据：固件/host/ELF/map仅写文本，资源报告故意FAIL/NOT_ASSESSED/static_link_only。
+   * 软件qualification报告只声明SOFTWARE_ONLY/PASS；这些标签用于验证loader不误当发布/机械资格。
+   */
   const auto activation_root = std::filesystem::temp_directory_path() /
                                ("application_hold_activation_" + std::to_string(getpid()));
   std::filesystem::create_directories(activation_root);
@@ -125,6 +154,10 @@ int main(int argc, char **argv) {
   candidate["firmware_image_sha256"] = file_sha256(image);
   { std::ofstream output(candidate_path); output << candidate; }
 
+  /**
+   * @brief prebuild模型/profile/policy/source/build_config是独立绑定字段，其中若干为合成hash常量。
+   * 不能把“彼此绑定成立”写成已加载真实机械模型或真实二进制构建被测。
+   */
   YAML::Node prebuild;
   prebuild["format"] = "dummy_robot_bundle_v1";
   prebuild["profile_id"] = 201;
@@ -137,6 +170,10 @@ int main(int argc, char **argv) {
   prebuild["bundle_identity"]["source_sha256"] = std::string(64U, '6');
   { std::ofstream output(prebuild_path); output << prebuild; }
 
+  /**
+   * @brief compiled manifest绑定firmware原SHA、policy及post_build的bundle/host/map/resource/qualification原文件SHA。
+   * 测试分别破坏runtime、prebuild mask及报告scope，重算外层hash后仍须被语义门槛拒绝。
+   */
   YAML::Node compiled;
   compiled["format"] = "dummy_compiled_policy_manifest_v1";
   compiled["policy_sha256"] = prebuild["compiled_policy_sha256"].as<std::string>();
@@ -151,6 +188,10 @@ int main(int argc, char **argv) {
   post_build["qualification_report_sha256"] = file_sha256(report);
   { std::ofstream output(compiled_path); output << compiled; }
 
+  /**
+   * @brief activation同时锁candidate/source/prebuild/二进制/报告及device/USB/端点声明。
+   * USB VID/PID/interface/serial只是输入文件与期望字符串，测试不运行udev或确认当前连接设备。
+   */
   YAML::Node activation;
   activation["schema"] = "dummy_no_load_dev_activation_v1";
   activation["scope"] = "NO_LOAD_DEV";
@@ -178,6 +219,10 @@ int main(int argc, char **argv) {
   activation["usb_interface"] = 0;
   activation["usb_serial"] = "DEMO00000001";
   activation["endpoint"] = "serial//dev/serial/by-id/usb-Dummy_Robotics_STM32_Virtual_ComPort_in_FS_Mode_DEMO00000001-if00#baudrate=115200";
+  /**
+   * @par 内部write_activation回调
+   * 无参数，写当前activation映射并返回该文件实际SHA；每个语义负例更新外层pin，避免仅因旧文件hash先被拒绝。
+   */
   auto write_activation = [&] {
     std::ofstream output(activation_path);
     output << activation;
@@ -190,6 +235,10 @@ int main(int argc, char **argv) {
     compiled_path.string(), image.string(), host.string(), map_file.string(), resource.string(), report.string(),
     "0123456789abcdef0123456789abcdef", "DEMO00000001",
     "serial//dev/serial/by-id/usb-Dummy_Robotics_STM32_Virtual_ComPort_in_FS_Mode_DEMO00000001-if00#baudrate=115200"};
+  /**
+   * @brief 软件依据可得到bench_only/software_only_development及相对±0.6rad规划范围、60s permit上限。
+   * 0rad轨迹对这份BENCH相对参考可行，不说明原绝对机械J3零位在限位内，也不签发实际permit。
+   */
   const auto activated = dummy_motion_client::load_device_profile(
     candidate_root.string(), "f405_6dof_bench", 201U, 63U, request);
   assert(activated.bench_only);
@@ -208,6 +257,10 @@ int main(int argc, char **argv) {
   assert(activated.candidate_profile_payload_hash == activated.profile_hash);
   assert(activated.contract_hash == digest(source["payload_sorted_sha256"].as<std::string>()));
 
+  /**
+   * @par 内部reject_request回调
+   * attempt为完整外部pin/路径期望；调用真实load_device_profile，只把invalid_argument视为期望拒绝并返回true，其它错误不吞掉。
+   */
   const auto reject_request = [&](const dummy_motion_client::NoLoadDevActivationRequest &attempt) {
     try {
       (void)dummy_motion_client::load_device_profile(
@@ -257,6 +310,10 @@ int main(int argc, char **argv) {
   { std::ofstream output(compiled_path); output << compiled; }
   activation["qualification_report_sha256"] = file_sha256(report);
   request.expected_activation_sha256 = write_activation();
+  /**
+   * @brief 21字段负例分别破坏scope/qualification、各层SHA、device及端点；每次改activation后重算expected SHA。
+   * 随后另改调用方device/serial、USB PID、全零pin/错误固件SHA，区分文件自洽与外部期望。
+   */
   for (const auto &change : std::array<std::pair<const char *, const char *>, 21U>{{
            {"scope", "RELEASE_APPROVED"}, {"qualification", "QUALIFIED"},
            {"candidate_manifest_sha256", "1111111111111111111111111111111111111111111111111111111111111111"},
@@ -303,6 +360,10 @@ int main(int argc, char **argv) {
   request.expected_activation_sha256 = write_activation();
   assert(reject_request(request));
 
+  /**
+   * @brief 构造合成253个JUnit全PASS条目与出处、50轮HIL计数和原文件索引。
+   * 这里没有实际运行253测试或50循环；日期、run、boot及passed均为夹具，正例只验证所需报告形状/绑定。
+   */
   const auto functional_root = activation_root / "functional";
   const auto evidence_root = functional_root / "evidence";
   std::filesystem::create_directories(evidence_root);
@@ -363,6 +424,10 @@ int main(int argc, char **argv) {
   hil["boot_epochs"].push_back(boot);
   YAML::Node raw_index;
   raw_index["schema"] = "dummy_no_load_dev_functional_raw_index_v1";
+  /**
+   * @brief 每轮两文本页分别声明motion kind1全SENT和release kind3/final8，保存文件SHA、单轮index SHA及跨轮索引。
+   * page-*.bin内容是raw-cycle-page文本而非372字节wire页，明确证明本loader层校验的是文件SHA/索引语义，不是重演设备链。
+   */
   for (int cycle = 1; cycle <= 50; ++cycle) {
     std::ostringstream directory_name;
     directory_name << "cycle-" << std::setw(3) << std::setfill('0') << cycle;
@@ -439,6 +504,10 @@ int main(int argc, char **argv) {
   functional_request.hil_evidence_root = evidence_root.string();
   functional_request.elf_path = elf.string();
   functional_request.expected_activation_sha256 = file_sha256(activation_path);
+  /**
+   * @brief FUNCTIONAL使用live_profile_sha256=compiled_policy摘要，而candidate_profile_payload_hash仍是原YAML文件SHA。
+   * 两者故意不同；后续Status匹配不能错用profile payload原SHA替代运行profile身份。
+   */
   const auto functional_profile = dummy_motion_client::load_device_profile(
     candidate_root.string(), "f405_6dof_bench", 201U, 63U, functional_request);
   assert(functional_profile.functional_development_basis);
@@ -451,6 +520,10 @@ int main(int argc, char **argv) {
   assert(functional_profile.profile_hash == digest(candidate["compiled_policy_sha256"].as<std::string>()));
   assert(functional_profile.profile_hash != digest(candidate["payloads"][2]["sha256"].as<std::string>()));
   // COMPONENT_ONLY: synthetic APP single-run raw binding, never target qualification.
+  /**
+   * @brief LIMITED把依据缩到1个HIL记录、显式goal_limit2和人工powered/fixed/no-load声明。
+   * 允许1或2预算并绑定非零boot，不等于批准可任意延长、补充目标或省略当前设备准入。
+   */
   auto limited_activation = YAML::Clone(functional_activation);
   limited_activation["basis"] = "NO_LOAD_DEV_FUNCTIONAL_LIMITED";
   limited_activation["goal_limit"] = 2;
@@ -478,6 +551,10 @@ int main(int argc, char **argv) {
   assert(limited_profile.functional_development_basis);
   assert(limited_profile.no_load_basis == dummy_motion_client::NoLoadBasis::kFunctionalLimited);
   assert(limited_profile.goal_limit == 2U && limited_profile.limited_boot_epoch != 0U);
+  /**
+   * @par 内部limited_rejects回调
+   * changed为待写LIMITED activation；重算外部pin后调用loader，invalid_argument返回true。核0/3、bool/带引号目标数、未确认操作者、错模型/basis及已存在timeline拒绝。
+   */
   const auto limited_rejects = [&](const YAML::Node& changed) {
     { std::ofstream output(activation_path); output << changed; }
     auto checked = functional_request;
@@ -535,6 +612,10 @@ int main(int argc, char **argv) {
   functional_activation["live_profile_sha256"] = candidate["compiled_policy_sha256"].as<std::string>();
   { std::ofstream output(activation_path); output << functional_activation; }
   functional_request.expected_activation_sha256 = file_sha256(activation_path);
+  /**
+   * @brief 完整50轮恢复后，将某页声明sent0并同步index及activation hash，语义仍须拒绝。
+   * 之后资源伪PASS、ELF错hash、页内容漂移、49轮/251条出处、JUnit failures1等分别独立拒绝，不能仅靠更新外层摘要绕过。
+   */
   const auto first_index_path = evidence_root / "cycle-001/index.json";
   auto bad_sent_index = YAML::LoadFile(first_index_path.string());
   bad_sent_index[0]["sent_mask"] = 0;
@@ -576,6 +657,10 @@ int main(int argc, char **argv) {
   assert(reject_request(functional_request));
   { std::ofstream output(first_page); output << "raw-1-0"; }
 
+  /**
+   * @par 内部write_functional_activation回调
+   * 无参数，覆盖当前functional activation并刷新request expected hash；不重置loader语义检查或修改产品数据。
+   */
   auto write_functional_activation = [&] {
     std::ofstream output(activation_path);
     output << functional_activation;
@@ -621,6 +706,10 @@ int main(int argc, char **argv) {
   assert(reject_request(functional_request));
   std::filesystem::remove_all(activation_root);
 
+  /**
+   * @brief 仅在临时副本改policy末尾换行即触发payload原SHA漂移。
+   * 另两副本分别以文件symlink/目录symlink移出模型，必须拒绝；不从这些用例扩大为抵御所有并发路径攻击。
+   */
   const auto copy = std::filesystem::temp_directory_path() /
                     ("application_hold_candidate_" + std::to_string(getpid()));
   std::filesystem::copy(argv[1], copy, std::filesystem::copy_options::recursive);
@@ -671,6 +760,10 @@ int main(int argc, char **argv) {
   std::filesystem::remove_all(outside_directory);
   assert(reason == "bundle payload hash mismatch");
 
+  /**
+   * @brief 可选加载外部已有fixture/activation的文件依据，按basis选择software/functional/limited路径。
+   * 历史文件名/目录分支会改为固定20260930报告与构建路径；只是读取并验证这些产物，不运行对应硬件或重建文件。
+   */
   if (argc == 4) {
     const std::filesystem::path supplied(argv[2]);
     const auto fixture = std::filesystem::is_directory(supplied) ? supplied : supplied.parent_path();

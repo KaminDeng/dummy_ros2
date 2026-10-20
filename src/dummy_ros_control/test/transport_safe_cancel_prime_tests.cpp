@@ -1,12 +1,47 @@
+/**
+ * @file transport_safe_cancel_prime_tests.cpp
+ * @brief 生产transport与受控SIL peer的生命周期/证据场景回归。
+ *
+ * 本文件接入宿主RobotCore，区分正常Received/Pending后当前D10优先与首Cancel RPC回执缺失时的safe-prime守卫。guard-only通过不证明Cancel COMMITTED或完整release；最外层main还把任意非零业务码统一映射为退出1。
+ * PTY字节桥模拟串行端点，pipe传递同一宿主ABI的刺激/观测对象；这里没有打开真实USB或电机端口。
+ * 角位置rad、速度rad/s、加速度rad/s²，raw电机位置rev；Source produced_at_us与Host接收/期限µs分属不同时钟域。
+ * 本地发送、RPC回调complete、业务事务COMMITTED、CAN全组SENT、raw文件flush及物理完成是不同证据层，须看各分支具体断言。
+ * 程序仅执行CLI选择的场景，未选分支不能计为覆盖；构建成功不等于全部分支已运行。
+ */
+/**
+ * @brief 复用P7宿主Core夹具的公开feedback/request/command/send_group辅助函数。
+ * 宏只重命名被包含源的main，避免与本文件入口冲突；这里不会调用其原测试main。
+ * 被引用helper中CAN结果均由测试回注，kBoot=0x7001、owner首字节1/session77；不加载真实CAN适配器。
+ */
 #define main original_p7_core_source_entrypoint
 #include "p7_core_lifecycle_red_tests.cpp"
 #undef main
+/**
+ * @brief 仅选择safe-prime守卫：Core已收到Cancel但首次RPC回执故意Timeout，避免当前Received/Pending D10优先路径遮住旧guard。
+ */
 static bool source_safe_prime_guard_only=false;
+/**
+ * @brief 选择取消后Hold Status使用final7而非旧final0；仅影响本测试构造的刺激。
+ * 与cancel_status_bad_flags组合覆盖终态、摘要及failure字段矛盾，不能把模式名当设备事实。
+ */
 static bool cancel_status_terminal7_variant=false;
 
+/**
+ * @brief 取消Status负例编号：1..4改final为4/5/6/9，5改链、6清链，7/8/9设置failure source/axis/reason。
+ * 0保持原本干净Status；所有编号在main选择，后续均要求失败关闭。
+ */
 static unsigned cancel_status_bad_flags=0U;
+/**
+ * @brief 将取消后的State改Stopping7且hold_ready=false，隔离“有终态Status但没有就绪Hold反馈”的负例。
+ */
 static bool cancel_state_stopping_notready=false;
+/**
+ * @brief 使用Hold4 Status变体；cancel_hold_case为71..82，运行时映射到raw_order_case59..70。
+ */
 static bool cancel_hold_status_variant=false;
+/**
+ * @brief 保存CLI的Hold Status变体编号，数值不是设备状态码或协议序号。
+ */
 static unsigned cancel_hold_case=0;
 #include "wire_operation.hpp"
 #include <array>
@@ -33,6 +68,9 @@ static unsigned cancel_hold_case=0;
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 namespace {
+/**
+ * @brief 显式选择Cancel与生命周期Stop重叠的源码场景；普通CLI分支不自动启用。
+ */
 static bool source_cancel_coordination=false;
 namespace wire = dp::protocol::dummy_robot_v2;
 using State = wire::DummyJointStateV2;
@@ -41,7 +79,17 @@ using Evidence = wire::DummyAttemptEvidenceV2;
 using Command = wire::DummyJointCommandV2;
 using Management = dp::protocol::services::DummyManageV2RawFixed;
 using namespace dummy_ros_control;
+/**
+ * @brief 检查采集尚未绑定时可接受的历史released Idle基线。
+ * @return 0全部关系成立；301..322分别定位身份、终态、页数、链或历史水位条件。
+ * @details 首先允许普通motion与有parent的独立release历史终态；再逐项破坏boot/session/permit/lost/core及历史上下文。
+ * 非零历史链在当前采集还没有页时可保留；已落页、已绑定current_boot或历史run/链不匹配都不能当作无害启动基线。
+ */
 int test_released_idle_startup_baseline() {
+  /**
+   * @brief context全部为零表示新采集尚未建立当前boot/run证据。
+   * 随后逐项赋值pages_written、historical_run_*、terminal_written_run_id验证“历史基线例外”不会覆盖本次已有证据。
+   */
   HistoricalIdleBaselineContext context{};
   Status status;
   status.set_boot_epoch(7U);
@@ -125,6 +173,12 @@ int test_released_idle_startup_baseline() {
   if (historical_released_idle_baseline(status, context)) return 317;
   return 0;
 }
+/**
+ * @brief 用人工Host µs检查一代命令的精确组ACK及超时分类。
+ * @return true表示身份/producer序号匹配、拒绝计数推进和State超龄归因均符合预期。
+ * @details generation42、boot7/session8/ref9/motion10；从1000µs起100000µs预算。旧组全mask不能确认本组；精确State committed序号可在Status mask为0时确认。
+ * 迟于期限、错误四元身份或错误序号不确认；command_rejected必须是新拒绝计数且精确待确认上下文。
+ */
 bool test_group_sent_ack() {
   CommandGenerationRecord record{};
   record.generation = 42U;
@@ -162,6 +216,10 @@ bool test_group_sent_ack() {
       !rejected.command_rejected(7U, 8U, 9U, 10U, 41U, 4U, 11000U) ||
       !rejected.pending()) return false;
 
+  /**
+   * @brief State先超龄时记录ACK未确认但不重复算ACK timeout；同时超过两个门槛时则保留各自原因。
+   * 这是停止原因分类的枚举/计数关系，不发送CAN或证明设备已停止。
+   */
   GroupSentAck default_budget;
   default_budget.begin(record, 1010U, 100000U);
   const auto state_stale_first = classify_transport_stop_causes(
@@ -177,6 +235,11 @@ bool test_group_sent_ack() {
       both_overdue.ack_unconfirmed_on_state_stale_stop) return false;
   return true;
 }
+/**
+ * @brief 区分旧周期倍数Stop和显式250ms硬件State年龄预算。
+ * @return true表示2周期告警、预算截止边界、reset后未观测State不误停均通过。
+ * @note 时间是同域人工µs，不包含主机调度最坏延迟证明。
+ */
 bool test_hardware_state_age_heartbeat() {
   TransportHeartbeat legacy(10000U);
   legacy.observe_state(100U);
@@ -192,6 +255,11 @@ bool test_hardware_state_age_heartbeat() {
   heartbeat.reset();
   return heartbeat.poll(300000U, 250000U) == HeartbeatAction::kNone;
 }
+/**
+ * @brief 参数解析只允许显式心跳Stop预算处于两State周期到max_state_age之间。
+ * @return true表示默认0、显式250000接受，而250001及39999拒绝。
+ * @details State周期20000µs、max_state_age250000µs；端点serial/test仅为解析字符串，此函数不启动通信。
+ */
 bool test_heartbeat_budget_parameter() {
   const std::string hash(64U, '1');
   std::unordered_map<std::string, std::string> values{
@@ -220,26 +288,71 @@ bool test_heartbeat_budget_parameter() {
   values["heartbeat_stop_budget_us"] = "39999";
   return !parse_transport_parameters(values, 6U, &parsed);
 }
+/**
+ * @brief 用正式lifecycle_to_wire获取Disabling编码，避免测试把Stopping和Disabling混用。
+ * @return Disabling对应wire core_state；仅转换内存快照。
+ */
 std::uint16_t ref_disabling_wire_state() {
   dummy_ref::JointSnapshot snapshot{};
   snapshot.lifecycle=dummy_ref::LifecycleState::kDisabling;
   return dummy_ref::comm::lifecycle_to_wire(snapshot);
 }
+/**
+ * @brief 父进程经pipe送给peer的一次发布刺激，属于同一宿主ABI对象而非wire包。
+ * status/state/evidence各自保存完整消息值；send_*决定本次发布哪些topic，done通知退出而不发布。
+ * 默认发Status和State，不发Evidence；这样可独立安排回执、Status、State、原页的到达顺序。
+ */
 struct Stimulus { Status status{}; State state{}; Evidence evidence{}; bool done = false; bool send_status = true; bool send_state = true; bool send_evidence = false; };
+/**
+ * @brief 普通场景读回的实际Stop request_id，供同一进程两次运行比较不重复；不是预填期望值。
+ */
 std::uint64_t observed_stop_request_id = 0U;
+/**
+ * @brief 对peer首次State publish注入一次QueueFull，检查有界重试不会把暂时背压变成测试假失败。
+ */
 bool inject_peer_state_queue_full_once = false;
+/**
+ * @brief 专用于release Query回执故障：1错op、2错motion、3错management、4仍Pending、5未release_committed。
+ */
 unsigned release_receipt_fault=0U;
 // 同一 peer 跨 exec 回归专用；普通组件场景不启用。
+/**
+ * @brief 被transport_stop_exec_tests.cpp复用时保留跨Host exec的合成设备缓存。
+ * 普通本文件入口默认false；不代表本main自行执行了跨exec回归。
+ */
 bool persistent_stop_cache_test = false;
+/**
+ * @brief 由复用夹具设置的旧Stop回执重放负例开关；要求收到匹配Idle也不能确认新请求。
+ */
 bool replayed_stop_host = false;
+/**
+ * @brief 预期Stop业务operation_id，普通场景900；跨exec使用者按轮次设置。
+ * operation_id与原RPC request_id/Query自己的request_id是不同关联字段。
+ */
 std::uint64_t exec_expected_stop_operation = 900U;
+/**
+ * @brief 跨fork共享区中保存前三轮Stop身份及首轮终态，普通组件场景不分配它。
+ * round是设备缓存轮次；stop保留原Disable请求，terminal保留原Query响应，request_ids检查每个新Host没有复用Stop逻辑ID。
+ */
 struct PersistentStopCache {
   unsigned round = 0U;
   Management::Request stop{};
   Management::Response terminal{};
   std::uint64_t request_ids[3]{};
 };
+/**
+ * @brief 非拥有指针，指向调用者建立的共享mmap对象；本文件普通模式保持nullptr。
+ */
 PersistentStopCache *persistent_stop_cache = nullptr;
+/**
+ * @brief 对peer自身消息发送做有限QueueFull重试。
+ * @tparam Publish 零参数发送回调，返回dp_comm Result。
+ * @tparam Pump 零参数执行器推进回调。
+ * @param publish 保留原消息对象的发送动作，不重建管理身份。
+ * @param pump 背压时消费本地执行器工作，允许Ok/Busy继续。
+ * @return 最多16次发布的最终结果；非QueueFull立即返回，pump硬错误也立即返回。
+ * @note 只有两次尝试之间sleep1ms，最多pump15次；本辅助不是生产管理事务无限重试器。
+ */
 template <typename Publish, typename Pump>
 dp::comm::Result publish_peer_with_retry(Publish publish, Pump pump) {
   constexpr unsigned kMaxAttempts = 16U;
@@ -254,6 +367,12 @@ dp::comm::Result publish_peer_with_retry(Publish publish, Pump pump) {
   }
   return dp::comm::Result::kQueueFull;
 }
+/**
+ * @brief 检查一次QueueFull可恢复、持续QueueFull恰16次和硬错误不重试。
+ * @return 0通过；351瞬时背压节奏错误；352有限尝试数错误；353非重试错误未立即结束。
+ * @par 内部回调
+ * pump只加计数并Ok；transient第一次QueueFull后Ok，congested始终QueueFull，invalid始终InvalidArgument。均不做真实通信。
+ */
 int test_peer_publish_backpressure() {
   unsigned attempts = 0U;
   unsigned pumps = 0U;
@@ -276,22 +395,71 @@ int test_peer_publish_backpressure() {
   return 0;
 }
 
+/**
+ * @brief argv中safe_prime后缀的借用指针，选择单项守卫负例或正例；不是生产配置。
+ */
+/**
+ * @par 本源13种源码模式的刺激边界
+ * positive为六轴零rad保持意图；drift只在未primed EnablingHold的观测改1e-6rad，不是任意轨迹偏移许可。
+ * wrong_boot/wrong_session/wrong_ref/old_motion分别改意图授权四元组；arbitrary_target把J1目标改0.001rad。guard-only要求这些目标实际transfer并被指定COMMAND_PRIME_DIAG守卫拒绝。
+ * foreign_run把Status run改2，wrong_status_phase把EnablingHold Status改Run5，no_owned把原Cancel client改外人；这些前提不满足时不能发当前D10。
+ * expired到270ms才发意图，second_stop在原窗口内重复Stop后220ms才发意图，两者检查不能重开250ms回合。
+ * wrong_query_op将Core结果operation清0，正常Pending路径要求D10已发送但不确认；入口明确禁止把它选为guard-only。
+ * 普通safe_prime_*已收到Cancel Pending回执时D10优先，不能把共享的意图故障后缀当作“该模式必然发过SDK prime”；guard-only才专门隔离首RPC结果不可用的prime守卫。
+ */
 static const char *prime_test_mode=nullptr;
+/**
+ * @brief 在peer进程持有实际RobotCore逻辑，外侧仍是受控通信fixture。
+ * 用P7 helper经公开反馈/管理/命令接口建立Run并提交Cancel；保留真实OperationResult，不凭修改wire phase伪造Core完成。
+ * 反馈是六节点0x23零电机rev帧，CAN发送则取实际tx/group/epoch再回注Submitted/Sent；只能证明宿主逻辑时序。
+ */
 struct CorePrimeModel {
+  /**
+   * @brief 本模型唯一Core实例；它拥有会话、参考、ledger、CAN队列及事务状态，wire输出从其snapshot派生。
+   */
   dummy_ref::RobotCore core;
+  /**
+   * @brief host_started是Host steady µs锚，cancel_id/disable_id是原管理请求ID。
+   * now把Host经过时间平移到Core测试域300220µs，不能将其直接当Host接收时间。
+   */
   std::uint64_t host_started=0U, cancel_id=0U, disable_id=0U;
+  /**
+   * @brief 仅缓存Core take_operation_result取得的kOk结果；默认零值表示尚无可报告业务终态。
+   * Query自己的RPC request_id与这些结果的operation_id不是同一字段。
+   */
   dummy_ref::OperationResult cancel_done{},disable_done{};
+  /**
+   * @brief 已由Core接受并回注完整六轴Motion组SENT后才置true；Host意图发布/局部转移不设置它。
+   */
   bool primed=false;
+  /**
+   * @brief 将Host经过时间映射到Core人工Source域。
+   * @return 300220µs加transport_steady_now_us−host_started；调用前须begin已设锚。
+   */
   std::uint64_t now() const {return 300220U+(dummy_ros_control::transport_steady_now_us()-host_started);}
+  /**
+   * @brief 按固定ApplicationHold配置建立Run，再提交原Cancel逻辑ID。
+   * @param wire 提供Cancel request_id/request_seq；helper request提供固定owner/session及Core当前tuple。
+   * @return Core initialize、completed_goal_holds(stop_at_run=true)及Cancel接纳全部成功。
+   * @note 本方法不是任意wire请求所有字段的通用验证器，许多身份由固定helper生成；真实wire身份准入主要由Host路径另检。
+   */
   bool begin(const Management::Request &wire) {
     dummy_ref::CoreConfig c{};c.configured_mask=63;c.stop_policy=dummy_ref::StopPolicy::kApplicationHold;
     c.session_lease_us=30000000;c.max_goal_duration_us=10000000;c.local_hold_budget_us=5000000;c.hold_expiry_action=dummy_ref::HoldExpiryAction::kDisableAndReleaseNoLoadBench;
+    /**
+     * @brief safe-prime模型把静止窗口压到2µs、速度估计窗1µs，便于快速推进宿主Core逻辑。
+     * 这不是current-D10版本的200ms机械静止预算，更不是实机稳定性测量；其它时间量为µs，速度/减速度为rad/s及rad/s²。
+     */
     c.feedback_timeout_us=250000;c.ticket_window_us=50000;c.ticket_issue_interval_us=1000;c.max_control_dt_us=1000000;c.stationary_window_us=2;c.velocity_estimation_window_us=1;c.stop_reserve_us=100;c.velocity_limit_rad_s=.15079644737231007;c.stop_velocity_cap_rad_s=c.velocity_limit_rad_s;c.can_velocity_cap_rev_s=1.2;c.stop_deceleration_rad_s2=4;c.profile_id=1;c.firmware_sha256[0]=1;c.contract_sha256[0]=2;c.model_sha256[0]=3;c.compiled_policy_digest[0]=4;c.first_sample_timeout_us=2000000;
     if(core.initialize(c,kBoot)!=dummy_ref::CoreResult::kOk || !completed_goal_holds(core,true))return false;
     host_started=dummy_ros_control::transport_steady_now_us();cancel_id=wire.request_id();
     auto q=request(core,wire.request_seq(),dummy_ref::ManagementOperation::kCancelMotion);q.request_id=cancel_id;
     return core.on_operation(q,300220)==dummy_ref::CoreResult::kOk;
   }
+  /**
+   * @brief 注入四次相邻µs六轴零反馈并tick，再取Core已完成OperationResult。
+   * @return 无；本版本poll不自动排CAN组，prime与release分别由专门方法回注发送结果。
+   */
   void poll() {
     const auto t=now();for(auto at:{t,t+1U,t+2U,t+3U})feedback_all(core,at);core.tick(t+4U);
     dummy_ref::OperationResult result;
@@ -300,6 +468,12 @@ struct CorePrimeModel {
       if(result.request_id==disable_id && result.result==dummy_ref::CoreResult::kOk)disable_done=result;
     }
   }
+  /**
+   * @brief 把实际收到的命令内容送Core，再回注六轴Motion组发送结果。
+   * @param wire Host经dp_comm真正发出的Command，复制boot/session/ref/motion/ticket/positions及producer。
+   * @return Core接纳命令且send_group取得六帧对应组成功为true；失败由回调abort。
+   * @details send_group只模拟Submitted/Sent，不证明电机反馈追踪了目标；primed后poll收集Core结果，不能提前编造Cancel COMMITTED。
+   */
   bool accept_prime(const Command &wire) {
     const auto t=now();auto q=command(core,wire.producer_seq());
     q.boot_epoch=wire.boot_epoch();q.session_id=wire.session_id();q.reference_epoch=wire.reference_epoch();q.motion_epoch=wire.motion_epoch();q.freshness_ticket=wire.freshness_ticket();
@@ -309,10 +483,20 @@ struct CorePrimeModel {
     if(!send_group(core,t+1U,dummy_ref::CanTxCategory::kMotion))return false;
     primed=true;std::fprintf(stderr,"REAL_CORE_PRIME_FULL6_SENT producer=%u noCOMMITbeforeSENT\n",wire.producer_seq());poll();return true;
   }
+  /**
+   * @brief 用实际D10的预期tuple向Core提交DisableAndRelease。
+   * @param wire 请求ID/seq和boot/session/ref/motion/management锚来自Host实际发送。
+   * @return 具体推进条件见本源后续实现；false会被peer回调视为夹具失败并abort。
+   * @note release名称不代表入函数时已经Idle或已Committed。
+   */
   bool release(const Management::Request &wire) {
     const auto t=now();disable_id=wire.request_id();
     auto q=request(core,wire.request_seq(),dummy_ref::ManagementOperation::kDisableAndRelease);q.request_id=disable_id;
     q.expected_boot_epoch=wire.expected_boot_epoch();q.session_id=wire.expected_session_id();q.expected_reference_epoch=wire.expected_reference_epoch();q.expected_motion_epoch=wire.expected_motion_epoch();q.expected_management_epoch=wire.expected_management_epoch();std::copy(std::begin(wire.client_instance_id()),std::end(wire.client_instance_id()),q.client.begin());
+    /**
+     * @brief safe版本将wire client复制到Core请求，Core接纳D10后最多16轮、400µs试着取Disable组。
+     * 每轮提供六轴反馈并回注相同tx身份的Submitted/Sent，只有确见Disable且Core到Idle才返回true；不是仅把snapshot手写成Idle。
+     */
     auto rc=core.on_operation(q,t);std::fprintf(stderr,"ACTUAL_D10_MODEL_ON_OPERATION rc=%u requestedM=%u requestedG=%u coreM=%u coreG=%u lifecycle=%u\n",unsigned(rc),q.expected_motion_epoch,q.expected_management_epoch,core.snapshot().motion_epoch,core.snapshot().management_epoch,unsigned(core.snapshot().lifecycle));if(rc!=dummy_ref::CoreResult::kOk)return false;
     bool sent=false;
     for(unsigned bounded=0U;bounded<16U && now()<t+400U && !sent;++bounded) {const auto at=now();
@@ -322,6 +506,13 @@ struct CorePrimeModel {
     poll();std::fprintf(stderr,"REAL_CORE_RELEASE sent=%d idle=%d done=%llu\n",sent,core.snapshot().lifecycle==dummy_ref::LifecycleState::kIdle,(unsigned long long)disable_done.operation_id);
     return sent && core.snapshot().lifecycle==dummy_ref::LifecycleState::kIdle;
   }
+  /**
+   * @brief 推进Core并把其当前状态覆盖到本次peer发布刺激。
+   * @param v 按引用改写Status/State身份、位置/票据、组掩码、producer和事务字段。
+   * @return 无；v的消息选择位可由特定故障分支关闭。
+   * @details Status对EnablingHold特意显示Stopping7，State仍用正式lifecycle_to_wire；这是fixture安排，不是生产协议映射规则改变。
+   * Idle清位置有效位并保留raw六轴，去许可；只在选定负例改run/core/身份等字段。
+   */
   void snapshot(Stimulus &v) {
     poll();const auto &q=core.snapshot();const auto &txn=core.transaction_status();
     v.status.set_core_state(q.lifecycle==dummy_ref::LifecycleState::kEnablingHold?7U:dummy_ref::comm::lifecycle_to_wire(q));v.state.set_core_state(dummy_ref::comm::lifecycle_to_wire(q));
@@ -342,26 +533,90 @@ struct CorePrimeModel {
     if(q.lifecycle==dummy_ref::LifecycleState::kIdle) {v.state.set_position_valid_mask(0);v.state.set_raw_position_valid_mask(63);double raw[6]{};v.state.set_raw_motor_position_rev(raw);v.status.set_permit_remaining_us(0);v.status.set_real_motion_permitted(false);}
   }
 };
+/**
+ * @brief peer进程独占Core模型指针；首次实际Cancel回调创建，之后命令/Query/快照共用同实例。
+ * fork后的父进程拥有自己的空副本，不通过它读取peer私有状态。
+ */
 static std::unique_ptr<CorePrimeModel> actual_core;
+/**
+ * @brief peer服务回调的本地状态，生命周期覆盖node/executor。
+ * commands_fd把收到Command对象回传父进程；stops_fd回传Cancel/Complete/Disable及相应Query便于核真实发送身份。
+ * 其余字段只为受控故障/顺序注入，不是生产设备状态存储。
+ */
 struct Peer {
+  /**
+   * @brief 命令观测pipe写端；传递宿主Command对象，不是把对象内存当作串行协议字节。
+   */
   int commands_fd;
+  /**
+   * @brief 管理观测pipe写端；父进程按操作号检查实际请求顺序。
+   */
   int stops_fd;
+  /**
+   * @brief 当前Stop原始逻辑请求ID；Query的queried_operation_id必须指向它。
+   */
   std::uint64_t stop_request_id = 0U;
+  /**
+   * @brief Stop提交时的motion锚；回执Pending保持，终态按夹具推进1。
+   */
   std::uint32_t stop_motion_epoch = 0U;
+  /**
+   * @brief Stop提交时的管理代次锚；用于避免Query回执借用别的事务。
+   */
   std::uint32_t stop_management_epoch = 0U;
+  /**
+   * @brief 当前Stop Query次数；通常首次Pending，之后才构造终态。
+   */
   unsigned stop_queries = 0U;
+  /**
+   * @brief 已看到Cancel发送，用于触发重叠Disable的旧tuple拒绝夹具。
+   */
   bool overlap_cancel_observed = false;
+  /**
+   * @brief 标记重叠Disable仍用了错误旧tuple，后续Query给失败而不伪造确认。
+   */
   bool overlap_disable_old_tuple = false;
+  /**
+   * @brief 让所有Stop Query保持Pending，验证cleanup保留unconfirmed而非把超时当成功。
+   */
   bool never_complete_stop = false;
+  /**
+   * @brief 在Pending回执先清session/ref，不能据此冒认release已Committed。
+   */
   bool revoke_owner_before_stop_receipt = false;
+  /**
+   * @brief 记录SelectMode序号水位，Stop必须使用其后继而非从旧计数重新开始。
+   */
   bool sequence_rebase_mode = false;
+  /**
+   * @brief 终态响应故意release_committed=false，即使后来Idle也不应确认Stop。
+   */
   bool uncommitted_stop_mode = false;
+  /**
+   * @brief 最近SelectMode请求序号，夹具用普通大小比较拒绝不前进的Stop；非通用回绕算法。
+   */
   std::uint32_t sequence_floor = 0U;
+  /**
+   * @brief request80的Disable直接返回Committed，跳过本夹具默认的Pending再Query路径。
+   */
   bool direct_gate_release = false;
+  /**
+   * @brief 记录显式release逻辑ID，使后续Query与该release关联。
+   */
   std::uint64_t gate_release_request_id = 0U;
 };
+/**
+ * @brief 连接两对PTY master的双向字节桥；端点仍走真实串行transport实现。
+ * 桥工作线程只搬字节，不解释Dummy消息；20ms poll避免析构时无限睡眠。
+ * 两个slave端点分别给Host与peer；不打开物理串口，不能据此宣称USB电气/CAN链路合格。
+ */
 class SerialBridge {
  public:
+  /**
+   * @brief 建立两对非阻塞PTY并取得slave路径。
+   * @return 两对open/grant/unlock/ptsname全部成功为true；任一步失败false，已开fd留给析构回收。
+   * @note 端点后缀baudrate=115200是transport解析配置，在PTY上不等于真实线速测量。
+   */
   bool open_pair() {
     for (int index = 0; index < 2; ++index) {
       masters_[index] = ::posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK);
@@ -373,8 +628,23 @@ class SerialBridge {
     }
     return true;
   }
+  /**
+   * @brief 返回一侧串行slave端点。
+   * @param index 调用方限定为0或1；本函数不做越界检查。
+   * @return 类内字符串引用，必须在bridge生存期内使用。
+   */
   const std::string &endpoint(int index) const { return endpoints_[index]; }
+  /**
+   * @brief fork后子进程关闭继承的master副本，由父进程桥独占转发。
+   * @return 无；不改变父进程自己的fd表。
+   */
   void close_child_fds() const { for (int fd : masters_) ::close(fd); }
+  /**
+   * @brief 开启父进程字节转发线程。
+   * @return 无；本夹具每对象只调用一次，不支持重复start自动join旧线程。
+   * @par 内部线程
+   * 轮询任一master的可读事件，按方向调用forward；running=false后退出，由析构join。
+   */
   void start() {
     running_ = true;
     worker_ = std::thread([this] {
@@ -386,12 +656,23 @@ class SerialBridge {
       }
     });
   }
+  /**
+   * @brief 停转发、join线程再关闭master；保证线程不继续访问已销毁对象或已关闭fd。
+   * @return 无。
+   */
   ~SerialBridge() {
     running_ = false;
     if (worker_.joinable()) worker_.join();
     for (int fd : masters_) if (fd >= 0) ::close(fd);
   }
  private:
+  /**
+   * @brief 非阻塞转发最多一次read取得的512字节批次。
+   * @param source 源master索引0/1。
+   * @param target 目标master索引0/1。
+   * @return 无；EINTR重试，EAGAIN等可写，其他错误/EOF返回而不伪装写满。
+   * @note offset只按实际写字节推进；退出running可中断未完成转发，这不是可靠存储队列。
+   */
   void forward(int source, int target) {
     std::uint8_t bytes[512];
     const auto count = ::read(masters_[source], bytes, sizeof(bytes));
@@ -407,18 +688,50 @@ class SerialBridge {
       } else return;
     }
   }
+  /**
+   * @brief PTY master拥有句柄，-1表示未创建；析构只关闭非负fd。
+   */
   int masters_[2]{-1, -1};
+  /**
+   * @brief 对应两个slave的transport端点文本，open_pair后固定。
+   */
   std::string endpoints_[2];
+  /**
+   * @brief 父进程线程运行标志；与fork后子进程的副本不是跨进程同步变量。
+   */
   std::atomic<bool> running_{false};
+  /**
+   * @brief 拥有字节桥线程；析构负责join，避免悬空this。
+   */
   std::thread worker_;
 };
+/**
+ * @brief 在borrowed回调有效期内复制Command并送回父进程。
+ * @param borrowed dp_comm借用消息，不能跨回调保存其视图。
+ * @param context 指向peer本地状态，提供命令观测pipe。
+ * @return 无；copy失败不写观测；pipe写结果在此未检查，父端超时/长度断言发现缺失。
+ */
 void receive_command(dp::comm::BorrowedMessage<Command> borrowed, void *context) {
   Command message;
   if (borrowed.copy_to(&message) == dp::comm::Result::kOk) {
+    /**
+     * @brief Core专属模式还把实际收到的wire命令送入宿主RobotCore，并回注完整六轴Submitted/Sent。
+     * 若Core拒绝则abort，不能只因Host发布过消息就声称Core接纳了prime；全组SENT仍是内存夹具而非真实CAN。
+     */
     if(actual_core && !actual_core->accept_prime(message))std::abort();
     (void)::write(static_cast<Peer *>(context)->commands_fd, &message, sizeof(message));
   }
 }
+/**
+ * @brief peer的manage_v2服务：回显请求身份并按被选场景产生受控事务回执。
+ * @param request 经串行协议/typed桥实际收到的请求。
+ * @param response 调用方提供的响应槽，由本回调写完整fixture字段。
+ * @param context Peer上下文，不拥有或销毁它。
+ * @par 未命名RequestInfo
+ * 此回调不校验真实认证来源，主要以请求内身份模拟；不能将其当正式设备授权实现。
+ * @return kOk表示服务回调完成，不代表业务成功；非法操作或观测pipe写失败返回InvalidArgument。特定Core场景另有Timeout故障注入。
+ * @details operation9/10/8分别为Cancel/Disable/Complete，12为QueryResult，6为Begin，1为SelectMode，0为只读Query。业务结果还必须看receipt/result/phase/operation及epoch绑定。
+ */
 dp::comm::Result receive_management(const Management::Request &request,
                                     Management::Response *response,
                                     const dp::comm::RequestInfo &, void *context) {
@@ -433,6 +746,9 @@ dp::comm::Result receive_management(const Management::Request &request,
   if (request.operation() == 8U &&
       ::write(peer.stops_fd, &request, sizeof(request)) != sizeof(request))
     return dp::comm::Result::kInvalidArgument;
+  /**
+   * @brief 只有QueryResult指向当前Stop原请求ID才走Stop结果缓存；Query本身request_id必须独立。
+   */
   const bool stop_query = request.operation() == 12U && peer.stop_request_id != 0U &&
       request.queried_operation_id() == peer.stop_request_id;
   if (peer.sequence_rebase_mode && request.operation() == 1U)
@@ -449,6 +765,10 @@ dp::comm::Result receive_management(const Management::Request &request,
   response->set_request_id(request.request_id());
   response->set_receipt(1U);
   response->set_result_code(0U);
+  /**
+   * @brief 普通fixture默认Committed、operation42，特定request45故意给777；request43故意跳两个motion代次。
+   * 这些固定应答用于验证Host拒绝不相关/越代回复，不模拟全部设备业务规则。
+   */
   response->set_operation_id(request.request_id() == 45U ? 777U : 42U);
   response->set_transaction_phase(3U);
   response->set_boot_epoch(request.expected_boot_epoch());
@@ -459,8 +779,16 @@ dp::comm::Result receive_management(const Management::Request &request,
   response->set_management_epoch(request.expected_management_epoch() + 1U);
   response->set_profile_id(request.expected_profile_id());
 
+  /**
+   * @brief 接到实际Cancel后才建立Core模型；begin失败abort，避免用固定回复冒充已接纳Cancel。
+   * 成功后的首次RPC回执仍不是Core Cancel终态。
+   */
   if(source_cancel_coordination && request.operation()==9U) {
     actual_core=std::make_unique<CorePrimeModel>();if(!actual_core->begin(request))std::abort();
+    /**
+     * @brief Core已经实际接纳Cancel，但服务回调故意返回Timeout。
+     * 这只隔离“初RPC结果不可用时”的safe-prime准入守卫，不产生Cancel强终态，也不宣称完整release成功。
+     */
     if(source_safe_prime_guard_only) {
       // 真实Core已接受Cancel，初次RPC回执缺失独立选中原safeprime守卫，不冒完整release成功。
       std::fprintf(stderr,"CORE_CANCEL_ACCEPTED_FIRST_RPC_RECEIPT_UNAVAILABLE RID=%llu\n",(unsigned long long)request.request_id());
@@ -468,11 +796,20 @@ dp::comm::Result receive_management(const Management::Request &request,
     }
     response->set_result_code(23);response->set_transaction_phase(1);response->set_operation_id(0);return dp::comm::Result::kOk;
   }
+  /**
+   * @brief 正常Received/Pending先到时，Host可直接发当前D10抢占Cancel；不得强制先发已经过时的SDK prime。
+   * release由Core公开管理/CAN反馈推进并要求Idle，但RPC本身仍返回Pending，由Query报告真实结果。
+   */
   if(actual_core && request.operation()==10U) {
     if(!actual_core->release(request))std::abort();
     std::fprintf(stderr,"REAL_CORE_STRICT_PENDING_D10_ACCEPTED withoutFakeCancelCOMMIT primed=%d\n",actual_core->primed);
     response->set_result_code(23);response->set_transaction_phase(1);response->set_operation_id(0);return dp::comm::Result::kOk;
   }
+  /**
+   * @brief QueryResult从Core已取出的cancel_done/disable_done选择结果，op0时返回Pending。
+   * Cancel结果还绑定oldest_pending_attempt身份；Disable结果设置release_committed。wrong_query_op负例清operation_id阻止强关联。
+   * 只有真实Core模式走本分支，普通固定peer仍走后面共同场景。
+   */
   if(actual_core && request.operation()==12U) {
     actual_core->poll();const auto &m=*actual_core;
     auto result=request.queried_operation_id()==m.cancel_id ? m.cancel_done : m.disable_done;
@@ -495,11 +832,19 @@ dp::comm::Result receive_management(const Management::Request &request,
     response->set_management_epoch(request.expected_management_epoch());
     return dp::comm::Result::kOk;
   }
+  /**
+   * @brief 保留共同旧peer回退分支，但本源将该Cancel Query设为Pending/op0。
+   * 真实Core模式的响应在更前面的actual_core分支已返回，不能借这里的常量声称Cancel已Committed。
+   */
   if(peer.overlap_cancel_observed && request.operation()==12U && request.queried_operation_id()==4693763926145815138ULL) {
     response->set_result_code(23U);response->set_transaction_phase(2U);response->set_operation_id(0U);
     response->set_run_id(0U);response->set_attempt_id(0U);response->set_motion_epoch(3U);response->set_management_epoch(4U);
     return dp::comm::Result::kOk;
   }
+  /**
+   * @brief 重叠Cancel后仍用旧motion/management提交Disable，fixture保留Pending而让后续Query明确失败。
+   * 这里的11/2是共同合成peer分支的约定，不覆盖Core专属28673/77/1/3/4身份。
+   */
   if (peer.overlap_cancel_observed && request.operation()==10U &&
       (request.expected_motion_epoch()!=11U ||request.expected_management_epoch()!=2U)) {
     peer.overlap_disable_old_tuple=true;peer.stop_request_id=request.request_id();
@@ -516,12 +861,19 @@ dp::comm::Result receive_management(const Management::Request &request,
     response->set_run_id(0U);response->set_release_committed(false);response->set_motion_complete(false);
     return dp::comm::Result::kOk;
   }
+  /**
+   * @brief Complete47先收到Pending回执；Query47才给可关联终态，便于排列Status/State/回执不同先后。
+   */
   if (request.operation() == 8U && request.request_id() == 47U) {
     response->set_operation_id(0U);
     response->set_transaction_phase(1U);
     response->set_result_code(23U);
     response->set_motion_epoch(request.expected_motion_epoch());
     response->set_management_epoch(request.expected_management_epoch());
+  /**
+   * @brief 显式gate release的Query回执用于注入错operation/motion/management、Pending或未Committed。
+   * 故障参数由main的release_deactivate_mode12..16映射，不能被早到Idle缓存绕过。
+   */
   } else if (request.operation() == 12U && request.queried_operation_id() == 47U) {
     response->set_operation_id(47U);
   }
@@ -532,6 +884,10 @@ dp::comm::Result receive_management(const Management::Request &request,
       response->set_operation_id(0U);
       return dp::comm::Result::kOk;
     }
+    /**
+     * @brief 显式gate release80：默认先Pending，direct_gate_release时直接Committed并清session/ref。
+     * 后续是否免重复Stop仍须合法Idle反馈，不能只看这个RPC返回。
+     */
     if (request.request_id() == 80U) {
       peer.gate_release_request_id = request.request_id();
       response->set_run_id(2U);
@@ -550,6 +906,9 @@ dp::comm::Result receive_management(const Management::Request &request,
       response->set_management_epoch(request.expected_management_epoch());
       return dp::comm::Result::kOk;
     }
+    /**
+     * @brief 跨exec复用模式保存每轮Stop逻辑ID，拒绝任意两Host复用同ID；最多支持三轮。
+     */
     if (persistent_stop_cache_test) {
       ++persistent_stop_cache->round;
       if (persistent_stop_cache->round > 3U) return dp::comm::Result::kInvalidArgument;
@@ -574,6 +933,10 @@ dp::comm::Result receive_management(const Management::Request &request,
     }
   } else if (stop_query) {
     ++peer.stop_queries;
+    /**
+     * @brief 第2轮原样重放首轮完整Query终态，包括旧request/operation关联。
+     * 不替换为新Query ID来制造伪相关；新Host即使随后见旧Idle也必须保持Stop未确认。
+     */
     if (persistent_stop_cache_test && persistent_stop_cache->round == 2U) {
       // 保留第一进程的完整 QueryResult，不改写 request/operation identity。
       if (persistent_stop_cache->terminal.request_id() == request.request_id() ||
@@ -588,6 +951,10 @@ dp::comm::Result receive_management(const Management::Request &request,
           (unsigned long long)response->operation_id());
       return dp::comm::Result::kOk;
     }
+    /**
+     * @brief 首Query（或never_complete全部Query）只返回Pending/op0；clear owner不等于release_committed。
+     * 普通后继Query才清session/ref、推进epochs并发布release标志，uncommitted模式反向验证该标志必需。
+     */
     if (peer.stop_queries == 1U || peer.never_complete_stop) {
       response->set_operation_id(0U);
       response->set_transaction_phase(2U);
@@ -624,6 +991,21 @@ dp::comm::Result receive_management(const Management::Request &request,
   }
   return dp::comm::Result::kOk;
 }
+/**
+ * @brief 在子进程建立静态dp_comm节点并执行parent驱动的发布/服务循环。
+ * @param endpoint PTY串行端点，节点角色peer。
+ * @param input parent→peer刺激pipe读端。
+ * @param output 命令观测及初始R通知pipe写端。
+ * @param stops_output 管理操作观测pipe写端。
+ * @param never_complete_stop 强制Stop Query始终Pending。
+ * @param revoke_owner_before_stop_receipt 提前清Pending回执session/ref。
+ * @param direct_gate_release release80直接Committed。
+ * @param sequence_rebase_mode SelectMode提高Stop请求序号下限。
+ * @param uncommitted_stop_mode Stop终态故意不设release_committed。
+ * @return 0收到done退出；1..8分别定位context/node/实体/激活/pipe/发布/spin错误。
+ * @details 生命周期上持有publisher/subscription/service直至循环结束。普通模式node激活后写R，跨exec持久模式由外部supervisor提前握手。
+ * 即使返回kOk也只证明这个受控peer传输和fixture处理，不代表真实设备认证或机械动作。
+ */
 int run_peer(const std::string &endpoint, int input, int output, int stops_output,
              bool never_complete_stop, bool revoke_owner_before_stop_receipt,
              bool direct_gate_release, bool sequence_rebase_mode,
@@ -675,6 +1057,11 @@ int run_peer(const std::string &endpoint, int input, int output, int stops_outpu
         return 0;
       }
       if(actual_core)actual_core->snapshot(stimulus);
+      /**
+       * @par 内部发送回调
+       * pump推进同一executor；Status、State、Evidence按该顺序尝试发布，send_*可独立关闭。
+       * publish_state可消费一次QueueFull注入；各topic有限重试后任一失败使peer返回7，不能默默丢页还宣称证据完整。
+       */
       const auto pump = [&] { return executor.spin_some(); };
       const auto status_result = stimulus.send_status
           ? publish_peer_with_retry([&] { return status_publisher.publish(stimulus.status); }, pump)
@@ -705,12 +1092,49 @@ int run_peer(const std::string &endpoint, int input, int output, int stops_outpu
     if (spun != dp::comm::Result::kOk && spun != dp::comm::Result::kBusy) return 8;
   }
 }
+/**
+ * @brief 以steady_clock最多等3s，每2ms重评谓词。
+ * @tparam Predicate 可调用bool谓词，可在其中发刺激/读统计。
+ * @param predicate 满足预期时返回true的检查动作；到期还会再调用一次。
+ * @return 最终谓词值，false让调用者返回自己的场景失败码。
+ * @note 不重置生产Stop原始deadline；测试等待期限与业务确认预算分开。
+ */
 template <typename Predicate> bool wait_for(Predicate predicate) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (!predicate() && std::chrono::steady_clock::now() < deadline)
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   return predicate();
 }
+/**
+ * @brief Host侧驱动一个受控transport场景并读取真实worker观测。
+ * @param endpoint Host PTY串行端点。
+ * @param input peer→Host命令/R通知pipe读端。
+ * @param output Host→peer Stimulus写端。
+ * @param stops_input peer→Host管理操作观测读端。
+ * @param six_axis true使用mask63/六位置，false使用J1 mask1。
+ * @param ack_timeout_mode 缩短组ACK预算为30000µs并持续提供未ACK新State。
+ * @param default_ack_age_mode 停发State，区分State超龄与ACK未确认/超时。
+ * @param never_complete_stop peer一直Pending，收尾必须保留unconfirmed。
+ * @param heartbeat_budget_mode 使用250ms显式State间隔预算。
+ * @param inactive_prime_mode 未激活硬件下允许测试首个保持目标发布。
+ * @param cold_idle_gap_mode 冷Idle断流重观测，不能伪造已授权参考反馈。
+ * @param cold_fault_gap_mode 同为冷态但Status Fault，断流不得走无害Idle例外。
+ * @param raw_capture_mode 开启本地raw文件采集。
+ * @param raw_bad_release_mode 注入不相关parent的释放Status。
+ * @param raw_incomplete_mode 已expect但无终态即stop，要求Incomplete。
+ * @param raw_many_mode 顺序采集run3..11并拒绝旧run Status。
+ * @param raw_order_case raw/ACK/cleanup场景编号，见main模式表与各分支。
+ * @param complete_order_mode Complete顺序/保持排空/刷新场景编号。
+ * @param release_deactivate_mode 显式释放与生命周期停机顺序编号。
+ * @param ticket_mode 1续票据后发pending，2旧票据不发，3授权变化不得借续票据发目标。
+ * @param reject_during_ack_mode 待ACK时收到明确新拒绝，须停机而非等ACK超时。
+ * @param sequence_rebase_mode Stop/Query从最近真实管理序号后继续。
+ * @param uncommitted_stop_mode Stop Query终态缺release_committed。
+ * @param uncommitted_idle_status_mode Idle Status缺release_committed。
+ * @return 0仅表示所选分支断言成立；非零为具体准备/期限/字段/统计失败码，不作为协议业务码。
+ * @details 先构造能力hash、数值限制与合成双时钟，再启动生产DeviceTransport。多数子场景独立提前return，后面普通完整场景不会同时执行。
+ * 局部lambda捕获的对象由本栈帧持有，transport.stop或析构负责停worker后离开栈；测试只在channel mutex内读写非原子共享观测。
+ */
 int run_parent(const std::string &endpoint, int input, int output, int stops_input,
                bool six_axis, bool ack_timeout_mode, bool default_ack_age_mode,
                bool never_complete_stop, bool heartbeat_budget_mode,
@@ -731,6 +1155,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   parameters.profile_id = 1U;
   parameters.configured_mask = six_axis ? 63U : 1U;
   const bool cold_gap_mode = cold_idle_gap_mode || cold_fault_gap_mode;
+  /**
+   * @brief max_state_age为Host反馈年龄门槛，按场景选250ms/200ms/1s。
+   * heartbeat_stop_budget是“接收间隔”预算，ACK timeout是“某一代组确认”预算；三者不能互相代替。
+   * source协调模式额外固定Stop确认250ms，后续Query或第二Stop不得把原窗口重新起算。
+   */
   parameters.max_state_age_us = (heartbeat_budget_mode || cold_gap_mode ||
       release_deactivate_mode >= 8U || raw_order_case >= 51U) ? 250000U :
       (default_ack_age_mode ? 200000U : 1000000U);
@@ -754,13 +1183,28 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   parameters.profile_hash[0] = 3U;
   parameters.firmware_hash[0] = 4U;
   parameters.policy_hash[0] = 5U;
+  /**
+   * @brief 普通能力fixture统一位置[-1,1]rad、速度1rad/s、加速度2rad/s²。
+   * hash首字节1..5只为区分合同/模型/profile/固件/策略，不是部署产品的真实身份摘要。
+   */
   parameters.position_min.fill(-1.0);
   parameters.position_max.fill(1.0);
   parameters.velocity_max.fill(1.0);
   parameters.acceleration_max.fill(2.0);
   std::string capture_path;
+  /**
+   * @brief raw临时路径的栈作用域清理器，只借用capture_path引用。
+   * 它先于transport构造，因此析构逆序使worker/文件先收尾再unlink。
+   */
   struct CaptureCleanup {
+    /**
+     * @brief 引用外层路径，空值表示未创建capture；引用必须比清理器活得更久。
+     */
     const std::string &path;
+    /**
+     * @brief 离开场景时删除非空临时文件，防止大量case留下输出。
+     * @return 无；unlink失败未改变业务返回码。
+     */
     ~CaptureCleanup() { if (!path.empty()) ::unlink(path.c_str()); }
   } capture_cleanup{capture_path};
   if (raw_capture_mode || replayed_stop_host) {
@@ -856,6 +1300,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   const double positions[6]{0.25, six_axis ? 0.2 : NAN, six_axis ? 0.3 : NAN,
                            six_axis ? 0.4 : NAN, six_axis ? 0.5 : NAN, six_axis ? 0.6 : NAN};
   valid.state.set_position_rad(positions);
+  /**
+   * @brief Core模式用boot28673/session77/ref1/motion2/management3和六轴零rad作为初始Run身份。
+   * 这组值与普通7/8/9/10完全不同，用于防止把共同分支常量误当Core真实tuple。
+   */
   if(source_cancel_coordination) {
     valid.status.set_boot_epoch(28673U);valid.state.set_boot_epoch(28673U);
     valid.status.set_session_id(77U);valid.state.set_session_id(77U);
@@ -866,11 +1314,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   }
 
   if (ticket_mode != 0U) valid.state.set_freshness_ticket(9007199254740996ULL);
+  /**
+   * @brief Host steady起点和人工Source域5,000,000,000µs偏移。
+   * 内部device_now_us返回该偏移加Host经过时间，用大偏移检查不能把Source绝对值直接当Host时间。
+   * Core专用peer随后会重写实际Core身份/票据，但该Source时间模拟仍由刺激提供；不是实测设备时钟同步。
+   */
   const auto host_clock_anchor_us = transport_steady_now_us();
   const auto device_now_us = [&] {
     return 5000000000ULL + transport_steady_now_us() - host_clock_anchor_us;
   };
+  /**
+   * @brief 普通模式票据从大于2^53的uint64递增，捕获错误的浮点中转；并非运行时从设备签发的真实票据。
+   */
   std::uint64_t synthetic_ticket = 9007199254740997ULL;
+  /**
+   * @par 内部send回调
+   * 按值接收Stimulus，不污染原夹具；Source时间0自动填device_now_us，普通非ticket模式每次发State递增票据。
+   * 返回pipe是否恰好写满一个宿主对象；这只确认刺激交给peer，不表示wire发布成功或Host已接纳。
+   */
   auto send = [&](Stimulus stimulus) {
     if (stimulus.state.produced_at_us() == 0U)
       stimulus.state.set_produced_at_us(device_now_us());
@@ -878,6 +1339,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       stimulus.state.set_freshness_ticket(++synthetic_ticket);
     return ::write(output, &stimulus, sizeof(stimulus)) == sizeof(stimulus);
   };
+  /**
+   * @par 内部send_rejected_state回调
+   * 保存原state_messages/rejected_states，反复send到两个计数都增加才返回true。
+   * 它证明至少一条消息进入接收并被拒绝；是否保留旧缓存、是否命中某一具体reason由调用处额外断言。
+   */
   auto send_rejected_state = [&](Stimulus stimulus) {
     const auto before = transport.statistics();
     return wait_for([&] {
@@ -893,13 +1359,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   std::shared_ptr<DeviceManagementRequest> captured_release;
   std::shared_ptr<DeviceManagementRequest> captured_query;
   std::uint64_t early_idle_received_upper=0U, early_idle_received_lower=0U, early_idle_callback_count=0U;
+  /**
+   * @brief 测试显式配置六轴保持容差0.003rad；用于区分同值/小偏差被抑制和0.02rad越界目标。
+   * 这是本地准入容差，不代表实际电机到位精度。
+   */
   for(auto &value:channel->post_complete_hold_tolerance_rad)
     value.store(0.003,std::memory_order_release);
+  /**
+   * @brief 先只发State而无Status绑定；必须计拒绝且copy_state仍不可用，防止单条State自建授权。
+   */
   auto unbound = valid;
   unbound.send_status = false;
   if (!wait_for([&] { send(unbound); return transport.statistics().rejected_states != 0U; }) ||
       system.copy_state(&snapshot)) return 48;
   if (release_deactivate_mode==4U && source_cancel_coordination) { valid.status.set_run_id(1U); valid.status.set_attempt_id(1U); valid.status.set_attempt_kind(1U); }
+  /**
+   * @brief 显式释放/生命周期子场景的独立入口，完成后直接return不跑后续普通运动流程。
+   * release80默认Pending、Query81指向80；少数模式直接Committed或完全无gate reply。编号细节见main表。
+   */
   if (release_deactivate_mode != 0U) {
     if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 230;
     if (release_deactivate_mode != 4U) {
@@ -934,6 +1411,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             explicit_release->response.size(), &release_receipt) != wire::CodecResult::kOk ||
             release_receipt.transaction_phase() != (release_deactivate_mode == 7U ? 3U : 1U))
           return 233;
+        /**
+         * @brief 先缓存Stopping7 Status与同op42的早到Idle State，但没有强COMMITTED时不能替换已接纳State。
+         * 先给六个错误State（Pending/op0/错op/boot/motion/management）分别验证拒绝；合法早Idle也仅为待后续回执解锁的候选。
+         */
         if (release_deactivate_mode >= 11U && release_deactivate_mode <= 18U) {
           auto stopping=valid; stopping.send_state=false;
           dummy_ref::JointSnapshot stopping_snapshot{};
@@ -948,6 +1429,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                     channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
                     observed.core_state()==7U && observed.operation_id()==42U;
               })) return 375;
+          /**
+           * @brief 组合陈旧候选负例：新epoch先校准，再连续发新鲜State避免心跳先Stop掩盖候选年龄。
+           * 保留早Idle的原Source产生时刻，不因后来Query回执重新盖接收时间戳来变新鲜。
+           */
           if(release_deactivate_mode==17U) {
             // 新Status epoch会清时钟水位；先接纳真实当前epoch的old-owner State重新校准。
             auto anchor=valid; anchor.send_status=false;
@@ -1007,6 +1492,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           if(release_deactivate_mode==17U) std::this_thread::sleep_for(std::chrono::milliseconds(100));
           // 未有COMMITTED时不更新已接纳State。下一真实Query解锁同op缓存。
         }
+        /**
+         * @brief 只有正式Disabling8且权限/permit已清时，才允许同tuple临时Idle反馈续鲜。
+         * Stopping7不能冒充Disabling8；仍有permit、错boot/motion/management的Idle也不能走此边界例外。
+         */
         if (release_deactivate_mode == 9U) {
           auto disabling = valid;
           disabling.send_state = false;
@@ -1093,6 +1582,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }
           if (!wait_for([&] { return query->complete.load(); })) return 238;
           captured_query = query;
+          /**
+           * @brief complete原子标志可先于worker应用reply；再观察50ms窗口，确保错/待定/未Committed回执不会稍后偷偷采用早Idle。
+           * mode12的强回执op43仍可允许后续全新op43 Idle，不能因为旧缓存op42不匹配而永久拒绝正确反馈。
+           */
           if(release_deactivate_mode>=12U && release_deactivate_mode<=17U) {
             // callback置complete先于worker应用reply；覆盖随后处理窗口，避免即时false假PASS。
             const auto check_until=transport_steady_now_us()+50000U;
@@ -1136,6 +1629,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               query->response.size(), &release_reply) != wire::CodecResult::kOk ||
               !release_reply.release_committed() || release_reply.transaction_phase() != 3U)
             return 239;
+          /**
+           * @brief 强回执后采用已收到的同op早Idle，要求接收Host时间仍落在首次发送窗口。
+           * state_callbacks计数不再增加，证明使用了原候选，不是靠重发一条新State掩盖缓存解锁问题。
+           */
           if((release_deactivate_mode==11U || release_deactivate_mode==18U) && !wait_for([&] {
                 std::lock_guard<std::mutex> lock(channel->mutex); State observed;
                 return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
@@ -1146,6 +1643,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               })) return 378;
           if((release_deactivate_mode==11U || release_deactivate_mode==18U) && transport.statistics().state_callbacks!=early_idle_callback_count)
             return 380;
+          /**
+           * @brief COMMITTED已锁定后让Stopping Status故意落后约500ms，但持续20ms提供当前Idle State。
+           * 要求不新增heartbeat/Stop，区分合法状态传播落后与真实State断流。
+           */
           if(release_deactivate_mode==18U) {
             // 真COMMITTED已锁定；继续20ms新鲜Idle State，旧Stopping Status故意保持500ms。
             auto idle=valid; idle.send_status=false;
@@ -1167,6 +1668,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }
         }
       }
+      /**
+       * @brief 缺最终Idle的释放不能永久豁免心跳；要求state_heartbeat_gap_stops出现后结束。
+       * 此断言只检查停机触发，不检查远端物理停止。
+       */
       if (release_deactivate_mode == 10U) {
         if (!wait_for([&] {
               return transport.statistics().state_heartbeat_gap_stops != 0U;
@@ -1199,6 +1704,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         released.status.set_transaction_phase(3U);
       }
       if (release_deactivate_mode == 9U) released.state.set_state_seq(17U);
+      /**
+       * @brief 已有强release结果但旧owner Disabling Status落后时，持续提供当前Idle State。
+       * 29个20ms新State必须不新增Stop；最终再补Status，不把Status先到当作唯一合法顺序。
+       */
       if (release_deactivate_mode == 6U) {
         auto old_owner_status = valid;
         old_owner_status.send_state = false;
@@ -1268,6 +1777,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       pollfd mgt{stops_input,POLLIN,0};Management::Request actual;
       if(::poll(&mgt,1,3000)!=1 || ::read(stops_input,&actual,sizeof(actual))!=sizeof(actual) ||actual.operation()!=9 || actual.request_id()!=cancel.request_id() || actual.expected_boot_epoch()!=cancel.expected_boot_epoch() || actual.expected_session_id()!=cancel.expected_session_id() || actual.expected_reference_epoch()!=cancel.expected_reference_epoch() || actual.expected_motion_epoch()!=cancel.expected_motion_epoch() || actual.expected_management_epoch()!=cancel.expected_management_epoch() || !std::equal(std::begin(actual.client_instance_id()),std::end(actual.client_instance_id()),cancel.client_instance_id()))return 880;
       double oldfixed[6]{};set_command_identity({28673U,77U,1U,2U,synthetic_ticket});
+      /**
+       * @brief 在旧motion2发布两个未转移目标后清身份，断言generation恰为1/2。
+       * 它只建立本进程producer水位，不能作为已发送/已ACK旧命令证据；后续prime应是新代次。
+       */
       const auto seed1=publish_control_update(oldfixed,6U,0,nullptr);const auto seed2=publish_control_update(oldfixed,6U,0,nullptr);clear_command_identity();
       if(seed1!=1U || seed2!=2U)return 885;
       const auto began=transport_steady_now_us();system.on_deactivate(rclcpp_lifecycle::State());
@@ -1276,6 +1789,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       enabling.status.set_operation_id(0U);enabling.status.set_transaction_phase(2U);enabling.status.set_final_state(0U);
       double fixed[6]{};enabling.state.set_position_rad(fixed);
       bool intent=false, intent_transferred=false, second_stop_requested=false;std::uint64_t gen=0,last_sent=0,second_stop_at=0U,first_unconfirmed_at=0U,rejected_before_intent=0U;
+      /**
+       * @brief 普通观测150ms，expired/second_stop延长至310ms以观察原250ms预算。
+       * 20ms周期提供Core派生观测；目标意图默认20ms后、expired270ms后、second_stop220ms后产生，避免未真正刺激guard就假通过。
+       */
       while(transport_steady_now_us()-began<(prime_test_mode && (!std::strcmp(prime_test_mode,"expired") || !std::strcmp(prime_test_mode,"second_stop"))?310000U:150000U)) {
         if(transport_steady_now_us()-last_sent>=20000U){enabling.state.set_state_seq(enabling.state.state_seq()+1U);enabling.state.set_produced_at_us(device_now_us());send(enabling);last_sent=transport_steady_now_us();}
         if(prime_test_mode && !std::strcmp(prime_test_mode,"second_stop") && !second_stop_requested && (source_safe_prime_guard_only ? transport_steady_now_us()-began>=200000U : (transport.statistics().stop_requests_sent==1U && transport.statistics().stop_requests_confirmed==0U && transport.statistics().unconfirmed_stop_requests==0U && transport_steady_now_us()-began<250000U))) {
@@ -1290,12 +1807,20 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             set_command_identity({!std::strcmp(prime_test_mode,"wrong_boot")?28674U:28673U,!std::strcmp(prime_test_mode,"wrong_session")?78U:77U,!std::strcmp(prime_test_mode,"wrong_ref")?2U:1U,!std::strcmp(prime_test_mode,"old_motion")?2U:3U,ticket});
           if(source_safe_prime_guard_only) channel->diagnostics.enable_details(true);
           rejected_before_intent=transport.statistics().rejected_commands;
+          /**
+           * @brief 记录本次具体generation并显式transfer，保留之前rejected计数。
+           * guard负例须证明该代目标到了worker并增加拒绝，不能把publish0/从未入队误当守卫拒绝。
+           */
           gen=publish_control_update(fixed,6U,0,nullptr);intent=gen!=0U;
           if(intent) intent_transferred=system.transfer_control_update();
           std::fprintf(stderr,"CORE_BOUND_SAFE_HOLD_INTENT generation=%llu boot28673/session77/ref1/newmotion3 pendingCancel(noCOMMITTED)\n",(unsigned long long)gen);
         }
         if(::poll(&response,1,0)==1) {
           Command unexpected{};if(::read(input,&unexpected,sizeof(unexpected))!=sizeof(unexpected))return 882;
+          /**
+           * @brief 正常Pending-D10路径不应再收到SDK prime；出现即889失败。
+           * guard-only正例（含微小drift）则要求Core实际接纳并全6SENT，且Stop sent/confirmed均0；并不要求或声称Cancel COMMITTED。
+           */
           if(!source_safe_prime_guard_only) {
             std::fprintf(stderr,"UNEXPECTED_SDK_PRIME_AFTER_PENDING_D10 producer=%u motion=%u\n",unexpected.producer_seq(),unexpected.motion_epoch());return 889;
           }
@@ -1309,10 +1834,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
       const auto stats=transport.statistics();const auto assertion_elapsed=transport_steady_now_us()-began;
       // 本fixture的Received/Pending先到，合法D10抢占优先；不再要求已废的prime先行。
+      /**
+       * @brief 正常当前D10场景的终态期望：foreign_run/wrong_status_phase/no_owned不发D10；wrong_query_op发过但不能确认。
+       * 其它正例要求恰1次D10且confirmed1，second_stop单独要求不重启期限。
+       */
       const bool expected_denied=prime_test_mode && (!std::strcmp(prime_test_mode,"foreign_run") || !std::strcmp(prime_test_mode,"wrong_status_phase") || !std::strcmp(prime_test_mode,"no_owned"));
       const bool expected_unconfirmed=prime_test_mode && !std::strcmp(prime_test_mode,"wrong_query_op");
       std::fprintf(stderr,"CURRENT_PENDING_D10_FIXTURE mode=%s intent=%d sent=%llu confirmed=%llu elapsed=%llu original250k noSDKprime=1\n",prime_test_mode?prime_test_mode:"positive",intent,(unsigned long long)stats.stop_requests_sent,(unsigned long long)stats.stop_requests_confirmed,(unsigned long long)assertion_elapsed);
       transport.stop();
+      /**
+       * @brief guard-only终态只检查相应守卫证据；不能混用正常D10成功断言。
+       * expired/no_owned/second_stop还要求确实产生intent并出现unconfirmed；second_stop核首次失败仍受原窗口约束。
+       */
       if(source_safe_prime_guard_only) {
       transport.stop();
       if(prime_test_mode && (!std::strcmp(prime_test_mode,"expired") || !std::strcmp(prime_test_mode,"no_owned") || !std::strcmp(prime_test_mode,"second_stop"))) {
@@ -1331,6 +1864,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if(pending_guard && (!intent_transferred || stats.rejected_commands<=rejected_before_intent)) return 895;
         if(pending_guard) {
           bool reached_guard=false;
+          /**
+           * @brief 扫描有界详情寻找COMMAND_PRIME_DIAG且参数精确等于本次generation。
+           * 除拒绝计数增加外，证明目标实际命中了指定prime守卫；不是只因授权已清空而未送达。
+           */
           for(std::size_t index=0;index<DiagnosticJournal::kDetailCapacity;++index) {
             const auto detail=transport.diagnostic_detail_record(index);
             if(detail && std::strncmp(detail->format.data(),"COMMAND_PRIME_DIAG reject seq=",29U)==0 &&
@@ -1359,6 +1896,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     const auto before = transport.statistics().stop_requests_sent;
     if (release_deactivate_mode == 3U) system.on_error(rclcpp_lifecycle::State());
     else system.on_deactivate(rclcpp_lifecycle::State());
+    /**
+     * @brief 普通deactivate是否需要额外Stop由已有强release+Idle证明决定。
+     * mode1/6/7/8/9/11/18要求不重复发；on_error及无证明路径仍发Stop。这里只按发送计数断言，不能将“已发送”扩为“已确认”。
+     */
     const bool expect_stop = release_deactivate_mode != 1U && release_deactivate_mode != 6U && release_deactivate_mode != 11U && release_deactivate_mode != 18U &&
         release_deactivate_mode != 7U &&
         release_deactivate_mode != 8U && release_deactivate_mode != 9U;
@@ -1370,6 +1911,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       if (transport.statistics().stop_requests_sent != before) return 236;
     }
     transport.stop();
+    /**
+     * @brief stop关闭writer后逐记录重读raw文件，检查release/Query请求响应交替、原字节和39字节头身份。
+     * Host记录时间单调；默认Pending再Query有4条管理记录，直接Committed模式只有2条。不重算物理运动结果。
+     */
     if (raw_capture_mode && (release_deactivate_mode == 1U || release_deactivate_mode == 7U)) {
       std::FILE *file = std::fopen(capture_path.c_str(), "rb");
       if (!file || ::fseek(file, 8L, SEEK_SET) != 0) return 244;
@@ -1439,6 +1984,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     return 0;
   }
+  /**
+   * @brief 冷Idle/Fault断流：无reference时raw位置与可控制关节反馈分开。
+   * Idle超预算可请求重新观测而不发Stop，Fault则必须停机且不能采用同一旧State。随后验证错hash与重复seq不能恢复冷态绑定。
+   */
   if (cold_gap_mode) {
     if (!wait_for([&] {
           send(valid);
@@ -1507,6 +2056,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     transport.stop();
     return 0;
   }
+  /**
+   * @brief 历史released Idle采集基线组：15忽略迟到历史页；16未Committed失败；17新boot失败；18陌生session Status保留原值；19转活动态失败。
+   * 这些分支只覆盖新采集的历史例外，不为正在运行的run放宽证据要求。
+   */
   if (raw_order_case >= 15U && raw_order_case <= 19U) {
     auto historical = valid;
     historical.status.set_run_id(2U);
@@ -1598,6 +2151,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         captured.raw_evidence_failure == 0U &&
         captured.raw_evidence_pages_written == 0U ? 0 : 287;
   }
+  /**
+   * @brief 六轴冷态raw准入先保留raw电机rev但不产生copy_state控制快照。
+   * 重复序号、raw缺轴、Source过旧/超前、错误core或raw NaN均拒绝且不刷新Host接收时间；stale/skew分别核计数。
+   */
   if (six_axis && !heartbeat_budget_mode) {
     auto cold = valid;
     cold.status.set_core_state(1U);
@@ -1650,6 +2207,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     valid.state.set_state_seq(2U);
   }
   if(raw_order_case>=87U && raw_order_case<=96U) {valid.status.set_core_state(3U);valid.state.set_core_state(4U);valid.state.set_can_sent_mask(63U);valid.status.set_can_sent_mask(63U);}
+  /**
+   * @brief public Stop失效之后的raw cleanup通道与普通控制缓存分开。
+   * 83原Run锚+新鲜同boot Fault可保留raw；84只有Hold无Run锚、85错boot、86重复Source产生时刻都不得写raw cleanup观测。
+   */
   if((raw_order_case>=83U && raw_order_case<=86U)) {valid.status.set_core_state(raw_order_case==84U?4U:5U);valid.state.set_core_state(raw_order_case==84U?4U:5U);}
   if(!(raw_order_case>=83U && raw_order_case<=86U) && !wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 12;
   if((raw_order_case>=83U && raw_order_case<=86U)) {
@@ -1680,6 +2241,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
 
 
   // 正式State ACK先于Status Hold：不能丢掉已确认generation，也不能凭Status Hold制造ACK。
+  /**
+   * @brief State精确ACK早于Status Hold的排空见证。
+   * 87应记录processed_generation/committed_seq/完整身份并quiescent；88无ACK、89部分mask且无ACK、90错epoch、91Run态、92错session、93陈旧、94错ref、95错boot、96先Stop均不能制造quiescent。
+   * Status变Hold本身不补出State未证明的ACK。
+   */
   if(raw_order_case>=87U && raw_order_case<=96U) {
     channel->inactive_prime_allowed.store(true,std::memory_order_release);
     State accepted;{std::lock_guard<std::mutex> lock(channel->mutex);wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&accepted);}
@@ -1738,6 +2304,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     transport.stop();return passed?0:375;
 
   }
+  /**
+   * @brief Complete时序子场景：请求47绑定旧motion10/management10，完成后保持motion11。
+   * 这里的RPC complete原子标志只表示响应已到；Query47关联结果、Status/State时序、终末producer ACK与后续刷新仍有独立门槛。
+   */
   if (complete_order_mode != 0U) {
     valid.status.set_management_epoch(10U);
     valid.state.set_management_epoch(10U);
@@ -1745,6 +2315,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if (!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                               snapshot.envelope.state_seq == 2U; })) return 166;
     std::uint32_t terminal_sequence=0U;
+    /**
+     * @brief 先发送两代旧epoch目标；mode12故意不ACK最后一代。
+     * Complete须等terminal_producer_seq已确认后才送peer，之后新提交的旧epoch目标只能排空/抑制，不能穿过冻结边界。
+     */
     if(complete_order_mode==11U || complete_order_mode==12U) {
       channel->inactive_prime_allowed.store(true,std::memory_order_release);
       set_command_identity({7U,8U,9U,10U,9007199254740997ULL});
@@ -1782,6 +2356,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if (wire::DummyManageV2RequestCodec::encode(complete,pending->request.data(),
           pending->request.size())!=wire::CodecResult::kOk) return 167;
     { std::lock_guard<std::mutex> lock(channel->mutex); channel->queued=pending; }
+    /**
+     * @brief Complete的expected_management_epoch故意错为11；要求本地failed且100ms没有operation8发送。
+     * 拒绝发生在发送准入层，不能声称远端执行后回滚。
+     */
     if(complete_order_mode==15U) {
       pollfd observed_request{stops_input,POLLIN,0};
       if(::poll(&observed_request,1,100)!=0 ||
@@ -1822,6 +2400,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
          first_command.motion_epoch()!=11U || first_command.producer_seq()!=first) return 202;
       double second_position[6]{};
       std::copy(std::begin(positions),std::end(positions),second_position);
+      /**
+       * @brief 原Complete句柄置canceled是本地句柄清理，不是设备Cancel COMMITTED。
+       * 以新鲜Hold State核同值目标抑制；31错boot、32错epoch、34陈旧载荷应保留旧seq3且无新发布，33偏移0.02rad应拒绝。
+       */
       if(complete_order_mode>=30U && complete_order_mode<=34U) {
         // 原Complete句柄结束并转Query时canceled清理；不能把它当真实Complete终态。
         pending->canceled.store(true,std::memory_order_release);
@@ -1864,6 +2446,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             after_same.stop_requests_sent==before_same.stop_requests_sent &&
             after_same.commands_published==before_same.commands_published ? 0 : 367;
       }
+      /**
+       * @brief Status先报告Hold时须具精确producer序号与完整SENT，才可把同值prime当已排空。
+       * 35同值不重复发布；36偏移目标拒绝；37无SENT、40错序号、41部分SENT不能凭Hold字样放行。38错epoch失效；39保鲜State但让pending过2.1s，不能借旧Status继续抑制新命令。
+       */
       if(complete_order_mode>=35U && complete_order_mode<=41U) {
         auto hold_status=enabling; hold_status.send_state=false; hold_status.send_status=true;
         hold_status.status.set_core_state(4U);
@@ -1983,6 +2569,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     next.state.set_core_state(4U);
     next.state.set_hold_ready(true);
     const auto baseline=transport.statistics();
+    /**
+     * @par 内部send_part回调
+     * status/state布尔选择只发布完成后的哪一半，Source时刻每次刷新；调用点安排Status先、State先、Query先的可接受顺序与超时负例。
+     */
     auto send_part=[&](bool status,bool state) {
       auto part=next;
       part.send_status=status; part.send_state=state;
@@ -2020,6 +2610,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       transport.stop();
       return 0;
     }
+    /**
+     * @par 内部complete_query回调
+     * 复制原Complete身份改QueryResult48/seq48，queried_operation_id固定47，排入channel后等RPC回调complete。
+     * 其返回值不是MotionCompletedHolding/已落盘证明；后续仍检查各状态和资格位。
+     */
     auto complete_query=[&] {
       auto query=complete;
       query.set_operation(12U); query.set_request_id(48U); query.set_request_seq(48U);
@@ -2064,6 +2659,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
       }
     }
+    /**
+     * @brief 完成导出资格组：Status final6/motion_complete与非零链仅建立本地post_complete_begin_ready门槛。
+     * 19无链、21错run、22evidence_lost禁止刷新；23/24/25之后的矛盾Status必须撤销已建立资格。这里不是独立重算该Status声称的全部raw链。
+     */
     if(complete_order_mode>=18U && complete_order_mode<=27U) {
       auto exported=next;
       exported.send_state=false;
@@ -2116,6 +2715,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
       channel->inactive_prime_allowed.store(true,std::memory_order_release);
       set_command_identity({7U,8U,9U,11U,9007199254740997ULL});
+      /**
+       * @brief 刷新目标先入队再清身份应被拒绝；重新收到新State并建立当前身份后，新generation可恢复。
+       * 被拒代次不能冒充已处理/已确认水位。
+       */
       if(complete_order_mode==26U) {
         const auto before=transport.statistics();
         const auto stale=publish_control_update(positions,six_axis ? 6U : 1U,0,nullptr);
@@ -2152,6 +2755,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       Command first_refresh;
       if(::read(input,&first_refresh,sizeof(first_refresh))!=sizeof(first_refresh) ||
          first_refresh.motion_epoch()!=11U || first_refresh.producer_seq()!=refresh) return 210;
+      /**
+       * @brief 发送刷新后、尚无State精确ACK时不得提前将hold_drain标quiescent。
+       */
       if(complete_order_mode==20U) {
         std::lock_guard<std::mutex> lock(channel->mutex);
         if(channel->hold_drain.processed_generation>=refresh || channel->hold_drain.quiescent)
@@ -2175,6 +2781,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       if(!send_part(false,true) || !wait_for([&] {
           return system.copy_state(&snapshot) && snapshot.envelope.state_seq==4U;
         }) || transport.statistics().group_sent_ack_timeouts!=0U) return 211;
+      /**
+       * @brief 收到精确ACK后生成quiescent排空回执；冷却期同值目标抑制但processed_generation仍推进。
+       * 随后切新run、持续保鲜超过1s再刷新，证明不是永久丢弃保持目标；已退休身份的被拒代次不得推进排空水位。
+       */
       if(complete_order_mode==20U) {
         if(!wait_for([&] {
             std::lock_guard<std::mutex> lock(channel->mutex);
@@ -2238,6 +2848,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       transport.stop();
       return 0;
     }
+    /**
+     * @brief Complete待定/保持抑制组：0或0.0008rad小变化不得误发布/误计ACK超时。
+     * mode7的0.02rad偏移超容差应触发Stop；mode14让pending经过约2.2s而继续供新State，避免用State失鲜解释结果。
+     */
     if((complete_order_mode>=6U && complete_order_mode<=8U) ||
        complete_order_mode==10U || complete_order_mode==13U || complete_order_mode==14U) {
       channel->inactive_prime_allowed.store(true,std::memory_order_release);
@@ -2280,8 +2894,19 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     transport.stop();
     return 0;
   }
+  /**
+   * @brief raw采集场景入口；多数按raw_order_case提前结束，不继续执行普通目标/Stop全集。
+   * 采集成功以页面数、失败码、终态flush及文件顺序判断；不把Status宣称的chain当独立原页验证。
+   */
   if (raw_capture_mode) {
     if (raw_order_case != 0U) {
+      /**
+       * @par 内部publish_page（顺序场景）
+       * run/sequence标识证据链位置；category1/2/3/4选择motion/stop/disable/terminal，group_count为报告组数，final_state只写终态。
+       * previous输入前链，next输出本页SHA；kind/parent绑定attempt身份，deliver=false只算字节/摘要而不发页，专供Status先到测试。
+       * 各raw_order_case在此单独改motion、kind、previous、mask等负例。链输入为previous+canonical prefix+evidence_lost；不包含当前chain自身。
+       * 返回true仅表示编码及（选中时）pipe发送成功，真实collector拒绝/落盘由调用点另等统计。
+       */
       auto publish_page = [&](std::uint64_t run, unsigned sequence, unsigned category,
                               unsigned group_count, unsigned final_state,
                               const std::array<std::uint8_t, 32U> &previous,
@@ -2352,7 +2977,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         message.set_chain_sha256(next_digest);
         return !deliver || send(stimulus);
       };
+      /**
+       * @par 内部seed_for回调
+       * 输入run，输出以run小端、boot7及client/四hash填充192字节后的SHA链起点；未写区为零。
+       * 它是当前测试身份的genesis，不是可信外部签名，也不是包含firmware.bin内容的摘要。
+       */
       auto seed_for = [&](std::uint64_t run) {
+        /**
+         * @brief 无组首终态使用run3/boot7及固定身份构造genesis；terminal_reason14解释0组终态。
+         * 释放后落页仍应在39字节头中保留原boot7/session8，而不是改成已清零owner。
+         */
         std::array<std::uint8_t, 192U> seed{};
         for (unsigned i = 0U; i < 8U; ++i)
           seed[i] = static_cast<std::uint8_t>(run >> (8U * i));
@@ -2366,6 +3000,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         ::SHA256(seed.data(), seed.size(), previous.data());
         return previous;
       };
+      /**
+       * @brief 多个后继run在Status落后时依赖前run终态flush精确绑定。
+       * 43依次允许run1→2→3；44旧run回执、45错boot、46错session、47错run、48缺终态均失败且不得多落页。
+       * 49迟到终态Status链错误使failure=6，50迟到正确链可匹配；验证原页/Status异步顺序，非物理动作顺序。
+       */
       if (raw_order_case >= 43U && raw_order_case <= 50U) {
         valid.status.set_core_state(3U);
         valid.status.set_final_state(0U);
@@ -2518,6 +3157,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             result.raw_evidence_pages_written == 6U &&
             result.raw_evidence_last_terminal_written_run == 3U ? 0 : 334;
       }
+      /**
+       * @brief 完成Hold刷新首原页可早于后继Status，但必须有已flush的前run完成证据。
+       * 34正常，35/36错回执boot/session，37无前终态，38零motion，39跳run，40部分mask，41无motion_complete，42清回执均拒绝。
+       * 51..58进一步让Status过250ms而State保鲜：51允许；52/53/54错身份，55坏链，56State也失鲜，57非Hold，58回执chain_valid=false均拒绝。
+       */
       if ((raw_order_case >= 34U && raw_order_case <= 42U) ||
           (raw_order_case >= 51U && raw_order_case <= 58U)) {
         valid.status.set_core_state(3U);
@@ -2583,6 +3227,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             ongoing.state.set_core_state(6U);
             ongoing.state.set_hold_ready(false);
           }
+          /**
+           * @brief 用Host经过300ms刻意陈旧Status；20ms推进State，选定负例则不保鲜或改为非Hold。
+           * 末尾直接核state/status接收年龄，避免只凭sleep猜测各谓词实际达到。
+           */
           const auto start = transport_steady_now_us();
           std::uint32_t seq = 2U;
           while (transport_steady_now_us() - start <= 300000U) {
@@ -2684,6 +3332,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         return transport.statistics().raw_evidence_failure == 0U &&
             transport.statistics().raw_evidence_pages_written == 4U ? 0 : 315;
       }
+      /**
+       * @brief 取消后release/刷新首页早到组，按原run及已flush安全Hold证明接纳后继。
+       * 20..23为独立release attempt（kind3/parent），24..33为新motion刷新；59..70附加安全Hold页与陈旧Status/新鲜State组合。
+       * 各负例的确切字段变化见main编号表和publish_page，而非仅用“先到”名称推断都应通过。
+       */
       if ((raw_order_case >= 20U && raw_order_case <= 33U) ||
           (raw_order_case >= 59U && raw_order_case <= 70U)) {
         const bool refresh = raw_order_case >= 24U;
@@ -2704,6 +3357,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                         [](auto byte) { return byte == 0U; })));
             }) || !publish_page(motion_run, 0U, raw_order_case >= 59U ? 1U : 2U, 1U, 0U, seed_for(motion_run), &motion_group) ||
             !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; })) return 288;
+        /**
+         * @brief 当前取消run先motion页，再安全保持页，最后final7；共享flush必须chain_valid且hold_epoch10。
+         * 终态motion_epoch仍指原attempt9，安全保持页使用后继10；不能用终态本身的epoch代替已完整SENT的hold epoch。
+         */
         if (raw_order_case >= 59U) {
           std::array<std::uint8_t, 32U> safety_group{};
           if (!publish_page(motion_run, 1U, 2U, 2U, 0U, motion_group, &safety_group) ||
@@ -2721,6 +3378,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               receipt.run_id != motion_run || receipt.final_state != 7U ||
               !receipt.chain_valid || !receipt.safety_hold_valid ||
               receipt.safety_hold_motion_epoch != 10U) return 357;
+          /**
+           * @brief 显式终态Status变体把已采集final7摘要写入Hold Status，再分别破坏final/chain/failure。
+           * 检查后继页拒绝，所以不把“Status final7”单字段当作安全保持证明。
+           */
           if(cancel_status_terminal7_variant){
             auto hold_terminal_status=valid;hold_terminal_status.send_state=false;
             hold_terminal_status.status.set_core_state(4U);hold_terminal_status.status.set_final_state(7U);
@@ -2734,6 +3395,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             if(cancel_status_bad_flags==9U)hold_terminal_status.status.set_first_failure_reason(1U);
             if(!send(hold_terminal_status) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&observed)==wire::CodecResult::kOk && observed.core_state()==4U && observed.final_state()==hold_terminal_status.status.final_state() && observed.run_id()==motion_run;}))return 363;
           }
+          /**
+           * @brief 先得到真实本地writer终态flush，再只改共享回执某字段隔离资格负例。
+           * 这类测试故意公开发布错误回执，不等于生产writer会自然产生该错误组合。
+           */
           auto invalid_receipt = receipt;
           if (raw_order_case == 60U) invalid_receipt.boot_epoch = 8U;
           if (raw_order_case == 61U) invalid_receipt.session_id = 9U;
@@ -2773,6 +3438,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           std::lock_guard<std::mutex> lock(channel->mutex);
           const auto now = transport_steady_now_us();
           State observed;
+          /**
+           * @brief State失鲜组合负例显式检查stale或heartbeat Stop已经发生。
+           * 因此通过只证明组合安全拒绝，不声称单独隔离某一个binding年龄谓词。
+           */
           if (raw_order_case == 64U) {
             if (accepted_state_at == 0U || now - accepted_state_at <= 250000U) return 359;
           } else if (wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
@@ -2895,6 +3564,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             }) || transport.statistics().raw_evidence_failure != 0U ||
             transport.statistics().raw_evidence_last_terminal_written_run != motion_run)
           return 292;
+        /**
+         * @brief deliver=false先算后继终态链供Status发布，但不把终页送collector；随后补同字节终页再切下一run。
+         * 验证提前Status不误判为已flush，也不在真实终页补齐后永久阻止后继。
+         */
         if (raw_order_case == 33U) {
           if (!publish_page(next_run, 1U, 4U, 1U, 6U, release_page,
                             &release_terminal, 1U, 0U, false)) return 302;
@@ -2983,6 +3656,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }) || !publish_page(1U, 0U, 2U, 1U, 0U, seed_for(1U), &group_one) ||
           !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; }))
         return 251;
+      /**
+       * @brief 前run尚无验证终态时直接来run2页，必须失败且只保留已落盘首run1页。
+       */
       if (raw_order_case == 6U) {
         if (!publish_page(2U, 0U, 2U, 1U, 0U, seed_for(2U), &group_two) ||
             !wait_for([&] { return transport.statistics().raw_evidence_failure != 0U; })) return 260;
@@ -3018,6 +3694,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         return transport.statistics().raw_evidence_pages_written == 2U ? 0 : 263;
       }
       if (transport.statistics().raw_evidence_failure != 0U) return 254;
+      /**
+       * @brief run2执行中可先收到released Idle Status，但余下disable/terminal原页仍绑定原owner session8。
+       * 9完整收齐后按记录索引核先页→released Status→disable页→terminal页→final Status；10错boot、11错kind、12坏链、13缺最终Status、14最终链不符分别拒绝。
+       */
       if (raw_order_case >= 9U && raw_order_case <= 14U) {
         auto released_state = valid;
         released_state.send_status = false;
@@ -3207,7 +3887,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       std::fclose(file);
       return page_two_index >= 0 && status_two_index > page_two_index ? 0 : 259;
     }
+    /**
+     * @brief 顺序run3..11共9run/18页，完整flush后回收有限run绑定槽。
+     * run4及run11插入旧run3 Status须增加stale_run_status_rejections但不覆盖当前run，也不把可忽略旧Status升级为collector失败。
+     */
     if (raw_many_mode) {
+      /**
+       * @par 内部publish_page（多run压力）
+       * run和terminal选择本run的seq0组页/seq1终页，previous/next传递32字节链；每组固定六轴全SENT。
+       * 只供run3..11闭合与回收检查，不生成真实CAN发送时间或运动完成实测。
+       */
       auto publish_page = [&](std::uint64_t run, bool terminal,
                               const std::array<std::uint8_t, 32U> &previous,
                               std::array<std::uint8_t, 32U> *next) {
@@ -3303,6 +3992,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           channel->raw_evidence_failure.load(std::memory_order_acquire) == 0U &&
           capture.raw_evidence_pages_written == 18U ? 0 : 147;
     }
+    /**
+     * @brief 已从Status expect到run却没有终页即stop；collector必须锁存Incomplete并让ready=false/initialization_failed=true。
+     * 这是证据采集失败状态，不能把缺页当作无动作或成功释放。
+     */
     if (raw_incomplete_mode) {
       transport.stop();
       const auto capture = transport.statistics();
@@ -3318,6 +4011,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     released_status.status.set_reference_epoch(0U);
     released_status.status.set_management_epoch(1U);
     if (raw_bad_release_mode) released_status.status.set_parent_run_id(42U);
+    /**
+     * @brief 将释放Status指向不相关parent42，要求采集失败及共享失败码锁存。
+     * 只能证明绑定门槛触发，不说明对端真实执行了释放。
+     */
     if (raw_bad_release_mode) {
       if (!send(released_status) || !wait_for([&] {
             return transport.statistics().raw_evidence_failure != 0U;
@@ -3391,6 +4088,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     return capture.raw_evidence_failure == 0U &&
         channel->raw_evidence_failure.load(std::memory_order_acquire) == 0U && found_page ? 0 : 139;
   }
+  /**
+   * @brief 普通完整场景先要求连续100ms得到稳定可用快照；若绑定失效变化则升seq并重新计稳定窗。
+   * 该准备过程允许异步bootstrap完成，不把一次瞬间copy成功当作长期稳定。
+   */
   auto stable_sequence = valid.state.state_seq();
   auto observed_invalidations = transport.statistics().invalidations;
   auto stable_since = std::chrono::steady_clock::now();
@@ -3410,6 +4111,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       })) return 54;
   if (snapshot.position[0] != 0.25 ||
       (six_axis ? snapshot.position[1] != 0.2 : !std::isnan(snapshot.position[1]))) return 13;
+  /**
+   * @brief 先等102ms不得Stop，之后超过250ms必须因State间隔停机。
+   * 原State重放、仅补Status、即使新seq同授权State也不能绕过已锁存Stop恢复copy_state。
+   */
   if (heartbeat_budget_mode) {
     const auto stops_before = transport.statistics().state_heartbeat_gap_stops;
     std::this_thread::sleep_for(std::chrono::milliseconds(102));
@@ -3445,6 +4150,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     std::lock_guard<std::mutex> lock(channel->mutex);
     if (channel->observation.state_received_us != accepted_observation_us) return 57;
   }
+  /**
+   * @par 内部restore_valid_snapshot回调
+   * 将合法seq推进后重发，直到copy_state精确看到该seq；用于普通身份负例之间恢复夹具，不清除生产Stop锁存。
+   */
   auto restore_valid_snapshot = [&] {
     valid.state.set_state_seq(++stable_sequence);
     return wait_for([&] {
@@ -3458,6 +4167,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
         snapshot.envelope.state_seq == stable_sequence; })) return 139;
   }
+  /**
+   * @brief 允许未activate时由worker从全局最新目标取得一次prime；本分支没有显式transfer。
+   * 核实际peer收到的wire producer/motion，再stop清身份；不证明正式生命周期之外任意目标可获准。
+   */
   if (inactive_prime_mode) {
     channel->inactive_prime_allowed.store(true);
     set_command_identity({valid.status.boot_epoch(), valid.status.session_id(),
@@ -3517,6 +4230,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         command.position_rad()[0], command.position_rad()[1]);
     return 17;
   }
+  /**
+   * @brief 待ACK命令期间Status拒绝计数3→4，核rejected_ack的完整身份/序号。
+   * 明确拒绝应立即触发Stop尝试且ACK timeout仍0，不能把设备拒绝拖到超时后才发现。
+   */
   if (reject_during_ack_mode) {
     valid.status.set_command_reject_count(4U);
     valid.status.set_can_sent_mask(parameters.configured_mask);
@@ -3538,6 +4255,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     clear_command_identity();
     return 0;
   }
+  /**
+   * @brief 一个目标在途时排入第二目标，持续保鲜但暂不增加票据。
+   * 75ms后ACK首目标；mode1新票据应发送第二目标并携带新ticket，mode2旧票据不发，mode3换session必须失效而不能借续票据发旧owner目标。
+   */
   if (ticket_mode != 0U) {
     const auto second_position = std::array<double, 6>{0.26, 0.2, 0.3, 0.4, 0.5, 0.6};
     const auto second_generation = publish_control_update(second_position.data(), 6U, 0, nullptr);
@@ -3576,6 +4297,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     clear_command_identity();
     return 0;
   }
+  /**
+   * @brief 两种失效原因单独安排：ACK模式继续新seq未ACK State，年龄模式完全停发State。
+   * 前者只计组ACK超时，后者计State stale且未确认ACK归因总数为1；cleanup仍未收到完整Stop证明时必须unconfirmed。
+   */
   if (ack_timeout_mode || default_ack_age_mode) {
     auto unacked = valid;
     unacked.send_status = false;
@@ -3636,6 +4361,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   invalid.state.set_position_rad(wrong_position);
   if (!send_rejected_state(invalid) ||
       !system.copy_state(&snapshot) || snapshot.position[0] != 0.25) return 18;
+  /**
+   * @brief 逐项改设备/profile/mask、Source未来/过去、session/boot/reference/motion，要求拒绝且保留0.25rad旧快照。
+   * 每项最多三次恢复重试是夹具调度容错，不表示生产会自动重试非法命令。
+   */
   for (unsigned fault = 0U; fault < 9U; ++fault) {
     bool rejected_while_snapshot_retained = false;
     for (unsigned attempt = 0U; attempt < 3U && !rejected_while_snapshot_retained; ++attempt) {
@@ -3663,6 +4392,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   }
   // A status authority transition must immediately invalidate old state and commands.
   // State carrying the previous authority cannot repopulate the snapshot.
+  /**
+   * @brief Status改变session/ref/motion必须立即清控制快照和全局目标身份。
+   * 旧State不得补回缓存；只有与新Status完整tuple匹配的新State可重新建立观测，不能只更新一个epoch。
+   */
   for (unsigned changed_field = 0U; changed_field < 3U; ++changed_field) {
     auto transition = valid;
     transition.status.set_management_epoch(valid.status.management_epoch() + 1U);
@@ -3704,6 +4437,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         return system.copy_state(&snapshot) && snapshot.envelope.state_seq == 3U;
       }) || transport.statistics().invalidations <= before_asynchronous_epoch) return 53;
   valid = asynchronous_epoch;
+  /**
+   * @brief 迟到management_epoch9的旧Status不应覆盖已见10或引起再次授权失效。
+   * 随后用独立Committed管理回执测试Status暂缺时可接受的精确下一motion代次。
+   */
   auto reordered = valid;
   reordered.status.set_management_epoch(9U);
   reordered.status.set_session_id(0U);
@@ -3725,6 +4462,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         send(valid);
         return transport.statistics().rejected_commands > before_unauthorized;
       })) return 66;
+  /**
+   * @par 内部send_fresh_state回调
+   * 仅发合法当前State、递增seq并让send填新Source时间，防止等待管理RPC时先触发无关心跳失效。
+   */
   auto send_fresh_state = [&] {
     auto heartbeat = valid;
     heartbeat.send_status = false;
@@ -3732,6 +4473,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     heartbeat.state.set_produced_at_us(0U);
     return send(heartbeat);
   };
+  /**
+   * @par 内部wait_for_management回调
+   * 参数为可替换的shared_ptr请求引用；等complete期间每50ms发新State。只有少于100ms的prompt failed才复制同请求原文，10ms退避后排新本地句柄。
+   * 失败超过100ms标failed_in_flight而不继续；这是受控fixture策略，不是任意远端超时都安全重发的保证，更不会重置生产Stop deadline。
+   * 返回值同时要求心跳pipe发送、等待完成及无长时in-flight失败。
+   */
   auto wait_for_management = [&](std::shared_ptr<DeviceManagementRequest> &request) {
     const auto started = std::chrono::steady_clock::now();
     auto attempt_started = started;
@@ -3784,6 +4531,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     return sent && completed && !failed_in_flight;
   };
+  /**
+   * @brief Begin42回执精确推进下一motion，证明该绑定可在Status暂缺时接纳新State/命令。
+   * 之前用同新epoch但无回执的目标应被拒绝；本回执来自受控peer，不代表实际设备授权。
+   */
   Management::Request authorization;
   authorization.set_schema_major(2U);
   authorization.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
@@ -3888,6 +4639,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         send(valid);
         return transport.statistics().status_messages > before_ack;
       })) return 62;
+  /**
+   * @brief peer故意回motion跳2，后继State不得借这个异常回执获得许可。
+   * 之后Query0只读应答和QueryResult指向另一operation777同样不能授权新的motion。
+   */
   authorization.set_request_id(43U);
   authorization.set_request_seq(43U);
   authorization.set_expected_motion_epoch(next_motion_epoch);
@@ -3961,6 +4716,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   valid.state.set_produced_at_us(0U);
   if (!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                                   snapshot.envelope.state_seq == stable_sequence; })) return 108;
+  /**
+   * @brief 为后续超龄Stop建立最后有效授权tuple；Stop必须使用该回执的motion/management，而非旧Status缓存。
+   */
   authorization.set_request_id(46U);
   authorization.set_request_seq(sequence_rebase_mode ? 2100000000U : 46U);
   authorization.set_operation(6U);
@@ -3977,6 +4735,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   Management::Response stop_authority_reply;
   if (wire::DummyManageV2ResponseCodec::decode(stop_authority->response.data(),
       stop_authority->response.size(), &stop_authority_reply) != wire::CodecResult::kOk) return 132;
+  /**
+   * @brief 用SelectMode请求序号2183397839提升发送序号水位。
+   * 后继Stop应2183397840且独立request_id，Query再加1并保留原Stop绑定；不能在新请求类型中从旧序号重新开始。
+   */
   if (sequence_rebase_mode) {
     auto select_mode = authorization;
     select_mode.set_request_id(2183397839ULL);
@@ -3988,6 +4750,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     { std::lock_guard<std::mutex> lock(channel->mutex); channel->queued = pending_select; }
     if (!wait_for_management(pending_select)) return 265;
   }
+  /**
+   * @brief 故意停止新State等待生产worker失效；保存末次Source产生时刻供Stop后重放负例使用。
+   * Host now和Source produced不可直接相减，年龄判定由transport映射层负责。
+   */
   const auto accepted_produced_us = snapshot.envelope.produced_at_us;
   const auto before_timeout = transport.statistics().invalidations;
   if (!wait_for([&] { return transport.statistics().invalidations > before_timeout; })) return 100;
@@ -4011,6 +4777,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                    stop_request.client_instance_id()))) return 266;
   pollfd query_response{stops_input, POLLIN, 0};
   if (::poll(&query_response, 1, 3000) != 1) return 139;
+  /**
+   * @brief 查询必须指向原Stop request_id，Query自己的request_id独立且configured_mask相同。
+   * 首个Pending与后续终态即使到了，未见匹配Idle也不能提前stop_requests_confirmed。
+   */
   Management::Request first_stop_query;
   if (::read(stops_input, &first_stop_query, sizeof(first_stop_query)) != sizeof(first_stop_query) ||
       first_stop_query.operation() != 12U ||
@@ -4025,6 +4795,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
        !std::equal(parameters.client_instance_id.begin(), parameters.client_instance_id.end(),
                    first_stop_query.client_instance_id()))) return 267;
   if (transport.statistics().stop_requests_confirmed != 0U) return 141;
+  /**
+   * @brief 始终Pending的Stop在transport.stop收尾后仍应未确认。
+   * 把unconfirmed作为预期负例通过，不是停止成功。
+   */
   if (never_complete_stop) {
     transport.stop();
     if (transport.statistics().stop_requests_confirmed != 0U ||
@@ -4075,6 +4849,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   stop_idle.state.set_state_seq(stable_sequence + 1U);
   const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
   stop_idle.state.set_raw_motor_position_rev(idle_raw);
+  /**
+   * @brief 跨exec复用路径读取raw文件，证明匹配Idle确已走实际回调并落盘。
+   * 即使接纳层因先前Stop失败拒绝Idle，raw可见也不能把旧operation900回执关联到当前Stop；最终confirmed必须0。
+   */
   if (replayed_stop_host) {
     const auto before_idle = transport.statistics();
     const auto idle_sent_at = transport_steady_now_us();
@@ -4125,6 +4903,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     return stats.stop_requests_confirmed == 0U &&
         stats.unconfirmed_stop_requests != 0U ? 0 : 355;
   }
+  /**
+   * @brief Idle Status故意release_committed=false并推进管理代次，避免被旧Status丢弃路径掩盖。
+   * 核Status/State真实进入观测，仍须保持Stop未确认。
+   */
   if (uncommitted_idle_status_mode) {
     stop_idle.status.set_release_committed(false);
     stop_idle.status.set_management_epoch(stop_idle.status.management_epoch() + 1U);
@@ -4154,6 +4936,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     return stats.stop_requests_confirmed == 0U &&
         stats.unconfirmed_stop_requests != 0U ? 0 : 274;
   }
+  /**
+   * @brief Stop Query“终态”本身未release_committed，即使随后发送合法样式Idle也不能补足该强回执。
+   */
   if (uncommitted_stop_mode) {
     if (!send(stop_idle)) return 269;
     if (!wait_for([&] { return transport.statistics().unconfirmed_stop_requests != 0U; }))
@@ -4163,6 +4948,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     return stats.stop_requests_confirmed == 0U &&
         stats.unconfirmed_stop_requests != 0U ? 0 : 268;
   }
+  /**
+   * @brief 在已见Disabling8后发未Committed Idle Status，要求保留Disabling观测。
+   * 随后补完整Idle Status/State才允许confirmed，防止仅core_state=Idle单字段越过释放证明。
+   */
   auto uncommitted_idle = stop_idle;
   uncommitted_idle.send_state = false;
   uncommitted_idle.status.set_release_committed(false);
@@ -4184,6 +4973,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       transport.statistics().unconfirmed_stop_requests != 0U) return 133;
   if (six_axis && (transport.statistics().state_heartbeat_gap_stops == 0U ||
       transport.statistics().last_state_gap_us < parameters.state_publish_period_us * 5U)) return 122;
+  /**
+   * @brief Stop确认后旧Status不能回退当前motion；旧seq/旧Source时刻及旧授权State均不得复活控制快照。
+   */
   auto stale_status_after_stop = valid;
   stale_status_after_stop.send_state = false;
   const auto stale_status_count = transport.statistics().status_messages;
@@ -4249,6 +5041,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   (void)system.copy_state(&snapshot);
+  /**
+   * @brief 新boot使旧状态/目标身份立即失效；旧boot后续到达也不能重建缓存。
+   * Stop已锁存时即使新boot State seq1仍拒绝，不能把重启看成自动重新授权。
+   */
   auto rebooted = valid;
   rebooted.status.set_boot_epoch(11U);
   rebooted.state.set_boot_epoch(11U);
@@ -4285,6 +5081,33 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   return 0;
 }
 }  // namespace
+/**
+ * @brief 创建独立PTY桥/peer子进程并运行一个Host场景。
+ * @param six_axis true使用mask63/六位置，false使用J1 mask1。
+ * @param ack_timeout_mode 缩短组ACK预算为30000µs并持续提供未ACK新State。
+ * @param default_ack_age_mode 停发State，区分State超龄与ACK未确认/超时。
+ * @param never_complete_stop peer一直Pending，收尾必须保留unconfirmed。
+ * @param revoke_owner_before_stop_receipt peer Pending时先清owner。
+ * @param heartbeat_budget_mode 使用250ms显式State间隔预算。
+ * @param inactive_prime_mode 未激活硬件下允许测试首个保持目标发布。
+ * @param cold_idle_gap_mode 冷Idle断流重观测，不能伪造已授权参考反馈。
+ * @param cold_fault_gap_mode 同为冷态但Status Fault，断流不得走无害Idle例外。
+ * @param raw_capture_mode 开启本地raw文件采集。
+ * @param raw_bad_release_mode 注入不相关parent的释放Status。
+ * @param raw_incomplete_mode 已expect但无终态即stop，要求Incomplete。
+ * @param raw_many_mode 顺序采集run3..11并拒绝旧run Status。
+ * @param raw_order_case raw/ACK/cleanup场景编号，见main模式表与各分支。
+ * @param complete_order_mode Complete顺序/保持排空/刷新场景编号。
+ * @param release_deactivate_mode 显式释放与生命周期停机顺序编号。
+ * @param ticket_mode 1续票据后发pending，2旧票据不发，3授权变化不得借续票据发目标。
+ * @param reject_during_ack_mode 待ACK时收到明确新拒绝，须停机而非等ACK超时。
+ * @param sequence_rebase_mode Stop/Query从最近真实管理序号后继续。
+ * @param uncommitted_stop_mode Stop Query终态缺release_committed。
+ * @param uncommitted_idle_status_mode Idle Status缺release_committed。
+ * @return 原样返回run_parent业务检查码；PTY/pipe/fork失败为30/31/32。
+ * @details 子进程只留peer需要的pipe端；父进程启桥后调用run_parent。完成或失败均SIGTERM并waitpid回收peer，再关父端pipe。
+ * 这里没有按peer退出码额外判成功，主要由Host的期限、观测、消息/统计断言决定；不得声称已完整验证所有peer内部错误路径。
+ */
 int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_age_mode,
                        bool never_complete_stop = false,
                        bool heartbeat_budget_mode = false,
@@ -4336,6 +5159,13 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
   ::close(requests[1]); ::close(responses[0]); ::close(stops[0]);
   return result;
 }
+/**
+ * @brief 执行场景并返回完整业务整数码，交外层main统一转换进程退出值。
+ * @param argc 命令行个数。
+ * @param argv 参数数组；argv[2]可能在选模式时改指向本地稳定字符串。
+ * @return 原业务检查码；fixture_result专用回归可返回256/512/−1，未知源码模式64。
+ * @details safe_prime_guard_*选择首RPC缺失守卫，safe_prime_*选择正常Pending-D10，cancel_coordination仅允许positive。限定13种后缀，不认识的模式不会默默跑默认正例。
+ */
 static int run_fixture_main(int argc, char **argv) {
   // 仅测试入口：覆盖业务错误码经真实fork/exec传回父进程，不能被低8位截断成成功。
   if (argc == 3 && std::strcmp(argv[1], "fixture_result") == 0) {
@@ -4373,6 +5203,10 @@ static int run_fixture_main(int argc, char **argv) {
     argv[2]=const_cast<char*>("running_deactivate");
   }
 
+  /**
+   * @brief 选择Hold Status变体71..82后映射raw59..70，复用同一真实断言分支。
+   * terminal7命令还可叠加final4/5/6/9、错/零链、failure字段与Stopping不ready；不是另创一个未经检查的默认case。
+   */
   cancel_hold_case=0U;
   if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_fresh_state")==0) cancel_hold_case=71U;
   if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_receipt_boot")==0) cancel_hold_case=72U;
@@ -4440,6 +5274,93 @@ static int run_fixture_main(int argc, char **argv) {
   const bool raw_bad_release_mode = argc == 3 && std::strcmp(argv[2], "raw_bad_release") == 0;
   const bool raw_incomplete_mode = argc == 3 && std::strcmp(argv[2], "raw_incomplete") == 0;
   const bool raw_many_mode = argc == 3 && std::strcmp(argv[2], "raw_many") == 0;
+  /**
+   * @brief CLI raw/cleanup/ACK编号索引；每个模式只执行一个对应分支。
+   * @details 71..82是Hold Status选择器，先减12映射59..70；terminal7变体再叠加final/chain/failure字段故障。22及部分间隙无CLI映射，不能当作已执行case。
+   * 编号1：后继run2首页先于Status，可落第3页；文件索引要求首页在Status之前。
+   * 编号2：run2 Status错boot，已落3页后锁存采集失败。
+   * 编号3：run2 Status错session，已落3页后锁存采集失败。
+   * 编号4：run2首页改kind2，前run完整仍不能借其资格接纳，页数停2。
+   * 编号5：run2首页previous链被破坏，不能落第3页。
+   * 编号6：run1只有首组页无终态，run2不得开始，页数停1。
+   * 编号7：run2有页/终态但始终缺其Status，stop后必须失败。
+   * 编号8：重复run2 seq0，页数停3并采集失败。
+   * 编号9：释放中Status清owner后，后续disable/terminal仍归原session；读文件核五阶段索引。
+   * 编号10：释放中Status错boot，拒绝并采集失败。
+   * 编号11：释放中disable页改kind，不能续上已绑定run2。
+   * 编号12：释放中disable页前链错误，页数停3。
+   * 编号13：释放终页已落但缺最终带链Status，stop报采集失败。
+   * 编号14：最终Status摘要与已落终页不符，页数虽5仍失败。
+   * 编号15：新采集见合法历史released Idle，迟到该历史原页不落盘也不误失败。
+   * 编号16：历史Idle未release_committed，不能建立无害历史基线。
+   * 编号17：历史基线之后换boot使采集失败。
+   * 编号18：历史基线之后陌生session Status不得覆盖原session0，不立即误报采集失败。
+   * 编号19：历史基线之后变活动Hold/非终态使采集失败。
+   * 编号20：取消后独立release首页早到：本fixture要求失败关闭，不能将未获准后继当合法release。
+   * 编号21：独立release首页parent错120，失败关闭。
+   * 编号23：release run退到120且parent119，旧run拒绝。
+   * 编号24：同owner新motion124首页早于Status，完整前run终态允许后继。
+   * 编号25：首页已落后后继Status错boot，锁存Identity失败。
+   * 编号26：后继Status错session，原run终态水位保留，stop后Incomplete。
+   * 编号27：后继motion run不递进，首页拒绝。
+   * 编号28：刷新首页category2替代要求的motion1，拒绝。
+   * 编号29：刷新首页group_count0，拒绝。
+   * 编号30：刷新首页sent_mask31非全六轴，拒绝。
+   * 编号31：刷新首页motion_epoch0，拒绝。
+   * 编号32：后继终页已落，最终Status链翻位，失败。
+   * 编号33：先只算终页摘要而不发送，发布终态Status后再补原页，后继run仍可开始。
+   * 编号34：完成后Hold刷新首页先于Status，前run1 flush成立则允许run2。
+   * 编号35：前run flush回执boot错误，后继首页拒绝。
+   * 编号36：前run flush回执session错误，后继首页拒绝。
+   * 编号37：前run缺终页，后继首页拒绝。
+   * 编号38：后继首页motion0，拒绝。
+   * 编号39：直接跳run3，拒绝。
+   * 编号40：后继首页sent_mask31，拒绝。
+   * 编号41：前终态没有motion_complete，后继首页拒绝。
+   * 编号42：前run flush共享回执清空，不能以统计水位代替强回执。
+   * 编号43：连续三个run均靠前run终态flush建立后继，不要求Status立即跟上。
+   * 编号44：发布旧run1终态回执，run3不得借旧回执前进。
+   * 编号45：run2回执boot错误，run3拒绝。
+   * 编号46：run2回执session错误，run3拒绝。
+   * 编号47：run2回执标run3，实际后继绑定仍拒绝。
+   * 编号48：run2未终态，run3拒绝。
+   * 编号49：run3首页到后才来run2错误链终态Status，failure6且总页5。
+   * 编号50：同样迟到但run2链精确匹配，可继续run3最终共6页。
+   * 编号51：Status陈旧>250ms而Hold State持续新鲜，已有完成flush仍允许后继首页。
+   * 编号52：同51但回执boot错，拒绝。
+   * 编号53：同51但回执session错，拒绝。
+   * 编号54：同51但回执run错，拒绝。
+   * 编号55：同51但首页previous链错，Chain失败。
+   * 编号56：Status和State都陈旧，不能以完成flush放宽当前反馈年龄。
+   * 编号57：State改非Hold6且不ready，后继拒绝。
+   * 编号58：回执chain_valid=false，后继拒绝。
+   * 编号59：取消final7已flush，安全Hold页epoch10且当前Hold State新鲜，即使Status陈旧也可接后继。
+   * 编号60：取消flush回执boot错，后继拒绝。
+   * 编号61：取消flush回执session错，后继拒绝。
+   * 编号62：取消flush回执run122不符123，后继拒绝。
+   * 编号63：取消flush回执chain_valid=false，后继拒绝。
+   * 编号64：取消后State不再保鲜，须已有stale/heartbeat停机；属于组合拒绝。
+   * 编号65：取消后State非Hold6（特选变体为Stopping7），后继拒绝。
+   * 编号66：Hold但hold_ready=false，后继拒绝。
+   * 编号67：State management_epoch1与所需0不符，后继拒绝。
+   * 编号68：取消终态回执safety_hold_valid=false，拒绝。
+   * 编号69：安全hold epoch被改11，拒绝。
+   * 编号70：后继首页motion_epoch11与安全hold10不匹配，拒绝。
+   * 编号83：Run锚已建立后public Stop失效，当前同boot新Fault可供raw cleanup，普通控制State仍不可用。
+   * 编号84：仅Hold未有Run锚，Fault不能填raw cleanup。
+   * 编号85：Fault换boot17，不能填raw cleanup。
+   * 编号86：Fault复用旧produced_at_us，不能填raw cleanup。
+   * 编号87：精确State ACK先到，再Status Hold，记录该generation quiescent排空。
+   * 编号88：State无committed ACK，后Status Hold不得造ACK。
+   * 编号89：State部分SENT且committed0，后Status Hold不得造ACK。
+   * 编号90：ACK State错motion，不能造排空。
+   * 编号91：ACK State处Run5，不能当Hold排空。
+   * 编号92：ACK State错session，拒绝。
+   * 编号93：ACK State Source旧2s，拒绝。
+   * 编号94：ACK State错reference，拒绝。
+   * 编号95：ACK State错boot，拒绝。
+   * 编号96：Status Hold前public Stop，已失效上下文不能重建quiescent。
+   */
   const unsigned raw_order_case = argc == 3 && std::strcmp(argv[2],"hold_state_ack_before_status")==0 ?87U : argc == 3 && std::strcmp(argv[2],"hold_no_ACK")==0 ?88U : argc == 3 && std::strcmp(argv[2],"hold_partial_SENT")==0 ?89U : argc == 3 && std::strcmp(argv[2],"hold_wrong_epoch")==0 ?90U : argc == 3 && std::strcmp(argv[2],"hold_Run_ACK")==0 ?91U : argc == 3 && std::strcmp(argv[2],"hold_wrong_session")==0 ?92U : argc == 3 && std::strcmp(argv[2],"hold_stale_ACK")==0 ?93U : argc == 3 && std::strcmp(argv[2],"hold_wrong_reference")==0 ?94U : argc == 3 && std::strcmp(argv[2],"hold_wrong_boot")==0 ?95U : argc == 3 && std::strcmp(argv[2],"hold_Stop_before_status")==0 ?96U : argc == 3 && std::strcmp(argv[2],"raw_fault_no_RUN_anchor")==0 ?84U :
       argc == 3 && std::strcmp(argv[2],"raw_fault_wrong_boot")==0 ?85U :
       argc == 3 && std::strcmp(argv[2],"raw_fault_stale_produced")==0 ?86U : argc == 3 && std::strcmp(argv[2],"raw_fault_after_public_invalidate")==0 ? 83U : cancel_hold_status_variant ? cancel_hold_case-12U : argc == 3 && std::strcmp(argv[2], "raw_order") == 0 ? 1U :
@@ -4516,6 +5437,49 @@ static int run_fixture_main(int argc, char **argv) {
       (argc == 3 && std::strcmp(argv[2], "raw_release_receipt") == 0) ||
       (argc == 3 && std::strcmp(argv[2], "raw_direct_receipt") == 0) ||
       (argc == 3 && std::strcmp(argv[2], "raw_capture") == 0);
+  /**
+   * @brief Complete编号索引；16没有当前CLI映射。
+   * 编号1：Status先、State后、Query终态最后，允许精确下一motion。
+   * 编号2：State先到不靠它建立新epoch，Status到后再给新seq并Query。
+   * 编号3：Query终态先，再State与Status，保持身份不误失效。
+   * 编号4：未许可Status跳motion12，必须增加invalidations。
+   * 编号5：只有State提前而没有Status授权，随后State间隔超时Stop。
+   * 编号6：完成后同值保持目标不重复发、不生ACK超时。
+   * 编号7：目标偏0.02rad超容差，应Stop且不发新命令。
+   * 编号8：Complete仍Pending时同值保持目标抑制。
+   * 编号9：下一epoch Status为Fault9，必须失效。
+   * 编号10：Hold先于Query，抑制同值目标，之后再Query可收尾。
+   * 编号11：终末目标已ACK后发送Complete并冻结旧epoch后续三代命令。
+   * 编号12：终末目标未ACK前Complete不应发，补ACK后才发并冻结。
+   * 编号13：0.0008rad小差保持目标在容差内抑制。
+   * 编号14：Pending持续约2.2s并持续供新State，不能把小差目标误当新运动。
+   * 编号15：Complete预期management错，本地failed且不发operation8。
+   * 编号17：下一motion Enabling先发一个prime，第二个小变目标不应在首ACK后偷偷多发。
+   * 编号18：正确run/非零链/final6建立导出资格，可发一次刷新并ACK。
+   * 编号19：无非零终链，不建立资格且不刷新。
+   * 编号20：ACK后生成hold_drain，冷却同值抑制，后续可周期刷新；被拒generation不得推进水位。
+   * 编号21：终态Status错run，不建立刷新资格。
+   * 编号22：evidence_lost使刷新资格关闭。
+   * 编号23：原本可刷新后又lost，必须撤销资格并抑制目标。
+   * 编号24：原本可刷新后final回退0/链清零，必须撤销资格。
+   * 编号25：原本可刷新后改attempt_kind2/parent1，必须撤销资格。
+   * 编号26：已排刷新目标被clear身份拒绝；新State和新身份后新generation可恢复。
+   * 编号27：刷新发出但始终无ACK，必须组ACK超时。
+   * 编号28：终末producer0的重试Complete，Status先路径仍可正确处理。
+   * 编号29：同28但下一Status错motion，必须失效。
+   * 编号30：本地Complete句柄canceled后新鲜Hold State仍可抑制同值prime，不误当完整事务终态。
+   * 编号31：同30但Hold State错boot，保留原seq3且不发布。
+   * 编号32：同30但错motion，保留旧快照且不发布。
+   * 编号33：同30但目标偏0.02rad，增加rejected_commands，不发布。
+   * 编号34：同30但Hold Source旧2s，拒绝并保留seq3。
+   * 编号35：Status先给Hold+精确ACK+全SENT，同值prime抑制且不计拒绝/Stop。
+   * 编号36：同35但目标偏0.02rad，拒绝不发布。
+   * 编号37：Status Hold无SENT，不能充当完整组确认，拒绝prime。
+   * 编号38：Status错motion导致授权失效，本地transfer拒绝也可满足负例。
+   * 编号39：Hold Status不更新、State续鲜2.1s超过pending期限，prime拒绝。
+   * 编号40：Status committed_seq错为first+1，不得当本组ACK。
+   * 编号41：Status sent_mask缺J1，不得当全组SENT。
+   */
   const unsigned complete_order_mode = argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_wrong_ack_seq")==0 ? 40U :
       argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_partial_sent")==0 ? 41U :
       argc == 3 && std::strcmp(argv[2],"complete_hold_status_before_state_unconfirmed_sent")==0 ? 37U :
@@ -4557,6 +5521,27 @@ static int run_fixture_main(int argc, char **argv) {
       argc == 3 && std::strcmp(argv[2],"complete_refresh_stale_authority")==0 ? 26U :
       argc == 3 && std::strcmp(argv[2],"complete_export_refresh_ack_unconfirmed")==0 ? 27U : 0U;
   const bool default_ack_age_mode = argc == 3 && std::strcmp(argv[2], "default_ack_age") == 0;
+  /**
+   * @brief 显式释放/生命周期编号索引，字段Complete指RPC收包不等于事务Committed。
+   * 编号1：Pending release80→Query81 Committed→Idle，deactivate不得再发Stop。
+   * 编号2：虽有回执但Idle Status未release_committed，仍需Stop。
+   * 编号3：已Released Idle后on_error仍走错误停机路径。
+   * 编号4：运行中deactivate触发Stop；source协调模式在此切入各源专属Cancel场景。
+   * 编号5：没有gate强回执，Idle样式不能使deactivate省略Stop。
+   * 编号6：强回执后Idle State先于旧owner Status，持续续鲜不误Stop。
+   * 编号7：release80直接Committed无Query，raw管理记录只两条。
+   * 编号8：合法Released Idle无新State超过250ms，不应按活动State断流重复Stop。
+   * 编号9：Disabling8+无许可可临时采用Idle State，Stopping7/有permit/错tuple不行。
+   * 编号10：始终缺最终Idle必须State间隔停机，不能无限释放豁免。
+   * 编号11：Stopping时早Idle暂存，Query强Committed后复用原接收时间及同op候选。
+   * 编号12：Query强回执op43与早候选op42不匹配，先不采用；随后正确op43新Idle可接纳。
+   * 编号13：Query回执motion错误，不采用早Idle。
+   * 编号14：Query回执management错误，不采用早Idle。
+   * 编号15：Query仍Pending，不采用早Idle。
+   * 编号16：Query未release_committed，不采用早Idle。
+   * 编号17：早Idle Source已陈旧，后Query强回执不能令其返鲜。
+   * 编号18：已Committed后Idle State持续新鲜而旧Stopping Status落后500ms，不误心跳Stop。
+   */
   const unsigned release_deactivate_mode = argc == 3 && std::strcmp(argv[2],"release_committed_idle_status_gap")==0 ? 18U :
       argc == 3 && std::strcmp(argv[2],"release_stopping_combined_stale_candidate")==0 ? 17U :
       argc == 3 && std::strcmp(argv[2],"release_stopping_wrong_receipt_op")==0 ? 12U :
@@ -4579,6 +5564,10 @@ static int run_fixture_main(int argc, char **argv) {
       argc == 3 && std::strcmp(argv[2], "released_no_final_idle") == 0 ? 10U : 0U;
   release_receipt_fault=release_deactivate_mode>=12U && release_deactivate_mode<=16U
       ? release_deactivate_mode-11U : 0U;
+  /**
+   * @brief 票据编号只控制第二代目标何时可发：1新票据续发；2票据不变不发；3session变化使旧owner目标失效。
+   * 首目标ACK和票据新鲜性各自独立，不能只因有ACK就复用旧票据发pending。
+   */
   const unsigned ticket_mode = argc == 3 && std::strcmp(argv[2], "ticket_refresh") == 0 ? 1U :
       argc == 3 && std::strcmp(argv[2], "ticket_stale") == 0 ? 2U :
       argc == 3 && std::strcmp(argv[2], "ticket_authority") == 0 ? 3U : 0U;
@@ -4592,6 +5581,10 @@ static int run_fixture_main(int argc, char **argv) {
       std::strcmp(argv[2], "stop_uncommitted_idle_status") == 0;
   // 只在原完整six_axis场景核原Worker诊断；不把仅sent的running_deactivate冒充confirmed。
   const bool verify_stop_policy_diag = six_axis && argc == 2;
+  /**
+   * @brief 另两源普通完整场景保留历史stderr STOP_POLICY_DIAG解析路径。
+   * 仅argc2普通六轴时打开tmpfile/dup2，恢复stderr后按Host steady字段检查唯一事件；不能假定每个Core模式都运行这段诊断核验。
+   */
   std::FILE *diag_file = verify_stop_policy_diag ? std::tmpfile() : nullptr;
   const int saved_stderr = verify_stop_policy_diag ? ::dup(STDERR_FILENO) : -1;
   if (verify_stop_policy_diag && (!diag_file || saved_stderr < 0 ||
@@ -4612,6 +5605,10 @@ static int run_fixture_main(int argc, char **argv) {
     std::rewind(diag_file);
     char line[2048]{};
     unsigned matches=0U;
+    /**
+     * @brief 只解析固定STOP_POLICY_DIAG前缀，要求15字段、原1s预算和完整身份。
+     * 不匹配的其它stderr行原样回放；场景原错误优先返回，不能用缺诊断覆盖真实业务失败。
+     */
     while (std::fgets(line, sizeof(line), diag_file)) {
       std::fputs(line, stderr); // 原件保留，不改原错误/退出码。
       if (std::strncmp(line, "STOP_POLICY_DIAG ", 17U)!=0) continue;
@@ -4639,7 +5636,17 @@ static int run_fixture_main(int argc, char **argv) {
   return run_component_case(true, false, true);
 }
 
+/**
+ * @brief 把完整业务结果转换为可靠进程成功/失败出口。
+ * @param argc 原命令行参数个数。
+ * @param argv 原参数数组，由run_fixture_main解析。
+ * @return 仅业务0输出进程0，其它统一1并打印完整result。
+ */
 int main(int argc, char **argv) {
+  /**
+   * @brief 保留完整result到stderr，任何非零统一返回1，防止exit低8位把256/512截断成成功。
+   * @return 业务0为退出0，所有其它值为退出1；fixture_result只服务进程边界回归，不连接peer。
+   */
   const auto result=run_fixture_main(argc,argv);
   if(result!=0) std::fprintf(stderr,"FIXTURE_FAILURE result=%d\n",result);
   return result==0 ? 0 : 1;

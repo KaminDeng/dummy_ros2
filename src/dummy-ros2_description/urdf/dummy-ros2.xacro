@@ -1,6 +1,14 @@
 <?xml version='1.0' encoding='utf-8'?>
+<!--
+@file dummy-ros2.xacro
+@brief 完整CAD的共享六轴运动学、彩色视觉、物理碰撞代理及近端间隙保护。
+@details 数值和所有碰撞对保持原设计；显示/规划、设备许可与真实机械执行是不同结论。资源逐文件解释见docs/dummy/mesh-reading-guide.md。
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dummy-ros2">
   <!--完整STEP装配：安装关系与颜色已经人工核对；Rest误碰撞通过凹支架分区包络修复，接触检查仍保留。-->
+<!--
+关节限位的Xacro参数，按Joint1到Joint6排列，单位rad。调用方可显式替换范围；这些默认几何限位不自行授予实机许可，运行限制还须匹配设备profile。
+-->
   <xacro:arg name="Joint1_lower" default="-2.9670597283903604" />
   <xacro:arg name="Joint1_upper" default="2.9670597283903604" />
   <xacro:arg name="Joint2_lower" default="-1.2740903539558606" />
@@ -13,9 +21,15 @@
   <xacro:arg name="Joint5_upper" default="1.7453292519943295" />
   <xacro:arg name="Joint6_lower" default="-12.566370614359172" />
   <xacro:arg name="Joint6_upper" default="12.566370614359172" />
+<!--
+银色材质的RGBA各分量在0到1；完整STEP的OBJ还会自行引用MTL材质，不应由该默认色覆盖所有零件。
+-->
   <material name="silver">
     <color rgba="0.700 0.700 0.700 1.000" />
   </material>
+<!--
+保留旧SimpleTransmission与EffortJointInterface声明。mechanicalReduction=1是这里的传动元数据，不是当前六轴电机的50:1控制映射；现代ROS2位置接口另由ros2_control Xacro或守卫硬件描述装配。
+-->
   <transmission name="Joint1_tran">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="Joint1">
@@ -76,6 +90,9 @@
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>
   </transmission>
+<!--
+固定根连杆：惯性原点/质量/张量供动力学模型，visual与collision分别引用彩色显示和保守包络。xyz为米、rpy为rad、质量kg、惯量kg·m²；这里的惯量数据不等同已测实物参数。
+-->
   <link name="base_link">
     <!-- 地面根：XY为J1轴心、Z=0为完整CAD基座底面。旧CAD统一平移
          [+0.019225,+0.000523,-0.004684]m；不改变关节机械零位和装配关系。 -->
@@ -97,6 +114,9 @@
       </geometry>
     </collision>
   </link>
+<!--
+Joint1后的旋转底座；显示OBJ保留颜色，碰撞STL采用凹支架分区包络，不能重新用整件凸包填实J2电机让位空间。
+-->
   <link name="link1_1_1">
     <inertial>
       <origin rpy="0 0 0" xyz="-0.005744742318232344 0.005464327027038366 0.012045619429015192" />
@@ -116,6 +136,9 @@
       </geometry>
     </collision>
   </link>
+<!--
+Joint2后的上臂装配；网格已经在本link局部坐标，scale=0.001将源毫米转米，不再重复施加CAD全局变换。
+-->
   <link name="link2_1_1">
     <inertial>
       <origin rpy="0 0 0" xyz="0.022476329402049397 0.0015836740439541114 0.0701478637986927" />
@@ -135,6 +158,9 @@
       </geometry>
     </collision>
   </link>
+<!--
+Joint3后的前臂装配；visual减面与collision包络分开维护，显示三角形减少不代表碰撞保护减少。
+-->
   <link name="link3_1_1">
     <inertial>
       <origin rpy="0 0 0" xyz="-0.010730263185093621 -0.022369081214190782 0.036467614070683996" />
@@ -154,6 +180,9 @@
       </geometry>
     </collision>
   </link>
+<!--
+Joint4后的腕部连杆；惯性、显示和碰撞各自有原点，当前visual/collision原点均为本link零位。
+-->
   <link name="link4_1_1">
     <inertial>
       <origin rpy="0 0 0" xyz="-0.004221306676286125 0.09021372117053507 0.00026828289249919424" />
@@ -173,6 +202,9 @@
       </geometry>
     </collision>
   </link>
+<!--
+Joint5后的腕部连杆；J6减速器外壳通过后面的固定安装joint挂到此link，不能把外壳当成随Joint6输出一起旋转。
+-->
   <link name="link5_1_1">
     <inertial>
       <origin rpy="0 0 0" xyz="-0.0007044959912857188 0.04181588666040692 1.9856549020258463e-05" />
@@ -192,6 +224,9 @@
       </geometry>
     </collision>
   </link>
+<!--
+J6减速器外壳：MINIF08近似网格仅用于visual；碰撞另用安装法兰box和筒体cylinder。当前此link没有inertial字段，注释不补造质量。
+-->
   <link name="j6_reducer_housing">
     <visual>
       <origin rpy="-1.5707963267948966 0 0" xyz="0 0 0" />
@@ -215,6 +250,9 @@
       </geometry>
     </collision>
   </link>
+<!--
+Joint6输出法兰：旧法兰STL仍同时用于visual/collision，配各自相同的安装平移；与固定减速器外壳是不同link。
+-->
   <link name="link6_1_1">
     <inertial>
       <origin rpy="0 0 0" xyz="8.866549679534264e-08 0.001500477150790519 2.701463612808652e-07" />
@@ -235,6 +273,10 @@
       </geometry>
     </collision>
   </link>
+<!--
+Joint1连接base_link与link1_1_1；origin定义父link中的零位joint坐标，axis定义该joint坐标中的转轴。本关节轴为局部负Z。
+limit的速度单位rad/s、effort为转矩限额元数据；并非驱动板电流值或已验证实物能力。SDK的motor方向/减速比换算不能在此再次重复。
+-->
   <joint name="Joint1" type="revolute">
     <origin rpy="0 0 0" xyz="0 0 0.096" />
     <parent link="base_link" />
@@ -242,6 +284,10 @@
     <axis xyz="0.0 -0.0 -1.0" />
     <limit effort="150" lower="$(arg Joint1_lower)" upper="$(arg Joint1_upper)" velocity="3.15" />
   </joint>
+<!--
+Joint2连接link1_1_1与link2_1_1；origin定义父link中的零位joint坐标，axis定义该joint坐标中的转轴。本关节轴为局部负X，安装高度已包含完整CAD校正。
+limit的速度单位rad/s、effort为转矩限额元数据；并非驱动板电流值或已验证实物能力。SDK的motor方向/减速比换算不能在此再次重复。
+-->
   <joint name="Joint2" type="revolute">
     <origin rpy="0 0 0" xyz="-0.0155 0.035 0.0375" />
     <parent link="link1_1_1" />
@@ -249,6 +295,10 @@
     <axis xyz="-1.0 -0.0 0.0" />
     <limit effort="150" lower="$(arg Joint2_lower)" upper="$(arg Joint2_upper)" velocity="3.15" />
   </joint>
+<!--
+Joint3连接link2_1_1与link3_1_1；origin定义父link中的零位joint坐标，axis定义该joint坐标中的转轴。原点RPY含π/2，axis仍按该joint局部坐标表达，不能按世界轴解读。
+limit的速度单位rad/s、effort为转矩限额元数据；并非驱动板电流值或已验证实物能力。SDK的motor方向/减速比换算不能在此再次重复。
+-->
   <joint name="Joint3" type="revolute">
     <origin rpy="1.5707963267948966 0 0" xyz="0.03665 0.0 0.146" />
     <parent link="link2_1_1" />
@@ -256,6 +306,10 @@
     <axis xyz="-1.0 0.0 -0.0" />
     <limit effort="150" lower="$(arg Joint3_lower)" upper="$(arg Joint3_upper)" velocity="3.15" />
   </joint>
+<!--
+Joint4连接link3_1_1与link4_1_1；origin定义父link中的零位joint坐标，axis定义该joint坐标中的转轴。腕部安装平移来自完整CAD装配，axis为局部负Y。
+limit的速度单位rad/s、effort为转矩限额元数据；并非驱动板电流值或已验证实物能力。SDK的motor方向/减速比换算不能在此再次重复。
+-->
   <joint name="Joint4" type="revolute">
     <origin rpy="0 0 0" xyz="-0.02047870211141205 -0.01 0.052" />
     <parent link="link3_1_1" />
@@ -263,6 +317,10 @@
     <axis xyz="0.0 -1.0 0.0" />
     <limit effort="150" lower="$(arg Joint4_lower)" upper="$(arg Joint4_upper)" velocity="3.15" />
   </joint>
+<!--
+Joint5连接link4_1_1与link5_1_1；origin定义父link中的零位joint坐标，axis定义该joint坐标中的转轴。axis为局部负X；后续固定减速器安装不改变该可动关节编号。
+limit的速度单位rad/s、effort为转矩限额元数据；并非驱动板电流值或已验证实物能力。SDK的motor方向/减速比换算不能在此再次重复。
+-->
   <joint name="Joint5" type="revolute">
     <origin rpy="0 0 0" xyz="0.0168 0.127 0.0" />
     <parent link="link4_1_1" />
@@ -270,11 +328,18 @@
     <axis xyz="-1.0 0.0 -0.0" />
     <limit effort="150" lower="$(arg Joint5_lower)" upper="$(arg Joint5_upper)" velocity="3.15" />
   </joint>
+<!--
+固定安装关系：把减速器外壳连接到Joint5后连杆，不增加第七个可动自由度。平移单位米。
+-->
   <joint name="j6_reducer_mount" type="fixed">
     <origin rpy="0 0 0" xyz="-0.0168 0.0625 0" />
     <parent link="link5_1_1" />
     <child link="j6_reducer_housing" />
   </joint>
+<!--
+Joint6连接j6_reducer_housing与link6_1_1；origin定义父link中的零位joint坐标，axis定义该joint坐标中的转轴。axis为局部负Y，有限revolute范围为±4π，不是无限continuous关节。
+limit的速度单位rad/s、effort为转矩限额元数据；并非驱动板电流值或已验证实物能力。SDK的motor方向/减速比换算不能在此再次重复。
+-->
   <joint name="Joint6" type="revolute">
     <origin rpy="0 0 0" xyz="0 0.028 0" />
     <parent link="j6_reducer_housing" />
@@ -282,6 +347,9 @@
     <axis xyz="-0.0 -1.0 0.0" />
     <limit effort="150" lower="$(arg Joint6_lower)" upper="$(arg Joint6_upper)" velocity="3.15" />
   </joint>
+<!--
+step_link2_motor_1为独立的电机碰撞box，没有visual；借固定joint连接本体，使其与远端接触可以独立检查，避免整件相邻豁免漏检。box size和origin均为米。
+-->
   <link name="step_link2_motor_1">
     <collision>
       <origin xyz="0.016100006103515627 -0.002549998764622004 0.10099999901198893" rpy="0 0 0" />
@@ -295,6 +363,9 @@
     <child link="step_link2_motor_1" />
     <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
+<!--
+step_link2_motor_2为独立的电机碰撞box，没有visual；借固定joint连接本体，使其与远端接触可以独立检查，避免整件相邻豁免漏检。box size和origin均为米。
+-->
   <link name="step_link2_motor_2">
     <collision>
       <origin xyz="0.017899993896484376 -0.002549998239391926 0.04500000000704173" rpy="0 0 0" />
@@ -308,6 +379,9 @@
     <child link="step_link2_motor_2" />
     <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
+<!--
+step_link3_motor_1为独立的电机碰撞box，没有visual；借固定joint连接本体，使其与远端接触可以独立检查，避免整件相邻豁免漏检。box size和origin均为米。
+-->
   <link name="step_link3_motor_1">
     <collision>
       <origin xyz="-0.02047870483398435 -0.03390000006534599 0.05349999700673708" rpy="0 0 0" />
@@ -321,6 +395,9 @@
     <child link="step_link3_motor_1" />
     <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
+<!--
+step_link4_motor_1为独立的电机碰撞box，没有visual；借固定joint连接本体，使其与远端接触可以独立检查，避免整件相邻豁免漏检。box size和origin均为米。
+-->
   <link name="step_link4_motor_1">
     <collision>
       <origin xyz="-0.0004500149296035264 0.07349999741796959 1.3958294988597464e-09" rpy="0 0 0" />
@@ -334,6 +411,9 @@
     <child link="step_link4_motor_1" />
     <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
+<!--
+step_link5_motor_1为独立的电机碰撞box，没有visual；借固定joint连接本体，使其与远端接触可以独立检查，避免整件相邻豁免漏检。box size和origin均为米。
+-->
   <link name="step_link5_motor_1">
     <collision>
       <origin xyz="-0.015300002722572346 0.049350000689001944 -4.671982054699209e-10" rpy="0 0 0" />
@@ -349,6 +429,9 @@
   </joint>
 
   <!-- 近端到远端的5mm碰撞间隙保护；无视觉，不改变关节链。 -->
+<!--
+clearance_base_link是固定、无visual的近端保护体。网格或box沿表面外扩约5.01mm，配套SRDF仅保留规定的近端到腕部检查，不对所有相邻连接统一padding。
+-->
 <link name="clearance_base_link"><collision>
       <origin rpy="0 0 0" xyz="0.019225 0.000523 -0.004684" />
       <geometry>
@@ -356,6 +439,9 @@
       </geometry>
     </collision></link>
 <joint name="clearance_base_link_fixed" type="fixed"><parent link="base_link" /><child link="clearance_base_link" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<!--
+clearance_link1_1_1是固定、无visual的近端保护体。网格或box沿表面外扩约5.01mm，配套SRDF仅保留规定的近端到腕部检查，不对所有相邻连接统一padding。
+-->
 <link name="clearance_link1_1_1"><collision>
       <origin rpy="0 0 0" xyz="0 0 0" />
       <geometry>
@@ -363,6 +449,9 @@
       </geometry>
     </collision></link>
 <joint name="clearance_link1_1_1_fixed" type="fixed"><parent link="link1_1_1" /><child link="clearance_link1_1_1" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<!--
+clearance_link2_1_1是固定、无visual的近端保护体。网格或box沿表面外扩约5.01mm，配套SRDF仅保留规定的近端到腕部检查，不对所有相邻连接统一padding。
+-->
 <link name="clearance_link2_1_1"><collision>
       <origin rpy="0 0 0" xyz="0 0 0" />
       <geometry>
@@ -370,6 +459,9 @@
       </geometry>
     </collision></link>
 <joint name="clearance_link2_1_1_fixed" type="fixed"><parent link="link2_1_1" /><child link="clearance_link2_1_1" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<!--
+clearance_step_link2_motor_1是固定、无visual的近端保护体。网格或box沿表面外扩约5.01mm，配套SRDF仅保留规定的近端到腕部检查，不对所有相邻连接统一padding。
+-->
 <link name="clearance_step_link2_motor_1"><collision>
       <origin rpy="0 0 0" xyz="0.016100006103515627 -0.002549998764622004 0.10099999901198893" />
       <geometry>
@@ -377,6 +469,9 @@
       </geometry>
     </collision></link>
 <joint name="clearance_step_link2_motor_1_fixed" type="fixed"><parent link="step_link2_motor_1" /><child link="clearance_step_link2_motor_1" /><origin xyz="0 0 0" rpy="0 0 0" /></joint>
+<!--
+clearance_step_link2_motor_2是固定、无visual的近端保护体。网格或box沿表面外扩约5.01mm，配套SRDF仅保留规定的近端到腕部检查，不对所有相邻连接统一padding。
+-->
 <link name="clearance_step_link2_motor_2"><collision>
       <origin rpy="0 0 0" xyz="0.017899993896484376 -0.002549998239391926 0.04500000000704173" />
       <geometry>

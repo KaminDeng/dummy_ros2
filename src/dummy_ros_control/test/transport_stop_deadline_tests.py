@@ -3,6 +3,11 @@
 复用现有PTY component目标，GDB仅在真实fresh普通Idle到达后注入本次时钟采样。
 不复制生产判定、不增加生产hook；各测试用独立进程组并回收自己的peer。
 """
+##
+# @file transport_stop_deadline_tests.py
+# @brief GDB在真实软件worker判定点注时钟的Stop精确边界测试。
+#
+# 导入时消费BINARY/SOURCE参数；会实际起GDB和PTY component/合成peer进程组，非设备实验。动态GDB脚本文本冻结；断点条件要求新鲜普通Idle且非缓存，delta0/1µs核真实分支，依赖Debug符号/源码行与GDB，不用生产hook或复制判定。
 import os
 from pathlib import Path
 import re
@@ -17,7 +22,13 @@ BINARY = str(Path(sys.argv.pop(1)).resolve())
 SOURCE = Path(sys.argv.pop(1)).resolve()
 
 
+##
+# @brief 实际GDB/Debug软件worker分支边界集合。
 class StopDeadlineTests(unittest.TestCase):
+    ##
+    # @brief 定位两个生产源码行、写临时GDB脚本，fresh Idle时令stop_now=deadline+delta，读实际确认计数；30s后有限清自有session。
+    # @param delta 注入stop_now−deadline差µs，本组0或1。
+    # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
     def check_boundary(self, delta):
         gdb = shutil.which("gdb")
         self.assertIsNotNone(gdb, "此Debug软件回归需要真实GDB，不能静默跳过")
@@ -76,9 +87,15 @@ run six_axis
         self.assertEqual((int(result[1]), int(result[2])),
                          (1, 0) if delta == 0 else (0, 1), output)
 
+    ##
+    # @brief 注delta0µs，真实软件判定计数须confirmed1/unconfirmed0，边界包含等号。
+    # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
     def test_ordinary_idle_exact_deadline_is_confirmed(self):
         self.check_boundary(0)
 
+    ##
+    # @brief 注delta1µs，计数须confirmed0/unconfirmed1，不能晚一微秒仍接受。
+    # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
     def test_ordinary_idle_after_deadline_is_unconfirmed(self):
         self.check_boundary(1)
 

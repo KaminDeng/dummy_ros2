@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+##
+# @file run_native_m3_functional.py
+# @brief 固定历史冻结产物的原生台架M3功能批次编排。
+#
+# 默认只打印计划；--execute会实际查USB owner、运行串口probe、启动ROS launch/Action，reset用例还执行flash_ref --execute烧录并复位。
+# 所有路径/hash/序列号/探针号是固定历史输入，非当前产物自动发现。FUNCTIONAL_POSITIVE始终qualified=false，不替代H0-H5、资源floor或机械/发布门禁。
 """固定原生台架M3功能批量编排；默认只打印计划，永不签H资格。"""
 
 import argparse
@@ -16,6 +22,9 @@ R = Path(__file__).resolve().parents[2]
 D = Path(os.environ.get("DPSDK_ROOT", str(Path(__file__).resolve().parents[2].parent / "dpsdk_consolidated")))
 S = R / 'scripts/dummy'
 REPORTS = R / 'build_dummy/reports'
+##
+# @brief 历史冻结manifest/部署/limits/候选/探针路径，SDK根可由DPSDK_ROOT覆盖。
+# POLICY仍为旧configs路径，固件/库/激活/目标SHA与STM32 serial/JLink号均硬编码；文件缺失或源码注释导致freeze漂移会失败，不允许自动刷新。
 FREEZE = D / 'build_dummy/reports/native-ros-candidate-v7-20261009.json'
 DEP = D / 'build_dummy/reports/no-load-dev-deployment-paths-p9-nonblocking-20261006.json'
 LIMITS = D / 'build_dummy/reports/no-load-dev-ros-limits-p9-nonblocking-20261006.json'
@@ -32,6 +41,10 @@ TARGET_HASHES = {50: '53b3228e6787749626eea3d20378f03fed86e3562f69518d1a8975e87e
                  10: '338963ad281d6189b6127d7adc0cc0afe59c6ccc5cabba4b2ea2c069252f66b2'}
 
 
+##
+# @brief 生成固定normal/long批次清单，不访问硬件。
+# @param stage normal/long/all，CLI限定；其它值返回空表。
+# @return normal含50目标加3次复位后10目标，long含3次单600s；all按循环交错组合。
 def plan(stage):
     cases = []
     if stage in ('normal', 'all'):
@@ -44,18 +57,34 @@ def plan(stage):
     return cases
 
 
+##
+# @brief 读取完整文件原字节SHA。
+# @param path 文件路径。
+# @return 64字符小写摘要；I/O异常传播，非规范JSON SHA。
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+##
+# @brief 用路径与原始SHA表示一个文件。
+# @param path 现存可读文件。
+# @return path/sha256 dict，不验证文件来源或部署许可。
 def artifact(path):
     return dict(path=str(path), sha256=sha(path))
 
 
+##
+# @brief 展开freeze中的源码与可选D参考文件条目。
+# @param freeze 已解析冻结映射。
+# @return 两集合value拼接列表；不是扫描当前仓库全部源码。
 def frozen_source_artifacts(freeze):
     return [*freeze['source_files'].values(), *freeze.get('d_test_reference_files', {}).values()]
 
 
+##
+# @brief 核文件原SHA及低9位权限与freeze声明相同。
+# @param value 含path/sha256/mode记录。
+# @return None；任一不符ValueError，不主动修改权限或摘要。
 def verify_frozen_artifact(value):
     path=Path(value['path'])
     if sha(path)!=value['sha256']:
@@ -64,10 +93,18 @@ def verify_frozen_artifact(value):
         raise ValueError(f'freeze mode mismatch: {path}')
 
 
+##
+# @brief 写JSON记录并保留末尾换行。
+# @param path 目标文件，调用方保证父目录。
+# @param value JSON对象。
+# @return None；覆盖同名文件，非原子事务或追加日志。
 def save(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
 
 
+##
+# @brief 加载邻近独占ROS会话包装器。
+# @return 已执行模块；其函数可管理真实进程/tty，导入本身不启动会话。
 def load_owner():
     spec = importlib.util.spec_from_file_location('native_m3_owner', S / 'run_real_6dof_session.py')
     module = importlib.util.module_from_spec(spec)
@@ -75,6 +112,11 @@ def load_owner():
     return module
 
 
+##
+# @brief 从proc maps找唯一guarded硬件库路径。
+# @param maps /proc/PID/maps全文。
+# @return install_dummy前缀内绝对Path；缺失/多路径/删除标记或错误前缀拒绝。
+# 这里只核路径形状，inode与文件SHA由runtime另核，不能只凭库名相同认定版本。
 def mapped_library(maps):
     paths = {line.split(maxsplit=5)[-1] for line in maps.splitlines()
              if 'libdummy_guarded_zenbedded_system.so' in line}
@@ -86,6 +128,13 @@ def mapped_library(maps):
     return path
 
 
+##
+# @brief 将在线Gate可执行路径/inode/原SHA绑定冻结安装产物。
+# @param executable 从/proc/PID/exe解析的实际路径。
+# @param mapped_inode 运行中exe链接的inode。
+# @param frozen 冻结installed_gate记录。
+# @return 在线可执行artifact；路径、inode或SHA不符拒绝。
+# 核本机当前进程/磁盘对象，非对端固件或外部签名认证。
 def validate_runtime_gate(executable, mapped_inode, frozen):
     executable = Path(executable)
     expected = Path(frozen['path']).resolve(strict=True)
@@ -98,6 +147,15 @@ def validate_runtime_gate(executable, mapped_inode, frozen):
     return artifact(executable)
 
 
+##
+# @brief 核Action/E2E数量、timeline尾标及Gate正常退出文字。
+# @param action Action报告。
+# @param timeline CSV全文。
+# @param launch 合并launch日志全文。
+# @param e2e 离线E2E报告。
+# @param count 该case期望目标数。
+# @return None；未成功/未释放、数量不符、缺cleanly或出现died拒绝。
+# 这是多来源已有结果核对，Gate日志正常退出不单独证明机械停止，必须同时有严格E2E。
 def validate_case_result(action, timeline, launch, e2e, count):
     if (action.get('status') != 'SUCCEEDED' or
             action.get('stop_confirmation') != 'CONFIRMED_RELEASED_IDLE' or
@@ -114,6 +172,13 @@ def validate_case_result(action, timeline, launch, e2e, count):
         raise ValueError('Gate died')
 
 
+##
+# @brief 依序执行固定case，首错即停并持续保存批次状态。
+# @param cases plan清单。
+# @param output 已存在组输出目录。
+# @param run_case 接收(item,case目录)的执行回调，实际模式为NativeRun。
+# @return 最终组报告；首错记录FAIL，不执行后续case。
+# reset项boot不得复用先前boot；组正结论仅FUNCTIONAL_POSITIVE且UNQUALIFIED，明确列出尚缺资格。
 def run_group(cases, output, run_case):
     report = dict(scope='M3_NATIVE_FUNCTIONAL', qualified=False, qualification='UNQUALIFIED',
                   result='FAIL', cases=[], first_failure=None,
@@ -147,6 +212,16 @@ def run_group(cases, output, run_case):
     return report
 
 
+##
+# @brief 首失败后为独立人工/外部抓取保留最多60s窗口。
+# @param root 当前case目录。
+# @param gate_pid 已捕获Gate PID，仅写进度关联。
+# @param reason 原错误。
+# @param monotonic 可注入Host秒钟。
+# @param sleep 可注入等待函数。
+# @param emit 可选进度输出回调，缺省print。
+# @return marker是否出现及结束Host ns；不自行采集/恢复设备。
+# 等待failure-capture.done只是允许外部取证的信号，不认证取证内容；失败窗口结束仍保留原首错。
 def failure_capture_window(root, gate_pid, reason, *, monotonic=time.monotonic,
                            sleep=time.sleep, emit=None):
     deadline = monotonic() + 60.0
@@ -165,7 +240,14 @@ def failure_capture_window(root, gate_pid, reason, *, monotonic=time.monotonic,
 
 
 
+##
+# @brief 持有固定freeze、输入原SHA/权限、seen_boots和owner模块的实际执行器；构造只校文件，调用会接触USB/ROS/烧录。
 class NativeRun:
+    ##
+    # @brief 加载冻结清单并记录本批输入/tool/source指纹。
+    # @param output 已创建输出根，用于inputs-and-tools.json。
+    # @return None；硬编码固件/库/激活/目标SHA、端点不符立即失败。
+    # paths按显式名单，不声称覆盖当前仓库所有文件；固定freeze可能包含源码原始SHA，纯注释也可使历史冻结验证失败，禁止自动更新逃逸。
     def __init__(self, output):
         self.output = output
         self.seen_boots = set()
@@ -197,12 +279,23 @@ class NativeRun:
             raise ValueError('wrong fixed STM32 endpoint')
         save(output / 'inputs-and-tools.json', self.hashes)
 
+    ##
+    # @brief 核本批原指纹与权限未漂移。
+    # @return None；任一路径原SHA或mode变化ValueError，不修复/重写freeze。
     def check_unchanged(self):
         if any(sha(path) != digest for path, digest in self.hashes.items()):
             raise ValueError('frozen input/tool/source changed during group')
         if any(oct(Path(path).stat().st_mode & 0o777) != mode for path, mode in self.modes.items()):
             raise ValueError('frozen input/tool/source mode changed during group')
 
+    ##
+    # @brief 执行真实子进程并分离stdout/stderr及命令元数据。
+    # @param argv 显式参数列表。
+    # @param root 现存case目录。
+    # @param name 输出文件标签。
+    # @param timeout 子进程秒预算，默认30。
+    # @return 成功stdout全文；非零RuntimeError，超时/中断保留时间/error元数据再抛。
+    # 继承环境但PYTHONPATH覆盖为SDK应用tools；不设置cwd，不保证任意下级命令自己不会启动子进程/设备动作。
     def command(self, argv, root, name, timeout=30):
         started = time.monotonic_ns()
         with (root / f'{name}.stdout').open('w') as out, (root / f'{name}.stderr').open('w') as err:
@@ -220,6 +313,12 @@ class NativeRun:
             raise RuntimeError(f'{name}: exit {result.returncode}')
         return (root / f'{name}.stdout').read_text()
 
+    ##
+    # @brief 无tty owner时运行实际只读设备probe并核冷态健康/身份。
+    # @param root case输出目录。
+    # @param label preprobe/postprobe输出标签。
+    # @return probe JSON；非Idle/许可未清/错误计数非零或固件身份不符拒绝。
+    # 真实打开固定STM32端点进行只读请求，不能作为纯离线helper调用；owner检查是当时观测，不是原子跨所有程序的USB排他锁。
     def probe(self, root, label):
         occupied = self.owner.inspect_owners(TTY)
         if occupied:
@@ -238,6 +337,13 @@ class NativeRun:
         save(root / f'{label}.json', value)
         return value
 
+    ##
+    # @brief 限时从launch日志定位Gate并捕获proc运行映像证明。
+    # @param process 正在运行的session包装器Popen。
+    # @param log launch合并日志Path。
+    # @param root 输出case目录。
+    # @return Gate所属pgid；30s内无可靠映像/进程先退或inode/SHA不符失败。
+    # 核映射库当前磁盘inode及固定SHA，再核/proc/exe；保存maps/stat/argv/Host时刻。不是只核build目录文件而忽略当前加载对象。
     def runtime(self, process, log, root):
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -274,7 +380,17 @@ class NativeRun:
             time.sleep(.1)
         raise TimeoutError('runtime maps capture deadline')
 
+    ##
+    # @brief 对真实Gate Enable发有限请求并等精确Hold服务报告。
+    # @param root 命令归档目录。
+    # @param monotonic Host时钟注入。
+    # @param sleep 等待注入。
+    # @return None；20s内未排队、非法回复或15轮仍无Hold失败。
+    # 只在明确未排队的特定unavailable文字重试；queued一次后绝不重发Enable。Hold轮询最多15次、每call最多10s加0.5s间隔，不应概括为整个Enable流程总20s。
     def enable_hold(self, root, *, monotonic=time.monotonic, sleep=time.sleep):
+        ##
+        # @par 内部回调 parsed
+        # text为ros2 service stdout；只接受唯一success=(True|False), message文本，返回(bool,message)，缺/多匹配拒绝，不以子串ENABLED_HOLD假通过。
         def parsed(text):
             matches = re.findall(r"success=(True|False), message='([^']*)'", text)
             if len(matches) != 1:
@@ -309,6 +425,12 @@ class NativeRun:
             sleep(.5)
         raise TimeoutError('confirmed ENABLED_HOLD unavailable')
 
+    ##
+    # @brief 对已完成捕获运行context→join→E2E及可选P9离线链。
+    # @param root 含timeline/raw/action的case目录。
+    # @param item kind决定是否加600s验证。
+    # @return None；任何子命令失败中止。
+    # 固定path0.05rad/goal0.003rad、producer窗250ms、ROS邻近40ms、State250ms；这是显式验收输入，非从报告观测反向放宽。
     def strict(self, root, item):
         capture = root
         captures = ['--timeline', capture / 'timeline.csv', '--raw', capture / 'raw.bin',
@@ -328,6 +450,13 @@ class NativeRun:
                 '--policy-sha256', self.freeze['identity_from_activation']['compiled_policy_sha256'],
                 '--firmware-sha256', FIRMWARE], root, 'long-validation', 180)
 
+    ##
+    # @brief 实际执行一case：可烧录、preprobe、ROS运动、收尾、严格证据与postprobe。
+    # @param item normal/long、count与reset标志。
+    # @param root 必须全新case目录。
+    # @return metadata；原首错或postflight失败最后重新抛出，metadata仍尽力保存。
+    # reset先确认owner空再调用flash_ref --execute；启动full真实launch并启raw/timeline，运行Action后由session owner收尾。
+    # 首错时可保留60s独立取证窗口，之后SIGTERM包装器并最多45s等收尾；超时按所属pgid升级，再kill包装器。postprobe只有preprobe成功才可称运动后检查，boot必须同次不变。
     def __call__(self, item, root):
         root.mkdir(exist_ok=False)
         metadata = dict(case=item, qualified=False, result='FAIL', freeze=artifact(FREEZE),
@@ -440,6 +569,11 @@ class NativeRun:
         return metadata
 
 
+##
+# @brief 缺--execute只打印计划，执行模式固定路径/新目录/本地锁。
+# @return plan-only0；全部FUNCTIONAL_POSITIVE0，否则1。
+# 执行输出须reports内全新canonical绝对路径且拒绝symlink；native-m3锁只协调同锁调用者，session还持另一个launch owner锁。
+# SIGNAL处理恢复原SIGTERM handler；执行模式可有烧录与运动副作用，qualified一直false。
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--stage', choices=('normal', 'long', 'all'), default='normal')
@@ -456,6 +590,9 @@ def main():
     if any(p.is_symlink() for p in (args.output, *args.output.parents)) or '..' in args.output.parts:
         parser.error('拒绝symlink或非canonical输出路径')
     args.output.mkdir(exist_ok=False)
+    ##
+    # @par 内部回调 interrupted
+    # signum/frame为SIGTERM回调上下文；抛KeyboardInterrupt驱动现有finally收尾，返回不正常完成；不直接发设备Stop。
     def interrupted(signum, frame):
         raise KeyboardInterrupt(f'收到信号{signum}')
     previous = signal.signal(signal.SIGTERM, interrupted)

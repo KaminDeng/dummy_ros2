@@ -1,4 +1,9 @@
 """真实临时产物验证离线部署绑定，不连接ROS或设备。"""
+##
+# @file test_manual_panel_deployment_config.py
+# @brief 部署配置render的文件SHA绑定、只改白名单及排他输出测试。
+#
+# native/firmware是临时文本文件，XML和decoder也是最小fixture；校验字节与配置合同不等于真实编译产物或硬件身份。CLI用例仅运行render配置脚本写文件，不部署、flash或连接设备。
 import copy
 import hashlib
 import importlib.util
@@ -16,6 +21,10 @@ renderer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(renderer)
 
 
+##
+# @brief 生成有真实文件SHA的native/firmware文本、固定合同摘要、最小decoder/XML及原面板配置模板。
+# @param tmp_path pytest临时目录Path；所有本用例产物限制在该目录。
+# @return (template字典, deployment字典, description路径)，仅存在于tmp_path。
 @pytest.fixture
 def inputs(tmp_path):
     deployment = {}
@@ -35,6 +44,10 @@ def inputs(tmp_path):
     return template, deployment, description
 
 
+##
+# @brief render仅改允许的五个部署字段，原模板不变，各身份flag、二进制/模型/decoder路径准确绑定。
+# @param inputs inputs fixture返回的模板、临时部署字典和模型路径。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_render_binds_real_artifacts_and_preserves_all_motion_parameters(inputs):
     template, deployment, description = inputs
     original = copy.deepcopy(template)
@@ -50,6 +63,11 @@ def test_render_binds_real_artifacts_and_preserves_all_motion_parameters(inputs)
     assert result['decoder_directory'] == deployment['decoder_directory']
 
 
+##
+# @brief 九种hash/身份/文件/flag缺失或重复均ValueError，且调用方模板不被部分修改。
+# @param inputs inputs fixture返回的模板、临时部署字典和模型路径。
+# @param mode 九种独立负例之一：摘要/身份/文件/flag缺失或重复。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 @pytest.mark.parametrize('mode', ['native-hash', 'firmware-hash', 'identity-missing', 'identity-invalid',
                                   'model-missing', 'decoder-missing', 'decoder-entry-missing', 'flag-missing', 'flag-duplicate'])
 def test_invalid_deployment_rejected_without_mutating_template(inputs, mode):
@@ -76,6 +94,11 @@ def test_invalid_deployment_rejected_without_mutating_template(inputs, mode):
     assert template == original
 
 
+##
+# @brief 临时输入运行renderer CLI，首次创建成功，再写同输出必须失败且字节不变；只产生配置文件。
+# @param inputs inputs fixture返回的模板、临时部署字典和模型路径。
+# @param tmp_path pytest临时目录Path；所有本用例产物限制在该目录。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_cli_creates_output_exclusively(inputs, tmp_path):
     template, deployment, description = inputs
     tp, dp, output = tmp_path / 'template.json', tmp_path / 'deployment.json', tmp_path / 'output.json'
@@ -89,6 +112,11 @@ def test_cli_creates_output_exclusively(inputs, tmp_path):
     assert output.read_bytes() == before
 
 
+##
+# @brief 段watchdog秒数拒绝0/负/非有限/>660、bool及字符串，不能以隐式类型转换放行。
+# @param inputs inputs fixture返回的模板、临时部署字典和模型路径。
+# @param value 非法秒数或类型，包括bool/字符串，避免隐式转换。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 @pytest.mark.parametrize('value', [0, -1, float('inf'), float('nan'), 661, True, '660'])
 def test_render_rejects_unbounded_or_invalid_segment_watchdog(inputs, value):
     template, deployment, description = inputs
@@ -97,6 +125,10 @@ def test_render_rejects_unbounded_or_invalid_segment_watchdog(inputs, value):
         renderer.render_config(template, deployment, description)
 
 
+##
+# @brief 有效模板最终仍发布660.0s段监督上限，不擅改运动参数。
+# @param inputs inputs fixture返回的模板、临时部署字典和模型路径。
+# @return 无；通过assert/unittest断言表达结果，失败抛异常，不返回设备执行凭据。
 def test_render_publishes_validated_segment_watchdog(inputs):
     template, deployment, description = inputs
     assert renderer.render_config(template, deployment, description)['moveit_segment_timeout_s'] == 660.

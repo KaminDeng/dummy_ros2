@@ -1,3 +1,10 @@
+/**
+ * @file shared_management_channel_tests.cpp
+ * @brief 核DeviceWorker facade与provider共享快照/排空/原证据状态及有限准入。
+ *
+ * 构造provider登记共享channel但不start实际transport；手动ready/observation仅为本地夹具。facade start挂registry，不运行ROS/peer或USB。
+ * 所有Hostµs和目标rad来自人工字段，末尾provider销毁后仍由facade缓存/共享引用保有证据标志，不意味着设备仍在线。
+ */
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
@@ -9,6 +16,13 @@
 #include <string>
 #include <unistd.h>
 
+/**
+ * @brief 将一次正常返回动作的stderr重定向到tmpfile并读取最多512字节。
+ * @tparam Action 零参数测试动作类型。
+ * @param action 本地send等预期正常返回的观察动作。
+ * @return 截取stderr字符串；创建/重定向失败为空。
+ * @note 此helper没有异常RAII恢复路径，不能承诺任意throw动作后stderr仍恢复；只服务当前有限用例。
+ */
 template <typename Action>
 std::string capture_stderr(Action action) {
   auto *output = tmpfile();
@@ -28,6 +42,12 @@ std::string capture_stderr(Action action) {
   fclose(output);
   return std::string(buffer, count);
 }
+/**
+ * @brief 共享观测、try-lock缓存、排空撤销、原证据状态及管理seq重定位。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * absent/not_ready/lock_busy/queued拒绝原因应可观察；两个client不能并发占同管理单槽，句柄析构可释放本地pending。
+ * busy first_poll须≤20ms且无入槽，释放锁后100ms窗口内以原ID/原字节唯一入槽；这是该调度样本的观测阈值，不是通用WCET证明。
+ */
 int main() {
   dummy_ros_control::TransportParameters parameters{"tcp/127.0.0.1:29999",{1},{2},2,1};
   dummy_motion_client::DpManagementTransport absent({parameters.endpoint,{1},{2},2,1},
@@ -66,6 +86,10 @@ int main() {
      rejected->rejected_ack_motion_epoch!=10U ||
      rejected->rejected_ack_sequence!=4145U ||
      rejected->rejected_ack_received_us!=101U) return 23;
+  /**
+   * @brief processed_generation12785可对应committed_seq12784的同值抑制排空；观测时间/容差0.003rad等必须逐项传递。
+   * 重设空hold_drain要显式撤销旧quiescent，不能返回无新信息而让消费者沿用旧证明。
+   */
   channel->hold_drain={7U,8U,12785U,9U,11U,12784U};
   channel->hold_drain.disposition=1U; channel->hold_drain.quiescent=true;
   channel->hold_drain.observed_us=100U; channel->hold_drain.max_state_age_us=250000U;
@@ -79,6 +103,10 @@ int main() {
   const auto pending=facade.hold_drain_snapshot();
   // A newly pending group revokes the prior proof, rather than looking like no new information.
   if(!pending || pending->quiescent || pending->processed_generation!=0U) return 21;
+  /**
+   * @brief 原证据失败、capture启用、terminal flush及干净取消标志是独立共享字段。
+   * 这里只手动发布/读取快照与身份匹配，不重放SHA链或执行writer，所以不能当完整故障/释放证据测试。
+   */
   if(facade.raw_evidence_failure()!=0U) return 12;
   channel->raw_evidence_failure.store(2U,std::memory_order_release);
   if(facade.raw_evidence_failure()!=2U) return 13;
@@ -102,12 +130,19 @@ int main() {
      dummy_motion_client::raw_terminal_matches(terminal,6U,8U,9U) ||
      dummy_motion_client::raw_terminal_matches(terminal,7U,7U,9U) ||
      dummy_motion_client::raw_terminal_matches(terminal,7U,8U,8U)) return 19;
+  /**
+   * @brief 此freshness辅助只检查接收年龄上界；now99小于人工received100仍返回true。
+   * 300100在默认门槛拒绝，1s自定义预算可接受直到1000101超界；不等价于完整Source时钟/未来包/身份校验。
+   */
   if(!dummy_motion_client::observation_is_fresh(*facade.observe(),99) ||
      dummy_motion_client::observation_is_fresh(*facade.observe(),300100) ||
      !dummy_motion_client::observation_is_fresh(*facade.observe(),300100,1000000U) ||
      dummy_motion_client::observation_is_fresh(*facade.observe(),1000101,1000000U)) return 7;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
+    /**
+     * @brief channel mutex被同线程持有时observe使用已有缓存，不能阻塞等待锁；缓存年龄仍由后续调用者另判。
+     */
     const auto cached=facade.observe();
     if(!cached || cached->state_received_us!=100) return 3;
   }
@@ -133,6 +168,10 @@ int main() {
   dummy_motion_client::WireManagementClient busy_client(facade);
   std::promise<void> lock_owned, release_lock;
   auto released=release_lock.get_future();
+  /**
+   * @par 持锁测试线程
+   * 先发lock_owned promise，再等release_lock；main确认锁已持后量一次poll，随后放行join。测试门闩故意阻塞线程，不是生产poll阻塞。
+   */
   std::thread holder([&] {
     std::unique_lock<std::mutex> lock(channel->mutex);
     lock_owned.set_value();
@@ -171,6 +210,10 @@ int main() {
       busy_client.poll(busy_id) || channel->queued!=admitted_pending ||
       admitted_pending->request!=original_bytes) return 11;
   channel->queued.reset();
+  /**
+   * @brief 共享请求seq水位必须跨client保留：见2183397839后新client用2183397840。
+   * 旧值不能回退；UINT32_MAX后跳过0为1，后续旧max/半环距离值也不应重置，依次reserve2/3。
+   */
   channel->observe_request_sequence(2100000000U);
   channel->observe_request_sequence(2183397839U);
   dummy_motion_client::WireManagementClient resumed_client(facade);

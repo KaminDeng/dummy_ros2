@@ -1,4 +1,9 @@
 """当前正式contract镜像必须逐字节匹配canonical导出；不产生设备运行资格。"""
+##
+# @file test_formal_contract_mirror.py
+# @brief 正式ROS合同镜像与显式canonical导出的逐字节/摘要一致性。
+#
+# 模块导入时必须已有DPSDK_ROOT环境变量，canonical取其applications/dummy_ref_control/contracts路径。只核manifest列举payload，不运行SDK/codec/设备；摘要相同不赋予发布资格或动作许可。
 import hashlib
 import os
 import json
@@ -9,6 +14,9 @@ MIRROR = ROOT / 'contracts/dummy_robot_v2'
 CANONICAL = Path(os.environ['DPSDK_ROOT']) / 'applications/dummy_ref_control/contracts/dummy_robot_v2'
 
 
+##
+# @brief manifest及每payload逐字节同canonical，路径非绝对/无..、原SHA/排序去重及聚合hash全部一致。
+# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_manifest_and_every_payload_match_canonical_export():
     assert (MIRROR / 'manifest.json').read_bytes() == (CANONICAL / 'manifest.json').read_bytes()
     manifest = json.loads((MIRROR / 'manifest.json').read_text())

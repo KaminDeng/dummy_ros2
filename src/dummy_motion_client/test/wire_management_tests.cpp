@@ -1,3 +1,10 @@
+/**
+ * @file wire_management_tests.cpp
+ * @brief 真实管理codec/客户端与内存FIFO传输的协议、续租及终态边界测试。
+ *
+ * 不创建真实transport端点；请求编码解码走生产codec，响应由测试显式构造。Port只计数，Host时间人工µs。
+ * Queued≠Accepted≠Committed；Query重试保留原请求身份/时间锚，续租不能挤掉Complete/Cancel或延长原终态期限。输出component证据不等于HIL/物理完成。
+ */
 #include "dummy_motion_client/management_client.hpp"
 #include "dummy_motion_client/action_gate.hpp"
 #include "dummy_motion_client/bootstrap_coordinator.hpp"
@@ -9,20 +16,40 @@
 #include <stdexcept>
 using namespace dummy_motion_client;
 namespace wire=dp::protocol::dummy_robot_v2;
+/**
+ * @brief 编解码内存链路，保存请求并以FIFO提供合成响应。
+ * timeout_next只使下一poll抛异常，reject_send使send返回空句柄。
+ */
 struct Transport : ManagementTransport {
   bool timeout_next=false;
   bool reject_send=false;
   std::vector<ManageRequest> requests;
   std::deque<std::vector<std::uint8_t>> responses;
+  /**
+   * @brief 借用Transport的请求句柄；Transport必须比句柄长寿。
+   */
   struct Handle : RequestHandle {
+    /**
+     * @brief 保存传输引用，无新线程。
+     * @param transport 所借用FIFO对象。
+     */
     explicit Handle(Transport &transport) : transport(transport) {}
     Transport &transport;
+    /**
+     * @brief 非阻塞取FIFO首响应，或注入一次timeout异常。
+     * @return 字节向量或空；不按句柄单独路由，生产WireManagementClient负责相关性。
+     */
     std::optional<std::vector<std::uint8_t>> poll() override {
       if(transport.timeout_next) { transport.timeout_next=false; throw std::runtime_error("simulated query timeout"); }
       if (transport.responses.empty()) return {};
       auto result=transport.responses.front(); transport.responses.pop_front(); return result;
     }
   };
+  /**
+   * @brief 解码并记录请求，建立借用本Transport的Handle。
+   * @param bytes 完整Manage请求wire字节。
+   * @return 新句柄；reject_send时空，decode失败抛异常。
+   */
   std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &bytes) override {
     if(reject_send) return {};
     ManageRequest request;
@@ -30,6 +57,11 @@ struct Transport : ManagementTransport {
       throw std::runtime_error("request codec failed");
     requests.push_back(request); return std::make_unique<Handle>(*this);
   }
+  /**
+   * @brief 编码一份合成响应并排入FIFO。
+   * @param response 由用例构造的wire响应。
+   * @return 无；codec失败抛异常。
+   */
   void respond(const wire::DummyManageV2Response &response) {
     std::vector<std::uint8_t> bytes(wire::DummyManageV2ResponseCodec::kEncodedSize);
     if (wire::DummyManageV2ResponseCodec::encode(response,bytes.data(),bytes.size())!=wire::CodecResult::kOk)
@@ -37,13 +69,36 @@ struct Transport : ManagementTransport {
     responses.push_back(bytes);
   }
 };
+/**
+ * @brief 非执行Port，primes/starts只累计接口调用次数。
+ */
 struct Port : ActionPort {
   int primes=0, starts=0;
+  /**
+   * @brief 未命名位置rad/epoch/generation不执行，只计prime。
+   * @return 无。
+   */
   void prime(const Position &,std::uint32_t,std::uint64_t) override { ++primes; }
+  /**
+   * @brief 未命名轨迹/generation不执行，只计start。
+   * @return 无。
+   */
   void start(const Trajectory &,std::uint64_t) override { ++starts; }
+  /**
+   * @brief 空失能，不向设备写管理请求。
+   * @return 无。
+   */
   void disable() override {}
+  /**
+   * @brief 空取消，不构成设备停止确认。
+   * @return 无。
+   */
   void cancel() override {}
 };
+/**
+ * @brief Enable只Queued不能prime；管理Committed仍需新State Hold及已提交seq，双流证据齐备才ready。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool two_stream_handshake() {
   Transport transport; WireManagementClient client(transport); Port port;
   ActionGate gate(client,port,{{"Joint1"},{-1},{1},{1},{1},{0.1},{0.1}});
@@ -80,6 +135,10 @@ bool two_stream_handshake() {
   const Trajectory motion{{"Joint1"},{{{0.0},{},{},1.0}},{},{},0};
   return gate.submit(motion,104) && transport.requests.back().freshness_ticket()==55;
 }
+/**
+ * @brief 不同process seed或同seed不同invocation构造的客户端ID不交叉；这里只模拟构造值，不fork进程。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool process_sessions_do_not_reuse_management_identity() {
   Transport first_transport, second_transport;
   WireManagementClient first(first_transport, 0x123456789abcdef0ULL);
@@ -120,6 +179,10 @@ bool process_sessions_do_not_reuse_management_identity() {
   return first_transport.requests.front().request_seq()!=
       second_transport.requests.front().request_seq();
 }
+/**
+ * @brief request_seq从UINT32_MAX回到1，跳过保留值0。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool sequence_wrap_skips_zero() {
   Transport transport;
   WireManagementClient client(transport,0x12345678fffffffeULL);
@@ -137,6 +200,10 @@ bool sequence_wrap_skips_zero() {
   const auto second=client.submit(request,2U);
   return second!=0U && transport.requests.back().request_seq()==1U;
 }
+/**
+ * @brief 回绕permit必须用实际已发送seq1参与摘要，不能用旧MAX或未发送预测号。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool permit_wrap_uses_sent_sequence() {
   Transport transport;
   WireManagementClient client(transport,0x12345678fffffffeULL);
@@ -166,6 +233,11 @@ bool permit_wrap_uses_sent_sequence() {
   const auto id=client.submit_permit(permit,binding,2U);
   return id!=0U && transport.requests.back().request_seq()==1U;
 }
+/**
+ * @brief 负例核response身份及Hold mask。
+ * @param scenario device/profile分别改相应字段；历史mask模式实际改client，hold_mask模式核非完整Hold不可用。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool wire_boundary_case(const std::string &scenario) {
   Transport transport; WireManagementClient client(transport); ManageRequest request;
   request.set_expected_profile_id(4); request.set_configured_mask(3);
@@ -185,6 +257,10 @@ bool wire_boundary_case(const std::string &scenario) {
     return scenario=="hold_mask" && reply && !reply->hold_available;
   } catch (const std::runtime_error &) { return scenario!="hold_mask"; }
 }
+/**
+ * @brief Pending23即使phase4也不当终态拒绝；客户端应Query原请求。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool pending_response_is_not_rejection() {
   Transport transport;
   WireManagementClient client(transport);
@@ -202,6 +278,10 @@ bool pending_response_is_not_rejection() {
       transport.requests.back().operation()==wire_value(ManageOperation::kQuery) &&
       transport.requests.back().queried_operation_id()==id;
 }
+/**
+ * @brief Grant原session42可暂收session0 Prepared，但Committed仍session0必须拒绝。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool grant_session_pending_query_identity() {
   Transport transport;
   WireManagementClient client(transport);
@@ -240,6 +320,11 @@ bool grant_session_pending_query_identity() {
   try { client.poll(id); } catch (const std::runtime_error &) { return true; }
   return false;
 }
+/**
+ * @brief Prepared阶段也拒绝六种关联身份漂移。
+ * @param mismatch 0..5分别破坏boot/device/client/profile/request_id/operation_id。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool grant_session_pending_query_rejects_mismatch(unsigned mismatch) {
   Transport transport;
   WireManagementClient client(transport);
@@ -274,6 +359,10 @@ bool grant_session_pending_query_rejects_mismatch(unsigned mismatch) {
   try { client.poll(id); } catch (const std::runtime_error &) { return true; }
   return false;
 }
+/**
+ * @brief 初回执op0，再Prepared，最后Query Committed session42/op71才完成。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool grant_session_result_after_pending_lookup() {
   Transport transport;
   WireManagementClient client(transport);
@@ -306,6 +395,12 @@ bool grant_session_result_after_pending_lookup() {
   return committed && committed->result_valid && committed->succeeded &&
       committed->operation_id==71U && committed->session_id==42U;
 }
+/**
+ * @brief 释放强结果仍要求可接受receipt，不能只看Committed标签。
+ * @param via_query 是否先经过Pending/Query。
+ * @param terminal_receipt Queued1/Replayed2有效，0/Busy4无效。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool release_terminal_receipt(bool via_query, std::uint8_t terminal_receipt) {
   Transport transport;
   WireManagementClient client(transport);
@@ -350,6 +445,12 @@ bool release_terminal_receipt(bool via_query, std::uint8_t terminal_receipt) {
   } catch(const std::runtime_error &) { return !valid_receipt; }
 }
 
+/**
+ * @brief RUN续租与终点Complete/Cancel共用客户端时守原身份和期限。
+ * @param mode 0正常；1/2错误续租绑定或别的操作；3失败；4原deadline；5Cancel优先；6显式abort；9..14各种续租/观测身份边界。
+ * 正例只核Complete准确发一次及冻结seq17/0.2rad，并非最终Succeeded或物理完成。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool running_renewal_does_not_drop_complete(unsigned mode=0U) {
   Transport transport; WireManagementClient client(transport); Port port;
   ActionGate gate(client,port,{{"Joint1"},{-1},{1},{1},{1},{0.1},{0.1}});
@@ -405,6 +506,10 @@ bool running_renewal_does_not_drop_complete(unsigned mode=0U) {
     response.set_transaction_phase(3); transport.respond(response); bootstrap.tick(22);
     if(!client.submit(setup_request,22)) return false;
   }
+  /**
+   * @par 续租/Complete仲裁
+   * 保留尚未被bootstrap消费的Renew回执；Gate不能绕开它发Complete，也不能因此重置目标终态deadline。
+   */
   const auto renewal=transport.requests.back();
   response.set_request_id(renewal.request_id()); response.set_operation_id(0);
   response.set_transaction_phase(1); response.set_result_code(23);
@@ -501,6 +606,12 @@ bool running_renewal_does_not_drop_complete(unsigned mode=0U) {
       transport.requests.back().terminal_position_rad()[0]==0.2 && gate.terminal()==Terminal::kNone;
 }
 
+/**
+ * @brief 短暂Status/State不相干时ReleasePending仍可Query，避免因等Idle而阻塞推进。
+ * @param fault 0正常；1错stage、2错phase、3错op、4超时、5错boot、6无inflight、7发送失败、8新Idle State配旧Stopping Status。
+ * 强回执只到ReleaseAwaitIdle；仍缺完整双流Idle时不能released。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool release_pending_polls_during_observation_grace(unsigned fault=0U) {
   Transport transport; WireManagementClient client(transport);
   ManageRequest identity; identity.set_expected_session_id(9);
@@ -577,6 +688,10 @@ bool release_pending_polls_during_observation_grace(unsigned fault=0U) {
       transport.requests.size()==2U;
 }
 
+/**
+ * @brief 20ms人工tick让Release Query在250ms State监督预算内拿到强回执。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool release_query_before_state_supervision_deadline() {
   Transport transport; WireManagementClient client(transport);
   ManageRequest identity; identity.set_expected_session_id(9);
@@ -614,6 +729,10 @@ bool release_query_before_state_supervision_deadline() {
   return committed_at>0U && committed_at-last_hold<=250000U && bootstrap.confirmed_release().has_value();
 }
 
+/**
+ * @brief Renew较慢Query节奏与Release较快节奏分开；Query两次重试沿用同RID/seq及queried原ID，第三次失败。
+ * @return 所述检查全部成立为true；false供main报告失败。
+ */
 bool query_backoff_and_retry_identity_remain_bounded() {
   for(const auto operation:{ManageOperation::kRenewLease,ManageOperation::kDisableAndRelease}) {
     Transport transport; WireManagementClient client(transport);
@@ -649,6 +768,14 @@ bool query_backoff_and_retry_identity_remain_bounded() {
   return true;
 }
 
+/**
+ * @brief 选择单个协议边界或运行完整内存管理握手序列。
+ * @param argc 进程参数数量。
+ * @param argv 模式/输入路径见下述说明。
+ * @return 0表示所选断言通过；非零、assert或检查异常表示失败。
+ * argv[1]选择模式；running_renewal_strict_identity可用argv[2]指定mode，否则循环9..14；complete_boundaries循环1..6。
+ * 无参数覆盖身份/序号/permit/释放后，逐步核Queued、Prepared、Query失败和迟到无关RID，最后双流Enable。只打印组件层证据。
+ */
 int main(int argc,char **argv) {
   if(argc==2 && std::string(argv[1])=="release_query_backoff_guards")
     return query_backoff_and_retry_identity_remain_bounded() ? 0 : 60;

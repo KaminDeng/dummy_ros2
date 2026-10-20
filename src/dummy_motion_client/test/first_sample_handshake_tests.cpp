@@ -1,5 +1,16 @@
+/**
+ * @file first_sample_handshake_tests.cpp
+ * @brief 核Enable/Begin双流首保持采样和真实producer ACK屏障。
+ *
+ * 复用内存Harness，primes/starts只是Port计数，不是电机实际到位次数。管理快照、record_update与State ACK分别驱动状态，避免Queued提前启动。
+ */
 #include "action_test_support.hpp"
 #include <iostream>
+/**
+ * @brief Queued不prime；新epoch采样后仍须首有效producer ACK。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 0.2rad不连续首样本拒绝；两个相同保持更新1/2后ACK第一条1即可完成握手，不要求ACK最新2。Begin时先prime且starts0，首采样ACK后才starts1。
+ */
 int main() {
   using namespace action_test;
   Harness harness; Authorization auth; auth.session=auth.reference=auth.permit=true;

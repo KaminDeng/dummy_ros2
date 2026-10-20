@@ -1,5 +1,13 @@
 # R00 ROS Baseline
 
+## 中文导读：R00 历史环境基线
+
+本文固定旧工作区、提交、依赖版本和源SHA，用于解释R00当时如何构建；不是当前机器安装清单。
+`--hardware none`排除实体IO，静态配置测试成功也不等于Gazebo真正启动或控制器已加载。
+表中exit=3明确表示运行时未执行，不能把AUD通过合并为全套PASS。
+当前仓库名为`dummy_ros2_consolidated`，新手操作请从 [主 README](../../README.md) 的现行入口开始；
+不要直接回退仓库、包版本或源码以追随本历史表。旧路径和摘要保留供报告溯源。
+
 ## Scope
 
 R00 establishes an isolated ROS source build and test runner. All R00 commands use

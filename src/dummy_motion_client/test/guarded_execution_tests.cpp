@@ -1,7 +1,22 @@
+/**
+ * @file guarded_execution_tests.cpp
+ * @brief 用真实JTC更新与借用的内存接口核登记执行/prime/末代冻结。
+ *
+ * 运行会init/configure/activate ROS控制器，但关节状态和目标接口均为本进程double，循环position=command模拟理想跟随。
+ * 不包含设备CAN/回执/真实轴动态，不能将终点0.35rad或JSON registered_jtc_execution读成物理执行证明。
+ */
 #include "dummy_ros_control/guarded_joint_trajectory_controller.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include <cmath>
 #include <iostream>
+/**
+ * @brief 从actual接口0.25rad prime，推进JTC后执行登记的一秒目标。
+ * @param argc 参数个数（含程序名）。
+ * @param argv 参数数组，模式/路径位置见下述说明。
+ * @return 0表示所选检查通过；非零或断言/require异常表示失败。
+ * 100Hz/10ms人工update；保持期先推进100拍，避免轨迹时钟停滞。注册UUID+语义摘要只许提交一次，110拍后command与最新generation均0.35rad。
+ * 将sink设nullptr后不再生成更新，但末记录身份仍current供transport；clear后才deactivate/ROS shutdown。
+ */
 int main(int argc,char **argv) {
   using namespace dummy_ros_control;
   rclcpp::init(argc,argv);
