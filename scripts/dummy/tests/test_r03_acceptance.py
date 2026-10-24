@@ -2,7 +2,7 @@
 """Build and execute the ROS-owned R03 codec and goal-gate probes."""
 ##
 # @file test_r03_acceptance.py
-# @brief R03历史合同字节钉住、codec编译执行、跨进程RPC及插件加载验收。
+# @brief 当前codec编译执行、跨进程RPC及插件加载验收，保留R03套件入口。
 #
 # 这些方法不是纯静态：compile_and_run调用g++和组件；RPC方法运行r03_rpc_probe及析构probe，插件方法运行pluginlib loader。真实dp_comm指进程/传输实现，不是实体USB/电机验证。
 import os
@@ -11,7 +11,6 @@ from pathlib import Path
 import subprocess
 import tempfile
 import json
-import hashlib
 import unittest
 
 
@@ -23,35 +22,6 @@ C03_INCLUDE = ROOT / "contracts/dummy_robot_v2/codec"
 ##
 # @brief 本套件unittest验收集合；实际子进程与证据层级见文件职责，各方法断言原样保留。
 class R03AcceptanceTest(unittest.TestCase):
-    ##
-    # @brief 只读manifest核dummy-wire-v2、wire stage及历史2f9ebf1，不运行codec。
-    # @return None；通过assert/unittest断言报告结果，失败抛异常。
-    def test_c05_wire_release_is_pinned_to_the_r03_handoff(self):
-        manifest = json.loads((ROOT / "contracts/dummy_robot_v2/manifest.json").read_text())
-        self.assertEqual("dummy-wire-v2", manifest["release_id"])
-        self.assertEqual("wire", manifest["stage"])
-        self.assertEqual("2f9ebf1", manifest["r03_commit"])
-
-    ##
-    # @brief git读取2f9ebf1原型清单与字节逐个比当前文件，并核原型不混入当前payload列表。
-    # @return None；通过assert/unittest断言报告结果，失败抛异常。
-    def test_c03_prototype_is_pinned_and_not_mislabeled_wire_v1(self):
-        prefix = "contracts/dummy_robot_v2/c03_prototype/generated"
-        listing = subprocess.run(
-            ["git", "ls-tree", "-r", "--name-only", "2f9ebf1", prefix],
-            cwd=ROOT, capture_output=True, text=True, check=True,
-        ).stdout.splitlines()
-        self.assertTrue(listing)
-        manifest = json.loads((ROOT / "contracts/dummy_robot_v2/manifest.json").read_text())
-        self.assertEqual("dummy-wire-v2", manifest["release_id"])
-        self.assertFalse(any(entry["path"].startswith("c03_prototype/") for entry in manifest["payloads"]))
-        for relative in listing:
-            expected = subprocess.run(
-                ["git", "show", f"2f9ebf1:{relative}"], cwd=ROOT,
-                capture_output=True, check=True,
-            ).stdout
-            self.assertEqual(expected, (ROOT / relative).read_bytes(), relative)
-
     ##
     # @brief 临时g++17严格警告编译所给单源，含ROS控制/合同/SDK include，再要求二进制退出0；未设子进程timeout。
     # @param source 实际C++源码Path，调用会编译并运行二进制。

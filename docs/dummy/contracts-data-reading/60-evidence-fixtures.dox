@@ -13,32 +13,11 @@
 R00–R08 task-report和scripts fixtures不是同一数据：前者记录结论/限制，后者记录case清单及预期。R00摘要内部仍保ROS01 NOT_RUN；R05越界guard未发service不能算MoveIt深层越界分支已执行。R03/C04交接prototype明示wire_release=false，不因wire_layout与冻结codec同SHA就批准原型发布。
 
 
-@section raw_ad5155bcbfe09065 contracts/dummy_robot_v1/evidence/C04.json
+@section raw_50fa4b30a5d06c83 docs/dummy/handoffs/R03-to-C04.json
 
 这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
 
-原文 SHA256：`ad5155bcbfe0906549417fc01dd4fa18957cf467935b9c4702eddd9215a2b176`；157 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
-
-suite C04/hardware none的十case选例清单，包含GEN02_ADAPTER及NEGATIVE。清单没有每case实际输出/时间或运行原件，不可按列出ID计通过。
-
-| case ID | 角色 |
-| --- | --- |
-| `GEN01` | C04待执行/汇总选例项；无实体硬件声明 |
-| `GEN02` | C04待执行/汇总选例项；无实体硬件声明 |
-| `GEN03` | C04待执行/汇总选例项；无实体硬件声明 |
-| `GEN05` | C04待执行/汇总选例项；无实体硬件声明 |
-| `GEN06` | C04待执行/汇总选例项；无实体硬件声明 |
-| `GEN08` | C04待执行/汇总选例项；无实体硬件声明 |
-| `RPC01` | C04待执行/汇总选例项；无实体硬件声明 |
-| `RPC12` | C04待执行/汇总选例项；无实体硬件声明 |
-| `NEGATIVE` | C04待执行/汇总选例项；无实体硬件声明 |
-| `GEN02_ADAPTER` | C04待执行/汇总选例项；无实体硬件声明 |
-
-@section raw_50fa4b30a5d06c83 contracts/dummy_robot_v1/evidence/R03-to-C04.json
-
-这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
-
-原文 SHA256：`50fa4b30a5d06c833e27a05a841e38f4697c02791d90a40208f7dd302697273f`；1447 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`50fa4b30a5d06c833e27a05a841e38f4697c02791d90a40208f7dd302697273f`；1447 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
 
 READY_FOR_C04是ROS交接可供下一owner独立验收，不是C04/C05自动通过。prototype wire_release=false；记录过并发configure删除/恢复生成树及显式GEN08复跑，不能把恢复或单例复跑当全门代证。
 
@@ -53,7 +32,7 @@ READY_FOR_C04是ROS交接可供下一owner独立验收，不是C04/C05自动通�
 | `runtime_observations` | `{"guarded_controller_state":"inactive","guarded_action_servers":0,"guarded_trajectory_topic_present":false,"zenoh_interprocess_service":"PASS","implicit_request_handle_destructor":"PASS"}` | inactive/action0/无trajectory入口及本机Zenoh服务等软件观察。 |
 | `upstream_status` | `{"owner":"DPSDK C04/C05","current_c03_exit_code":0,"current_c03_result":"Generated tree restored; seven tests passed in full run and GEN08 passed on explicit rerun","transient_issue":"A prior concurrent configure deleted the tracked generated tree; it was restored by the DPSDK owner","required_before_c05":"C04 must consume this handoff and rerun complete compatibility before publishing wire-v1"}` | 原DPSDK owner/C03恢复及后续独立兼容前置，显式单例复跑不补完整门。 |
 
-@section raw_8422881c141e350b contracts/dummy_robot_v1/evidence/fk_random_cases.json
+@section raw_8422881c141e350b src/dummy_moveit_config/test/fixtures/fk_random_cases.json
 
 这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
 
@@ -194,50 +173,7 @@ READY_FOR_C04是ROS交接可供下一owner独立验收，不是C04/C05自动通�
 | 126 | `[-0.2345323524396472,-0.39040661104629226,0.36703199766561334,-0.7610152881943615,-0.17860513155704894,0.36033806296797843]` | 1.562660862e-08 | 8.321198086e-08 | 固定legacy源码数学对照；非物理采样 |
 | 127 | `[-0.48490220259176975,0.9908233973502878,0.17097680713386776,0.03220810361182269,-0.42066569946116283,-0.3671282888165679]` | 8.018905095e-09 | 1.161521611e-07 | 固定legacy源码数学对照；非物理采样 |
 
-@section raw_b602eaea81e93ec6 contracts/dummy_robot_v1/evidence/source_hashes.json
-
-这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
-
-原文 SHA256：`b602eaea81e93ec6c7bf8d65e303bece52cb4d4700d80558fe67266d9fc4bdfb`；172 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
-
-只有两条旧源码identity，绑定FK/Robot来源；没有命令、时钟、capture或物理结果，不能把存在SHA当执行。
-
-| 角色 | 原SHA |
-| --- | --- |
-| `legacy_fk` | `a0efaf04f70f0d6f683b5154e29dfb1ddbe1adbd3fbb5b5e2bd9abd9389c1ca3` |
-| `legacy_robot` | `c270028ccefb47adb87f53295cbc8a57fc627b3d2c97afebfbd22269d368be73` |
-
-@section raw_2e03cc58215e934a contracts/dummy_robot_v1/fixtures/can_golden.json
-
-这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
-
-原文 SHA256：`2e03cc58215e934adacd9485fbd790f890ed9bc28b12ee5550a618d528ace9e6`；4089 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
-
-这些是离线bytes示例，**3motor rev/s仅fixture，不是批准速度或试动指令**。同名Joint1示例ratio30与v1 model Joint1 ratio50不同，必须保各病例明示的历史数学参数，不能替当前模型。J1非零anchor7.25证明相对圈差；J6 +3π多圈映-75motor rev，不能取模。
-
-| 病例 | 参考类别 | 目标rad或标明deg | 旧init deg/显式anchor rev | 方向 | ratio | motor rev | fixture cap rev/s | CAN ID | 八byte LE |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Joint1_relative_10deg | legacy_math_only | 10 deg | 0 | -1 | 30 | -0.8333333333333334 | 3.0 | 0x87 | 55 55 55 BF 00 00 40 40 |
-| Joint2_relative_10deg | legacy_math_only | -63 deg | -73 | 1 | 30 | 0.8333333333333334 | 3.0 | 0x107 | 55 55 55 3F 00 00 40 40 |
-| Joint3_relative_10deg | legacy_math_only | 170 deg | 180 | -1 | 30 | 0.8333333333333334 | 3.0 | 0x187 | 55 55 55 3F 00 00 40 40 |
-| Joint4_relative_10deg | legacy_math_only | 10 deg | 0 | 1 | 24 | 0.6666666666666666 | 3.0 | 0x207 | AB AA 2A 3F 00 00 40 40 |
-| Joint5_relative_10deg | legacy_math_only | 10 deg | 0 | -1 | 30 | -0.8333333333333334 | 3.0 | 0x287 | 55 55 55 BF 00 00 40 40 |
-| Joint6_relative_10deg | legacy_math_only | 10 deg | 0 | -1 | 50 | -1.3888888888888888 | 3.0 | 0x307 | 1C C7 B1 BF 00 00 40 40 |
-| J1_bench_nonzero_anchor | bench_session | 0.17453292519943295 | 7.25 | -1 | 30 | 6.416666666666667 | 3.0 | 0x87 | 55 55 CD 40 00 00 40 40 |
-| J6_positive_3pi_model | legacy_math_only | 9.42477796076938 | 0 | -1 | 50 | -75.0 | 3.0 | 0x307 | 00 00 96 C2 00 00 40 40 |
-
-控制帧仅query/Disable请求示例；Disable字节不证明物理驱动断能。反馈`1.5rev/finish1`尾部DE AD BE被此历史golden容许，finish2拒绝，不能把dirty tail接受推成当前任意布局都可忽略尾字段。
-
-| 控制/反馈病例 | 原数据 |
-| --- | --- |
-| J1_query_position | `{"case":"J1_query_position","std_id":"0xa3","dlc":8,"data_hex":"00 00 00 00 00 00 00 00","kind":"query_position"}` |
-| J1_disable_request | `{"case":"J1_disable_request","std_id":"0x81","dlc":8,"data_hex":"00 00 00 00 00 00 00 00","kind":"disable_request"}` |
-| J6_query_position | `{"case":"J6_query_position","std_id":"0x323","dlc":8,"data_hex":"00 00 00 00 00 00 00 00","kind":"query_position"}` |
-| J6_disable_request | `{"case":"J6_disable_request","std_id":"0x301","dlc":8,"data_hex":"00 00 00 00 00 00 00 00","kind":"disable_request"}` |
-| J1_finite_dirty_tail | `{"case":"J1_finite_dirty_tail","std_id":"0xa3","dlc":8,"data_hex":"00 00 C0 3F 01 DE AD BE","expected_motor_rev":1.5,"expected_finish":true,"expected_accept":true}` |
-| J1_bad_finish | `{"case":"J1_bad_finish","std_id":"0xa3","dlc":8,"data_hex":"00 00 C0 3F 02 DE AD BE","expected_accept":false}` |
-
-@section raw_fdd4e563fbac24d1 contracts/dummy_robot_v1/fixtures/fk_cases.json
+@section raw_fdd4e563fbac24d1 src/dummy_moveit_config/test/fixtures/fk_cases.json
 
 这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
 
@@ -256,7 +192,7 @@ READY_FOR_C04是ROS交接可供下一owner独立验收，不是C04/C05自动通�
 
 这份原件是离线/历史证据，下面区分原记录实际范围与不能推出的结论。
 
-原文 SHA256：`9eb1d92746595146a77c3978306b284ec3ce11adcdae3e7daae622420b58d092`；1460 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`9eb1d92746595146a77c3978306b284ec3ce11adcdae3e7daae622420b58d092`；1460 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
 
 这是正式release **结构schema**，不是已批准实例。required十五个字段绑定image大小/0x08000000地址、model/profile/compiled policy、firmware源码、contract、mask63/profile201及resource/map/measurement摘要；additionalProperties=false、stage常量RELEASE_APPROVED也不能认证任意自填JSON已获批准。该地址是schema约束，不是刷写操作指令。
 

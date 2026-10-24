@@ -185,7 +185,8 @@ The collision geometry and scene-owner checks are described in
 - [Coordinate frames](docs/dummy/ground-origin.md) and [collision clearance](docs/dummy/collision-clearance.md).
 - [Trajectory execution](docs/dummy/moveit-path-execution.md).
 - [Versioned contract data](docs/dummy/contracts-data-reading/README.md).
-- [Generated codecs](docs/dummy/generated-codecs/README.md) and [protocol prototype](docs/dummy/generated-protocol-c03/README.md).
+- [Generated codecs](docs/dummy/generated-codecs/README.md).
+- [Current contracts](contracts/README.md); historical wire 2.4 decoding resources live in `compatibility/wire2_4/`.
 
 ## Contributing and license
 

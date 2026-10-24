@@ -26,11 +26,11 @@ SPEC.loader.exec_module(joiner)
 APP_SPEC = importlib.util.spec_from_file_location("application_e2e", ROOT / "application_e2e.py")
 application_e2e = importlib.util.module_from_spec(APP_SPEC)
 APP_SPEC.loader.exec_module(application_e2e)
-LAYOUT = json.loads((ROOT.parents[1] / "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
+LAYOUT = json.loads((ROOT.parents[1] / "compatibility/wire2_4/wire_layout.json").read_text())
 
 
 ##
-# @brief 按当前wire_layout offset小端打包合成payload，默认schema2.4，其余未给字段为零，不调设备codec发送。
+# @brief 按历史wire2.4布局小端打包合成payload，其余未给字段为零，不调设备codec发送。
 # @param name LAYOUT payload消息类型名。
 # @param values 字段名到值映射；数组hex转bytes，数值按字段类型小端写。
 # @return 固定encoded_size的合成payload bytes。

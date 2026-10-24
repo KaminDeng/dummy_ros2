@@ -52,7 +52,7 @@ def deploy(native, firmware, identity, description):
         shutil.copy2(firmware,release/'firmware.bin')
         for relative in ('scripts/dummy/join_real_6dof_evidence.py',
                          'contracts/dummy_robot_v2/codec/wire_layout.json',
-                         'contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json'):
+                         'compatibility/wire2_4/wire_layout.json'):
             target=release/'ros'/relative;target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copy2(source/relative,target)
         binding={key:ids[key] for key in ('contract_sha256','model_sha256','profile_sha256')}

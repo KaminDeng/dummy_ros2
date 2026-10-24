@@ -97,7 +97,7 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/src/raw_evidence_collector.cpp")
   target_include_directories(fault_cleanup_receipt_tests PRIVATE include
     "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_legacy_2_4/codec")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../compatibility/wire2_4/codec")
   target_compile_options(fault_cleanup_receipt_tests PRIVATE -UNDEBUG)
   target_compile_features(fault_cleanup_receipt_tests PRIVATE cxx_std_17)
   target_link_libraries(fault_cleanup_receipt_tests PRIVATE OpenSSL::Crypto Threads::Threads)

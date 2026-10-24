@@ -7,7 +7,7 @@ R03记录上游pin、ROS自有插件、DPSDK生成codec和controller gate各自�
 QUEUED且accepted=false只证明当时服务回执语义，不是Capture或运动已完成。
 注册goal UUID/digest的值对象测试、插件编译、controller运行加载、跨进程绕过关闭
 属于不同验证层；不能从前一层推出后一层。本页引用提交与版本为历史输入。
-当前生产调用/授权流程见 [运行手册](ros-runbook.md)，冻结生成物说明见 [生成协议](generated-protocol-c03/README.md)。
+当前生产调用/授权流程见 [运行手册](ros-runbook.md)，当前V2生成物说明见 [生成codec](generated-codecs/README.md)。本报告的C03/V1原型及探针已退出当前源码入口，需从Git历史 `c76b1eb06924010daa735288066f9c43a26ed6d1` 查阅。
 
 ## Locked Inputs
 

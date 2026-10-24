@@ -23,7 +23,7 @@ from types import MappingProxyType
 
 ROOT = Path(__file__).resolve().parents[2]
 LAYOUT = json.loads((ROOT / "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
-LEGACY_LAYOUT = json.loads((ROOT / "contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json").read_text())
+LEGACY_LAYOUT = json.loads((ROOT / "compatibility/wire2_4/wire_layout.json").read_text())
 TYPES = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
          "float64": "d", "bool": "B"}
 ##

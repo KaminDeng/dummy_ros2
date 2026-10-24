@@ -9,9 +9,11 @@ rad是关节角，deg是旧初始化角，m是DH长度；J6有限多圈值不归
 当前模型、全50:1映射及后端选择以 [主 README](../../README.md) 和匹配的model/profile为准。
 旧数学FK通过不证明碰撞、质量惯量、负载、机械标定或真实安装正确；下文原数值保留供溯源。
 
-## Contract Identity
+数学回归保留的 [固定FK病例](../../src/dummy_moveit_config/test/fixtures/fk_cases.json) 与 [随机FK病例](../../src/dummy_moveit_config/test/fixtures/fk_random_cases.json) 已迁入MoveIt测试夹具；旧合同身份仅在Git历史 `c76b1eb06924010daa735288066f9c43a26ed6d1` 中查阅。
 
-ROS consumes the read-only C02 bundle at `contracts/dummy_robot_v1`. Its release
+## Historical Contract Identity
+
+The historical C02 record consumed the read-only bundle at `contracts/dummy_robot_v1`. Its release
 is `dummy-model-v1`, stage `model`, with payload digest
 `f7f5495c21e03840d38b56da4a5da09115c20594350c71958d62c95c0ba21634`.
 The legacy FK source hash is

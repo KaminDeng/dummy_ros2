@@ -1,233 +1,26 @@
 {
   "schema": "ros_frozen_contract_data_reading_v1",
   "source_HEAD": "7c9285f6c63cc162245df1299a0b6b8522044d38",
-  "source_count": 119,
-  "unique_sha256_count": 80,
+  "source_count": 78,
+  "unique_sha256_count": 54,
   "sources": [
     {
-      "path": "contracts/dummy_robot_v1/c03_prototype/generated/dummy_robot_v1/wire_layout.json",
-      "sha256": "100c1b18642f3409badb973de3d96f8ad963c25d8d1cb8022da61df302b1994b",
-      "bytes": 27192,
-      "page": "ros_contract_layouts_enums",
-      "document": "20-layouts-enums.dox",
-      "anchor": "raw_100c1b18642f3409",
-      "representative": "contracts/dummy_robot_v1/c03_prototype/generated/dummy_robot_v1/wire_layout.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/codec/wire_layout.json",
-      "sha256": "100c1b18642f3409badb973de3d96f8ad963c25d8d1cb8022da61df302b1994b",
-      "bytes": 27192,
-      "page": "ros_contract_layouts_enums",
-      "document": "20-layouts-enums.dox",
-      "anchor": "raw_100c1b18642f3409",
-      "representative": "contracts/dummy_robot_v1/c03_prototype/generated/dummy_robot_v1/wire_layout.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/enums/dummy_enum_values_v1.json",
-      "sha256": "97ef4b52ad34afec8c94e74e45a3c427ee8bd7b4eeac7a1dcc8bc4c4078a7e12",
-      "bytes": 1706,
-      "page": "ros_contract_layouts_enums",
-      "document": "20-layouts-enums.dox",
-      "anchor": "raw_97ef4b52ad34afec",
-      "representative": "contracts/dummy_robot_v1/enums/dummy_enum_values_v1.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/evidence/C04.json",
-      "sha256": "ad5155bcbfe0906549417fc01dd4fa18957cf467935b9c4702eddd9215a2b176",
-      "bytes": 157,
-      "page": "ros_contract_evidence_fixtures",
-      "document": "60-evidence-fixtures.dox",
-      "anchor": "raw_ad5155bcbfe09065",
-      "representative": "contracts/dummy_robot_v1/evidence/C04.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/evidence/R03-to-C04.json",
-      "sha256": "50fa4b30a5d06c833e27a05a841e38f4697c02791d90a40208f7dd302697273f",
-      "bytes": 1447,
-      "page": "ros_contract_evidence_fixtures",
-      "document": "60-evidence-fixtures.dox",
-      "anchor": "raw_50fa4b30a5d06c83",
-      "representative": "contracts/dummy_robot_v1/evidence/R03-to-C04.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/evidence/fk_random_cases.json",
+      "path": "src/dummy_moveit_config/test/fixtures/fk_random_cases.json",
       "sha256": "8422881c141e350bf5f9bd001e0f3518a6f99f49335a44c4aea1b20936e74cbe",
       "bytes": 85866,
       "page": "ros_contract_evidence_fixtures",
       "document": "60-evidence-fixtures.dox",
       "anchor": "raw_8422881c141e350b",
-      "representative": "contracts/dummy_robot_v1/evidence/fk_random_cases.json"
+      "representative": "src/dummy_moveit_config/test/fixtures/fk_random_cases.json"
     },
     {
-      "path": "contracts/dummy_robot_v1/evidence/source_hashes.json",
-      "sha256": "b602eaea81e93ec6c7bf8d65e303bece52cb4d4700d80558fe67266d9fc4bdfb",
-      "bytes": 172,
-      "page": "ros_contract_evidence_fixtures",
-      "document": "60-evidence-fixtures.dox",
-      "anchor": "raw_b602eaea81e93ec6",
-      "representative": "contracts/dummy_robot_v1/evidence/source_hashes.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/fixtures/can_golden.json",
-      "sha256": "2e03cc58215e934adacd9485fbd790f890ed9bc28b12ee5550a618d528ace9e6",
-      "bytes": 4089,
-      "page": "ros_contract_evidence_fixtures",
-      "document": "60-evidence-fixtures.dox",
-      "anchor": "raw_2e03cc58215e934a",
-      "representative": "contracts/dummy_robot_v1/fixtures/can_golden.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/fixtures/fk_cases.json",
+      "path": "src/dummy_moveit_config/test/fixtures/fk_cases.json",
       "sha256": "fdd4e563fbac24d16ce85187cd1755664fb5a47c800764a513404ea5bbb35d64",
       "bytes": 1140,
       "page": "ros_contract_evidence_fixtures",
       "document": "60-evidence-fixtures.dox",
       "anchor": "raw_fdd4e563fbac24d1",
-      "representative": "contracts/dummy_robot_v1/fixtures/fk_cases.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/idl/DummyDeviceStatusV1.msg",
-      "sha256": "0512857fb959d5f3db0189930e705ade5addc574235d61507043df5836f62d9b",
-      "bytes": 805,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_0512857fb959d5f3",
-      "representative": "contracts/dummy_robot_v1/idl/DummyDeviceStatusV1.msg"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/idl/DummyJointCommandV1.msg",
-      "sha256": "08243121628086a2c4cece5a651c14883ab82231db135f9959ec9b8662736a97",
-      "bytes": 276,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_08243121628086a2",
-      "representative": "contracts/dummy_robot_v1/idl/DummyJointCommandV1.msg"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/idl/DummyJointStateV1.msg",
-      "sha256": "7e91ee5d0b550c891c50e32f0d5e0a96d765478f50fea1f9d220d6a7342eb6ed",
-      "bytes": 853,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_7e91ee5d0b550c89",
-      "representative": "contracts/dummy_robot_v1/idl/DummyJointStateV1.msg"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/idl/DummyManageV1.srv",
-      "sha256": "71c4f4178b8f7ff2fa7d668e20d224df8beefddadd1822a7fdfbf72b2d9248c8",
-      "bytes": 2170,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_71c4f4178b8f7ff2",
-      "representative": "contracts/dummy_robot_v1/idl/DummyManageV1.srv"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/manifest.json",
-      "sha256": "4a2f5b938027080f93c19b4425d23f0995cfffd871d63b5d99c1896eef107a3b",
-      "bytes": 4875,
-      "page": "ros_contract_manifests_origins",
-      "document": "50-manifests-origins.dox",
-      "anchor": "raw_4a2f5b938027080f",
-      "representative": "contracts/dummy_robot_v1/manifest.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/metadata/dummy_robot_v1.yaml",
-      "sha256": "0c3cb3cf6c808f3e45fa8be30518e60708bb7bc031767a129523b5013e829cc4",
-      "bytes": 6627,
-      "page": "ros_contract_policy_metadata",
-      "document": "40-policy-metadata.dox",
-      "anchor": "raw_0c3cb3cf6c808f3e",
-      "representative": "contracts/dummy_robot_v1/metadata/dummy_robot_v1.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/model/geometry_reference.yaml",
-      "sha256": "4bf97f5ba919e7aac4599b8066423f825c6052df225257445f13fc679cf9133d",
-      "bytes": 805,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_4bf97f5ba919e7aa",
-      "representative": "contracts/dummy_robot_v1/model/geometry_reference.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/model/model.yaml",
-      "sha256": "b1ebe5560acc25ae9d02ecdbef37cf4c81bf8bb05f1e174e041faf8cde07e0f5",
-      "bytes": 1737,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_b1ebe5560acc25ae",
-      "representative": "contracts/dummy_robot_v1/model/model.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/policy/f405_j1_activation.template.json",
-      "sha256": "56f6406680f24701a587e96c487f747b1b5c4a04fb3e2426d13b72d558b6f037",
-      "bytes": 1794,
-      "page": "ros_contract_policy_metadata",
-      "document": "40-policy-metadata.dox",
-      "anchor": "raw_56f6406680f24701",
-      "representative": "contracts/dummy_robot_v1/policy/f405_j1_activation.template.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/policy/f405_j1_policy.template.json",
-      "sha256": "f36a529448bfe7bd8dc15c9bc12de95a63129b29d2bb19b8792b59088b72eaff",
-      "bytes": 1531,
-      "page": "ros_contract_policy_metadata",
-      "document": "40-policy-metadata.dox",
-      "anchor": "raw_f36a529448bfe7bd",
-      "representative": "contracts/dummy_robot_v1/policy/f405_j1_policy.template.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml",
-      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac",
-      "bytes": 637,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_facc243a92779d6f",
-      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/profiles/f405_j1_passive.yaml",
-      "sha256": "6553078601365a93cba86ab8a2a7f0b4a244cf7b196dccae759df834690df98c",
-      "bytes": 639,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_6553078601365a93",
-      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_passive.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/profiles/gazebo_6dof.yaml",
-      "sha256": "699f78969aee46961e353459a0d360f733a3c55d85eb420a13d48a8481f9ba7f",
-      "bytes": 2030,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_699f78969aee4696",
-      "representative": "contracts/dummy_robot_v1/profiles/gazebo_6dof.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/profiles/profile_schema.json",
-      "sha256": "23d033d6711a0bfae96bd141f078f142ec1577098fc6637f5f79e3dad0e9567a",
-      "bytes": 954,
-      "page": "ros_contract_policy_metadata",
-      "document": "40-policy-metadata.dox",
-      "anchor": "raw_23d033d6711a0bfa",
-      "representative": "contracts/dummy_robot_v1/profiles/profile_schema.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml",
-      "sha256": "59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2",
-      "bytes": 2023,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_59e7a8cc580c9541",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v1/profiles/sil_j1.yaml",
-      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c",
-      "bytes": 1982,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_765311d93bfdeddb",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+      "representative": "src/dummy_moveit_config/test/fixtures/fk_cases.json"
     },
     {
       "path": "contracts/dummy_robot_v2/codec/wire_layout.json",
@@ -344,7 +137,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_facc243a92779d6f",
-      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/f405_j1_bench.yaml"
     },
     {
       "path": "contracts/dummy_robot_v2/profiles/sil_6dof.yaml",
@@ -353,7 +146,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_59e7a8cc580c9541",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/sil_6dof.yaml"
     },
     {
       "path": "contracts/dummy_robot_v2/profiles/sil_j1.yaml",
@@ -362,7 +155,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_765311d93bfdeddb",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/sil_j1.yaml"
     },
     {
       "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json",
@@ -405,179 +198,13 @@
       "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/profiles/f405_6dof_bench.yaml"
     },
     {
-      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
-      "sha256": "b46bb45efb0ccd6781b7bd03bd183a169e53a585083f2287a09231c76c7b35f2",
-      "bytes": 2039,
-      "page": "ros_contract_manifests_origins",
-      "document": "50-manifests-origins.dox",
-      "anchor": "raw_1717985d07d923ab",
-      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/manifest.json",
-      "archived_original_sha256": "1717985d07d923ab5194f4cf110da5ddb42d0369b1aa2b1cbc57f52301fb66ce",
-      "archived_original_bytes": 1920,
-      "public_redaction": "provenance_metadata_only",
-      "anchor_identity": "archived original SHA prefix; stable navigation only"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml",
-      "sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713",
-      "bytes": 1737,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_a2ed010f4a5e3d49",
-      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/policy/application_hold_no_load.json",
-      "sha256": "adba10b17088c6db6e8d96b44f8d390fd5a6dc0f5f7cb65c4cdb9e946fd36575",
-      "bytes": 4312,
-      "page": "ros_contract_policy_metadata",
-      "document": "40-policy-metadata.dox",
-      "anchor": "raw_adba10b17088c6db",
-      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/policy/application_hold_no_load.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/profiles/f405_6dof_bench.yaml",
-      "sha256": "90e5a970cd213a2c40cc92242b512d4b608657912a19f02189c524e74a67b0a4",
-      "bytes": 1103,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_90e5a970cd213a2c",
-      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate/profiles/f405_6dof_bench.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json",
+      "path": "compatibility/wire2_4/wire_layout.json",
       "sha256": "df7eb59f512b9e246bf00e52264fd916e55f6633b355ebcca9e594ef99712ff7",
       "bytes": 29307,
       "page": "ros_contract_layouts_enums",
       "document": "20-layouts-enums.dox",
       "anchor": "raw_df7eb59f512b9e24",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/enums/dummy_enum_values_v2.json",
-      "sha256": "2e7237e8793f26508830b3fa960c1beadd413920d21b816429d1b45db279eafb",
-      "bytes": 2709,
-      "page": "ros_contract_layouts_enums",
-      "document": "20-layouts-enums.dox",
-      "anchor": "raw_2e7237e8793f2650",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/enums/dummy_enum_values_v2.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/evidence/release_manifest.schema.json",
-      "sha256": "9eb1d92746595146a77c3978306b284ec3ce11adcdae3e7daae622420b58d092",
-      "bytes": 1460,
-      "page": "ros_contract_evidence_fixtures",
-      "document": "60-evidence-fixtures.dox",
-      "anchor": "raw_9eb1d92746595146",
-      "representative": "contracts/dummy_robot_v2/evidence/release_manifest.schema.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyAttemptEvidenceV2.msg",
-      "sha256": "848daa404280f3424ab675f7cbae542b38a3e597ad1eb847609829896a50d265",
-      "bytes": 640,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_848daa404280f342",
-      "representative": "contracts/dummy_robot_v2/idl/DummyAttemptEvidenceV2.msg"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyDeviceStatusV2.msg",
-      "sha256": "dca9436dc60101d3e25875a2d1bc0e069512a966085394bb583e92a8a4fd7c4c",
-      "bytes": 1414,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_dca9436dc60101d3",
-      "representative": "contracts/dummy_robot_v2/idl/DummyDeviceStatusV2.msg"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyJointCommandV2.msg",
-      "sha256": "302f007f28b2586475ccbe0332be4910186cc8c61cbf3b74377436be86c09714",
-      "bytes": 296,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_302f007f28b25864",
-      "representative": "contracts/dummy_robot_v2/idl/DummyJointCommandV2.msg"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyJointStateV2.msg",
-      "sha256": "4c68ebf3664488169e31b13e5ad2d240a62cadde93c3bb3ace916a1b28263b1f",
-      "bytes": 750,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_4c68ebf366448816",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyJointStateV2.msg"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/idl/DummyManageV2.srv",
-      "sha256": "7dcec4292e1d2e156b6642bf1bf22b316a0947c614bc06bbabdcaabdbcca08d9",
-      "bytes": 1204,
-      "page": "ros_contract_wire_fields",
-      "document": "10-wire-fields.dox",
-      "anchor": "raw_7dcec4292e1d2e15",
-      "representative": "contracts/dummy_robot_v2/idl/DummyManageV2.srv"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/manifest.json",
-      "sha256": "f167d6f145e1f8675199f35a36af9f8048847aadd20d34e90410819b49b8c42a",
-      "bytes": 6202,
-      "page": "ros_contract_manifests_origins",
-      "document": "50-manifests-origins.dox",
-      "anchor": "raw_f167d6f145e1f867",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/manifest.json"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/metadata/dummy_robot_v2.yaml",
-      "sha256": "309d77ef1e58942235627ef6a40ac2a7d639770ded31b19d69d97fce6bd7d1a0",
-      "bytes": 782,
-      "page": "ros_contract_policy_metadata",
-      "document": "40-policy-metadata.dox",
-      "anchor": "raw_309d77ef1e589422",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/metadata/dummy_robot_v2.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/model/model.yaml",
-      "sha256": "a2ed010f4a5e3d4981d805519e6d209b27e71ebb56b7479fb8be076f85425713",
-      "bytes": 1737,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_a2ed010f4a5e3d49",
-      "representative": "contracts/dummy_robot_v2_application_hold_no_load_candidate_legacy_2_4/model/model.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/f405_6dof_bench.yaml",
-      "sha256": "9087f1b68042b72e9706d143ecfb2055ed28cddd16755a4f92dc508943194af7",
-      "bytes": 1857,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_9087f1b68042b72e",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/profiles/f405_6dof_bench.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/f405_j1_bench.yaml",
-      "sha256": "facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac",
-      "bytes": 637,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_facc243a92779d6f",
-      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_6dof.yaml",
-      "sha256": "08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb",
-      "bytes": 2066,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_08f7b2a5e475c9a3",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_6dof.yaml"
-    },
-    {
-      "path": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_j1.yaml",
-      "sha256": "765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c",
-      "bytes": 1982,
-      "page": "ros_contract_models_profiles",
-      "document": "30-models-profiles.dox",
-      "anchor": "raw_765311d93bfdeddb",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+      "representative": "compatibility/wire2_4/wire_layout.json"
     },
     {
       "path": "docs/dummy/handoffs/R03-to-C04.json",
@@ -586,7 +213,7 @@
       "page": "ros_contract_evidence_fixtures",
       "document": "60-evidence-fixtures.dox",
       "anchor": "raw_50fa4b30a5d06c83",
-      "representative": "contracts/dummy_robot_v1/evidence/R03-to-C04.json"
+      "representative": "docs/dummy/handoffs/R03-to-C04.json"
     },
     {
       "path": "docs/dummy/handoffs/R06-to-DPSDK-operation-enum-blocker.json",
@@ -905,7 +532,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_facc243a92779d6f",
-      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/f405_j1_bench.yaml"
     },
     {
       "path": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/sil_6dof.yaml",
@@ -914,7 +541,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_59e7a8cc580c9541",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_6dof.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/sil_6dof.yaml"
     },
     {
       "path": "src/dummy_motion_client/test/fixtures/application_wire_source/profiles/sil_j1.yaml",
@@ -923,7 +550,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_765311d93bfdeddb",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/sil_j1.yaml"
     },
     {
       "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle.origin.json",
@@ -1044,7 +671,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_facc243a92779d6f",
-      "representative": "contracts/dummy_robot_v1/profiles/f405_j1_bench.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/f405_j1_bench.yaml"
     },
     {
       "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/profiles/sil_6dof.yaml",
@@ -1053,7 +680,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_08f7b2a5e475c9a3",
-      "representative": "contracts/dummy_robot_v2_legacy_2_4/profiles/sil_6dof.yaml"
+      "representative": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/profiles/sil_6dof.yaml"
     },
     {
       "path": "src/dummy_motion_client/test/fixtures/trusted_sil_bundle/profiles/sil_j1.yaml",
@@ -1062,7 +689,7 @@
       "page": "ros_contract_models_profiles",
       "document": "30-models-profiles.dox",
       "anchor": "raw_765311d93bfdeddb",
-      "representative": "contracts/dummy_robot_v1/profiles/sil_j1.yaml"
+      "representative": "contracts/dummy_robot_v2/profiles/sil_j1.yaml"
     },
     {
       "path": "src/dummy_ros_control/test/guarded_probe.yaml",
@@ -1100,7 +727,8 @@
       "anchor_identity": "archived original SHA prefix; stable navigation only"
     }
   ],
-  "source_HEAD_role": "首次归档基线；六份公开脱敏副本不再声称逐字节等于该历史HEAD",
-  "public_redacted_source_count": 6,
-  "sha256_scope": "sha256/bytes为当前公开文件；六份副本另存archived_original_sha256/bytes，旧SHA前缀仅作稳定导航锚。"
+  "source_HEAD_role": "首次归档基线；当前源表已移除停用合同并跟随兼容资源和FK夹具迁移。",
+  "public_redacted_source_count": 5,
+  "sha256_scope": "sha256/bytes绑定当前源表文件；公开脱敏副本另存归档旧身份。旧版本仅从Git历史读取。",
+  "retired_sources_git_commit": "c76b1eb06924010daa735288066f9c43a26ed6d1"
 }

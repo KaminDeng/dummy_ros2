@@ -59,8 +59,8 @@ install(FILES ../../scripts/dummy/join_real_6dof_evidence.py
   DESTINATION share/${PROJECT_NAME}/panel_runtime/scripts/dummy)
 install(FILES ../../contracts/dummy_robot_v2/codec/wire_layout.json
   DESTINATION share/${PROJECT_NAME}/panel_runtime/contracts/dummy_robot_v2/codec)
-install(FILES ../../contracts/dummy_robot_v2_legacy_2_4/codec/wire_layout.json
-  DESTINATION share/${PROJECT_NAME}/panel_runtime/contracts/dummy_robot_v2_legacy_2_4/codec)
+install(FILES ../../compatibility/wire2_4/wire_layout.json
+  DESTINATION share/${PROJECT_NAME}/panel_runtime/compatibility/wire2_4)
 # 可执行脚本安装至 lib/dummy_bringup，供 ros2 run/launch 查找；辅助模块同目录支持面板进程内导入。
 # 配置/部署工具只处理明确本机产物；手动面板独占Native通信，MoveIt/场景/探针通过既定ROS或面板接口协作。
 install(PROGRAMS

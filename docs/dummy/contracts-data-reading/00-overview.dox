@@ -2,11 +2,13 @@
 @page ros_contract_data_reading 冻结合同数据阅读入口
 
 
-本组说明把冻结输入与用途分开：先确认当前公开SHA及版本，再查字段/模型/策略，最后判断历史证据能支持哪一级结论。119个物理文件、80种内容首次按ROS Git基线 `7c9285f6c63cc162245df1299a0b6b8522044d38` 归档；公开版对其中6份来源元数据JSON脱敏。机器映射分别保存当前sha256/bytes与archived_original_sha256/bytes，旧SHA前缀锚仅供稳定导航，不声称这6份当前字节仍与旧HEAD一致。
+本组说明把冻结输入与用途分开：先确认当前公开SHA及版本，再查字段/模型/策略，最后判断历史证据能支持哪一级结论。当前源表含78个物理文件、54种内容；首次归档按ROS Git基线 `7c9285f6c63cc162245df1299a0b6b8522044d38` 归档；公开版对来源元数据JSON脱敏。机器映射分别保存当前sha256/bytes与archived_original_sha256/bytes，旧SHA前缀锚仅供稳定导航，不声称这些当前字节仍与旧HEAD一致。
+
+当前合同入口仅保留V2与candidate；旧V1/C03和旧2.4完整合同仅存在Git历史。`compatibility/wire2_4/`为内部回放/兼容资源，MoveIt FK测试夹具有独立路径，均不作为当前合同发布入口。
 
 @section data_reading_route 新读者顺序
 
-1. @ref ros_contract_layouts_enums ：先辨v1、wire2.5/current和legacy2.4，核payload ID/尺寸；State 350/301B不能按同名类型猜解码。
+1. @ref ros_contract_layouts_enums ：先辨当前wire2.5与内部兼容wire2.4，核payload ID/尺寸；State 350/301B不能按同名类型猜解码。
 2. @ref ros_contract_wire_fields ：按消息/服务request与response查每个字段的类型、offset、单位、有效性及receipt/阶段/终态分层。
 3. @ref ros_contract_models_profiles ：核direction、gear ratio、模型/相对参考、Home/Rest与限位，不把旧deg/math seed变成当前rad指令。
 4. @ref ros_contract_policy_metadata ：区分默认deny、可支持、许可、lease/goal/Hold/试用预算与未资格no-load candidate。
@@ -16,18 +18,18 @@
 
 @section data_version_examples 三个容易混淆的例子
 
-- `contracts/dummy_robot_v1/manifest.json`的历史release_id写dummy-wire-v2，但IDL/schema/ABI是major1。当前V2.5 manifest才写schema2/minor5，不能按字符串含“v2”猜布局。
+- Git历史 `c76b1eb06924010daa735288066f9c43a26ed6d1` 中旧V1 manifest的release_id写dummy-wire-v2，但IDL/schema/ABI是major1。当前V2.5 manifest才写schema2/minor5，不能按字符串含“v2”猜布局。
 - 当前State在301B旧前缀后加6×float64 Hold目标及1B有效mask，共350B；legacy2.4仍301B。其它V2 IDL SHA可能完全相同，仍须各自metadata/enums/bundle身份。
 - 模型 `bbbfbf…` 将J5限位±100deg，APP/application/trusted `5f222c…`仍±120deg；即使都all50/方向相同，原model身份不同，旧软件资格/策略pin不能静默迁移。
 
 @section data_evidence_boundary 本页验证的实际范围
 
-归档时曾对照原文件bytes/SHA与Git基线；公开版六份来源元数据则按当前完整原文重算SHA/bytes，并独立保留归档旧身份；manifest引用另读原件重SHA，聚合按已读消费者的明确算法静态重算。文档验证是实际Doxygen 1.9.8提取页/锚/表项，不是原生ROS IDL/proto符号绑定；没有运行rosidl、protoc、任何产品生成器、validator、test/collect、CMake/编译、SDK、ROS节点或设备。
+归档时曾对照原文件bytes/SHA与Git基线；保留的公开版来源元数据则按当前完整原文重算SHA/bytes，并独立保留归档旧身份；manifest引用另读原件重SHA，聚合按已读消费者的明确算法静态重算。文档验证是实际Doxygen 1.9.8提取页/锚/表项，不是原生ROS IDL/proto符号绑定；没有运行rosidl、protoc、任何产品生成器、validator、test/collect、CMake/编译、SDK、ROS节点或设备。
 
 因此“页存在/表项全”不等“设备可执行”。`operator_confirmed`不是认证，Queued不是accepted/Committed，Committed不是CAN SENT，SENT不是物理Disable，Motion完成Holding不是Release child完成，原页链自洽不是现场来源认证。每一层都需要相应独立前置与原件。
 
 @section data_changes_policy 为什么说明在外部
 
-原件的注释/格式也可能参与hash；更改JSON/YAML/IDL/lock、fixture或manifest会改变身份甚至破坏既有证据。公开版仅对明确标注的六份来源元数据做路径脱敏；正式合同、原payload、数值及历史资格/运行结论保留，不把历史矛盾修成一致。两份candidate manifest的原字节SHA改变后，旧activation绑定失效，未重签旧activation或转移旧资格。历史报告记载的失败/局限也不直接断言当前HEAD仍有该问题，更不因后来的修复把过去NOT_RUN改成PASS。
+原件的注释/格式也可能参与hash；更改JSON/YAML/IDL/lock、fixture或manifest会改变身份甚至破坏既有证据。公开版仅对明确标注的来源元数据做路径脱敏；正式合同、原payload、数值及历史资格/运行结论保留，不把历史矛盾修成一致。candidate manifest的原字节SHA改变后，旧activation绑定失效，未重签旧activation或转移旧资格。历史报告记载的失败/局限也不直接断言当前HEAD仍有该问题，更不因后来的修复把过去NOT_RUN改成PASS。
 
 */

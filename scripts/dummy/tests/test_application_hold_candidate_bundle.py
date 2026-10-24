@@ -3,10 +3,12 @@
 # @file test_application_hold_candidate_bundle.py
 # @brief 既有F405默认deny候选与SDK来源/固件产物的离线身份检查。
 #
-# 读取固定兄弟dpsdk_consolidated路径及20260930固件文件，不生成/flash固件，不连接设备。payload原SHA、policy去note后规范JSON SHA、source聚合和model文件SHA是不同对象；文件一致不等于QUALIFIED或runtime许可。
+# 读取显式DPSDK_ROOT和候选原件，不生成/flash固件，不连接设备。候选policy/model自洽不等于当前source绑定；未绑定的固件和不同source身份必须保持未资格。
 
 import hashlib
 import json
+import os
+import re
 from pathlib import Path
 
 import yaml
@@ -15,10 +17,10 @@ from scripts.dummy.real_six_axis_preflight import inspect_bundle
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DPSDK = ROOT.parent / "dpsdk_consolidated"
+DPSDK = Path(os.environ.get("DPSDK_ROOT", str(ROOT.parent / "dpsdk")))
 BUNDLE = ROOT / "contracts/dummy_robot_v2_application_hold_no_load_candidate"
-POLICY = DPSDK / "configs/f405_6dof_application_hold_no_load_candidate.json"
-IMAGE = DPSDK / "build_dummy/reports/f405-p7-app-48c8-20260930.bin"
+POLICY = BUNDLE / "policy/application_hold_no_load.json"
+SDK_POLICY = DPSDK / "applications/dummy_ref_control/config/f405_6dof_application_hold_no_load_candidate.json"
 SOURCE_CONTRACT = DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json"
 
 
@@ -31,7 +33,7 @@ def digest(path):
 
 
 ##
-# @brief 逐payload与聚合核SHA，再与既有policy/firmware/source/model绑定，profile策略/时序字段须同源；不验证真实机械模型。
+# @brief 核候选payload/聚合、内含policy/model和策略语义，明确旧source及空固件绑定不转移资格。
 # @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_candidate_payloads_and_frozen_d_identity():
     manifest = json.loads((BUNDLE / "manifest.json").read_text())
@@ -47,10 +49,18 @@ def test_candidate_payloads_and_frozen_d_identity():
     canonical = json.dumps({key: value for key, value in source.items() if key != "note"},
                            sort_keys=True, separators=(",", ":")).encode()
     assert manifest["compiled_policy_sha256"] == hashlib.sha256(canonical).hexdigest()
-    assert manifest["firmware_image_sha256"] == digest(IMAGE)
-    assert manifest["source_contract_sha256"] == json.loads(SOURCE_CONTRACT.read_text())["payload_sorted_sha256"]
-    assert manifest["model_sha256"] == digest(DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/model/model.yaml")
-    assert json.loads((BUNDLE / "policy/application_hold_no_load.json").read_text()) == source
+    assert manifest["firmware_image_sha256"] is None
+    assert manifest["source_firmware_image"] is None
+    assert re.fullmatch(r"[0-9a-f]{64}", manifest["source_contract_sha256"])
+    assert manifest["source_contract_sha256"] != json.loads(SOURCE_CONTRACT.read_text())["payload_sorted_sha256"]
+    assert manifest["draft_status"].startswith("UNQUALIFIED:")
+    assert "new_matching_J6_firmware_and_Host" in manifest["qualification_gap"]
+    assert manifest["model_sha256"] == digest(BUNDLE / "model/model.yaml")
+    assert manifest["model_sha256"] == source["model_sha256"]
+    assert manifest["model_sha256"] != digest(DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/model/model.yaml")
+    sdk_policy = json.loads(SDK_POLICY.read_text())
+    sdk_policy["model_sha256"] = manifest["model_sha256"]
+    assert source == sdk_policy
     profile = yaml.safe_load((BUNDLE / "profiles/f405_6dof_bench.yaml").read_text())
     assert profile["active_axes"] == source["active_axes"]
     assert profile["reference_kind"] == source["reference_kind"]

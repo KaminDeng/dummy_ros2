@@ -59,8 +59,7 @@ flowchart LR
 
 其他目录：
 
-- [contracts](contracts)：设备协议的 codec、IDL、模型、profile 和历史证据；`legacy_2_4`
-  是旧协议原件的专用镜像，不能与当前运行期 codec 混链。
+- [contracts](contracts/README.md)：保留当前V2正式合同及仍被工具引用的离线候选；历史2.4仅留必要解码/回归资源，位于 `compatibility/wire2_4/`。
 - [scripts/dummy](scripts/dummy)：离线构建、预检、证据拼接、模型工具及独立规划回归。
 - [docs/dummy](docs/dummy)：运行说明、模型变更及按阶段保存的验证记录。
 - [模型资源逐文件说明](docs/dummy/mesh-reading-guide.md)：35 个网格、材质和严格 JSON
@@ -68,7 +67,7 @@ flowchart LR
 - [包布局与缓存说明](docs/dummy/package-layout-reading-guide.md)：包元数据、空资源标记、
   历史 Python 字节码和 RViz 窗口状态的用途，以及各类文件的注释格式。
 - [冻结合同与证据逐项说明](docs/dummy/contracts-data-reading/README.md)：保留原件字节，解释字段、单位、版本、SHA及历史验收边界。
-- [生成codec阅读说明](docs/dummy/generated-codecs/README.md)、[C03原型说明](docs/dummy/generated-protocol-c03/README.md)：代码生成产物保持原身份，按真实符号阅读。
+- [生成codec阅读说明](docs/dummy/generated-codecs/README.md)：当前V2代码生成产物保持原身份，按真实符号阅读。
 - [激活校验器说明](docs/dummy/activation-identity-reading/README.md)：完整参数、停止预算与结构校验边界，校验通过不等于允许实机运动。
 - `build_*`、`install_*`、`log_*`：本机构建、安装和日志输出。修改与阅读以 `src/` 为主；
   `--symlink-install` 也不代表所有已运行进程会自动重新加载资源。

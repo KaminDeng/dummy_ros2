@@ -43,11 +43,48 @@ def bundle(tmp_path):
         manifest_items.append({"path": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     listing = "\n".join(f"{item['path']}:{item['sha256']}" for item in manifest_items)
     (tmp_path / "manifest.json").write_text(json.dumps({
-        "format": "dummy_wire_release_v2", "release_id": "dummy-wire-v2.4",
+        "format": "dummy_wire_release_v2", "release_id": "dummy-wire-v2.5",
+        "schema_major": 2, "schema_minor": 5,
         "payloads": manifest_items,
         "payload_sorted_sha256": hashlib.sha256(listing.encode()).hexdigest(),
     }))
     return tmp_path
+
+
+@pytest.mark.parametrize("identity", [
+    {"format": "dummy_wire_release_v1", "schema_major": 1},
+    {"release_id": "dummy-wire-v2.4", "schema_minor": 4},
+    {"schema_minor": 6},
+    {"schema_major": True},
+    {"schema_minor": "5"},
+    {"schema_minor": None},
+    {"release_id": "dummy-wire-v2"},
+])
+def test_unsupported_manifest_identity_is_rejected(bundle, identity):
+    path = bundle / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest.update(identity)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="unsupported release manifest"):
+        preflight.inspect_bundle(bundle)
+
+
+def test_missing_schema_is_rejected(bundle):
+    path = bundle / "manifest.json"
+    manifest = json.loads(path.read_text())
+    del manifest["schema_minor"]
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="unsupported release manifest"):
+        preflight.inspect_bundle(bundle)
+
+
+def test_tampered_aggregate_is_rejected(bundle):
+    path = bundle / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["payload_sorted_sha256"] = "00" * 32
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="aggregate hash"):
+        preflight.inspect_bundle(bundle)
 
 
 ##

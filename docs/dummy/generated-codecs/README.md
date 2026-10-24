@@ -1,19 +1,19 @@
 # 冻结生成codec的中文阅读指南
 
-这里的 `.dox` 把说明挂到18个原头的真实符号上，原件不插注释、不重新生成。修改这些原字节会影响payload/fixture身份，所以外部说明与源码身份分开保存。[source-map.json](source-map.json)列出每个原件的完整SHA与文档映射；它只是文档索引，不是新的产品manifest、可信pin或授权输入。
+这里的 `.dox` 把说明挂到11个保留原头的真实符号上，原件不插注释、不重新生成。修改这些原字节会影响payload/fixture身份，所以外部说明与源码身份分开保存。[source-map.json](source-map.json)列出每个原件的完整SHA与文档映射；它只是文档索引，不是新的产品manifest、可信pin或授权输入。
 
-先选下表的一套Doxyfile，在ROS仓库根运行 `doxygen docs/dummy/generated-codecs/Doxyfile.<family>`。六套INPUT互相隔离；不要把所有v2目录同时传给一次Doxygen。同名 `dp::protocol::dummy_robot_v2` 在不同minor/fixture里不代表同一物理文件；同时输入会让字段/方法说明错误地合并。配置只提取XML，不运行编译器、产品生成器或测试。
+先选下表的一套Doxyfile，在ROS仓库根运行 `doxygen docs/dummy/generated-codecs/Doxyfile.<family>`。四套INPUT互相隔离；不要把所有v2目录同时传给一次Doxygen。同名 `dp::protocol::dummy_robot_v2` 在不同minor/fixture里不代表同一物理文件；同时输入会让字段/方法说明错误地合并。配置只提取XML，不运行编译器、产品生成器或测试。
 
 | family | 原件范围 | 符号说明 | 实际提取的函数 /变量 /类结构 /宏 |
 | --- | --- | --- | --- |
-| [v1](Doxyfile.v1) | 历史v1三个codec头和旧model头 | [v1-symbols.dox](v1-symbols.dox) | 380 / 222 / 17 / 4 |
 | [v2-current](Doxyfile.v2-current) | 当前正式v2.5三个codec头 | [v25-symbols.dox](v25-symbols.dox) | 414 / 242 / 19 / 4 |
-| [v2-legacy-2-4](Doxyfile.v2-legacy-2-4) | 保留2.4三个codec头 | [v24-symbols.dox](v24-symbols.dox) | 410 / 240 / 19 / 4 |
 | [application-fixture](Doxyfile.application-fixture) | application_wire_source三个头 | 复用字节相同的v25说明 | 414 / 242 / 19 / 4 |
 | [trusted-sil-fixture](Doxyfile.trusted-sil-fixture) | trusted_sil_bundle三个头 | 复用字节相同的v25说明 | 414 / 242 / 19 / 4 |
 | [fault146](Doxyfile.fault146) | 两个历史故障数据头 | [fault146-symbols.dox](fault146-symbols.dox) | 0 / 11 / 0 / 0 |
 
 输出位于 `/tmp/dummy-doxygen-audit/generated-codecs18m/<family>/xml`。统计来自Doxygen 1.9.8：函数/变量必须在原头的location上有brief，不能只在sidecar生成一段导航文字。每个配置还与EXTRACT_ALL解析的原符号集合对照；宏、类型别名、枚举类型的说明也在相应符号中。数组元素不是独立函数，故障数据头按数组/时间常量说明。
+
+旧V1/C03及旧2.4完整合同已移除，逐符号页面仅在Git历史 `c76b1eb06924010daa735288066f9c43a26ed6d1` 中保留。2.4 codec/layout迁至 [内部兼容资源](../../../compatibility/wire2_4/README.md)，只供旧故障回放与兼容处理，不作为当前合同入口。下文2.4尺寸只用于内部兼容资源对照。
 
 ## 从值对象读到wire字节
 
@@ -29,20 +29,18 @@ codec返回kOk只表示这些格式门通过：没有认证来源、核当前own
 
 ## 版本与字段角色
 
-| payload | v1.0字节 | v2.4字节 | v2.5字节 |
-| --- | ---: | ---: | ---: |
-| Status | 297 | 651 | 651 |
-| Command | 125 | 133 | 133 |
-| State | 356 | 301 | 350 |
-| AttemptEvidence | 无此类 | 372 | 372 |
-| Manage Request | 233 | 233 | 233 |
-| Manage Response | 618 | 132 | 132 |
+| payload | 内部兼容2.4字节 | 当前2.5字节 |
+| --- | ---: | ---: |
+| Status | 651 | 651 |
+| Command | 133 | 133 |
+| State | 301 | 350 |
+| AttemptEvidence | 372 | 372 |
+| Manage Request | 233 | 233 |
+| Manage Response | 132 | 132 |
 
-同样长不代表同布局：v1与v2管理Request都是233字节，但字段次序/查询键/租约字段不同；v1 Response携大快照和多个valid位，v2改用事务phase、ACK与终态链接。v1目录manifest的release文本为 `dummy-wire-v2`，实际生成命名空间/decoder却明确是1.0，应以对应原头/layout核对，不能按目录或release名称猜解析方式。
+2.4→2.5保持Evidence372与Status651，State在offset301追加6×8字节hold_position_rad和offset349的hold_valid_mask，301→350。所有这里的decoder都要求精确minor；2.4数组不能直接交2.5 decoder当作兼容成功。旧故障consumer若没有显式适配，也不能因fixture存在就宣称新decoder已接受它。
 
-2.4→2.5保持Evidence372与Status651，State在offset301追加6×8字节hold_position_rad和offset349的hold_valid_mask，301→350。旧v1虽然也有Hold字段，其顺序和其它字段不同。所有这里的decoder都要求精确minor；2.4数组不能直接交2.5 decoder当作兼容成功。旧故障consumer若没有显式适配，也不能因fixture存在就宣称新decoder已接受它。
-
-数组轴序J1..J6，掩码bit0=J1；motor rev与joint rad不同。position_min/max是设备声明边界，BENCH规划相对界和机械绝对界不是同一坐标。字段 `acceleration_max_rad_s` 的实际单位为rad/s²，历史名称少一个2。v1模型头是 `design_seed_not_runtime_config`，物理方向/校准均未确认；旧六轴比值50/30/30/24/30/50不能代替当前SDK实际采用的映射。within_limits只闭区间比较；preserve_multiturn_position越界回0哨值，既不夹紧也不折圈，0可能和合法值混淆。
+数组轴序J1..J6，掩码bit0=J1；motor rev与joint rad不同。position_min/max是设备声明边界，BENCH规划相对界和机械绝对界不是同一坐标。字段 `acceleration_max_rad_s` 的实际单位为rad/s²，历史名称少一个2。
 
 Host收到State的时间、Source produced_at_us、Source CAN queued/taken/submitted/sent/abort时间分别来自自己的角色。即使都写µs，也不能直接跨域相减求单向延迟。freshness_ticket是opaque票号，不是时间；producer_seq、state_seq、request_seq、request_id、operation_id、run_id和motion_epoch分别标记不同因果层，不能互换。
 
@@ -60,26 +58,19 @@ v2 Evidence组页category1/2/3与终页category4有不同形状：终页组ID/pr
 
 ## dp_comm特化与容量
 
-MessageCodec特化只把raw codec结果转bool，并给类型interface IDs；服务描述提供Request/Response别名。v1消息4131/4132/4133、服务4134、请求/响应4135/4136；v2消息4137/4138/4139、服务4140、请求/响应4141/4142、Evidence4143。它们不是CAN节点号或已启动的ROS服务。
+MessageCodec特化只把raw codec结果转bool，并给类型interface IDs；服务描述提供Request/Response别名。当前V2消息4137/4138/4139、服务4140、请求/响应4141/4142、Evidence4143。它们不是CAN节点号或已启动的ROS服务。
 
-kStaticRequirements按SDK实际字段顺序声明：nodes1、publishers(v1=2/v2=3)、subscriptions1、timers0、event_queue8、max_message_bytes(v1=618/v2=651)、max_topic_bytes96、scratch0、对象alignment，以及services/clients/pending/completed各1。宏头只有对应DP_COMM_RUNTIME_MAX_*宏已定义时才在容量不足时报编译错误，不自动配storage。当前v2 metadata另写message_bytes672，是独立元数据预算；不要把它当本头实际kEncodedSize，或擅改原manifest“统一”两者。
+kStaticRequirements按SDK实际字段顺序声明：nodes1、publishers3、subscriptions1、timers0、event_queue8、max_message_bytes651、max_topic_bytes96、scratch0、对象alignment，以及services/clients/pending/completed各1。宏头只有对应DP_COMM_RUNTIME_MAX_*宏已定义时才在容量不足时报编译错误，不自动配storage。当前v2 metadata另写message_bytes672，是独立元数据预算；不要把它当本头实际kEncodedSize，或擅改原manifest“统一”两者。
 
 ## 原件到外部文档的完整映射
 
-SHA按原文件全部字节计算。主v2.5 codec的三处副本、dp_comm/static的四处副本均按SHA确认相同后复用说明；不同manifest聚合（正式2ae31387…、application1d5d4cd6…、SIL0afb58dd…）仍各自保留，不能因codec相同就替代bundle信任身份。
+SHA按原文件全部字节计算。保留的v2.5 codec及适配/资源头的三处副本均按SHA确认相同后复用说明；不同manifest聚合（正式2ae31387…、application1d5d4cd6…、SIL0afb58dd…）仍各自保留，不能因codec相同就替代bundle信任身份。
 
 | 原件 | 原SHA-256 | family / 文件映射sidecar |
 | --- | --- | --- |
-| [contracts/dummy_robot_v1/codec/dp_dummy_robot_v1.hpp](../../../contracts/dummy_robot_v1/codec/dp_dummy_robot_v1.hpp) | `e9c04f74bd73edcf5721401c3f2c35217ed9eed528e808fea0870fa56dcc8951` | v1 / [v1-files.dox](v1-files.dox) |
-| [contracts/dummy_robot_v1/codec/dp_dummy_robot_v1_dp_comm.hpp](../../../contracts/dummy_robot_v1/codec/dp_dummy_robot_v1_dp_comm.hpp) | `b7959cff2853c32a4405aeff13b0ee1b4fdf1e9e5eb05f1b797a8598bb4e6743` | v1 / [v1-files.dox](v1-files.dox) |
-| [contracts/dummy_robot_v1/codec/dp_dummy_robot_v1_static_requirements.h](../../../contracts/dummy_robot_v1/codec/dp_dummy_robot_v1_static_requirements.h) | `b72871ece7fe611e8111f99deefac7d1f9f08f994470b06dad166b008c89fce0` | v1 / [v1-files.dox](v1-files.dox) |
-| [contracts/dummy_robot_v1/model/dummy_model.hpp](../../../contracts/dummy_robot_v1/model/dummy_model.hpp) | `c9fb2155a8531d3ea5d8febe2c2a17c549659b0fb6008d651c90bcb9462a2c7b` | v1 / [v1-files.dox](v1-files.dox) |
 | [contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp](../../../contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp) | `649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143` | v2-current / [v2-current-files.dox](v2-current-files.dox) |
 | [contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp](../../../contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_dp_comm.hpp) | `78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40` | v2-current / [v2-current-files.dox](v2-current-files.dox) |
 | [contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_static_requirements.h](../../../contracts/dummy_robot_v2/codec/dp_dummy_robot_v2_static_requirements.h) | `c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352` | v2-current / [v2-current-files.dox](v2-current-files.dox) |
-| [contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2.hpp](../../../contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2.hpp) | `466da9fe8e856938908aff06f9e7a6b930c9143987567b4d494e16124bdbe5c2` | v2-legacy-2-4 / [v2-legacy-2-4-files.dox](v2-legacy-2-4-files.dox) |
-| [contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2_dp_comm.hpp](../../../contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2_dp_comm.hpp) | `78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40` | v2-legacy-2-4 / [v2-legacy-2-4-files.dox](v2-legacy-2-4-files.dox) |
-| [contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2_static_requirements.h](../../../contracts/dummy_robot_v2_legacy_2_4/codec/dp_dummy_robot_v2_static_requirements.h) | `c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352` | v2-legacy-2-4 / [v2-legacy-2-4-files.dox](v2-legacy-2-4-files.dox) |
 | [src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2.hpp](../../../src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2.hpp) | `649ebc7fc37ec7b85d9eaa116c8174438fac236e592da68350a9d3ae599a9143` | application-fixture / [application-fixture-files.dox](application-fixture-files.dox) |
 | [src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2_dp_comm.hpp](../../../src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2_dp_comm.hpp) | `78d2fc3f6cc9cd3eef1e32f989434cb5fc284231593307f63e4499f48c219c40` | application-fixture / [application-fixture-files.dox](application-fixture-files.dox) |
 | [src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2_static_requirements.h](../../../src/dummy_motion_client/test/fixtures/application_wire_source/codec/dp_dummy_robot_v2_static_requirements.h) | `c24ee5036d82b3925de01b79d229af9dc4a892d2c68a62bb77186a5f0f391352` | application-fixture / [application-fixture-files.dox](application-fixture-files.dox) |

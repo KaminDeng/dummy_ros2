@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 ##
 # @file real_six_axis_preflight.py
-# @brief 核历史v2.4六轴bundle的离线自洽，始终拒绝运动资格。
+# @brief 核当前v2.5六轴bundle的离线自洽，始终拒绝运动资格。
 #
 # CLI只验证端点/ID文本与文件，不调用verify_live_stm32_usb、不打开串口；总是motion_eligible=false且退出1。
 # 文件内另有显式live USB属性helper，会查询udev和设备节点，不能因为CLI离线就把所有函数都称纯内存。
-# 只接受历史dummy-wire-v2.4，后续schema/release不能因相似名字自动通过；自洽manifest不等于外部可信签名。
+# 只接受当前dummy-wire-v2.5/schema2.5，旧版或未知schema不能因相似名字自动通过；自洽manifest不等于外部可信签名。
 """只读检查真实六轴 bundle；当前没有最终许可时一律不签发运动资格。"""
 
 import argparse
@@ -109,7 +109,7 @@ def verify_live_stm32_usb(endpoint, expected_serial):
 
 
 ##
-# @brief 按清单逐文件重算SHA并核历史六轴角色。
+# @brief 按清单逐文件重算SHA并核当前六轴角色。
 # @param root 存在的bundle目录，含manifest/model/profile。
 # @return bundle_verified=true的报告，但motion_eligible恒false；文件/形状/身份错误抛异常。
 # 拒绝绝对/..路径、越根、重复payload和未排序清单，重算path:hash无尾换行的聚合SHA。
@@ -118,7 +118,10 @@ def inspect_bundle(root):
     root = Path(root).resolve(strict=True)
     manifest = json.loads((root / "manifest.json").read_text())
     if (manifest.get("format") != "dummy_wire_release_v2" or
-            manifest.get("release_id") != "dummy-wire-v2.4"):
+            manifest.get("release_id") != "dummy-wire-v2.5" or
+            type(manifest.get("schema_major")) is not int or
+            type(manifest.get("schema_minor")) is not int or
+            manifest["schema_major"] != 2 or manifest["schema_minor"] != 5):
         raise ValueError("unsupported release manifest")
     payloads = manifest.get("payloads")
     if not isinstance(payloads, list) or not payloads:

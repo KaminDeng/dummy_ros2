@@ -1,7 +1,7 @@
 /**
 @page activation_identity_validator 冻结J1激活验证器逐函数说明
 
-原件固定于合同manifest的payload SHA，因此中文说明放在本页，原Python全文保持。
+本页解释Git历史 `c76b1eb06924010daa735288066f9c43a26ed6d1` 中已移除的V1验证器与报告；原路径不是当前文件入口。历史源码身份见source-map.json，参数/数值说明供溯源。
 本页列真实签名、参数、返回和流程；Doxygen提取的是文档页，不把无标注Python函数页伪称原符号绑定。
 
 @section activation_fn_strict_load strict_load：严格加载JSON并拒绝歧义输入

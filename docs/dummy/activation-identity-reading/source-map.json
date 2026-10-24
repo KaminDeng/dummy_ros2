@@ -1,12 +1,16 @@
 {
   "originals": [
     {
-      "path": "contracts/dummy_robot_v1/policy/validate_activation.py",
-      "sha256": "9a7d16215030132eac0cede2476bc198725c9a83869cadd1f1e64fe0563ca59f"
+      "sha256": "9a7d16215030132eac0cede2476bc198725c9a83869cadd1f1e64fe0563ca59f",
+      "historical_path": "contracts/dummy_robot_v1/policy/validate_activation.py",
+      "git_object": "c76b1eb06924010daa735288066f9c43a26ed6d1:contracts/dummy_robot_v1/policy/validate_activation.py",
+      "exists_in_current_tree": false
     },
     {
-      "path": "contracts/dummy_robot_v1/evidence/wire-v1-validation.md",
-      "sha256": "a804e3969189a2325e6e007df41e1bc32abfa6cb75c7dbfd62c8683c2700245b"
+      "sha256": "a804e3969189a2325e6e007df41e1bc32abfa6cb75c7dbfd62c8683c2700245b",
+      "historical_path": "contracts/dummy_robot_v1/evidence/wire-v1-validation.md",
+      "git_object": "c76b1eb06924010daa735288066f9c43a26ed6d1:contracts/dummy_robot_v1/evidence/wire-v1-validation.md",
+      "exists_in_current_tree": false
     }
   ],
   "functions": [
@@ -67,5 +71,7 @@
       "line": 121,
       "parameters": []
     }
-  ]
+  ],
+  "source_role": "git_history_only",
+  "git_commit": "c76b1eb06924010daa735288066f9c43a26ed6d1"
 }
