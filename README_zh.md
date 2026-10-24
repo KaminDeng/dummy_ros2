@@ -49,6 +49,10 @@ flowchart LR
 
 ## 五个 ROS 包与阅读入口
 
+[全源码阅读指南HTML](docs/dummy/source-reading-guide.html)提供适合新手的功能阅读顺序，
+把ROS与DPSDK应用放在同一条往返链路中讲解，再按模块补全2138份文件。
+页面内含离线源码、函数/字段定位、逐文件导读、自测与本地阅读记录；打开页面不启动ROS或设备。
+
 | 包 | 作用 | 建议先读 |
 | --- | --- | --- |
 | `dummy-ros2_description` | 完整 STEP 的彩色视觉、碰撞资源与六轴关节链 | [共享 Xacro](src/dummy-ros2_description/urdf/dummy-ros2.xacro) |

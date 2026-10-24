@@ -180,6 +180,7 @@ The collision geometry and scene-owner checks are described in
 
 ## Documentation
 
+- [Complete source reading handbook (中文)](docs/dummy/source-reading-guide.html): guided feature routes, an offline source reader, file-by-file notes, and local reading progress for this workspace and the DPSDK application.
 - [Operation guide](docs/dummy/ros-runbook.md), including duplicate MoveIt diagnosis and shutdown.
 - [Robot model and conversion](docs/dummy/process-reading-guide.md).
 - [Coordinate frames](docs/dummy/ground-origin.md) and [collision clearance](docs/dummy/collision-clearance.md).
