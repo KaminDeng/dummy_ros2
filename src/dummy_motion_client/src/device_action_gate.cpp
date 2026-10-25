@@ -38,7 +38,7 @@
 #include "std_srvs/srv/trigger.hpp"
 
 namespace dummy_motion_client {
-namespace wire=dp::protocol::dummy_robot_v2;
+namespace wire=dp::iface;
 using Follow=control_msgs::action::FollowJointTrajectory;
 using GoalHandle=rclcpp_action::ServerGoalHandle<Follow>;
 using Controller=dummy_ros_control::GuardedJointTrajectoryController;

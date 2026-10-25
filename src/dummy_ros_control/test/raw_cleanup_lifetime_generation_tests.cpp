@@ -15,7 +15,7 @@
  */
 int main(){
  using namespace dummy_ros_control;DeviceManagementChannel c(TransportParameters{});c.ready=true;
- std::array<std::uint8_t,dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize> b{};
+ std::array<std::uint8_t,dp::iface::DummyJointStateV2Codec::kEncodedSize> b{};
  /**
   * @brief old是cleanup生存期generation，100是人工Host接收µs；二者用途不同。
   * 先证明原代次可发布，reset后再用同一old检查排队迟到记录不得复活缓存。

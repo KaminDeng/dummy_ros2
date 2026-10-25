@@ -52,13 +52,13 @@ int main() {
   dummy_ros_control::TransportParameters parameters{"tcp/127.0.0.1:29999",{1},{2},2,1};
   dummy_motion_client::DpManagementTransport absent({parameters.endpoint,{1},{2},2,1},
       dummy_motion_client::DpManagementTransport::Connection::kDeviceWorker);
-  std::vector<std::uint8_t> bytes(dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize);
+  std::vector<std::uint8_t> bytes(dp::iface::DummyManageV2RequestCodec::kEncodedSize);
   dummy_motion_client::ManageRequest request;
   request.set_schema_major(2U);
-  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   request.set_request_id(42U);
-  if (dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::encode(
-          request, bytes.data(), bytes.size()) != dp::protocol::dummy_robot_v2::CodecResult::kOk)
+  if (dp::iface::DummyManageV2RequestCodec::encode(
+          request, bytes.data(), bytes.size()) != dp::iface::CodecResult::kOk)
     return 27;
   const auto absent_log = capture_stderr([&] { (void)absent.send(bytes); });
   if (absent_log.find("reason=not_ready request_id=42") == std::string::npos)
@@ -196,17 +196,17 @@ int main() {
   const auto admitted_pending=channel->queued;
   const auto original_bytes=admitted_pending->request;
   dummy_motion_client::ManageRequest admitted_request;
-  if(dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::decode(
+  if(dp::iface::DummyManageV2RequestCodec::decode(
       original_bytes.data(),original_bytes.size(),&admitted_request)!=
-      dp::protocol::dummy_robot_v2::CodecResult::kOk ||
+      dp::iface::CodecResult::kOk ||
       admitted_request.request_id()!=busy_id || admitted_request.request_seq()==0U ||
       admitted_request.operation()!=dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::kQuery)) return 11;
-  auto expected_request=query; expected_request.set_schema_major(2U); expected_request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  auto expected_request=query; expected_request.set_schema_major(2U); expected_request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   expected_request.set_request_id(busy_id);expected_request.set_request_seq(admitted_request.request_seq());
-  std::array<std::uint8_t,dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize> expected_bytes{};
-  if(dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::encode(
+  std::array<std::uint8_t,dp::iface::DummyManageV2RequestCodec::kEncodedSize> expected_bytes{};
+  if(dp::iface::DummyManageV2RequestCodec::encode(
       expected_request,expected_bytes.data(),expected_bytes.size())!=
-      dp::protocol::dummy_robot_v2::CodecResult::kOk || expected_bytes!=original_bytes ||
+      dp::iface::CodecResult::kOk || expected_bytes!=original_bytes ||
       busy_client.poll(busy_id) || channel->queued!=admitted_pending ||
       admitted_pending->request!=original_bytes) return 11;
   channel->queued.reset();
@@ -219,9 +219,9 @@ int main() {
   dummy_motion_client::WireManagementClient resumed_client(facade);
   if (!resumed_client.submit(query, 201U) || !channel->queued) return 28;
   dummy_motion_client::ManageRequest resumed_request;
-  if (dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::decode(
+  if (dp::iface::DummyManageV2RequestCodec::decode(
           channel->queued->request.data(), channel->queued->request.size(),
-          &resumed_request) != dp::protocol::dummy_robot_v2::CodecResult::kOk ||
+          &resumed_request) != dp::iface::CodecResult::kOk ||
       resumed_request.request_seq() != 2183397840U) return 29;
   channel->observe_request_sequence(2183397839U);
   if (channel->reserve_request_sequence() != 2183397841U) return 31;

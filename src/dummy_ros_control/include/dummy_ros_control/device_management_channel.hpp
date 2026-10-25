@@ -9,7 +9,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ros_control/wire_types.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/raw_evidence_collector.hpp"
 
@@ -19,16 +19,16 @@ namespace dummy_ros_control {
  * @brief 一个管理事务的定长请求/响应codec字节及原子canceled/failed/complete；响应先写字节再发布complete，调用方负责按协议同步观察。
  */
 struct DeviceManagementRequest {
-  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyManageV2RequestCodec::kEncodedSize> request{};
-  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyManageV2ResponseCodec::kEncodedSize> response{};
+  std::array<std::uint8_t, dummy_wire::DummyManageV2RequestCodec::kEncodedSize> request{};
+  std::array<std::uint8_t, dummy_wire::DummyManageV2ResponseCodec::kEncodedSize> response{};
   std::atomic<bool> canceled{false}, failed{false}, complete{false};
 };
 /**
  * @brief 最新原始State/Status字节及HOST_TRANSPORT_STEADY_US接收时刻；rejected_ack_*记录同身份拒绝命令的独立水位，不能当作成功ACK。
  */
 struct DeviceManagementObservation {
-  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize> state{};
-  std::array<std::uint8_t, dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kEncodedSize> status{};
+  std::array<std::uint8_t, dummy_wire::DummyJointStateV2Codec::kEncodedSize> state{};
+  std::array<std::uint8_t, dummy_wire::DummyDeviceStatusV2Codec::kEncodedSize> status{};
   std::uint64_t state_received_us=0, status_received_us=0;
   std::uint64_t rejected_ack_boot_epoch=0, rejected_ack_session_id=0, rejected_ack_received_us=0;
   std::uint32_t rejected_ack_reference_epoch=0, rejected_ack_motion_epoch=0,

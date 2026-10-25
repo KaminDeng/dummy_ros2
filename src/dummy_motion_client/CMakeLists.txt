@@ -23,28 +23,21 @@ find_package(OpenSSL REQUIRED)
 find_package(controller_manager REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(yaml-cpp REQUIRED)
-# DPSDK_ROOT初值来自环境，随后作为CACHE路径保留；缺路径立即拒绝，避免猜测旧build。
-# codec头直接来自同版源码合同；dummy_ros_control导入库来自其安装包，调用方仍须保证两端匹配。
-set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root with published wire codec")
-if(NOT DPSDK_ROOT)
-  message(FATAL_ERROR "必须显式指定同版候选DPSDK_ROOT")
-endif()
-set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/applications/dummy_ref_control/contracts/dummy_robot_v2/codec")
-if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp")
-  message(FATAL_ERROR "The published DPSDK manage_v2 wire codec is required")
-endif()
+# 协议/Policy/通信 ABI 由 control 导出的同一安装 SDK 递归提供。
+set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "离线源码模型回归所用DPSDK根")
+find_package(DPSDKHostSDK CONFIG REQUIRED)
+get_target_property(DUMMY_WIRE_INCLUDE dp_protocol::selected INTERFACE_INCLUDE_DIRECTORIES)
 # @par 公共逻辑库
 # action_gate/permit/bootstrap/management_client组成不含ROS节点main的逻辑静态库。
-# PUBLIC C++17/头目录/加密链接传给消费者；PRIVATE goal-registration依赖只服务库实现。
+# PUBLIC C++17/公开头/协议及加密依赖传给消费者；跨包公开头的control接口亦必须PUBLIC。
 # BUILD_INTERFACE用于源码构建，INSTALL_INTERFACE用于安装后的消费者。
 add_library(dummy_device_action STATIC
   src/action_gate.cpp src/bench_permit.cpp src/bootstrap_coordinator.cpp src/management_client.cpp)
-target_link_libraries(dummy_device_action PUBLIC OpenSSL::Crypto
-  PRIVATE dummy_ros_control::dummy_goal_registration_gate)
+target_link_libraries(dummy_device_action PUBLIC OpenSSL::Crypto DPSDKHostSDK::dummy_protocol
+  dummy_ros_control::dummy_goal_registration_gate)
 target_compile_features(dummy_device_action PUBLIC cxx_std_17)
 target_include_directories(dummy_device_action PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<BUILD_INTERFACE:${DUMMY_WIRE_INCLUDE}>
   $<INSTALL_INTERFACE:include>)
 # Native守卫转发仿真Action；device_action_gate在下方走设备管理/受控controller链路。
 # 两个入口是不同后端角色，不能因都能接Action就将仿真视为真实设备许可。
@@ -52,11 +45,12 @@ add_executable(native_action_gate src/native_action_gate.cpp)
 # 设备管理适配依赖control导出的651字节PIC通信布局及guarded system，
 # PUBLIC宏必须与依赖库ABI一致；profile库借yaml-cpp/摘要核输入，不能单凭解析成功授权。
 add_library(dummy_dp_management STATIC src/dp_management_transport.cpp)
-target_compile_definitions(dummy_dp_management PUBLIC DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=651)
 target_link_libraries(dummy_dp_management PUBLIC dummy_device_action dummy_ros_control::dummy_dp_comm
   dummy_ros_control::dummy_guarded_zenbedded_system)
 add_library(dummy_device_profile STATIC src/device_profile.cpp)
 target_link_libraries(dummy_device_profile PUBLIC dummy_device_action PRIVATE yaml-cpp OpenSSL::Crypto)
+target_compile_definitions(dummy_device_profile PRIVATE
+  DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256="${DPSDKHostSDK_ROBOT_MANIFEST_SHA256}")
 add_library(dummy_native_goal_validation STATIC src/native_goal_validation.cpp)
 target_link_libraries(dummy_native_goal_validation dummy_device_action)
 ament_target_dependencies(dummy_native_goal_validation control_msgs)
@@ -99,6 +93,7 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../compatibility/wire2_4/codec")
   target_compile_options(fault_cleanup_receipt_tests PRIVATE -UNDEBUG)
+  target_compile_definitions(fault_cleanup_receipt_tests PRIVATE DUMMY_LEGACY_WIRE_2_4=1)
   target_compile_features(fault_cleanup_receipt_tests PRIVATE cxx_std_17)
   target_link_libraries(fault_cleanup_receipt_tests PRIVATE OpenSSL::Crypto Threads::Threads)
   add_test(NAME fault_cleanup_verified_receipt_and_current_observation COMMAND fault_cleanup_receipt_tests)
@@ -128,6 +123,18 @@ if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   # 仅检查正式镜像身份；不得据此授予DeviceProfile运行/运动权限。
 # 正式bundle的身份完整性正例不授予DeviceProfile运动权；镜像测试核源码合同的规范副本。
+  add_executable(protocol_release_identity_tests test/protocol_release_identity_tests.cpp)
+  target_link_libraries(protocol_release_identity_tests PRIVATE dummy_device_profile)
+  add_test(NAME current_protocol_release_identity COMMAND protocol_release_identity_tests
+    "${DPSDKHostSDK_ROBOT_BUNDLE_DIR}")
+  set_tests_properties(current_protocol_release_identity PROPERTIES LABELS "component_only;offline;installed_sdk")
+  get_filename_component(_dummy_ros_install_root "${CMAKE_INSTALL_PREFIX}/.." ABSOLUTE)
+  add_test(NAME installed_sdk_source_hidden_consumer COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/installed_sdk_consumer.py"
+    --sdk-prefix "${DPSDK_HOST_SDK_PREFIX}" --ros-prefix "${_dummy_ros_install_root}"
+    --sdk-source "${DPSDK_ROOT}" --ros-source "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  set_tests_properties(installed_sdk_source_hidden_consumer PROPERTIES
+    TIMEOUT 90 LABELS "component_only;offline;installed_sdk")
   add_executable(formal_bundle_identity_probe test/formal_bundle_identity_probe.cpp)
   target_link_libraries(formal_bundle_identity_probe PRIVATE dummy_device_profile)
   add_test(NAME formal_bundle_identity_integrity COMMAND formal_bundle_identity_probe
@@ -405,17 +412,14 @@ if(BUILD_TESTING)
   endforeach()
 endif()
 # @par 安装与导出
-# 安装公开头、正式及无负载候选合同目录、同版wire头和五个静态库。
+# 安装公开头与静态库；当前wire/Policy和机器人业务包由同一SDK前缀导出。
 # export_dummy_device_action导出target及接口依赖，ament_package生成包索引；候选目录存在不表示运动资格。
 install(DIRECTORY include/ DESTINATION include)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2" DESTINATION share/${PROJECT_NAME}/contracts)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_application_hold_no_load_candidate"
-  DESTINATION share/${PROJECT_NAME}/contracts)
-install(FILES "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2.hpp" DESTINATION include)
+# 现行机器人业务包由显式SDK前缀提供；冻结ROS合同只留在历史测试源中。
 install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_management dummy_device_profile
   dummy_goal_timeline EXPORT export_dummy_device_action ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_device_action)
-ament_export_dependencies(dummy_ros_control control_msgs yaml-cpp OpenSSL)
+ament_export_dependencies(dummy_ros_control control_msgs yaml-cpp OpenSSL DPSDKHostSDK DpProtocol)
 install(FILES LICENSE DESTINATION share/${PROJECT_NAME})
 
 ament_package()

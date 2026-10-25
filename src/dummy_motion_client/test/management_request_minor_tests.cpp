@@ -9,7 +9,7 @@
 #include <cassert>
 
 namespace {
-namespace wire = dp::protocol::dummy_robot_v2;
+namespace wire = dp::iface;
 
 /**
  * @brief 保存最后请求及是否成功解出当前schema minor的单线程夹具。
@@ -44,7 +44,7 @@ struct Transport : dummy_motion_client::ManagementTransport {
     dummy_motion_client::ManageRequest request;
     decoded_current_minor = wire::DummyManageV2RequestCodec::decode(
         bytes.data(), bytes.size(), &request) == wire::CodecResult::kOk &&
-        request.schema_minor() == dp::protocol::dummy_robot_v2::kSchemaMinor;
+        request.schema_minor() == dummy_ref::protocol::kSchemaMinor;
     sent = request;
     return decoded_current_minor ? std::make_unique<Handle>() : nullptr;
   }

@@ -362,7 +362,7 @@ void ActionGate::observe(const ManageReply &reply,std::uint64_t now) {
  * @note 本层不估算设备produced时钟或原始年龄；调用方须先保证流的新鲜性/源时序，不能把此返回值当全部transport校验。
  */
 bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::uint64_t now) {
-  namespace wire=dp::protocol::dummy_robot_v2;
+  namespace wire=dp::iface;
   wire::DummyJointStateV2 state;
   if (wire::DummyJointStateV2Codec::decode(bytes,size,&state)!=wire::CodecResult::kOk ||
       state.schema_major()!=2 ||

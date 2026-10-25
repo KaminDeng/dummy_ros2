@@ -57,7 +57,7 @@ static unsigned cancel_hold_case=0;
 #include <openssl/sha.h>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v2_dp_comm.hpp"
+#include "dummy_ref/wire_contract.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/raw_evidence_collector.hpp"
@@ -73,12 +73,12 @@ static bool source_cancel_coordination=false;
  * @brief 保留共同CLI的source模式后缀；本源实际Core专属分支不再用这些旧合成Query故障值决定结果。
  */
 static const char* source_cancel_fault=nullptr;
-namespace wire = dp::protocol::dummy_robot_v2;
+namespace wire = dp::iface;
 using State = wire::DummyJointStateV2;
 using Status = wire::DummyDeviceStatusV2;
 using Evidence = wire::DummyAttemptEvidenceV2;
 using Command = wire::DummyJointCommandV2;
-using Management = dp::protocol::services::DummyManageV2RawFixed;
+using Management = dp::protocol::services::DummyManageV2;
 using namespace dummy_ros_control;
 /**
  * @brief 检查采集尚未绑定时可接受的历史released Idle基线。
@@ -826,7 +826,7 @@ dp::comm::Result receive_management(const Management::Request &request,
       request.operation() != 12U && request.operation() != 10U && request.operation() != 1U && request.operation() != 9U)
     return dp::comm::Result::kInvalidArgument;
   response->set_schema_major(2U);
-  response->set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response->set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response->set_device_id(request.device_id());
   response->set_client_instance_id(request.client_instance_id());
   response->set_request_id(request.request_id());
@@ -1293,8 +1293,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if (!transport.start() || !wait_for([&] { return transport.statistics().ready; })) return 11;
   Stimulus valid{};
   valid.status.set_schema_major(2U);
-  valid.status.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
-  valid.state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  valid.status.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
+  valid.state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   valid.state.set_schema_major(2U);
   std::uint8_t device[16]{1U};
   valid.status.set_device_id(device);
@@ -1454,7 +1454,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if (release_deactivate_mode != 4U) {
       Management::Request release;
       release.set_schema_major(2U);
-      release.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+      release.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
       release.set_device_id(device);
       std::uint8_t client[16]{2U};
       release.set_client_instance_id(client);
@@ -1841,7 +1841,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
     }
     if (release_deactivate_mode==4U && source_cancel_coordination) {
-      Management::Request cancel;cancel.set_schema_major(2U);cancel.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);cancel.set_device_id(device);
+      Management::Request cancel;cancel.set_schema_major(2U);cancel.set_schema_minor(dummy_ref::protocol::kSchemaMinor);cancel.set_device_id(device);
       std::uint8_t owner[16]{1U};cancel.set_client_instance_id(owner);cancel.set_request_id(4693763926145815138ULL);cancel.set_request_seq(91U);cancel.set_operation(9U);
       cancel.set_expected_boot_epoch(28673U);cancel.set_expected_session_id(77U);cancel.set_expected_reference_epoch(1U);cancel.set_expected_motion_epoch(2U);cancel.set_expected_management_epoch(3U);cancel.set_expected_profile_id(1U);cancel.set_configured_mask(63U);if(prime_test_mode && !std::strcmp(prime_test_mode,"no_owned")){std::uint8_t foreign[16]{3U};cancel.set_client_instance_id(foreign);}
       auto pending=std::make_shared<DeviceManagementRequest>();wire::DummyManageV2RequestCodec::encode(cancel,pending->request.data(),pending->request.size());
@@ -2239,7 +2239,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     stale_page.send_status = false;
     stale_page.send_evidence = true;
     stale_page.evidence.set_schema_major(2U);
-    stale_page.evidence.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    stale_page.evidence.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     stale_page.evidence.set_run_id(2U);
     stale_page.evidence.set_attempt_id(2U);
     stale_page.evidence.set_evidence_seq(0U);
@@ -2448,7 +2448,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
     }
     Management::Request complete;
-    complete.set_schema_major(2U); complete.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    complete.set_schema_major(2U); complete.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     complete.set_device_id(device);
     const std::uint8_t client[16]{2U};
     complete.set_client_instance_id(client);
@@ -3029,7 +3029,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stimulus.send_evidence = true;
         auto &message = stimulus.evidence;
         message.set_schema_major(2U);
-        message.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+        message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
         message.set_run_id(run);
         message.set_attempt_id(run);
         message.set_evidence_seq(sequence);
@@ -3076,11 +3076,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         std::array<std::uint8_t, wire::DummyAttemptEvidenceV2Codec::kEncodedSize> raw{};
         if (wire::DummyAttemptEvidenceV2Codec::encode(
                 message, raw.data(), raw.size()) != wire::CodecResult::kOk) return false;
-        std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize + 1U> input{};
+        std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> input{};
         std::copy(previous.begin(), previous.end(), input.begin());
-        std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize,
+        std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
                     input.begin() + 32U);
-        input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kEvidenceLostOffset];
+        input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
         ::SHA256(input.data(), input.size(), next->data());
         std::uint8_t next_digest[32]{};
         std::copy(next->begin(), next->end(), next_digest);
@@ -4016,7 +4016,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stimulus.send_evidence = true;
         auto &message = stimulus.evidence;
         message.set_schema_major(2U);
-        message.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+        message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
         message.set_run_id(run);
         message.set_attempt_id(run);
         message.set_evidence_seq(terminal ? 1U : 0U);
@@ -4038,11 +4038,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         std::array<std::uint8_t, wire::DummyAttemptEvidenceV2Codec::kEncodedSize> raw{};
         if (wire::DummyAttemptEvidenceV2Codec::encode(
                 message, raw.data(), raw.size()) != wire::CodecResult::kOk) return false;
-        std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize + 1U> input{};
+        std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> input{};
         std::copy(previous.begin(), previous.end(), input.begin());
-        std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize,
+        std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
                     input.begin() + 32U);
-        input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kEvidenceLostOffset];
+        input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
         ::SHA256(input.data(), input.size(), next->data());
         std::uint8_t digest[32]{};
         std::copy(next->begin(), next->end(), digest);
@@ -4147,7 +4147,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     evidence.send_state = false;
     evidence.send_evidence = true;
     evidence.evidence.set_schema_major(2U);
-    evidence.evidence.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    evidence.evidence.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     evidence.evidence.set_run_id(3U);
     evidence.evidence.set_attempt_id(3U);
     evidence.evidence.set_evidence_seq(0U);
@@ -4170,11 +4170,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     std::array<std::uint8_t, wire::DummyAttemptEvidenceV2Codec::kEncodedSize> raw{};
     if (wire::DummyAttemptEvidenceV2Codec::encode(
             evidence.evidence, raw.data(), raw.size()) != wire::CodecResult::kOk) return 140;
-    std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize + 1U> chain_input{};
+    std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> chain_input{};
     std::copy(std::begin(previous), std::end(previous), chain_input.begin());
-    std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize,
+    std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
                 chain_input.begin() + 32U);
-    chain_input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kEvidenceLostOffset];
+    chain_input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
     std::uint8_t chain[32]{};
     ::SHA256(chain_input.data(), chain_input.size(), chain);
     evidence.evidence.set_chain_sha256(chain);
@@ -4647,7 +4647,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   Management::Request authorization;
   authorization.set_schema_major(2U);
-  authorization.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  authorization.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   authorization.set_device_id(device);
   const std::uint8_t client[16]{2U};
   authorization.set_client_instance_id(client);

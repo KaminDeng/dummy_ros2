@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v2_dp_comm.hpp"
+#include "dummy_ref/wire_contract.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 namespace dummy_ros_control {
@@ -18,7 +18,7 @@ namespace dummy_ros_control {
  */
 class DpCommCommandWorker {
  public:
-  using WireCommand = dp::protocol::dummy_robot_v2::DummyJointCommandV2;
+  using WireCommand = dp::iface::DummyJointCommandV2;
   using Publisher = dp::comm::Publisher<WireCommand>;
 
   /**
@@ -43,7 +43,7 @@ class DpCommCommandWorker {
     if (!system_->take_publish_record(&record)) return dp::comm::Result::kNotReady;
     WireCommand message;
     message.set_schema_major(2U);
-    message.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     message.set_boot_epoch(record.identity.boot);
     message.set_session_id(record.identity.session);
     message.set_reference_epoch(record.identity.reference_epoch);
@@ -73,7 +73,7 @@ class DpCommCommandWorker {
  */
 class DpCommStateReceiver {
  public:
-  using WireState = dp::protocol::dummy_robot_v2::DummyJointStateV2;
+  using WireState = dp::iface::DummyJointStateV2;
   /**
    * @brief 固定借用目标系统和本次期望条件。
    * @param system 长于订阅回调的硬件对象。
@@ -92,9 +92,9 @@ class DpCommStateReceiver {
     if (!self || !self->system_) return;
     WireState state;
     if (borrowed.copy_to(&state) != dp::comm::Result::kOk) return;
-    std::uint8_t bytes[dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize]{};
-    if (dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::encode(
-            state, bytes, sizeof(bytes)) != dp::protocol::dummy_robot_v2::CodecResult::kOk) return;
+    std::uint8_t bytes[dp::iface::DummyJointStateV2Codec::kEncodedSize]{};
+    if (dp::iface::DummyJointStateV2Codec::encode(
+            state, bytes, sizeof(bytes)) != dp::iface::CodecResult::kOk) return;
     self->accepted_ = self->system_->ingest_wire_state(bytes, sizeof(bytes), self->expectation_);
   }
   /**

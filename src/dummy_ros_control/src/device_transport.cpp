@@ -18,7 +18,7 @@
 #include <thread>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v2_dp_comm.hpp"
+#include "dummy_ref/wire_contract.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
@@ -31,12 +31,12 @@ namespace {
 /**
  * @brief wire为生成codec与服务类型的别名；以下kWire常量对应设备协议编号，不是ROS lifecycle枚举。
  */
-namespace wire = dp::protocol::dummy_robot_v2;
+namespace wire = dp::iface;
 using State = wire::DummyJointStateV2;
 using Status = wire::DummyDeviceStatusV2;
 using Evidence = wire::DummyAttemptEvidenceV2;
 using Command = wire::DummyJointCommandV2;
-using Management = dp::protocol::services::DummyManageV2RawFixed;
+using Management = dp::protocol::services::DummyManageV2;
 constexpr std::uint16_t kWireEnablingHold = 3U;
 constexpr std::uint16_t kWireHold = 4U;
 constexpr std::uint16_t kWireDisabling = 8U;
@@ -739,7 +739,7 @@ struct DeviceTransport::Impl {
    * @return bool；成功仍须后续能力/hash/epoch/run检查。
    */
   bool matches_status(const Status &message) const noexcept {
-    return message.schema_major() == 2U && message.schema_minor() == wire::kSchemaMinor && matches_common(message);
+    return message.schema_major() == 2U && message.schema_minor() == dummy_ref::protocol::kSchemaMinor && matches_common(message);
   }
 
   /**
@@ -748,7 +748,7 @@ struct DeviceTransport::Impl {
    * @return bool；不单独授权session或校验时间。
    */
   bool matches_state(const State &message) const noexcept {
-    return message.schema_major() == 2U && message.schema_minor() == wire::kSchemaMinor && matches_common(message);
+    return message.schema_major() == 2U && message.schema_minor() == dummy_ref::protocol::kSchemaMinor && matches_common(message);
   }
 
   /**
@@ -985,7 +985,7 @@ struct DeviceTransport::Impl {
           (response.session_id() == 0U && response.reference_epoch() == 0U)) ||
         !sequence_at_or_after(response.motion_epoch(), gate_release.expected_motion_epoch) ||
         !sequence_at_or_after(response.management_epoch(), gate_release.expected_management_epoch) ||
-        response.schema_major() != 2U || response.schema_minor() != wire::kSchemaMinor ||
+        response.schema_major() != 2U || response.schema_minor() != dummy_ref::protocol::kSchemaMinor ||
         response.profile_id() != parameters.profile_id ||
         response.receipt() != 1U || response.transaction_phase() != 3U ||
         response.result_code() != 0U || response.operation_id() == 0U ||
@@ -1045,8 +1045,8 @@ struct DeviceTransport::Impl {
         response.motion_epoch()==authorized_motion_epoch &&
         sequence_at_or_after(response.management_epoch(),status.management_epoch());
     const bool invalid_request_binding =
-        request.schema_major() != 2U || request.schema_minor() != wire::kSchemaMinor ||
-        response.schema_major() != 2U || response.schema_minor() != wire::kSchemaMinor ||
+        request.schema_major() != 2U || request.schema_minor() != dummy_ref::protocol::kSchemaMinor ||
+        response.schema_major() != 2U || response.schema_minor() != dummy_ref::protocol::kSchemaMinor ||
         request.request_id() == 0U || response.request_id() != request.request_id() ||
         response.operation_id() == 0U || boot == 0U ||
         request.expected_boot_epoch() != boot || response.boot_epoch() != boot ||
@@ -1746,7 +1746,7 @@ struct DeviceTransport::Impl {
       if (wire::DummyJointStateV2Codec::encode(value, raw.data(), raw.size()) != wire::CodecResult::kOk ||
           !self.raw_evidence.offer_observation(RawEvidenceCollector::Kind::kState,
               raw.data(), raw.size(), now, value.boot_epoch(), value.session_id(),
-              value.schema_major()==2U && value.schema_minor()==wire::kSchemaMinor && value.boot_epoch()==self.raw_fault_trusted_boot &&
+              value.schema_major()==2U && value.schema_minor()==dummy_ref::protocol::kSchemaMinor && value.boot_epoch()==self.raw_fault_trusted_boot &&
               value.profile_id()==self.parameters.profile_id && value.configured_mask()==self.parameters.configured_mask &&
               std::equal(std::begin(value.device_id()),std::end(value.device_id()),self.parameters.device_id.begin()) &&
               value.core_state()==9U && value.session_id()==0U && value.reference_epoch()==0U &&
@@ -2147,7 +2147,7 @@ struct DeviceTransport::Impl {
      */
     const bool next_motion_first_page = !binding &&
         (!self.provisional_evidence_binding || prior_provisional_completed) &&
-        value.schema_major() == 2U && value.schema_minor() == wire::kSchemaMinor &&
+        value.schema_major() == 2U && value.schema_minor() == dummy_ref::protocol::kSchemaMinor &&
         value.evidence_seq() == 0U && value.attempt_kind() == 1U &&
         value.parent_run_id() == 0U && value.category() == 1U &&
         value.group_count() >= 1U && value.group_id() != 0U &&
@@ -2184,7 +2184,7 @@ struct DeviceTransport::Impl {
         binding = self.find_evidence_binding(value.run_id());
       }
     }
-    if (value.schema_major() != 2U || value.schema_minor() != wire::kSchemaMinor ||
+    if (value.schema_major() != 2U || value.schema_minor() != dummy_ref::protocol::kSchemaMinor ||
         !binding || binding->attempt_kind != value.attempt_kind() ||
         binding->parent_run_id != value.parent_run_id() ||
         wire::DummyAttemptEvidenceV2Codec::encode(value, page.raw.data(), page.raw.size()) !=
@@ -2300,7 +2300,7 @@ struct DeviceTransport::Impl {
         authorized_motion_epoch == 0U || authorized_management_epoch == 0U) return {};
     Management::Request request;
     request.set_schema_major(2U);
-    request.set_schema_minor(wire::kSchemaMinor);
+    request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     std::uint8_t device[16]{}, client[16]{};
     std::copy(parameters.device_id.begin(), parameters.device_id.end(), device);
     std::copy(parameters.client_instance_id.begin(), parameters.client_instance_id.end(), client);
@@ -2347,7 +2347,7 @@ struct DeviceTransport::Impl {
          (sent.operation() == kWireGetOperation &&
           sent.queried_operation_id() == original.request_id() &&
           sent.configured_mask() == original.configured_mask())) &&
-        response.schema_major() == 2U && response.schema_minor() == wire::kSchemaMinor &&
+        response.schema_major() == 2U && response.schema_minor() == dummy_ref::protocol::kSchemaMinor &&
         response.receipt() == 1U && response.request_id() == sent.request_id() &&
         response.boot_epoch() == original.expected_boot_epoch() &&
         (same_owner || released_owner) &&
@@ -2571,7 +2571,7 @@ struct DeviceTransport::Impl {
       refresh_in_flight_seq=wire_producer_sequence(record.generation);
     Command message;
     message.set_schema_major(2U);
-    message.set_schema_minor(wire::kSchemaMinor);
+    message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     std::uint8_t device[16]{}, client[16]{};
     std::copy(parameters.device_id.begin(), parameters.device_id.end(), device);
     std::copy(parameters.client_instance_id.begin(), parameters.client_instance_id.end(), client);
@@ -2667,7 +2667,7 @@ struct DeviceTransport::Impl {
      * @brief 本次连接使用固定dp_comm静态存储及当前codec最大载荷；Context采用StaticOnly，不因管理/State流量无限申请队列。此局部存储必须活过其Context/端点句柄。
      */
     const dp::comm::StaticStorageConfig storage_config{1U, 2U, 3U, 0U, 8U,
-        wire::DummyDeviceStatusV2Codec::kEncodedSize, 96U, 1U, 1U, 1U, 1U};
+        DP_PROTOCOL_PRODUCT_POSIX_DUMMY_REF_ROS_SDK_RUNTIME_MESSAGE_BYTES, 96U, 1U, 1U, 1U, 1U};
     dp::comm::StaticStorage storage(storage_config);
     const dp::comm::TransportConfig transport{"peer", parameters.endpoint.c_str(), "", "dummy_ros_control"};
     auto initialized = dp::comm::Context::init(storage,
@@ -2701,10 +2701,10 @@ struct DeviceTransport::Impl {
     std::string route = "/dpsdk/dummy_robot/";
     for (auto byte : parameters.device_id) { route += hex[byte >> 4U]; route += hex[byte & 15U]; }
     route += "/ref_control/";
-    auto state_result = node.create_subscription<State>((route + "state_v2").c_str(), {}, receive_state, this);
-    auto status_result = node.create_subscription<Status>((route + "status_v2").c_str(), {}, receive_status, this);
-    auto command_result = node.create_publisher<Command>((route + "command_v2").c_str(), {});
-    auto management_result=node.create_client<Management>((route+"manage_v2").c_str());
+    auto state_result = node.create_subscription<State>((route + DP_PROTOCOL_TOPIC_DUMMY_STATE_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_STATE, DUMMY_ROS_SDK), receive_state, this);
+    auto status_result = node.create_subscription<Status>((route + DP_PROTOCOL_TOPIC_DUMMY_STATUS_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_STATUS, DUMMY_ROS_SDK), receive_status, this);
+    auto command_result = node.create_publisher<Command>((route + DP_PROTOCOL_TOPIC_DUMMY_COMMAND_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_COMMAND, DUMMY_ROS_SDK));
+    auto management_result=node.create_client<Management>((route+DP_PROTOCOL_TOPIC_DUMMY_MANAGE_ENDPOINT).c_str());
     if (!state_result.has_value() || !status_result.has_value() || !command_result.has_value() || !management_result.has_value()) {
       diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"endpoint_setup_failed");
       diagnostic_detail( "device transport endpoint setup failed state=%u status=%u command=%u management=%u\\n",
@@ -2720,7 +2720,7 @@ struct DeviceTransport::Impl {
     std::optional<dp::comm::Subscription<Evidence>> evidence_subscription;
     if (!parameters.raw_evidence_path.empty()) {
       auto evidence_result = node.create_subscription<Evidence>(
-          (route + "attempt_evidence_v2").c_str(), {}, receive_evidence, this);
+          (route + DP_PROTOCOL_TOPIC_DUMMY_ATTEMPT_EVIDENCE_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_ATTEMPT_EVIDENCE, DUMMY_ROS_SDK), receive_evidence, this);
       if (!evidence_result.has_value()) {
         diagnostics.reject_from_context(DiagnosticReason::kManagementRejected,transport_steady_now_us(),"evidence_subscription_failed");
         diagnostic_detail( "device transport evidence subscription failed result=%u\n",
@@ -2855,7 +2855,7 @@ struct DeviceTransport::Impl {
       if(owned_cancel && wire::DummyManageV2RequestCodec::decode(pending->request.data(),pending->request.size(),&q)==wire::CodecResult::kOk &&
          (q.request_id()==owned_cancel->request_id() || cancel_query_matches(q))) {
         if(wire::DummyManageV2ResponseCodec::decode(pending->response.data(),pending->response.size(),&r)!=wire::CodecResult::kOk ||
-           r.request_id()!=q.request_id() || r.receipt()!=1U || r.schema_major()!=2U || r.schema_minor()!=wire::kSchemaMinor ||
+           r.request_id()!=q.request_id() || r.receipt()!=1U || r.schema_major()!=2U || r.schema_minor()!=dummy_ref::protocol::kSchemaMinor ||
            r.boot_epoch()!=owned_cancel->expected_boot_epoch() || r.session_id()!=owned_cancel->expected_session_id() ||
            r.reference_epoch()!=owned_cancel->expected_reference_epoch() || r.profile_id()!=owned_cancel->expected_profile_id() ||
            !std::equal(parameters.device_id.begin(),parameters.device_id.end(),r.device_id()) ||

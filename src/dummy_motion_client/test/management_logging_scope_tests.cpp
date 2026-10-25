@@ -34,7 +34,7 @@ int main() {
   char name[]="wire",mode[]="release_query_backoff_guards";char* arguments[]={name,mode};
   for(unsigned i=0U;i<20U;++i)assert(original_wire_management_main(2,arguments)==0);
   DpManagementTransport absent({"tcp/127.0.0.1:29999",{1},{2},2,1},DpManagementTransport::Connection::kDeviceWorker);
-  ManageRequest request;request.set_schema_major(2U);request.set_schema_minor(wire::kSchemaMinor);
+  ManageRequest request;request.set_schema_major(2U);request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   request.set_request_id(42U);request.set_request_seq(7U);request.set_operation(3U);
   request.set_expected_boot_epoch(7U);request.set_expected_session_id(9U);
   request.set_expected_reference_epoch(1U);request.set_expected_motion_epoch(10U);

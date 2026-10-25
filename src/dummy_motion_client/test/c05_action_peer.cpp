@@ -23,15 +23,15 @@
 #include <yaml-cpp/yaml.h>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v2_dp_comm.hpp"
+#include "dummy_ref/wire_contract.hpp"
 #include "dummy_motion_client/device_profile.hpp"
 
 namespace c05_peer {
-namespace wire = dp::protocol::dummy_robot_v2;
+namespace wire = dp::iface;
 using Command = wire::DummyJointCommandV2;
 using State = wire::DummyJointStateV2;
 using Status = wire::DummyDeviceStatusV2;
-using Service = dp::protocol::services::DummyManageV2RawFixed;
+using Service = dp::protocol::services::DummyManageV2;
 
 constexpr std::uint16_t kSelectMode = 1U, kGrantSession = 2U, kCaptureReference = 3U,
     kSetPermit = 5U, kEnable = 6U, kBegin = 7U, kComplete = 8U,
@@ -278,7 +278,7 @@ class Peer {
     const bool session_valid = r.operation() == kGrantSession
         ? session_ == 0U && r.expected_session_id() != 0U
         : r.expected_session_id() == session_;
-    return r.schema_major() == 2U && r.schema_minor() == dp::protocol::dummy_robot_v2::kSchemaMinor && r.request_id() != 0U && valid_ticket(r.freshness_ticket()) &&
+    return r.schema_major() == 2U && r.schema_minor() == dummy_ref::protocol::kSchemaMinor && r.request_id() != 0U && valid_ticket(r.freshness_ticket()) &&
         std::equal(std::begin(r.device_id()), std::end(r.device_id()), std::begin(options_.device)) && std::equal(std::begin(r.client_instance_id()), std::end(r.client_instance_id()), std::begin(options_.client)) &&
         r.expected_boot_epoch() == boot_ && session_valid && r.expected_reference_epoch() == reference_ && r.expected_motion_epoch() == motion_ && r.expected_management_epoch() == management_ && r.expected_profile_id() == options_.profile && r.configured_mask() == options_.mask;
   }
@@ -288,7 +288,7 @@ class Peer {
    * @return schema/RID/device/client/boot/profile/mask均匹配。
    */
   bool query_identity_valid(const Service::Request &r) const noexcept {
-    return r.schema_major() == 2U && r.schema_minor() == dp::protocol::dummy_robot_v2::kSchemaMinor && r.request_id() != 0U &&
+    return r.schema_major() == 2U && r.schema_minor() == dummy_ref::protocol::kSchemaMinor && r.request_id() != 0U &&
         std::equal(std::begin(r.device_id()), std::end(r.device_id()), std::begin(options_.device)) && std::equal(std::begin(r.client_instance_id()), std::end(r.client_instance_id()), std::begin(options_.client)) &&
         r.expected_boot_epoch() == boot_ && r.expected_profile_id() == options_.profile &&
         r.configured_mask() == options_.mask;
@@ -300,7 +300,7 @@ class Peer {
    * @return 无。
    */
   void base(const Service::Request &r, Service::Response *out) const {
-    out->set_schema_major(2U); out->set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor); out->set_device_id(options_.device);
+    out->set_schema_major(2U); out->set_schema_minor(dummy_ref::protocol::kSchemaMinor); out->set_device_id(options_.device);
     out->set_client_instance_id(options_.client); out->set_request_id(r.request_id());
     out->set_boot_epoch(boot_); out->set_session_id(session_); out->set_reference_epoch(reference_);
     out->set_motion_epoch(motion_); out->set_management_epoch(management_);
@@ -410,7 +410,7 @@ class Peer {
    */
   void receive(const Command &c) noexcept {
     const bool fresh = valid_ticket(c.freshness_ticket());
-    const bool identity = c.schema_major() == 2U && c.schema_minor() == dp::protocol::dummy_robot_v2::kSchemaMinor && fresh && c.producer_seq() > accepted_ && c.boot_epoch() == boot_ && c.session_id() == session_ && c.reference_epoch() == reference_ && c.motion_epoch() == motion_ && c.profile_id() == options_.profile && c.configured_mask() == options_.mask && std::equal(std::begin(c.device_id()), std::end(c.device_id()), std::begin(options_.device)) && std::equal(std::begin(c.client_instance_id()), std::end(c.client_instance_id()), std::begin(options_.client));
+    const bool identity = c.schema_major() == 2U && c.schema_minor() == dummy_ref::protocol::kSchemaMinor && fresh && c.producer_seq() > accepted_ && c.boot_epoch() == boot_ && c.session_id() == session_ && c.reference_epoch() == reference_ && c.motion_epoch() == motion_ && c.profile_id() == options_.profile && c.configured_mask() == options_.mask && std::equal(std::begin(c.device_id()), std::end(c.device_id()), std::begin(options_.device)) && std::equal(std::begin(c.client_instance_id()), std::end(c.client_instance_id()), std::begin(options_.client));
     if (!identity || (core_ != kEnablingHold && core_ != kHold && core_ != kRunning)) {
       ++rejected_commands_;
       if (rejected_commands_ <= 10U) {
@@ -501,7 +501,7 @@ class Peer {
   void publish(dp::comm::Publisher<Status> &statuses, dp::comm::Publisher<State> &states) noexcept {
     ++ticket_; ticket_times_[ticket_%ticket_times_.size()]={ticket_,now_us()};
     const auto wire_core = core_ == kIdle && reference_ == 0U ? kUnreferencedIdle : core_;
-    Status status{}; status.set_schema_major(2U); status.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    Status status{}; status.set_schema_major(2U); status.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     status.set_device_id(options_.device); status.set_boot_epoch(boot_); status.set_session_id(session_);
     status.set_reference_epoch(reference_); status.set_motion_epoch(motion_);
     status.set_management_epoch(management_); status.set_profile_id(options_.profile);
@@ -551,7 +551,7 @@ class Peer {
         last_status_core_state_ = wire_core;
       }
     }
-    State state{}; state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    State state{}; state.set_schema_major(2U); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     state.set_device_id(options_.device); state.set_boot_epoch(boot_); state.set_session_id(session_);
     state.set_reference_epoch(reference_); state.set_motion_epoch(motion_);
     state.set_management_epoch(management_); state.set_profile_id(options_.profile);

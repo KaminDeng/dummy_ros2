@@ -12,7 +12,7 @@
 #include <iostream>
 #include <thread>
 
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ref/wire_validation.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
     }
     if (observation && missing_axis == 0U) break;
     if (observation && missing_axis != 0U) {
-      namespace wire = dp::protocol::dummy_robot_v2;
+      namespace wire = dp::iface;
       wire::DummyJointStateV2 state;
       wire::DummyDeviceStatusV2 status;
       if (wire::DummyJointStateV2Codec::decode(observation->state.data(), observation->state.size(), &state) ==
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
     transport.stop();
     return 5;
   }
-  namespace wire = dp::protocol::dummy_robot_v2;
+  namespace wire = dp::iface;
   wire::DummyJointStateV2 state;
   wire::DummyDeviceStatusV2 status;
   if (wire::DummyJointStateV2Codec::decode(observation->state.data(), observation->state.size(), &state) !=

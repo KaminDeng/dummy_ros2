@@ -8,7 +8,7 @@
 #include <limits>
 #include <iostream>
 using namespace action_test;
-namespace wire=dp::protocol::dummy_robot_v2;
+namespace wire=dp::iface;
 /**
  * @brief 构造J1 State，检查未使用轴NaN与Hold缺发送掩码的不同语义。
  * @param partial_hold_mask false为EnablingHold3且J6 NaN（未配置轴允许），应prime一次；true为Hold4但组mask不足，不得prime。
@@ -18,7 +18,7 @@ bool state_case(bool partial_hold_mask) {
   Harness harness; Authorization auth; auth.session=auth.reference=auth.permit=true;
   auth.identity.set_expected_session_id(1); auth.identity.set_configured_mask(1);
   require(harness.gate.enable(auth,1));
-  wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   state.set_state_seq(1);
   state.set_session_id(1); state.set_configured_mask(1); state.set_position_valid_mask(1);
   state.set_hold_ready(!partial_hold_mask); state.set_motion_epoch(1);

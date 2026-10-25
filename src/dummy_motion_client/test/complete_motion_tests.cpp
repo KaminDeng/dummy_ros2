@@ -17,7 +17,7 @@
  */
 void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned invalid=0U) {
   using namespace action_test;
-  namespace wire=dp::protocol::dummy_robot_v2;
+  namespace wire=dp::iface;
   Harness h;
   Authorization auth; auth.session=auth.reference=auth.permit=true;
   auth.identity.set_expected_session_id(1U); auth.identity.set_configured_mask(1U);
@@ -32,7 +32,7 @@ void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned inva
   ++h.epoch;
   h.gate.observe(h.response(false,12784U),15U);
   wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor); state.set_state_seq(1U); state.set_session_id(1U);
+  state.set_schema_major(2U); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor); state.set_state_seq(1U); state.set_session_id(1U);
   state.set_motion_epoch(h.epoch); state.set_core_state(wire_value(WireCoreState::kHold));
   state.set_hold_ready(true); state.set_committed_producer_seq(12784U);
   state.set_configured_mask(1U); state.set_position_valid_mask(1U);

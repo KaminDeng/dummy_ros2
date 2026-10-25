@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #include <openssl/sha.h>
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ref/wire_validation.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/raw_evidence_collector.hpp"
 
@@ -30,7 +30,7 @@ using dummy_ros_control::RawEvidenceBinding;
 using dummy_ros_control::RawEvidenceBindings;
 using dummy_ros_control::RawEvidenceIdentity;
 using dummy_ros_control::RawEvidencePage;
-namespace wire = dp::protocol::dummy_robot_v2;
+namespace wire = dp::iface;
 
 namespace {
 /**
@@ -95,7 +95,7 @@ RawEvidencePage page(std::uint64_t run, std::uint32_t seq,
   if (group_count == UINT32_MAX) group_count = terminal && seq == 0U ? 0U : 1U;
   wire::DummyAttemptEvidenceV2 message{};
   message.set_schema_major(2U);
-  message.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   message.set_run_id(run);
   message.set_attempt_id(run);
   message.set_evidence_seq(seq);
@@ -138,11 +138,11 @@ RawEvidencePage page(std::uint64_t run, std::uint32_t seq,
    * @brief 链输入为previous摘要、wire规范前缀及evidence_lost字节。
    * 先编码获得规范正文，算hash后再把chain写回wire；不是对含自身摘要的完整帧求hash。
    */
-  std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize + 1U> input{};
+  std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> input{};
   std::copy(previous.begin(), previous.end(), input.begin());
-  std::copy_n(result.raw.begin(), wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize,
+  std::copy_n(result.raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
               input.begin() + 32U);
-  input.back() = result.raw[wire::DummyAttemptEvidenceV2Codec::kEvidenceLostOffset];
+  input.back() = result.raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
   ::SHA256(input.data(), input.size(), result.chain_sha256.data());
   std::uint8_t chain_bytes[32]{};
   std::copy(result.chain_sha256.begin(), result.chain_sha256.end(), chain_bytes);
@@ -167,11 +167,11 @@ void rewrite_page(RawEvidencePage &value, wire::DummyAttemptEvidenceV2 &message)
   message.set_chain_sha256(empty_chain);
   if (wire::DummyAttemptEvidenceV2Codec::encode(
           message, value.raw.data(), value.raw.size()) != wire::CodecResult::kOk) std::abort();
-  std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize + 1U> input{};
+  std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> input{};
   std::copy(value.previous_chain_sha256.begin(), value.previous_chain_sha256.end(), input.begin());
-  std::copy_n(value.raw.begin(), wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize,
+  std::copy_n(value.raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
               input.begin() + 32U);
-  input.back() = value.raw[wire::DummyAttemptEvidenceV2Codec::kEvidenceLostOffset];
+  input.back() = value.raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
   ::SHA256(input.data(), input.size(), value.chain_sha256.data());
   std::uint8_t chain[32]{};
   std::copy(value.chain_sha256.begin(), value.chain_sha256.end(), chain);
@@ -286,7 +286,7 @@ bool test_management_wire_records() {
   if (!collector.start(path)) return false;
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   std::uint8_t client[16]{};
   client[0] = 1U;
   request.set_client_instance_id(client);
@@ -303,7 +303,7 @@ bool test_management_wire_records() {
       wire::CodecResult::kOk) return false;
   wire::DummyManageV2Response response{};
   response.set_schema_major(2U);
-  response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_client_instance_id(client);
   response.set_request_id(80U);
   response.set_boot_epoch(11U);
@@ -353,11 +353,11 @@ bool test_management_wire_records() {
 bool test_management_offers_require_open_capture() {
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   std::array<std::uint8_t, wire::DummyManageV2RequestCodec::kEncodedSize> request_raw{};
   wire::DummyManageV2Response response{};
   response.set_schema_major(2U);
-  response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   std::array<std::uint8_t, wire::DummyManageV2ResponseCodec::kEncodedSize> response_raw{};
   if (wire::DummyManageV2RequestCodec::encode(request, request_raw.data(), request_raw.size()) !=
           wire::CodecResult::kOk ||
@@ -415,7 +415,7 @@ bool test_management_wrong_ids_are_preserved() {
   if (!collector.start(path)) return false;
   wire::DummyManageV2Response response{};
   response.set_schema_major(2U);
-  response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(999U);
   response.set_run_id(4U);
   response.set_boot_epoch(11U);
@@ -448,7 +448,7 @@ bool test_management_wrong_ids_are_preserved() {
 bool test_management_length_fails_closed() {
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   request.set_request_id(80U);
   request.set_request_seq(80U);
   std::array<std::uint8_t, wire::DummyManageV2RequestCodec::kEncodedSize> raw{};
@@ -677,7 +677,7 @@ bool test_management_overflow_with_running_writer() {
   }
   wire::DummyManageV2Request request{};
   request.set_schema_major(2U);
-  request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   std::array<std::uint8_t, wire::DummyManageV2RequestCodec::kEncodedSize> raw{};
   bool accepted = wire::DummyManageV2RequestCodec::encode(request, raw.data(), raw.size()) ==
       wire::CodecResult::kOk;

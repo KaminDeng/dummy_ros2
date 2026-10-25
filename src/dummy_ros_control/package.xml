@@ -15,6 +15,8 @@ DPSDKHostSDK；本清单本身不会创建SDK安装区、启动设备或授予�
   <license>Apache-2.0</license>
   <!-- 使用ament_cmake装配C++共享库/测试；依赖安装不等于插件已加载。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- 设备wire/Policy与651/18000 PIC运行时统一来自显式安装SDK。 -->
+  <depend>dpsdk_host_sdk</depend>
   <!-- 控制器接口/JTC提供轨迹更新基类；硬件接口提供SystemInterface。 -->
   <depend>controller_interface</depend>
   <depend>joint_trajectory_controller</depend>

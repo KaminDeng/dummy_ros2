@@ -57,7 +57,7 @@ int main(int argc,char **argv) {
    */
   auto commit=[&](std::uint32_t epoch) {
     const auto request=transport.requests.back();
-    wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     response.set_request_id(request.request_id());response.set_boot_epoch(7);response.set_session_id(9);
     response.set_reference_epoch(1);response.set_motion_epoch(epoch);response.set_management_epoch(1);
     response.set_profile_id(201);response.set_receipt(1);response.set_result_code(0);
@@ -94,7 +94,7 @@ int main(int argc,char **argv) {
    * @par 内部replywire回调
    * q给当前Query request_id，phase选择Prepared/Committed/Failed；固定响应op=原rid+100及当前tuple，不自动接受所有传入请求身份。
    */
-  auto replywire=[&](const ManageRequest&q,std::uint8_t phase){wire::DummyManageV2Response r;r.set_schema_major(2);r.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);r.set_request_id(q.request_id());r.set_boot_epoch(7);r.set_session_id(9);r.set_reference_epoch(1);r.set_motion_epoch(2);r.set_management_epoch(1);r.set_profile_id(201);r.set_receipt(1);r.set_operation_id(rid+100);r.set_transaction_phase(phase);r.set_result_code(0);return r;};
+  auto replywire=[&](const ManageRequest&q,std::uint8_t phase){wire::DummyManageV2Response r;r.set_schema_major(2);r.set_schema_minor(dummy_ref::protocol::kSchemaMinor);r.set_request_id(q.request_id());r.set_boot_epoch(7);r.set_session_id(9);r.set_reference_epoch(1);r.set_motion_epoch(2);r.set_management_epoch(1);r.set_profile_id(201);r.set_receipt(1);r.set_operation_id(rid+100);r.set_transaction_phase(phase);r.set_result_code(0);return r;};
   if(mode.rfind("wrong_",0)==0){ gate.cancel(25);assert(gate.error()=="STOP_FAILED");assert(!gate.cancel_waiting_for_renewal(renew,26));return 0;}
   transport.respond(replywire(transport.requests.back(),2));auto prepared=client.poll(rid);
   assert(prepared);

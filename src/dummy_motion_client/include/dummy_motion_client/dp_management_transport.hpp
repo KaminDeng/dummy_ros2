@@ -112,7 +112,7 @@ inline bool raw_fault_cleanup_matches(const RawTerminalIdentity &terminal,const 
     std::uint64_t boot,std::uint64_t session,std::uint64_t run,std::uint32_t active_epoch,
     std::uint32_t profile,std::uint8_t mask,const std::array<std::uint8_t,16> &device,std::uint64_t now,
     std::uint64_t state_max_age_us=250000U) noexcept {
-  namespace wire=dp::protocol::dummy_robot_v2;
+  namespace wire=dummy_wire;
   if(!raw_first_page_matches(first,boot,session,run,terminal.attempt_motion_epoch) || !first.chain_valid ||
      !first.full_six || !first.strict_refresh_successor || first.evidence_lost || first.attempt_kind!=1U || first.category!=1U ||
      first.evidence_seq!=0U || !first.final || first.expected_mask!=63U || first.submitted_mask!=63U || first.sent_mask!=63U || first.failed_mask!=0U)return false;
@@ -132,7 +132,7 @@ inline bool raw_fault_cleanup_matches(const RawTerminalIdentity &terminal,const 
   wire::DummyJointStateV2 state{};wire::DummyDeviceStatusV2 status{};
   if(wire::DummyJointStateV2Codec::decode(observation.state.data(),observation.state.size(),&state)!=wire::CodecResult::kOk ||
      wire::DummyDeviceStatusV2Codec::decode(observation.status.data(),observation.status.size(),&status)!=wire::CodecResult::kOk)return false;
-  if(state.schema_major()!=2U || state.schema_minor()!=wire::kSchemaMinor || status.schema_major()!=2U || status.schema_minor()!=wire::kSchemaMinor ||
+  if(state.schema_major()!=2U || state.schema_minor()!=dummy_wire_schema::kSchemaMinor || status.schema_major()!=2U || status.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
      state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=0U || status.session_id()!=0U ||
      state.reference_epoch()!=0U || status.reference_epoch()!=0U || state.core_state()!=9U || status.core_state()!=9U ||
      state.motion_epoch()!=terminal.fault_stop_motion_epoch || status.motion_epoch()!=terminal.fault_stop_motion_epoch ||

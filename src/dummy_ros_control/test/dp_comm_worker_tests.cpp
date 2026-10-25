@@ -7,11 +7,11 @@
 #include <cstdint>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v2_dp_comm.hpp"
+#include "dummy_ref/wire_contract.hpp"
 #include "dummy_ros_control/dp_comm_worker.hpp"
 
 namespace {
-using Message = dp::protocol::dummy_robot_v2::DummyJointCommandV2;
+using Message = dp::iface::DummyJointCommandV2;
 /**
  * @brief 订阅观测槽；count只在借用消息成功复制后递增，message拥有拷贝后的值。
  */
@@ -36,7 +36,7 @@ void receive(dp::comm::BorrowedMessage<Message> borrowed, void *context) {
  */
 int main() {
   dp::comm::StaticStorageConfig config{1U, 2U, 2U, 0U, 6U,
-      dp::protocol::dummy_robot_v2::DummyDeviceStatusV2Codec::kEncodedSize, 96U};
+      dp::iface::DummyDeviceStatusV2Codec::kEncodedSize, 96U};
   dp::comm::StaticStorage storage(config);
   auto context_result = dp::comm::Context::init(storage, dp::comm::MemoryMode::kStaticOnly);
   if (!context_result.has_value()) return 1;
@@ -55,7 +55,7 @@ int main() {
   auto publisher = std::move(publisher_result).take_value();
   auto subscription = std::move(subscription_result).take_value();
   dummy_ros_control::GuardedZenbeddedSystem system;
-  using State = dp::protocol::dummy_robot_v2::DummyJointStateV2;
+  using State = dp::iface::DummyJointStateV2;
   const dummy_ros_control::StateExpectation expectation{9U, 7U, 100U, true, 0x3FU, 1000U, 1100U, 150U};
   dummy_ros_control::DpCommStateReceiver state_receiver(&system, expectation);
   auto state_publisher_result = node.create_publisher<State>("state_v2", {});
@@ -82,7 +82,7 @@ int main() {
    */
   State feedback;
   feedback.set_schema_major(2U);
-  feedback.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  feedback.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   feedback.set_boot_epoch(9U);
   feedback.set_profile_id(7U);
   feedback.set_state_seq(101U);

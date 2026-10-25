@@ -1,6 +1,6 @@
 # @file CMakeLists.txt
 # @brief ROS控制器/硬件插件、位置控制传输与组件测试的构建入口。
-# @details 配置顺序：发现ROS/OpenSSL→核验指定SDK及codec→核验三个PIC源→
+# @details 配置顺序：发现ROS/OpenSSL→核验安装SDK协议/运行库与角色→
 # 装配可加载库→注册测试/独立探针→安装导出。651/18000是runtime容量角色，
 # 不是电机数或USB MTU。配置、编译、测试与物理设备验证是不同层次。
 # BUILD_TESTING只控制测试目标注册；没有在配置/构建时自动连接USB或使能机械臂。
@@ -16,91 +16,16 @@ find_package(pluginlib REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-# 调用者可通过环境或-D指定源码根；verify脚本还要求明确的SDK安装前缀、同源PIC角色和codec身份。
-set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "DPSDK source root")
+# 生产构建仅消费安装 SDK；源码根只供显式 BUILD_TESTING 的真实 Core 回归。
+set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "离线源码模型回归所用DPSDK根")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake")
-# ROS合同镜像用于部分历史/兼容测试；生产传输直接包含SDK发布的当前wire codec，不能混链旧镜像。
 get_filename_component(ROS_WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v2/codec")
-set(DUMMY_WIRE_INCLUDE "${DPSDK_ROOT}/applications/dummy_ref_control/contracts/dummy_robot_v2/codec")
-if(NOT EXISTS "${DUMMY_WIRE_INCLUDE}/dp_dummy_robot_v2_dp_comm.hpp")
-  message(FATAL_ERROR "Production device transport requires the published DPSDK wire-v1 codec")
-endif()
-# 这个INTERFACE目标只传播包含路径/宏/链接依赖；实际通信实现由下方dummy_dp_comm_pic编译。
+get_target_property(DUMMY_WIRE_INCLUDE dp_protocol::selected INTERFACE_INCLUDE_DIRECTORIES)
 add_library(dummy_dp_comm INTERFACE)
-# 三个源路径及下一列表的SHA按下标配对。即便只加注释也会改变原始SHA；升级须先验证适配与正负例。
-set(DUMMY_DP_COMM_SDK_SOURCES
-  "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like.cpp"
-  "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like_transport.cpp"
-  "${DPSDK_ROOT}/platform/common/dp_comm_pico_port/dp_comm_port.cpp")
-set(DUMMY_DP_COMM_SDK_HASHES
-  3a171d250a45cf774a1b0bff90263c5d7feddd57e1c9c0bd0d471d557c61e856
-  ec5dfd24763098b5ca79e3d32618afa69b88b62aaca7e574eaff303974bcd7f5
-  6b0e6d369ae8b1d2fefd1cd877ded9d6bd7d4f73c1b035b06c363de6cf86732e)
-# 配置阶段逐源检查存在性和原始摘要，任何一项漂移均FATAL_ERROR；不自动接受当前文件的新SHA。
-set(source_index 0)
-foreach(source IN LISTS DUMMY_DP_COMM_SDK_SOURCES)
-  if(NOT EXISTS "${source}")
-    message(FATAL_ERROR "Missing required read-only DPSDK source: ${source}")
-  endif()
-  file(SHA256 "${source}" source_sha256)
-  list(GET DUMMY_DP_COMM_SDK_HASHES ${source_index} expected_source_sha256)
-  if(NOT source_sha256 STREQUAL expected_source_sha256)
-    message(FATAL_ERROR "DPSDK PIC source changed; revalidate the transport adapter before updating its source lock: ${source}")
-  endif()
-  math(EXPR source_index "${source_index}+1")
-  message(STATUS "DPSDK PIC input ${source}: ${source_sha256}")
-endforeach()
-# The prebuilt runtime uses a local-exec TLS relocation and cannot be loaded by
-# pluginlib. Compile the source-locked transport as PIC in this build.
-# 当前runtime锁对应Node reset释放服务及最近deadline修复，均有实际负例/回归。
-# 存储借用还包含SDK已提交的std::launder生命周期处理；只接受下列精确源码，
-# 配套组件与独立篡改负例用于核对升级，不能以重新计算SHA代替回归。
-# 动态插件不能装载带local-exec TLS重定位的普通预编译runtime；将锁定源重编为PIC静态库供共享库链接。
-add_library(dummy_dp_comm_pic STATIC ${DUMMY_DP_COMM_SDK_SOURCES})
-# Zenoh日志桥也是PIC；这里只编译本项目桥接实现，不修改第三方Zenoh源码。
-add_library(dummy_dp_comm_log_shim STATIC src/zenoh_pico_log_shim.cpp)
-set_target_properties(dummy_dp_comm_log_shim PROPERTIES POSITION_INDEPENDENT_CODE ON)
-set_target_properties(dummy_dp_comm_pic PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_features(dummy_dp_comm_pic PUBLIC cxx_std_17)
-# PUBLIC容量定义必须传给使用runtime对象的调用方；否则静态存储/消息大小约定会不一致。
-target_compile_definitions(dummy_dp_comm_pic PUBLIC
-  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=651 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
-# PRIVATE平台/OSAL开关复现该SDK角色的编译环境，不向所有ROS应用传播这些实现选择。
-target_compile_definitions(dummy_dp_comm_pic PRIVATE
-  DP_COMM_DEFAULT_LOCAL_ONLY=1 ZENOH_LINUX ZENOH_C_STANDARD=11 ZENOH_COMPILER_GCC ZENOH_LOG_INFO
-  DPSDK_ALLOW_UNSAFE_LIBC_HEAP_FALLBACK=0 DPSDK_ENABLE_TLSF_HEAP=1
-  DP_OSAL_ENABLE_CHRONO=1 DP_OSAL_ENABLE_CONDITION_VAR=1 DP_OSAL_ENABLE_MEMORY_MANAGER=1
-  DP_OSAL_ENABLE_RW_LOCK=1 DP_OSAL_ENABLE_SPIN_LOCK=1 DP_OSAL_ENABLE_STATIC_ALLOC=0
-  DP_OSAL_ENABLE_THREAD_POOL=1 DP_OSAL_ENABLE_THREAD_SNAPSHOT=1 DP_OSAL_ENABLE_TIMER=1)
-# 混合使用选定SDK源码接口及同一SDK安装区的版本/Zenoh头；严禁从任意旧build借头凑齐。
-target_include_directories(dummy_dp_comm_pic PRIVATE
-  "${DPSDK_ROOT}/libraries/dp_comm/include"
-  "${DPSDK_ROOT}/libraries/dp_comm/src"
-  "${DPSDK_ROOT}/platform/common/dp_comm_pico_port"
-  "${DPSDK_ROOT}/platform/posix_native/kernel_port"
-  "${DPSDK_ROOT}/platform/common/console_device"
-  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src"
-  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/interface"
-  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/debug"
-  "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/impl/posix/include"
-  "${DPSDKHostSDK_VERSION_INCLUDE_DIR}"
-  "${DPSDK_ROOT}/platform/common/zenoh_port"
-  "${DPSDKHostSDK_ZENOH_INCLUDE_DIR}")
-target_include_directories(dummy_dp_comm INTERFACE
-  "${DUMMY_WIRE_INCLUDE}" "${DPSDK_ROOT}/libraries/dp_comm/include")
-target_compile_definitions(dummy_dp_comm INTERFACE
-  DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=651 DP_COMM_RUNTIME_STORAGE_BYTES=18000)
-# 导入SDK的OSAL、console、Zenoh归档并链接Host系统库；归档身份已由导出的SDK Config校验。
 target_link_libraries(dummy_dp_comm INTERFACE
-  dummy_dp_comm_pic
-  DPSDKHostSDK::osal
-  DPSDKHostSDK::console
-  DPSDKHostSDK::zenoh
-  dummy_dp_comm_log_shim
-  rt pthread m dl)
-if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v2.hpp")
-  message(FATAL_ERROR "ROS C03 prototype mirror does not contain the Dummy generated codec")
+  DPSDKHostSDK::dp_comm DPSDKHostSDK::dummy_protocol rt pthread m dl)
+if(BUILD_TESTING AND NOT IS_DIRECTORY "${DPSDK_ROOT}/applications/dummy_ref_control")
+  message(FATAL_ERROR "BUILD_TESTING的真实Core回归须显式DPSDK_ROOT；安装消费请用BUILD_TESTING=OFF")
 endif()
 
 # 纯头文件守卫接口只导出include与C++17要求，不生成独立机器码库。
@@ -502,12 +427,11 @@ if(BUILD_TESTING)
   target_link_libraries(real_peer_state_probe dummy_guarded_zenbedded_system)
   add_executable(production_transport_tests test/production_transport_tests.cpp)
   target_link_libraries(production_transport_tests dummy_guarded_zenbedded_system)
-  # SDK锁测试在私有工程损坏两codec与三安装归档并检验拒绝；三PIC源锁的篡改属于上层独立配置负例。
-  add_test(NAME sdk_input_lock_tests COMMAND "${CMAKE_COMMAND}"
-    "-DDPSDK_ROOT=${DPSDK_ROOT}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/sdk-lock-test"
-    "-DLOCK_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake"
-    "-DDPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/test/sdk_input_lock_tests.cmake")
+  # 安装锁测试在私有副本检查缺包、错Codec/ABI、通信归档/日志归档与公开载荷篡改。
+  add_test(NAME sdk_input_lock_tests COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/installed_sdk_inputs_tests.py"
+    --prefix "${DPSDK_HOST_SDK_PREFIX}"
+    --lock-file "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_sdk_inputs.cmake")
   add_test(NAME production_transport_peer_discovery_tests COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_transport_peer_test_tests.py")
   # 轻量生产者/陈旧状态/非阻塞接口回归；按目标补链接真实硬件插件，不连接物理总线。
@@ -527,6 +451,10 @@ if(BUILD_TESTING)
     "${DUMMY_WIRE_INCLUDE}"
     "${DPSDK_ROOT}/libraries/dp_comm/include")
   add_test(NAME wire_probe_tests COMMAND wire_probe_tests)
+  set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v2/codec")
+  if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v2.hpp")
+    message(FATAL_ERROR "历史兼容测试需要冻结ROS Codec原件")
+  endif()
   add_executable(wire_minor4_codec_tests test/wire_minor4_codec_tests.cpp)
   target_compile_features(wire_minor4_codec_tests PRIVATE cxx_std_17)
   target_include_directories(wire_minor4_codec_tests PRIVATE "${C03_PROTOTYPE_INCLUDE}")
@@ -584,8 +512,19 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
   add_library(dummy_dp_comm_current_test_runtime STATIC
     "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like.cpp")
   target_compile_features(dummy_dp_comm_current_test_runtime PUBLIC cxx_std_17)
-  get_target_property(_dummy_test_runtime_includes dummy_dp_comm_pic INCLUDE_DIRECTORIES)
-  get_target_property(_dummy_test_runtime_defines dummy_dp_comm_pic COMPILE_DEFINITIONS)
+  set(_dummy_test_runtime_includes
+    "${DPSDK_HOST_SDK_PREFIX}/include" "${DPSDK_ROOT}/libraries/dp_comm/src"
+    "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src"
+    "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/interface"
+    "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/debug"
+    "${DPSDK_ROOT}/core/dp_sdk_core/dp_osal/src/impl/posix/include"
+    "${DPSDK_ROOT}/platform/posix_native/kernel_port"
+    "${DPSDK_ROOT}/platform/common/console_device" "${DPSDKHostSDK_VERSION_INCLUDE_DIR}")
+  set(_dummy_test_runtime_defines DP_COMM_DEFAULT_LOCAL_ONLY=1 DP_COMM_ENABLE_ENCODED_PUBLISH_OBSERVER=0
+    DPSDK_ALLOW_UNSAFE_LIBC_HEAP_FALLBACK=0 DPSDK_ENABLE_TLSF_HEAP=1
+    DP_OSAL_ENABLE_CHRONO=1 DP_OSAL_ENABLE_CONDITION_VAR=1 DP_OSAL_ENABLE_MEMORY_MANAGER=1
+    DP_OSAL_ENABLE_RW_LOCK=1 DP_OSAL_ENABLE_SPIN_LOCK=1 DP_OSAL_ENABLE_STATIC_ALLOC=0
+    DP_OSAL_ENABLE_THREAD_POOL=1 DP_OSAL_ENABLE_THREAD_SNAPSHOT=1 DP_OSAL_ENABLE_TIMER=1)
   # 先去除从生产PIC目标继承的容量宏，再设测试值，避免同一编译命令重复冲突定义。
   list(FILTER _dummy_test_runtime_defines EXCLUDE REGEX "^DP_COMM_RUNTIME_(MAX_MESSAGE_BYTES|STORAGE_BYTES)=")
   target_include_directories(dummy_dp_comm_current_test_runtime PRIVATE ${_dummy_test_runtime_includes})
@@ -646,15 +585,14 @@ install(DIRECTORY include/ DESTINATION include)
 install(TARGETS
   dummy_goal_registration_gate
   dummy_dp_comm
-  dummy_dp_comm_pic
-  dummy_dp_comm_log_shim
   dummy_command_channel
   dummy_guarded_joint_trajectory_controller
   dummy_guarded_zenbedded_system
   EXPORT export_dummy_goal_registration_gate
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_goal_registration_gate HAS_LIBRARY_TARGET)
-ament_export_dependencies(OpenSSL DPSDKHostSDK)
+ament_export_dependencies(OpenSSL DPSDKHostSDK DpProtocol controller_interface
+  joint_trajectory_controller hardware_interface pluginlib trajectory_msgs)
 
 # 第二个测试区核对故障清理的raw生命周期代次；仍是离线组件，不把旧run证据补成当前释放。
 if(BUILD_TESTING)

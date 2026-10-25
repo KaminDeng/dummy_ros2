@@ -10,7 +10,7 @@
 #include "dummy_ros_control/diagnostic_scope.hpp"
 #include "dummy_ros_control/diagnostic_json.hpp"
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v2_dp_comm.hpp"
+#include "dummy_ref/wire_contract.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/management_admission_retry.hpp"
 #include <algorithm>
@@ -25,8 +25,8 @@ namespace dummy_motion_client {
 /**
  * @brief 生成wire codec别名；Service使用定长raw管理服务，避免把ROS消息结构体内存当载荷。
  */
-namespace wire=dp::protocol::dummy_robot_v2;
-using Service=dp::protocol::services::DummyManageV2RawFixed;
+namespace wire=dp::iface;
+using Service=dp::protocol::services::DummyManageV2;
 namespace {
 /**
  * @brief 本地拒绝类别：未ready、无channel、长度错、锁忙、queued占槽和codec失败；不是设备fault/result编号。
@@ -306,7 +306,7 @@ struct DpManagementTransport::Impl {
   static void receive(dp::comm::BorrowedMessage<Message> borrowed,void *context) {
     Message value; if(borrowed.copy_to(&value)!=dp::comm::Result::kOk) return;
     auto &self=*static_cast<Impl *>(context);
-    if(value.schema_major()!=2 || value.schema_minor()!=wire::kSchemaMinor ||
+    if(value.schema_major()!=2 || value.schema_minor()!=dummy_ref::protocol::kSchemaMinor ||
        value.profile_id()!=self.parameters.profile || value.configured_mask()!=self.parameters.mask ||
        !std::equal(self.parameters.device.begin(),self.parameters.device.end(),value.device_id())) return;
     std::vector<std::uint8_t> bytes(Codec::kEncodedSize);
@@ -322,7 +322,7 @@ struct DpManagementTransport::Impl {
   void run() noexcept {
     std::shared_ptr<Pending> active;
     try {
-      dp::comm::StaticStorage storage({1,0,2,0,8,wire::DummyDeviceStatusV2Codec::kEncodedSize,96,0,1,1,1});
+      dp::comm::StaticStorage storage({1,0,2,0,8,DP_PROTOCOL_PRODUCT_POSIX_DUMMY_REF_ROS_SDK_RUNTIME_MESSAGE_BYTES,96,0,1,1,1});
       const dp::comm::TransportConfig config{"client",parameters.endpoint.c_str(),"","device_action_gate"};
       auto initialized=dp::comm::Context::init(storage,{dp::comm::MemoryMode::kStaticOnly,&config,nullptr});
       if(!initialized.has_value()) throw std::runtime_error("dp_comm init");
@@ -334,10 +334,10 @@ struct DpManagementTransport::Impl {
       const char *hex="0123456789abcdef"; std::string route="/dpsdk/dummy_robot/";
       for(auto byte:parameters.device) { route+=hex[byte>>4]; route+=hex[byte&15]; }
       route+="/ref_control/";
-      auto created=node.create_client<Service>((route+"manage_v2").c_str());
-      auto states=node.create_subscription<wire::DummyJointStateV2>((route+"state_v2").c_str(),{},
+      auto created=node.create_client<Service>((route+DP_PROTOCOL_TOPIC_DUMMY_MANAGE_ENDPOINT).c_str());
+      auto states=node.create_subscription<wire::DummyJointStateV2>((route+DP_PROTOCOL_TOPIC_DUMMY_STATE_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_STATE, DUMMY_ROS_SDK),
           receive<wire::DummyJointStateV2,wire::DummyJointStateV2Codec,true>,this);
-      auto statuses=node.create_subscription<wire::DummyDeviceStatusV2>((route+"status_v2").c_str(),{},
+      auto statuses=node.create_subscription<wire::DummyDeviceStatusV2>((route+DP_PROTOCOL_TOPIC_DUMMY_STATUS_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_STATUS, DUMMY_ROS_SDK),
           receive<wire::DummyDeviceStatusV2,wire::DummyDeviceStatusV2Codec,false>,this);
       if(!created.has_value() || !states.has_value() || !statuses.has_value()) throw std::runtime_error("dp_comm entities");
       auto client=std::move(created).take_value(); auto state=std::move(states).take_value();
@@ -578,7 +578,7 @@ std::unique_ptr<ManagementTransport::RequestHandle> DpManagementTransport::send(
       log_admission(AdmissionReason::kLockBusy,bytes);
       Service::Request decoded;
       if(wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&decoded)!=wire::CodecResult::kOk ||
-         decoded.schema_major()!=2U || decoded.schema_minor()!=wire::kSchemaMinor || decoded.request_id()==0U) return {};
+         decoded.schema_major()!=2U || decoded.schema_minor()!=dummy_ref::protocol::kSchemaMinor || decoded.request_id()==0U) return {};
       return std::make_unique<Impl::SharedHandle>(std::move(pending),channel,impl_->admission_owner,management_now_us());
     }
     if(channel->queued && !channel->queued->canceled) {

@@ -9,7 +9,7 @@
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 #include "dp_comm/dp_comm.hpp"
-#include "dp_dummy_robot_v2_dp_comm.hpp"
+#include "dummy_ref/wire_contract.hpp"
 #include <atomic>
 #include <chrono>
 #include <cerrno>
@@ -23,8 +23,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 using namespace dummy_motion_client;
-namespace wire = dp::protocol::dummy_robot_v2;
-using Service = dp::protocol::services::DummyManageV2RawFixed;
+namespace wire = dp::iface;
+using Service = dp::protocol::services::DummyManageV2;
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -241,7 +241,7 @@ struct StopBridgeBeforeTransport {
  */
 std::vector<std::uint8_t> request_bytes(std::uint64_t request_id = 0x20000000000001ULL) {
   ManageRequest request;
-  request.set_schema_major(2); request.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  request.set_schema_major(2); request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   request.set_request_id(request_id);
   std::vector<std::uint8_t> bytes(wire::DummyManageV2RequestCodec::kEncodedSize);
   if (wire::DummyManageV2RequestCodec::encode(request, bytes.data(), bytes.size()) != wire::CodecResult::kOk)
@@ -490,7 +490,7 @@ dp::comm::Result reply(const Service::Request &request, Service::Response *outpu
            const dp::comm::RequestInfo &, void *context) {
   reply_calls.fetch_add(1, std::memory_order_relaxed);
   Service::Response response;
-  response.set_schema_major(2); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor); response.set_request_id(request.request_id());
+  response.set_schema_major(2); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor); response.set_request_id(request.request_id());
   response.set_device_id(request.device_id()); response.set_client_instance_id(request.client_instance_id());
   response.set_boot_epoch(request.expected_boot_epoch());
   response.set_session_id(request.expected_session_id());

@@ -57,7 +57,7 @@ int main(int argc,char **argv) {
    */
   auto commit=[&](std::uint32_t epoch) {
     const auto request=transport.requests.back();
-    wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     response.set_request_id(request.request_id());response.set_boot_epoch(7);response.set_session_id(9);
     response.set_reference_epoch(1);response.set_motion_epoch(epoch);response.set_management_epoch(1);
     response.set_profile_id(201);response.set_receipt(1);response.set_result_code(0);
@@ -83,7 +83,7 @@ int main(int argc,char **argv) {
   assert(client.matching_inflight_renewal(live)==0U);
   Position end{};end[0]=0.2;assert(gate.record_update(gate.generation(),2,17,end));
   // ACK来自正式State codec/公共observe_state，不从私有Gate字段伪造。
-  wire::DummyJointStateV2 accepted;accepted.set_schema_major(2);accepted.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyJointStateV2 accepted;accepted.set_schema_major(2);accepted.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   accepted.set_boot_epoch(7);accepted.set_session_id(9);accepted.set_reference_epoch(1);
   accepted.set_motion_epoch(2);accepted.set_management_epoch(1);accepted.set_profile_id(201);
   accepted.set_configured_mask(1);accepted.set_position_valid_mask(1);accepted.set_state_seq(1);
@@ -148,7 +148,7 @@ int main(int argc,char **argv) {
       snapshot.core_state=snapshot.state_core_state=wire_value(WireCoreState::kRunning);snapshot.run_id=5;
       assert(bootstrap.start_operation(snapshot,ManageOperation::kCaptureReference,24));
       const auto setup=transport.requests.back();
-      wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+      wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
       response.set_request_id(setup.request_id());response.set_boot_epoch(7);response.set_session_id(9);
       response.set_reference_epoch(1);response.set_motion_epoch(2);response.set_management_epoch(1);
       response.set_profile_id(201);response.set_receipt(1);response.set_transaction_phase(3);

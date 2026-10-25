@@ -10,14 +10,14 @@
 #include <optional>
 #include <type_traits>
 #include <vector>
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ros_control/wire_types.hpp"
 #include "dummy_motion_client/bench_permit.hpp"
 
 namespace dummy_motion_client {
 /**
  * @brief ManageRequest为生成的wire请求类型，Position为六轴rad容器；身份字段/序号与角度不共用单位。
  */
-using ManageRequest = dp::protocol::dummy_robot_v2::DummyManageV2Request;
+using ManageRequest = dummy_wire::DummyManageV2Request;
 using Position = std::array<double, 6>;
 // Dummy wire-major-v2 stable values.
 /**

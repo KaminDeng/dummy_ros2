@@ -245,7 +245,7 @@ void enable_preserves_bootstrap_motion_epoch() {
  * 部分mask31、完整63但未排空都不够；管理回执不能代替最后一组Hold提交。
  */
 void begin_waits_for_final_hold_commit() {
-  namespace wire=dp::protocol::dummy_robot_v2;
+  namespace wire=dp::iface;
   auto six_axis=profile();
   six_axis.joints={"Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"};
   six_axis.lower.assign(6U,-1.0); six_axis.upper.assign(6U,1.0);
@@ -269,7 +269,7 @@ void begin_waits_for_final_hold_commit() {
   check(gate.submit(motion,4U));
   check(port.disables==2 && client.requests.size()==1U && !gate.ready());
   wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor); state.set_boot_epoch(7U);
+  state.set_schema_major(2U); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor); state.set_boot_epoch(7U);
   state.set_session_id(9U); state.set_profile_id(1U);
   state.set_configured_mask(0x3FU); state.set_position_valid_mask(0x3FU);
   state.set_core_state(wire_value(WireCoreState::kHold));
@@ -297,7 +297,7 @@ void begin_waits_for_final_hold_commit() {
  * processed generation343、committed342用于区分本地排队进度与实际发组水位。
  */
 void discarded_local_hold_generation_does_not_block_begin() {
-  namespace wire=dp::protocol::dummy_robot_v2;
+  namespace wire=dp::iface;
   Client client; Port port; port.stream_hold=true;
   ActionGate gate(client,port,profile());
   Authorization authorization;
@@ -309,7 +309,7 @@ void discarded_local_hold_generation_does_not_block_begin() {
   check(gate.record_update(gate.generation(),1U,342U,Position{}));
   gate.observe(reply(1U,1U,true),3U);
   wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  state.set_schema_major(2U); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   state.set_session_id(9U); state.set_configured_mask(1U);
   state.set_position_valid_mask(1U); state.set_motion_epoch(1U);
   state.set_core_state(wire_value(WireCoreState::kHold)); state.set_hold_ready(true);
@@ -402,17 +402,17 @@ void begin_drain_and_reply_share_deadline() {
   gate.observe(reply(1U,1U,true),3U);
   check(gate.submit(trajectory(),4U));
   gate.observe_hold_drain({0U,9U,1U,0U,1U,1U},102U);
-  dp::protocol::dummy_robot_v2::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  dp::iface::DummyJointStateV2 state;
+  state.set_schema_major(2U); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   state.set_session_id(9U); state.set_state_seq(1U);
   state.set_motion_epoch(1U);
   state.set_configured_mask(1U); state.set_position_valid_mask(1U);
   state.set_core_state(wire_value(WireCoreState::kHold));
   state.set_hold_ready(true); state.set_committed_producer_seq(1U);
   state.set_can_submitted_mask(1U); state.set_can_sent_mask(1U);
-  std::vector<std::uint8_t> bytes(dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::kEncodedSize);
-  check(dp::protocol::dummy_robot_v2::DummyJointStateV2Codec::encode(
-    state,bytes.data(),bytes.size())==dp::protocol::dummy_robot_v2::CodecResult::kOk);
+  std::vector<std::uint8_t> bytes(dp::iface::DummyJointStateV2Codec::kEncodedSize);
+  check(dp::iface::DummyJointStateV2Codec::encode(
+    state,bytes.data(),bytes.size())==dp::iface::CodecResult::kOk);
   check(gate.observe_state(bytes.data(),bytes.size(),103U));
   check(client.requests.size()==2U &&
         client.requests.back().operation()==wire_value(ManageOperation::kBegin));
@@ -427,7 +427,7 @@ void begin_drain_and_reply_share_deadline() {
  * 0x80000001相对当前1不能作为明确新提交，后续准确seq1才释放等待。
  */
 void hold_drain_accepts_wrap_but_rejects_old_commit() {
-  namespace wire=dp::protocol::dummy_robot_v2;
+  namespace wire=dp::iface;
   Client client; Port port; port.stream_hold=true;
   ActionGate gate(client,port,profile());
   Authorization authorization;
@@ -442,7 +442,7 @@ void hold_drain_accepts_wrap_but_rejects_old_commit() {
   check(gate.record_update(gate.generation(),1U,1U,Position{}));
   check(!gate.record_update(gate.generation(),1U,UINT32_MAX,Position{}));
   wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  state.set_schema_major(2U); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   state.set_session_id(9U); state.set_configured_mask(1U);
   state.set_position_valid_mask(1U); state.set_motion_epoch(1U);
   state.set_core_state(wire_value(WireCoreState::kHold)); state.set_hold_ready(true);

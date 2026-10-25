@@ -7,7 +7,11 @@
  * 不枚举实际设备、不发送许可；SOFTWARE_ONLY/NO_LOAD_DEV/UNQUALIFIED保持各自范围。
  */
 #include "dummy_motion_client/device_profile.hpp"
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ref/wire_validation.hpp"
+#include "dp_protocol_wire_contract.h"
+#ifndef DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256
+#define DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256 ""
+#endif
 
 #include <algorithm>
 #include <array>
@@ -264,8 +268,8 @@ VerifiedBundle verify_bundle(const std::string &bundle_root) {
      * @brief release_id必须匹配本次编译wire schema major/minor，防止拿旧codec目录拼接当前runtime。
      */
     const std::string expected_release = "dummy-wire-v" +
-        std::to_string(dp::protocol::dummy_robot_v2::kSchemaMajor) + "." +
-        std::to_string(dp::protocol::dummy_robot_v2::kSchemaMinor);
+        std::to_string(dummy_ref::protocol::kSchemaMajor) + "." +
+        std::to_string(dummy_ref::protocol::kSchemaMinor);
     if (require(manifest, "format").as<std::string>() != "dummy_wire_release_v2" ||
         require(manifest, "release_id").as<std::string>() != expected_release) invalid("unsupported bundle release");
     const YAML::Node payloads = require(manifest, "payloads");
@@ -289,6 +293,63 @@ VerifiedBundle verify_bundle(const std::string &bundle_root) {
     }
     const std::string aggregate = require(manifest, "payload_sorted_sha256").as<std::string>();
     if (aggregate != sha256_text(listing)) invalid("bundle aggregate hash mismatch");
+    const bool protocol_payload = std::any_of(verified.begin(), verified.end(), [](const auto& item) {
+      return item.first.rfind("protocol/", 0U) == 0U;
+    });
+    if (manifest["contract_sha256"] || manifest["runtime_contract_sha256"] ||
+        manifest["protocol_release"] || manifest["wire_contract"] || protocol_payload) {
+      if (require(manifest, "schema_major").as<unsigned>() != dummy_ref::protocol::kSchemaMajor ||
+          require(manifest, "schema_minor").as<unsigned>() != dummy_ref::protocol::kSchemaMinor)
+        invalid("current protocol wrapper schema mismatch");
+      const auto contract = require(manifest, "contract_sha256").as<std::string>();
+      if (manifest["runtime_contract_sha256"] &&
+          manifest["runtime_contract_sha256"].as<std::string>() != contract)
+        invalid("current protocol runtime identity mismatch");
+      const auto reference = require(manifest, "protocol_release");
+      const auto wire = require(manifest, "wire_contract");
+      const std::string release_path = "protocol/manifest.json";
+      const std::string wire_path = "protocol/include/wire_contract.json";
+      if (contract != DP_PROTOCOL_WIRE_CONTRACT_SHA256 ||
+          require(reference, "path").as<std::string>() != release_path ||
+          verified.find(release_path) == verified.end() ||
+          require(reference, "sha256").as<std::string>() != verified.at(release_path) ||
+          require(wire, "path").as<std::string>() != wire_path ||
+          verified.find(wire_path) == verified.end() ||
+          require(wire, "sha256").as<std::string>() != contract)
+        invalid("current protocol release identity mismatch");
+      const auto release = detail::load_pinned_yaml(root/release_path, verified.at(release_path), {});
+      const auto descriptor = detail::load_pinned_yaml(root/wire_path, verified.at(wire_path), {});
+      const auto selected = release;
+      const auto declared = require(reference, "selection");
+      if (require(release, "wire_contract_sha256").as<std::string>() != contract ||
+          require(descriptor, "sha256").as<std::string>() != contract ||
+          require(selected, "protocol_set").as<std::string>() != "dummy" ||
+          require(selected, "codec").as<std::string>() != "raw-fixed")
+        invalid("current protocol codec/wire identity mismatch");
+      for (const char* field : {"protocol_set", "profile", "codec"})
+        if (require(selected, field).as<std::string>() != require(declared, field).as<std::string>())
+          invalid("current protocol selection mismatch");
+      const auto actual_source = require(release, "source_snapshot");
+      const auto declared_source = require(reference, "source_snapshot");
+      if (!actual_source.IsMap() || actual_source.size() == 0U || !declared_source.IsMap() ||
+          actual_source.size() != declared_source.size())
+        invalid("current protocol source snapshot mismatch");
+      for (const auto& field : actual_source) {
+        const auto key = field.first.as<std::string>();
+        if (!field.second.IsScalar() ||
+            field.second.as<std::string>() != require(declared_source, key.c_str()).as<std::string>())
+          invalid("current protocol source snapshot mismatch");
+      }
+      const auto release_payloads = require(release, "payloads");
+      if (!release_payloads.IsSequence() || release_payloads.size() == 0U)
+        invalid("current protocol payload list missing");
+      for (const auto& item : release_payloads) {
+        const auto path = "protocol/" + require(item, "path").as<std::string>();
+        if (verified.find(path) == verified.end() ||
+            verified.at(path) != require(item, "sha256").as<std::string>())
+          invalid("current protocol payload binding mismatch");
+      }
+    }
     return {root, manifest, sha256_text(manifest_bytes), std::move(verified), aggregate};
 }
 
@@ -307,7 +368,9 @@ DeviceBundleIdentity bundle_identity(const VerifiedBundle &bundle, const std::st
         bundle.payloads.find(profile_key) == bundle.payloads.end()) invalid("unmanifested model or profile");
     DeviceBundleIdentity output;
     output.bundle_hash = parse_sha256(bundle.aggregate);
-    output.contract_hash = output.bundle_hash;
+    // 冻结回归保原聚合含义；现行包显式提供稳定wire身份。
+    output.contract_hash = bundle.manifest["contract_sha256"] ?
+        parse_sha256(bundle.manifest["contract_sha256"].as<std::string>()) : output.bundle_hash;
     output.model_hash = parse_sha256(bundle.payloads.at(model_key));
     output.profile_hash = parse_sha256(bundle.payloads.at(profile_key));
     output.candidate_profile_payload_hash = output.profile_hash;
@@ -769,7 +832,8 @@ NoLoadActivationIdentity verify_no_load_activation(const VerifiedBundle &candida
       !equal_hash("candidate_payload_sorted_sha256", identity.bundle_hash) ||
       !equal_hash("source_wire_manifest_sha256", parse_sha256(source.manifest_sha256)) ||
       !equal_hash("source_contract_sha256", identity.contract_hash) ||
-      identity.contract_hash != parse_sha256(source.aggregate) ||
+      identity.contract_hash != (source.manifest["contract_sha256"] ?
+          parse_sha256(source.manifest["contract_sha256"].as<std::string>()) : parse_sha256(source.aggregate)) ||
       source_model == source.payloads.end() ||
       identity.model_hash != parse_sha256(source_model->second) ||
       !equal_hash("model_sha256", identity.model_hash) ||
@@ -959,7 +1023,8 @@ DeviceProfile load_device_profile_impl(const std::string &bundle_root, const std
      * @brief SIL固定可信聚合，不允许任意重新算过自洽manifest的伪fixture；此固定来源约束独立于bundle的一致性校验。
      */
     if ((profile_name == "sil_j1" || profile_name == "sil_6dof") &&
-        bundle.aggregate != "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89d445ed96eda497b")
+        bundle.aggregate != "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89d445ed96eda497b" &&
+        bundle.manifest_sha256 != DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256)
       invalid("untrusted SIL fixture bundle");
     const auto identity = bundle_identity(bundle, profile_name);
     DeviceProfile output;

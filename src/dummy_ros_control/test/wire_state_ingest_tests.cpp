@@ -8,7 +8,7 @@
 #include <cmath>
 #include <cstdint>
 
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ref/wire_validation.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 /**
@@ -19,10 +19,10 @@
  * @return 0 表示本文件全部检查通过；非零定位失败检查。
  */
 int main() {
-  namespace wire = dp::protocol::dummy_robot_v2;
+  namespace wire = dp::iface;
   wire::DummyJointStateV2 state;
   state.set_schema_major(2U);
-  state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   state.set_boot_epoch(9U);
   state.set_profile_id(7U);
   state.set_state_seq(101U);

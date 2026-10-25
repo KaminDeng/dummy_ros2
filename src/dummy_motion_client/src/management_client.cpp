@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <stdexcept>
 namespace dummy_motion_client {
-namespace wire = dp::protocol::dummy_robot_v2;
+namespace wire = dp::iface;
 /**
  * @brief 只把完整同身份的在途RenewLease识别为Complete/Cancel的延期前因。
  * 比较boot/session/reference/motion/management/profile/mask以及device/client；不允许任意Busy事务占槽就成为延长完成/停止窗口的理由。
@@ -71,7 +71,7 @@ bool WireManagementClient::send(const ManageRequest &request) {
 std::uint64_t WireManagementClient::submit(const ManageRequest &request, std::uint64_t sent_at_us) {
   if (handle_ || pending_send_ ||
       request.operation()==wire_value(ManageOperation::kSetPermit)) return 0U;
-  original_=request; original_.set_schema_major(2); original_.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  original_=request; original_.set_schema_major(2); original_.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   original_.set_request_id(take_request_id());
   original_.set_request_seq(take_request_sequence());
   sent_at_us_=sent_at_us; operation_id_=0; accepted_=false;
@@ -105,7 +105,7 @@ std::uint64_t WireManagementClient::submit_permit(
   const auto permit_sequence = take_request_sequence();
   if (!trusted_bench_permit_digest(binding, owner, request.expected_session_id(), permit_sequence, &digest))
     return 0U;
-  original_=request; original_.set_schema_major(2); original_.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  original_=request; original_.set_schema_major(2); original_.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   original_.set_request_id(take_request_id()); original_.set_request_seq(permit_sequence);
   std::uint8_t wire_digest[32]{};
   std::copy(digest.begin(), digest.end(), wire_digest);

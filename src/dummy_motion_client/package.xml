@@ -10,6 +10,8 @@
   <license>Apache-2.0</license>
   <!-- ament_cmake负责配置、安装和包索引；depend同时声明构建/运行依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- 设备wire/Policy与651/18000 PIC运行时统一来自显式安装SDK。 -->
+  <depend>dpsdk_host_sdk</depend>
   <depend>control_msgs</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
@@ -24,5 +26,6 @@
   <depend>yaml-cpp</depend>
   <depend>openssl</depend>
   <test_depend>ament_cmake</test_depend>
+  <test_depend>bubblewrap</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

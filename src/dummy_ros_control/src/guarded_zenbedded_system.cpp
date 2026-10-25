@@ -10,7 +10,7 @@
 #include <limits>
 #include <string>
 
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ref/wire_validation.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -234,7 +234,7 @@ bool GuardedZenbeddedSystem::ingest_state(
 bool GuardedZenbeddedSystem::ingest_wire_state(
     const std::uint8_t *bytes, std::size_t size,
     const StateExpectation &expectation) noexcept {
-  namespace wire = dp::protocol::dummy_robot_v2;
+  namespace wire = dp::iface;
   wire::DummyJointStateV2 decoded;
   if (wire::DummyJointStateV2Codec::decode(bytes, size, &decoded) != wire::CodecResult::kOk)
     return false;

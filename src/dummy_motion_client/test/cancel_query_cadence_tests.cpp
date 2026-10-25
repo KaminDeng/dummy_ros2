@@ -14,7 +14,7 @@
 #include <iostream>
 #include <stdexcept>
 using namespace dummy_motion_client;
-namespace wire=dp::protocol::dummy_robot_v2;
+namespace wire=dp::iface;
 /**
  * @brief 内存ManagementTransport：requests记录实际编码后请求，responses保存待poll响应。
  * timeout_next仅使一次poll抛异常，reject_send使send返回空；无网络/peer。
@@ -90,7 +90,7 @@ struct Transport : ManagementTransport {
  * @return 合成wire响应；调用者另设operation/run等终态字段。
  */
 static wire::DummyManageV2Response reply(const ManageRequest &q,unsigned phase=2,unsigned result=23){
- wire::DummyManageV2Response r;r.set_schema_major(2);r.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);r.set_request_id(q.request_id());r.set_boot_epoch(7);r.set_session_id(9);r.set_reference_epoch(1);r.set_motion_epoch(11);r.set_management_epoch(2);r.set_profile_id(201);r.set_receipt(1);r.set_transaction_phase(phase);r.set_result_code(result);return r;
+ wire::DummyManageV2Response r;r.set_schema_major(2);r.set_schema_minor(dummy_ref::protocol::kSchemaMinor);r.set_request_id(q.request_id());r.set_boot_epoch(7);r.set_session_id(9);r.set_reference_epoch(1);r.set_motion_epoch(11);r.set_management_epoch(2);r.set_profile_id(201);r.set_receipt(1);r.set_transaction_phase(phase);r.set_result_code(result);return r;
 }
 /**
  * @brief 驱动同一原请求从Received到多次Query，并量化人工elapsed。

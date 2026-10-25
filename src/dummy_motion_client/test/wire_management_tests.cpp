@@ -15,7 +15,7 @@
 #include <iostream>
 #include <stdexcept>
 using namespace dummy_motion_client;
-namespace wire=dp::protocol::dummy_robot_v2;
+namespace wire=dp::iface;
 /**
  * @brief 编解码内存链路，保存请求并以FIFO提供合成响应。
  * timeout_next只使下一poll抛异常，reject_send使send返回空句柄。
@@ -106,13 +106,13 @@ bool two_stream_handshake() {
   auth.identity.set_expected_session_id(9); auth.identity.set_expected_boot_epoch(7);
   auth.identity.set_expected_profile_id(1); auth.identity.set_configured_mask(1);
   if (!gate.enable(auth,100)) return false;
-  wire::DummyManageV2Response receipt; receipt.set_schema_major(2); receipt.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyManageV2Response receipt; receipt.set_schema_major(2); receipt.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   receipt.set_request_id(1);
   receipt.set_boot_epoch(7); receipt.set_session_id(9);
   receipt.set_profile_id(1); receipt.set_receipt(1); receipt.set_operation_id(101);
   receipt.set_transaction_phase(1);
   transport.respond(receipt); gate.tick(101); if (port.primes) return false;
-  wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   state.set_boot_epoch(7);
   state.set_session_id(9); state.set_profile_id(1); state.set_state_seq(1);
   state.set_motion_epoch(1); state.set_configured_mask(1); state.set_position_valid_mask(1);
@@ -153,7 +153,7 @@ bool process_sessions_do_not_reuse_management_identity() {
       ids[index]=client.submit(select,index+1U);
       if (ids[index]==0U || transport.requests.back().request_seq()==1U) return false;
       wire::DummyManageV2Response response;
-      response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+      response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
       response.set_request_id(ids[index]); response.set_result_code(0U);
       response.set_receipt(wire_value(WireReceipt::kQueued));
       response.set_transaction_phase(wire_value(WireTransactionPhase::kCommitted));
@@ -191,7 +191,7 @@ bool sequence_wrap_skips_zero() {
   const auto first=client.submit(request,1U);
   if (first==0U || transport.requests.back().request_seq()!=UINT32_MAX) return false;
   wire::DummyManageV2Response response;
-  response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(first); response.set_result_code(0U);
   response.set_receipt(wire_value(WireReceipt::kQueued));
   response.set_transaction_phase(wire_value(WireTransactionPhase::kCommitted));
@@ -211,7 +211,7 @@ bool permit_wrap_uses_sent_sequence() {
   select.set_operation(wire_value(ManageOperation::kSelectMode));
   const auto first=client.submit(select,1U);
   wire::DummyManageV2Response response;
-  response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(first); response.set_result_code(0U);
   response.set_receipt(wire_value(WireReceipt::kQueued));
   response.set_transaction_phase(wire_value(WireTransactionPhase::kCommitted));
@@ -243,7 +243,7 @@ bool wire_boundary_case(const std::string &scenario) {
   request.set_expected_profile_id(4); request.set_configured_mask(3);
   std::uint8_t device[16]{1}; request.set_device_id(device);
   const auto id=client.submit(request,1);
-  wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(id);
   response.set_profile_id(4); response.set_device_id(device);
   response.set_receipt(1); response.set_operation_id(1); response.set_transaction_phase(1);
@@ -268,7 +268,7 @@ bool pending_response_is_not_rejection() {
   request.set_operation(wire_value(ManageOperation::kSelectMode));
   const auto id=client.submit(request,1U);
   wire::DummyManageV2Response response;
-  response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(id); response.set_result_code(23U);
   response.set_transaction_phase(4U);
   transport.respond(response);
@@ -294,7 +294,7 @@ bool grant_session_pending_query_identity() {
   request.set_device_id(device); request.set_client_instance_id(owner);
   const auto id=client.submit(request,1U);
   wire::DummyManageV2Response response;
-  response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(id); response.set_boot_epoch(7U);
   response.set_profile_id(3U); response.set_device_id(device);
   response.set_client_instance_id(owner);
@@ -336,7 +336,7 @@ bool grant_session_pending_query_rejects_mismatch(unsigned mismatch) {
   request.set_device_id(device); request.set_client_instance_id(owner);
   const auto id=client.submit(request,1U);
   wire::DummyManageV2Response response;
-  response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(id); response.set_boot_epoch(7U);
   response.set_profile_id(3U); response.set_device_id(device);
   response.set_client_instance_id(owner); response.set_session_id(0U);
@@ -371,7 +371,7 @@ bool grant_session_result_after_pending_lookup() {
   request.set_expected_session_id(42U);
   const auto id=client.submit(request,1U);
   wire::DummyManageV2Response response;
-  response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(id);
   response.set_session_id(0U);
   response.set_receipt(wire_value(WireReceipt::kQueued));
@@ -411,7 +411,7 @@ bool release_terminal_receipt(bool via_query, std::uint8_t terminal_receipt) {
   request.set_expected_profile_id(3U);
   const auto id=client.submit(request,1U);
   wire::DummyManageV2Response response;
-  response.set_schema_major(2U); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  response.set_schema_major(2U); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(id); response.set_boot_epoch(7U);
   response.set_profile_id(3U); response.set_session_id(42U);
   response.set_operation_id(71U);
@@ -460,7 +460,7 @@ bool running_renewal_does_not_drop_complete(unsigned mode=0U) {
   auth.identity.set_configured_mask(1); auth.identity.set_expected_management_epoch(1);
   auto commit=[&](std::uint32_t epoch) {
     const auto request=transport.requests.back();
-    wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     response.set_request_id(request.request_id()); response.set_boot_epoch(7); response.set_session_id(9);
     response.set_reference_epoch(1); response.set_profile_id(1); response.set_receipt(1);
     response.set_operation_id(request.request_id()+100); response.set_transaction_phase(3);
@@ -490,7 +490,7 @@ bool running_renewal_does_not_drop_complete(unsigned mode=0U) {
   // 独立管理协调器就绪后，真实共享WireClient发送RUN续租。
   const auto setup=transport.requests.back();
   // Bootstrap自行消费本次setup终态。
-  wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(setup.request_id()); response.set_boot_epoch(7); response.set_session_id(9);
   response.set_reference_epoch(1); response.set_profile_id(1); response.set_receipt(1);
   response.set_operation_id(setup.request_id()+100); response.set_transaction_phase(3);
@@ -584,7 +584,7 @@ bool running_renewal_does_not_drop_complete(unsigned mode=0U) {
     if(!commit(2)) return false;
   }
   if(mode==14U) {
-    wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     state.set_boot_epoch(7); state.set_session_id(9); state.set_reference_epoch(1);
     state.set_motion_epoch(2); state.set_management_epoch(2); state.set_profile_id(1);
     state.set_state_seq(1); state.set_configured_mask(1); state.set_position_valid_mask(1);
@@ -625,7 +625,7 @@ bool release_pending_polls_during_observation_grace(unsigned fault=0U) {
   }
   if(!bootstrap.start_release(hold,100) || !bootstrap.release_request_inflight()) return false;
   const auto original=transport.requests.back();
-  wire::DummyManageV2Response pending; pending.set_schema_major(2); pending.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyManageV2Response pending; pending.set_schema_major(2); pending.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   pending.set_request_id(original.request_id()); pending.set_boot_epoch(7); pending.set_session_id(9);
   pending.set_reference_epoch(1); pending.set_motion_epoch(10); pending.set_management_epoch(1);
   pending.set_profile_id(1); pending.set_receipt(1); pending.set_transaction_phase(1); pending.set_result_code(23);
@@ -701,7 +701,7 @@ bool release_query_before_state_supervision_deadline() {
   constexpr std::uint64_t request_time=1000000U, last_hold=request_time-32000U;
   if(!bootstrap.start_release(hold,request_time)) return false;
   const auto original=transport.requests.back();
-  wire::DummyManageV2Response reply; reply.set_schema_major(2); reply.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyManageV2Response reply; reply.set_schema_major(2); reply.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   reply.set_boot_epoch(7); reply.set_session_id(9); reply.set_reference_epoch(1);
   reply.set_motion_epoch(10); reply.set_management_epoch(1); reply.set_profile_id(1);
   reply.set_request_id(original.request_id()); reply.set_receipt(1);
@@ -740,7 +740,7 @@ bool query_backoff_and_retry_identity_remain_bounded() {
     mutation.set_expected_boot_epoch(7); mutation.set_expected_session_id(9);
     mutation.set_expected_reference_epoch(1); mutation.set_expected_motion_epoch(10); mutation.set_expected_profile_id(1);
     const auto id=client.submit(mutation,100);
-    wire::DummyManageV2Response reply; reply.set_schema_major(2); reply.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+    wire::DummyManageV2Response reply; reply.set_schema_major(2); reply.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
     reply.set_request_id(id); reply.set_boot_epoch(7); reply.set_session_id(9);
     reply.set_reference_epoch(1); reply.set_motion_epoch(10); reply.set_profile_id(1);
     reply.set_receipt(1); reply.set_transaction_phase(1); reply.set_result_code(23);
@@ -824,7 +824,7 @@ int main(int argc,char **argv) {
   if(client.submit(competing,124)!=0U || transport.requests.size()!=1U ||
      client.original_sent_at_us()!=123U) return 15;
   if (transport.requests.size()!=1 || transport.requests[0].expected_session_id()!=9007199254740993ULL) return 2;
-  wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dp::protocol::dummy_robot_v2::kSchemaMinor);
+  wire::DummyManageV2Response response; response.set_schema_major(2); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
   response.set_request_id(id);
   response.set_session_id(9007199254740993ULL);
   response.set_receipt(1); response.set_operation_id(9007199254740995ULL); response.set_transaction_phase(1);

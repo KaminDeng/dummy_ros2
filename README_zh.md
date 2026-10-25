@@ -159,10 +159,11 @@ ros2 launch dummy_bringup manual_joint_panel.launch.py backend:=real
 
 ## 完整 ROS 控制工作区、Gazebo 与 SIL
 
-完整构建涉及 `dummy_ros_control` 和 `dummy_motion_client`，除 DPSDK 源码根目录外，
-还必须显式传入同版、PIC、651 字节消息 / 18000 字节存储契约的 Host SDK 安装前缀。
+完整构建涉及 `dummy_ros_control` 和 `dummy_motion_client`，必须显式传入同版、PIC、
+651 字节消息 / 18000 字节存储契约的 Host SDK 安装前缀。生产构建使用
+`BUILD_TESTING=OFF`，不需要 DPSDK 源码；开启真实 Core/model 离线回归时才需 `DPSDK_ROOT`。
 [verify_sdk_inputs.cmake](src/dummy_ros_control/cmake/verify_sdk_inputs.cmake)
-会检查源码根、角色及输入摘要；Host SDK 导出脚本 `applications/dummy_ref_control/host/sdk_export.cmake`
+会检查安装包的协议、角色及头/库/业务包摘要；Host SDK 导出脚本 `applications/dummy_ref_control/host/sdk_export.cmake`
 位于相邻 DPSDK 仓库。前缀是已经正确导出的安装目录，不是任意旧 build 目录。
 
 可先从所选 DPSDK 源码导出这一角色的 SDK。以下三步只做 Host 构建和安装：
@@ -190,9 +191,23 @@ source install_dummy/setup.bash
 ```
 
 脚本先由 `scene.yaml` 生成 Gazebo 世界，再执行全工作区 colcon 构建；遇到 SDK
-源文件摘要不匹配，应核对实际候选与重新验证记录，不应删除锁或随意复制新摘要。
+安装载荷摘要不匹配，应核对实际候选与重新验证记录，不应删除锁或随意复制新摘要。
 两项 SDK 路径指向同一安装区：`DPSDK_HOST_SDK_PREFIX` 用于显式身份核验，
 `DPSDKHostSDK_DIR` 使下游 Action 包也能解析控制包导出的 SDK 依赖。
+
+协议由 SDK 中的 `DpProtocol` 完整 release 提供，机器人模型/profile 包独立位于
+`share/dummy_ref/robot_contract`。运行 `contract_hash` 使用稳定 `wire_contract_sha256`；
+完整载荷聚合、profile、工具和 release manifest SHA 分别保留，不能互换。ROS 包版本与
+ROS typesupport type hash 属于 ROS 接口层，不能替代设备 wire 身份。冻结 `contracts/`
+及 wire2.4 回归原件继续保留，其字节不作为本次 current SDK 的发布身份。
+
+仅构建这两个包可使用显式 `colcon --packages-select dummy_ros_control dummy_motion_client`。
+定向 CTest `sdk_input_lock_tests` 检查真实 SDK 缺包、错 Codec/ABI 和载荷篡改；
+`current_protocol_release_identity` 检查稳定 wire 与来源分层以及 wrapper 元数据拒绝；
+`installed_sdk_source_hidden_consumer` 使用 bubblewrap 在私有 mount 中屏蔽两仓源码，
+编译并运行安装消费者、装载真实插件，并在冻结合同不可见时配置生产包。
+这些离线检查不会启动 ROS 节点、MoveIt 或物理设备。
+
 
 | 环境 | 入口 | 实际用途 |
 | --- | --- | --- |
