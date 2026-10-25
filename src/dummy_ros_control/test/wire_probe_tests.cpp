@@ -159,7 +159,8 @@ int main() {
   request_info.source_device.bytes[0] = 0xB2U;
   dp::comm::ServiceCallback<ManageService> callback = monitor_snapshot;
   if (dp::comm::service_invoke<ManageService>(
-          monitor_request, sizeof(monitor_request), &callback, nullptr, request_info,
+          monitor_request, sizeof(monitor_request), wire::DummyManageV2RequestCodec::kEncodedSize,
+          &callback, nullptr, request_info,
           monitor_response, sizeof(monitor_response), &monitor_response_size, nullptr) != dp::comm::Result::kOk) return 9;
   wire::DummyManageV2Response snapshot;
   if (wire::DummyManageV2ResponseCodec::decode(monitor_response, monitor_response_size, &snapshot) != wire::CodecResult::kOk) return 10;
