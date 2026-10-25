@@ -1,5 +1,5 @@
 # 从本目录运行：doxygen Doxyfile；只读取外部阅读页，不扫描产品或冻结IDL。
-PROJECT_NAME = "ROS frozen contracts data reading"
+PROJECT_NAME = "ROS current robot business data"
 OUTPUT_DIRECTORY = /tmp/ros-contracts-data-reading
 INPUT = .
 FILE_PATTERNS = *.dox

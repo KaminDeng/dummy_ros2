@@ -121,7 +121,16 @@ if(BUILD_TESTING)
   set_tests_properties(transport_worker_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline;synthetic_pty")
   # 仅Host测试：真实Core停止握手+现SDK/Worker回调，非设备/完整Node资格。
   # 安全停车首样本测试直接编译当前SDK Core，并从当前model/profile生成模型头；Host模型不能冒充实体时序资格。
+  # 仅源码Core组件需要独立电机CAN Tiny选择；生产通信仍完全来自安装SDK。
+  include("${DPSDK_ROOT}/libraries/dp_protocol/cmake/DpProtocolGenerate.cmake")
+  dp_protocol_add_target(TARGET dummy_test_motor_can_protocol SET motor_can_extensions
+    PROFILE profile_tiny CODEC raw-fixed)
   set(_safe_prime_core_root "${DPSDK_ROOT}")
+  # Tiny与Full含同名公共常量头，电机codec独立翻译后再链接，避免选择头互相遮蔽。
+  add_library(dummy_test_motor_can OBJECT "${DPSDK_ROOT}/applications/dummy_ref_control/core/motor_can_codec.cpp")
+  target_include_directories(dummy_test_motor_can PRIVATE "${DPSDK_ROOT}/applications/dummy_ref_control/include")
+  target_link_libraries(dummy_test_motor_can PRIVATE dummy_test_motor_can_protocol)
+  target_compile_features(dummy_test_motor_can PRIVATE cxx_std_17)
   set(_safe_prime_generated "${CMAKE_CURRENT_BINARY_DIR}/safe_prime_generated")
   # 按DEPENDS重建生成头，使用同一Python模块路径；VERBATIM保留包含空格的参数边界。
   add_custom_command(OUTPUT "${_safe_prime_generated}/dummy_model.hpp"
@@ -137,7 +146,7 @@ if(BUILD_TESTING)
     VERBATIM)
   add_custom_target(transport_safe_prime_model DEPENDS "${_safe_prime_generated}/dummy_model.hpp")
   # 固定列出真实Core翻译单元，避免glob意外加入主入口/平台实现；下方循环只拼接路径，不运行Core。
-  set(_safe_prime_core_sources authorization joint_mapper motor_can_codec operation_cache reference
+  set(_safe_prime_core_sources authorization joint_mapper operation_cache reference
     command_guard bench_permit deployment_policy state_estimator stop_controller can_scheduler
     can_commit_tracker profile_loader motion_transaction run_ledger attempt_slots robot_core)
   set(_safe_prime_core_files "")
@@ -151,7 +160,7 @@ if(BUILD_TESTING)
     "${_safe_prime_core_root}/applications/dummy_ref_control/test"
     "${_safe_prime_core_root}/applications/dummy_ref_control/comm"
     "${_safe_prime_generated}")
-  target_link_libraries(transport_safe_cancel_prime_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  target_link_libraries(transport_safe_cancel_prime_tests dummy_guarded_zenbedded_system OpenSSL::Crypto dummy_test_motor_can)
   # 夹具完整性校验与正/负场景分开；只有可执行target被构建不表示这些场景都已被CTest运行。
   add_test(NAME transport_safe_prime_fixture_integrity
     COMMAND ${Python3_EXECUTABLE}
@@ -181,7 +190,7 @@ if(BUILD_TESTING)
     "${_safe_prime_core_root}/applications/dummy_ref_control/test"
     "${_safe_prime_core_root}/applications/dummy_ref_control/comm"
     "${_safe_prime_generated}")
-  target_link_libraries(transport_current_cancel_release_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  target_link_libraries(transport_current_cancel_release_tests dummy_guarded_zenbedded_system OpenSSL::Crypto dummy_test_motor_can)
   # 复用现Core/Worker模型：早Idle在强Query后重验；SOURCE范围不冒实体时间资格。
   # 早到Idle先隔离、在强Query之后重验；这些Host正负例不把单独Idle状态当成释放提交。
   foreach(_early_mode positive no_commit wrong_boot wrong_op wrong_run stale permission second_stop commit_first direct_retired)
@@ -442,7 +451,7 @@ if(BUILD_TESTING)
   endforeach()
   target_link_libraries(nonblocking_tests dummy_guarded_zenbedded_system)
 
-  # 当前wire观察边界用生产dp_comm；minor4兼容codec另用历史镜像，不能替代当前消息身份检查。
+  # 当前wire观察边界直接使用生产安装SDK的dp_comm。
   add_executable(wire_probe_tests test/wire_probe_tests.cpp)
   # 白盒thunk的typed-decode观察边界来自实际当前runtime，不提供测试空stub。
   target_link_libraries(wire_probe_tests PRIVATE dummy_dp_comm)
@@ -451,15 +460,6 @@ if(BUILD_TESTING)
     "${DUMMY_WIRE_INCLUDE}"
     "${DPSDK_ROOT}/libraries/dp_comm/include")
   add_test(NAME wire_probe_tests COMMAND wire_probe_tests)
-  set(C03_PROTOTYPE_INCLUDE "${ROS_WORKSPACE_ROOT}/contracts/dummy_robot_v2/codec")
-  if(NOT EXISTS "${C03_PROTOTYPE_INCLUDE}/dp_dummy_robot_v2.hpp")
-    message(FATAL_ERROR "历史兼容测试需要冻结ROS Codec原件")
-  endif()
-  add_executable(wire_minor4_codec_tests test/wire_minor4_codec_tests.cpp)
-  target_compile_features(wire_minor4_codec_tests PRIVATE cxx_std_17)
-  target_include_directories(wire_minor4_codec_tests PRIVATE "${C03_PROTOTYPE_INCLUDE}")
-  add_test(NAME wire_minor4_codec_tests COMMAND wire_minor4_codec_tests)
-
   add_executable(goal_gate_tests test/goal_gate_tests.cpp)
   target_link_libraries(goal_gate_tests PRIVATE dummy_goal_registration_gate)
   add_test(NAME goal_gate_tests COMMAND goal_gate_tests)
@@ -575,7 +575,6 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
   add_test(NAME dp_comm_worker_tests COMMAND dp_comm_worker_tests)
 
   add_executable(wire_state_ingest_tests test/wire_state_ingest_tests.cpp)
-  target_include_directories(wire_state_ingest_tests PRIVATE "${C03_PROTOTYPE_INCLUDE}")
   target_link_libraries(wire_state_ingest_tests dummy_guarded_zenbedded_system)
   add_test(NAME wire_state_ingest_tests COMMAND wire_state_ingest_tests)
 endif()

@@ -28,7 +28,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac`；637 B；3 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`facc243a92779d6fd13d54e874bb493d2cf7513e3aa80e967c0be353142992ac`；637 B；3 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键/路径 | 原值 | 意义/单位/边界 |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2`；2023 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`59e7a8cc580c9541fb586d684578d6588cd6153d223668fc23ecead64ae446f2`；2023 B；2 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键/路径 | 原值 | 意义/单位/边界 |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c`；1982 B；3 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`765311d93bfdeddb845f2b1890745b6de86d27b2be82d56bb5f2d00f7716772c`；1982 B；3 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键/路径 | 原值 | 意义/单位/边界 |
 | --- | --- | --- |
@@ -177,7 +177,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`bbbfbf070281a2e63a09061830d6dc79a9e1d7206e1e4754c53a0fc8545bdfb0`；1738 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`bbbfbf070281a2e63a09061830d6dc79a9e1d7206e1e4754c53a0fc8545bdfb0`；1738 B；1 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键 | 原值 | 意义/边界 |
 | --- | --- | --- |
@@ -203,7 +203,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`4079ab9a8ef2bcecfc0bd06d9de7a6f6cd503cb6a00458b7b129e3ff2a0ecb51`；2087 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`4079ab9a8ef2bcecfc0bd06d9de7a6f6cd503cb6a00458b7b129e3ff2a0ecb51`；2087 B；1 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键/路径 | 原值 | 意义/单位/边界 |
 | --- | --- | --- |
@@ -249,7 +249,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14`；1738 B；3 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`5f222ca6d5bb46e49f4ab73425af04fb591848cceaf86342ee9fe4128acbef14`；1738 B；3 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键 | 原值 | 意义/边界 |
 | --- | --- | --- |
@@ -275,7 +275,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`90e5a970cd213a2c40cc92242b512d4b608657912a19f02189c524e74a67b0a4`；1103 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`90e5a970cd213a2c40cc92242b512d4b608657912a19f02189c524e74a67b0a4`；1103 B；1 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键/路径 | 原值 | 意义/单位/边界 |
 | --- | --- | --- |
@@ -316,7 +316,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb`；2066 B；1 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`08f7b2a5e475c9a3e980cdc027579883ca83fa73812e9e7ac9064e0a4d3969bb`；2066 B；1 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键/路径 | 原值 | 意义/单位/边界 |
 | --- | --- | --- |
@@ -379,7 +379,7 @@ legacy2.4 bench profile结构中的`gear_ratios`全50，但note仍说J6 direct d
 
 逐键解释这份原件；相同SHA副本复用内容，路径所属bundle/版本仍须另核manifest。
 
-原文 SHA256：`d6f55e42a41c4dea0c4dbe4f460030adbb3e11722629f0c3add37f8af44ca819`；2087 B；2 个物理路径共用此内容。每份路径仍单独列在 @ref ros_contract_data_sources 。
+原文 SHA256：`d6f55e42a41c4dea0c4dbe4f460030adbb3e11722629f0c3add37f8af44ca819`；2087 B；2 个物理路径共用此内容。当前运行来源以明确安装SDK的manifest为准。
 
 | 关键键/路径 | 原值 | 意义/单位/边界 |
 | --- | --- | --- |

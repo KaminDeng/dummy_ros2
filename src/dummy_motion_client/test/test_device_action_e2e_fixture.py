@@ -3,7 +3,7 @@
 # @file test_device_action_e2e_fixture.py
 # @brief SIL fixture能力/路径与真实本机PTY桥的混合回归。
 #
-# 路径/hash/URDF多为离线检查，但PTY用例实际启动原生serial_pty_bridge、线程/管道与短等待，自检方法实际执行C05 peer --self-test；不启动设备Gate或实体USB。trusted_sil_bundle为固定独立fixture，刻意不同canonical合同，不能当正式设备activation。
+# 路径/hash/URDF多为离线检查，但PTY用例实际启动原生serial_pty_bridge、线程/管道与短等待，自检方法实际执行C05 peer --self-test；不启动设备Gate或实体USB。SIL输入为明确安装SDK机器人包，不能当正式设备activation。
 
 import importlib.util
 import ctypes
@@ -49,8 +49,8 @@ def test_six_axis_smoke_uses_all_axes_and_sil_profile():
     assert "device_action_six_axis_smoke_probe" in cmake
     assert "real_six_axis_smoke" in cmake
     assert "device_motion_six_axis_smoke_probe" in cmake
-    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
-    dpsdk_manifest = Path(os.environ["DPSDK_ROOT"]) / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json"
+    bundle = probe.installed_bundle()
+    dpsdk_manifest = probe.installed_bundle() / "manifest.json"
     capability = probe.real_peer_capability(bundle, "sil_6dof")
     description = ET.fromstring(probe.urdf("serial//dev/pts/1#baudrate=3000000", capability, 6))
     joint_names = [joint.attrib["name"] for joint in description.findall("./ros2_control/joint")]
@@ -60,7 +60,7 @@ def test_six_axis_smoke_uses_all_axes_and_sil_profile():
     assert parameters["profile_id"] == "1"
     assert parameters["configured_mask"] == "63"
     assert capability["profile_sha256"] != probe.real_peer_capability(bundle)["profile_sha256"]
-    assert capability["contract_sha256"] != json.loads(dpsdk_manifest.read_text())["payload_sorted_sha256"]
+    assert capability["contract_sha256"] == json.loads(dpsdk_manifest.read_text())["contract_sha256"]
     assert capability["position_min_rad"] == [-0.3] * 6
     assert capability["position_max_rad"] == [0.3] * 6
     points = probe.smooth_motion_points([0] * 6, probe.SIX_AXIS_TARGET)
@@ -517,17 +517,17 @@ def test_serial_fixture_identifies_chunks_around_maximum_gap():
 
 
 ##
-# @brief 固定SIL pin/profile/model给能力与URDF身份参数一致，policy hash故意等profile原SHA，非真实compiled审批。
+# @brief 安装SDK pin/profile/model给能力与URDF身份参数一致，policy hash故意等profile原SHA，非真实compiled审批。
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_real_peer_capability_comes_from_verified_bundle():
-    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
+    bundle = probe.installed_bundle()
     capability = probe.real_peer_capability(bundle)
     manifest = probe.json.loads((bundle / "manifest.json").read_text())
     payloads = {entry["path"]: entry["sha256"] for entry in manifest["payloads"]}
     profile = probe.yaml.safe_load((bundle / "profiles/sil_j1.yaml").read_text())
     model = probe.yaml.safe_load((bundle / "model/model.yaml").read_text())
 
-    assert capability["contract_sha256"] == manifest["payload_sorted_sha256"]
+    assert capability["contract_sha256"] == manifest["contract_sha256"]
     assert capability["model_sha256"] == payloads["model/model.yaml"]
     assert capability["profile_sha256"] == payloads["profiles/sil_j1.yaml"]
     assert capability["compiled_policy_sha256"] == capability["profile_sha256"]
@@ -552,7 +552,7 @@ def test_real_peer_capability_comes_from_verified_bundle():
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture(tmp_path):
     # 从精确SIL fixture构造hash自洽但不在既有strict pin内的独立负例。
-    source = TEST_DIR / "fixtures/trusted_sil_bundle"
+    source = probe.installed_bundle()
     bundle = tmp_path / "foreign_bundle"
     shutil.copytree(source, bundle)
     payload = bundle / "profiles/sil_j1.yaml"
@@ -564,7 +564,7 @@ def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture(tmp_path
     listing = [f"{entry['path']}:{entry['sha256']}" for entry in manifest["payloads"]]
     assert listing == sorted(listing)
     manifest["payload_sorted_sha256"] = hashlib.sha256("\n".join(listing).encode()).hexdigest()
-    assert manifest["payload_sorted_sha256"] != probe.OFFLINE_SIL_CONTRACT_SHA256
+    assert manifest["payload_sorted_sha256"] != json.loads((probe.installed_bundle() / "manifest.json").read_text())["payload_sorted_sha256"]
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="untrusted SIL fixture"):
         probe.real_peer_capability(bundle)
@@ -576,7 +576,7 @@ def test_foreign_hash_valid_sil_bundle_is_not_a_trusted_offline_fixture(tmp_path
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_current_sil_fixture_rejects_forged_aggregate_hash(tmp_path):
     bundle = tmp_path / "forged_bundle"
-    shutil.copytree(TEST_DIR / "fixtures/trusted_sil_bundle", bundle)
+    shutil.copytree(probe.installed_bundle(), bundle)
     path = bundle / "manifest.json"
     manifest = json.loads(path.read_text())
     manifest["payload_sorted_sha256"] = "f" * 64
@@ -591,7 +591,7 @@ def test_current_sil_fixture_rejects_forged_aggregate_hash(tmp_path):
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_current_sil_fixture_rejects_tampered_payload(tmp_path):
     bundle = tmp_path / "tampered_bundle"
-    shutil.copytree(TEST_DIR / "fixtures/trusted_sil_bundle", bundle)
+    shutil.copytree(probe.installed_bundle(), bundle)
     path = bundle / "profiles/sil_j1.yaml"
     path.write_bytes(path.read_bytes() + b"\n# unlisted tamper\n")
     with pytest.raises(ValueError, match="payload hash mismatch"):
@@ -618,7 +618,7 @@ def test_c05_ticket_expires_at_profile_window():
 # @param monkeypatch pytest属性/环境替换fixture，退出作用域恢复。
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_50ms_candidate_changes_only_runtime_state_period(monkeypatch):
-    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
+    bundle = probe.installed_bundle()
     baseline = probe.real_peer_capability(bundle)
     monkeypatch.setenv("DUMMY_E2E_STATE_PERIOD_US", "50000")
 
@@ -633,7 +633,7 @@ def test_50ms_candidate_changes_only_runtime_state_period(monkeypatch):
 # @param monkeypatch pytest属性/环境替换fixture，退出作用域恢复。
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_20ms_candidate_changes_only_runtime_state_period(monkeypatch):
-    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
+    bundle = probe.installed_bundle()
     baseline = probe.real_peer_capability(bundle)
     monkeypatch.setenv("DUMMY_E2E_STATE_PERIOD_US", "20000")
 
@@ -644,7 +644,7 @@ def test_20ms_candidate_changes_only_runtime_state_period(monkeypatch):
 # @brief 10ms控制周期算100Hz，独立于运行State候选20/50ms。
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_controller_update_rate_matches_sil_control_period():
-    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
+    bundle = probe.installed_bundle()
     capability = probe.real_peer_capability(bundle)
 
     assert capability["control_period_us"] == 10000
@@ -654,7 +654,7 @@ def test_controller_update_rate_matches_sil_control_period():
 ##
 # @brief 真实--self-test输出PENDING码与当前合同枚举对应；方法历史v24名称不代表只接受旧布局。
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
-def test_synthetic_peer_pending_result_matches_v24_enum():
+def test_synthetic_peer_pending_result_matches_current_constant():
     root = TEST_DIR.parents[2]
     peer = Path(os.environ["DUMMY_C05_PEER_EXECUTABLE"])
     library_path = Path(os.environ["DUMMY_ROS_CONTROL_LIBRARY_DIR"])
@@ -663,16 +663,16 @@ def test_synthetic_peer_pending_result_matches_v24_enum():
     completed = subprocess.run([str(peer), "--self-test"], capture_output=True,
                                text=True, check=True, env=env)
     event = json.loads(completed.stdout)
-    enum_values = json.loads((root / "contracts/dummy_robot_v2/enums/dummy_enum_values_v2.json").read_text())
+    constants = json.loads((probe.installed_bundle() / "protocol/include/protocol_constants.json").read_text())
 
-    assert event["pending_result_code"] == enum_values["result_code"]["PENDING"]
+    assert event["pending_result_code"] == constants["resources"]["dpsdk_interfaces/msg/DummyProtocolV2"]["RESULT_CODE_PENDING"]
 
 
 ##
 # @brief 对50ms输入点用control_dt10ms作保守差分刺激，核速度/加速度小于fixture上限；不是完整JTC重采样验证。
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_smooth_goal_respects_sil_command_derivative_limits():
-    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
+    bundle = probe.installed_bundle()
     capability = probe.real_peer_capability(bundle)
     control_dt = capability["control_period_us"] / 1000000
     points = probe.smooth_motion_points(0.0, 0.05, duration_s=5)
@@ -694,7 +694,7 @@ def test_smooth_goal_respects_sil_command_derivative_limits():
 # @brief 人工合并/插值某些样本的差分加速度仍有余量，不覆盖任意调度延迟。
 # @return None；以assert/unittest/pytest.raises报告既定检查，失败抛异常。
 def test_smooth_goal_keeps_derivative_margin_after_coalesced_ros_sample():
-    bundle = TEST_DIR / "fixtures/trusted_sil_bundle"
+    bundle = probe.installed_bundle()
     capability = probe.real_peer_capability(bundle)
     control_dt = capability["control_period_us"] / 1000000
     points = probe.smooth_motion_points(0.0, 0.05)

@@ -5,7 +5,8 @@
   <description>Launch package reserved for Dummy ROS bringup.</description>
   <maintainer email="maintainer@example.invalid">Dummy ROS maintainers</maintainer>
   <license>Apache-2.0</license>
-  <buildtool_depend>ament_cmake</buildtool_depend><!-- 构建工具与 CMakeLists.txt 中 ament_package 配合，安装 launch/config/脚本并注册包索引。 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>dpsdk_host_sdk</depend><!-- 模型与公共协议读取器绑定同一安装SDK。 -->
   <exec_depend>ament_index_python</exec_depend><!-- 运行时通过 ament 索引定位显式安装区资源，不依赖源码工作目录。 -->
   <exec_depend>builtin_interfaces</exec_depend><!-- Duration 等基础时间消息供规划和轨迹请求使用；时间字段的秒/纳秒单位由消息定义。 -->
   <exec_depend>control_msgs</exec_depend><!-- 轨迹 action 消息支持公开门控及探针；依赖消息类型不表示已发送或接受目标。 -->

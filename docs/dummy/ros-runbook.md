@@ -101,7 +101,7 @@ reference、drive enable 或运动有效。任何带电动作都必须通过独�
 
 ```sh
 /usr/bin/python3 scripts/dummy/real_six_axis_preflight.py \
-  --bundle contracts/dummy_robot_v2 \
+  --bundle "$DPSDK_HOST_SDK_PREFIX/share/dummy_ref/robot_contract" \
   --endpoint 'serial//dev/ttyACM1#baudrate=115200' \
   --device-id <设备32位十六进制ID> --client-id <Host32位十六进制ID> \
   --serial <板卡序列号> --report build_dummy/reports/ros-six-axis-preflight.json

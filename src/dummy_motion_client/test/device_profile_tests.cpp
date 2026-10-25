@@ -1,8 +1,8 @@
 /**
  * @file device_profile_tests.cpp
- * @brief 核SIL画像/冻结包摘要、permit预算及同快照YAML解析。
+ * @brief 核当前SIL画像/独立外来包摘要、permit预算及同快照YAML解析。
  *
- * 需要argv[1]候选bundle、argv[2]另一冻结合同目录；只读输入，临时复制包并改副本制造漂移。assert须启用；load成功不表示固件已绑定或取得真实运动许可。
+ * 需要argv[1]当前安装bundle、argv[2]由其临时生成的外来合同目录；只读输入，临时复制包并改副本制造漂移。assert须启用；load成功不表示固件已绑定或取得真实运动许可。
  */
 #include <cassert>
 #include <filesystem>
@@ -59,7 +59,8 @@ int main(int argc, char **argv) {
   assert(profile.joints.lower.at(2) == -0.3);
   assert(profile.joints.upper.at(2) == 0.3);
   const auto frozen = dummy_motion_client::inspect_device_bundle_identity(argv[2], "sil_j1");
-  assert(frozen.contract_hash != profile.contract_hash);
+  assert(frozen.bundle_hash != profile.bundle_hash);
+  assert(frozen.contract_hash == profile.contract_hash);
   bool foreign_sil_rejected = false;
   try { (void)dummy_motion_client::load_device_profile(argv[2], "sil_j1", 2U, 1U); }
   catch (const std::invalid_argument &) { foreign_sil_rejected = true; }

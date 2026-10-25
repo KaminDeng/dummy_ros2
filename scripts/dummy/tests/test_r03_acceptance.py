@@ -15,34 +15,36 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DPSDK = Path(os.environ.get("DPSDK_ROOT", str(Path(__file__).resolve().parents[3].parent / "dpsdk_consolidated")))
-C03_INCLUDE = ROOT / "contracts/dummy_robot_v2/codec"
+SDK_PREFIX = Path(os.environ["DPSDK_HOST_SDK_PREFIX"])
 
 
 ##
 # @brief 本套件unittest验收集合；实际子进程与证据层级见文件职责，各方法断言原样保留。
 class R03AcceptanceTest(unittest.TestCase):
     ##
-    # @brief 临时g++17严格警告编译所给单源，含ROS控制/合同/SDK include，再要求二进制退出0；未设子进程timeout。
+    # @brief 临时CMake工程用当前安装SDK目标与严格C++17警告编译所给单源，再要求二进制退出0；未设子进程timeout。
     # @param source 实际C++源码Path，调用会编译并运行二进制。
     # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def compile_and_run(self, source: Path) -> None:
         self.assertTrue(source.is_file(), f"missing R03 SUT: {source}")
         with tempfile.TemporaryDirectory(prefix="dummy_r03_") as temporary:
             binary = Path(temporary) / source.stem
-            completed = subprocess.run(
-                [
-                    "g++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                    "-I", str(ROOT / "src/dummy_ros_control/include"),
-                    "-I", str(C03_INCLUDE),
-                    "-I", str(DPSDK / "libraries/dp_comm/include"),
-                    str(source), "-o", str(binary),
-                ],
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            cmake = Path(temporary) / 'CMakeLists.txt'
+            cmake.write_text(f'''cmake_minimum_required(VERSION 3.16)
+project(r03_current_sdk LANGUAGES CXX)
+find_package(DPSDKHostSDK CONFIG REQUIRED PATHS "{SDK_PREFIX}/lib/cmake/DPSDKHostSDK" NO_DEFAULT_PATH)
+find_package(OpenSSL REQUIRED)
+add_executable({source.stem} "{source}")
+target_compile_features({source.stem} PRIVATE cxx_std_17)
+target_compile_options({source.stem} PRIVATE -Wall -Wextra -Werror)
+target_include_directories({source.stem} PRIVATE "{ROOT}/src/dummy_ros_control/include")
+target_link_libraries({source.stem} PRIVATE DPSDKHostSDK::dp_comm DPSDKHostSDK::dummy_protocol OpenSSL::Crypto)
+''')
+            configured = subprocess.run(['cmake', '-S', temporary, '-B', temporary],
+                                        capture_output=True, text=True, check=False)
+            self.assertEqual(0, configured.returncode, configured.stderr)
+            completed = subprocess.run(['cmake', '--build', temporary],
+                                       capture_output=True, text=True, check=False)
             self.assertEqual(0, completed.returncode, completed.stderr)
             executed = subprocess.run([str(binary)], check=False, capture_output=True, text=True)
             self.assertEqual(0, executed.returncode, executed.stderr)

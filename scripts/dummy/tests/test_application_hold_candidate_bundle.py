@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from scripts.dummy.real_six_axis_preflight import inspect_bundle
+from scripts.dummy.installed_sdk import robot_bundle
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -21,7 +22,7 @@ DPSDK = Path(os.environ.get("DPSDK_ROOT", str(ROOT.parent / "dpsdk")))
 BUNDLE = ROOT / "contracts/dummy_robot_v2_application_hold_no_load_candidate"
 POLICY = BUNDLE / "policy/application_hold_no_load.json"
 SDK_POLICY = DPSDK / "applications/dummy_ref_control/config/f405_6dof_application_hold_no_load_candidate.json"
-SOURCE_CONTRACT = DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json"
+SOURCE_CONTRACT = robot_bundle() / "manifest.json"
 
 
 ##
@@ -57,7 +58,7 @@ def test_candidate_payloads_and_frozen_d_identity():
     assert "new_matching_J6_firmware_and_Host" in manifest["qualification_gap"]
     assert manifest["model_sha256"] == digest(BUNDLE / "model/model.yaml")
     assert manifest["model_sha256"] == source["model_sha256"]
-    assert manifest["model_sha256"] != digest(DPSDK / "applications/dummy_ref_control/contracts/dummy_robot_v2/model/model.yaml")
+    assert manifest["model_sha256"] != digest(robot_bundle() / "model/model.yaml")
     sdk_policy = json.loads(SDK_POLICY.read_text())
     sdk_policy["model_sha256"] = manifest["model_sha256"]
     assert source == sdk_policy

@@ -368,7 +368,7 @@ DeviceBundleIdentity bundle_identity(const VerifiedBundle &bundle, const std::st
         bundle.payloads.find(profile_key) == bundle.payloads.end()) invalid("unmanifested model or profile");
     DeviceBundleIdentity output;
     output.bundle_hash = parse_sha256(bundle.aggregate);
-    // 冻结回归保原聚合含义；现行包显式提供稳定wire身份。
+    // 默认deny业务材料保来源聚合含义；当前发布显式提供稳定wire身份。
     output.contract_hash = bundle.manifest["contract_sha256"] ?
         parse_sha256(bundle.manifest["contract_sha256"].as<std::string>()) : output.bundle_hash;
     output.model_hash = parse_sha256(bundle.payloads.at(model_key));
@@ -377,7 +377,9 @@ DeviceBundleIdentity bundle_identity(const VerifiedBundle &bundle, const std::st
     output.policy_hash = output.profile_hash;
     if (profile_name == "f405_6dof_bench") {
       output.firmware_bound = true;
-      output.contract_hash = parse_sha256(require(bundle.manifest, "source_contract_sha256").as<std::string>());
+      output.contract_hash = bundle.manifest["contract_sha256"] ?
+          parse_sha256(bundle.manifest["contract_sha256"].as<std::string>()) :
+          parse_sha256(require(bundle.manifest, "source_contract_sha256").as<std::string>());
       output.policy_hash = parse_sha256(require(bundle.manifest, "compiled_policy_sha256").as<std::string>());
       output.firmware_hash = parse_sha256(require(bundle.manifest, "firmware_image_sha256").as<std::string>());
       if (std::all_of(output.contract_hash.begin(), output.contract_hash.end(), [](auto byte) { return byte == 0U; }) ||
@@ -832,6 +834,7 @@ NoLoadActivationIdentity verify_no_load_activation(const VerifiedBundle &candida
       !equal_hash("candidate_payload_sorted_sha256", identity.bundle_hash) ||
       !equal_hash("source_wire_manifest_sha256", parse_sha256(source.manifest_sha256)) ||
       !equal_hash("source_contract_sha256", identity.contract_hash) ||
+      parse_sha256(require(candidate.manifest, "source_contract_sha256").as<std::string>()) != parse_sha256(source.aggregate) ||
       identity.contract_hash != (source.manifest["contract_sha256"] ?
           parse_sha256(source.manifest["contract_sha256"].as<std::string>()) : parse_sha256(source.aggregate)) ||
       source_model == source.payloads.end() ||
@@ -1023,7 +1026,6 @@ DeviceProfile load_device_profile_impl(const std::string &bundle_root, const std
      * @brief SIL固定可信聚合，不允许任意重新算过自洽manifest的伪fixture；此固定来源约束独立于bundle的一致性校验。
      */
     if ((profile_name == "sil_j1" || profile_name == "sil_6dof") &&
-        bundle.aggregate != "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89d445ed96eda497b" &&
         bundle.manifest_sha256 != DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256)
       invalid("untrusted SIL fixture bundle");
     const auto identity = bundle_identity(bundle, profile_name);

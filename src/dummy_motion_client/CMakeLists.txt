@@ -77,25 +77,18 @@ install(TARGETS native_action_gate DESTINATION lib/${PROJECT_NAME})
 # 仅BUILD_TESTING时创建下列target/CTest。component_only/offline是测试分类，
 # 不自动证明所有分支已执行；-UNDEBUG只对显式列出的target恢复assert，不能泛化到全部target。
 if(BUILD_TESTING)
-# 预算组件测试无设备；下方历史wire2.4故障原件独立编译其collector，避免混入生产wire2.5。
+# 预算与故障收尾组件均使用当前安装SDK。
   add_executable(limited_goal_budget_tests test/limited_goal_budget_tests.cpp)
   target_include_directories(limited_goal_budget_tests PRIVATE include)
   target_compile_options(limited_goal_budget_tests PRIVATE -UNDEBUG)
   add_test(NAME limited_goal_budget_tests COMMAND limited_goal_budget_tests)
   set_tests_properties(limited_goal_budget_tests PROPERTIES LABELS "component_only;offline")
   find_package(Threads REQUIRED)
-  # 历史ROS05真机原件保持wire2.4字节，独立target只用对应legacy codec；
-  # 不把旧payload改写成新协议，也不将此target混入生产wire2.5链接。
-  # 私有软件故障证据夹具复用原codec/完整collector，不是目标硬件资格。
-  add_executable(fault_cleanup_receipt_tests test/fault_cleanup_receipt_tests.cpp
-    "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/src/raw_evidence_collector.cpp")
-  target_include_directories(fault_cleanup_receipt_tests PRIVATE include
-    "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../compatibility/wire2_4/codec")
+  # 当前合成故障页验证收尾业务，不重放废弃wire2.4抓取。
+  add_executable(fault_cleanup_receipt_tests test/fault_cleanup_receipt_tests.cpp)
+  target_include_directories(fault_cleanup_receipt_tests PRIVATE include)
   target_compile_options(fault_cleanup_receipt_tests PRIVATE -UNDEBUG)
-  target_compile_definitions(fault_cleanup_receipt_tests PRIVATE DUMMY_LEGACY_WIRE_2_4=1)
-  target_compile_features(fault_cleanup_receipt_tests PRIVATE cxx_std_17)
-  target_link_libraries(fault_cleanup_receipt_tests PRIVATE OpenSSL::Crypto Threads::Threads)
+  target_link_libraries(fault_cleanup_receipt_tests PRIVATE dummy_dp_management)
   add_test(NAME fault_cleanup_verified_receipt_and_current_observation COMMAND fault_cleanup_receipt_tests)
   set_tests_properties(fault_cleanup_verified_receipt_and_current_observation PROPERTIES LABELS "component_only;offline" TIMEOUT 15)
 # 清理/目标timeline用当前wire与Host线程；每个add_test以真实目标或生成器表达式定位可执行程序。
@@ -138,15 +131,15 @@ if(BUILD_TESTING)
   add_executable(formal_bundle_identity_probe test/formal_bundle_identity_probe.cpp)
   target_link_libraries(formal_bundle_identity_probe PRIVATE dummy_device_profile)
   add_test(NAME formal_bundle_identity_integrity COMMAND formal_bundle_identity_probe
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2")
+    "${DPSDKHostSDK_ROBOT_BUNDLE_DIR}")
   add_test(NAME formal_contract_canonical_mirror_integrity COMMAND ${Python3_EXECUTABLE} -m pytest -q
     "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/dummy/tests/test_formal_contract_mirror.py")
   set_tests_properties(formal_bundle_identity_integrity formal_contract_canonical_mirror_integrity
     PROPERTIES TIMEOUT 15 LABELS "component_only;offline;source_integrity"
-    ENVIRONMENT "DPSDK_ROOT=${DPSDK_ROOT}")
+    ENVIRONMENT "DPSDK_ROOT=${DPSDK_ROOT};DPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX};PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/../..;PYTEST_DISABLE_PLUGIN_AUTOLOAD=1")
 # 固定可信SIL夹具路径用于软件测试；APPLICATION_HOLD用专用wire source生成相应输入。
 # 这些fixture不会被安装成真实设备已核准配置。
-  set(DUMMY_SIL_FIXTURE_BUNDLE "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/trusted_sil_bundle")
+  set(DUMMY_SIL_FIXTURE_BUNDLE "${DPSDKHostSDK_ROBOT_BUNDLE_DIR}")
   add_test(NAME device_profile_tests COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_device_profile_fixture.py"
     "$<TARGET_FILE:device_profile_tests>"
@@ -158,23 +151,24 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/test/run_application_hold_candidate_profile.py"
     "$<TARGET_FILE:application_hold_candidate_profile_tests>" "${DPSDK_ROOT}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../contracts/dummy_robot_v2_application_hold_no_load_candidate"
-    "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/application_wire_source")
+    "${DPSDKHostSDK_ROBOT_BUNDLE_DIR}")
 # Python fixture/activation wiring是离线组件层；public probe会启动本包节点做ROS Action验证，
 # 需区分离线结构断言、合成peer、真实SDK软件peer三个层次。
   add_test(NAME device_action_e2e_fixture
     COMMAND ${Python3_EXECUTABLE} -m pytest -q
       ${CMAKE_CURRENT_SOURCE_DIR}/test/test_device_action_e2e_fixture.py)
   set_tests_properties(device_action_e2e_fixture PROPERTIES
-    ENVIRONMENT "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" LABELS "component_only;offline")
+    ENVIRONMENT "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1;DPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX}" LABELS "component_only;offline")
   add_test(NAME device_action_activation_wiring
     COMMAND ${Python3_EXECUTABLE} -m pytest -q
       ${CMAKE_CURRENT_SOURCE_DIR}/test/test_device_action_activation_wiring.py)
   set_tests_properties(device_action_activation_wiring PROPERTIES
-    ENVIRONMENT "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" LABELS "component_only;offline")
+    ENVIRONMENT "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1;DPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX}" LABELS "component_only;offline")
   add_test(NAME device_action_public_probe COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test/device_action_public_probe.py $<TARGET_FILE:device_action_gate>
     "${DUMMY_SIL_FIXTURE_BUNDLE}")
-  set_tests_properties(device_action_public_probe PROPERTIES TIMEOUT 30 LABELS "component_only;ros_action")
+  set_tests_properties(device_action_public_probe PROPERTIES TIMEOUT 30 LABELS "component_only;ros_action"
+    ENVIRONMENT "DPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX}")
   # 两种SIL测试时钟角色由调用方显式绑定，不探测旧build或复用面板角色。
 # 两个peer路径必须由调用方显式提供；空值不会自动探测某个旧build。
 # 下面传给e2e脚本的real/real_smoke指实际SDK SIL peer角色，不等于真实机械臂测试。
@@ -226,7 +220,8 @@ if(BUILD_TESTING)
   set_property(TEST device_action_e2e_fixture device_action_e2e_probe device_action_smoke_probe
     device_action_six_axis_smoke_probe device_motion_unsupported_probe
     device_motion_supported_probe device_motion_six_axis_smoke_probe
-    APPEND PROPERTY ENVIRONMENT "DUMMY_SERIAL_BRIDGE_EXECUTABLE=$<TARGET_FILE:serial_pty_bridge>")
+    APPEND PROPERTY ENVIRONMENT "DUMMY_SERIAL_BRIDGE_EXECUTABLE=$<TARGET_FILE:serial_pty_bridge>"
+      "DPSDK_HOST_SDK_PREFIX=${DPSDK_HOST_SDK_PREFIX}")
   set_property(TEST device_action_e2e_fixture APPEND PROPERTY ENVIRONMENT
     "DUMMY_C05_PEER_EXECUTABLE=$<TARGET_FILE:c05_action_peer>"
     "DUMMY_ROS_CONTROL_LIBRARY_DIR=$<TARGET_FILE_DIR:dummy_ros_control::dummy_guarded_zenbedded_system>"
@@ -415,7 +410,7 @@ endif()
 # 安装公开头与静态库；当前wire/Policy和机器人业务包由同一SDK前缀导出。
 # export_dummy_device_action导出target及接口依赖，ament_package生成包索引；候选目录存在不表示运动资格。
 install(DIRECTORY include/ DESTINATION include)
-# 现行机器人业务包由显式SDK前缀提供；冻结ROS合同只留在历史测试源中。
+# 现行机器人业务包由显式SDK前缀提供；ROS不保留独立wire镜像。
 install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_management dummy_device_profile
   dummy_goal_timeline EXPORT export_dummy_device_action ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_device_action)

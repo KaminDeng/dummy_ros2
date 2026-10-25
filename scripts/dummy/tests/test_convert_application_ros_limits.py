@@ -85,7 +85,7 @@ def source(tmp_path, timing_override=None):
     aggregate = hashlib.sha256("\n".join(
         f'{item["path"]}:{item["sha256"]}' for item in payloads).encode()).hexdigest()
     manifest.write_text(json.dumps({
-        "format": "dummy_wire_release_v2", "release_id": "dummy-wire-v2.4",
+        "format": "dummy_wire_release_v2", "release_id": "dummy-wire-v2.5",
         "payloads": payloads, "model_sha256": model_sha,
         "compiled_policy_sha256": policy_sha, "payload_sorted_sha256": aggregate,
     }) + "\n")
@@ -336,3 +336,43 @@ def test_manifest_and_limits_are_each_read_once(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "read_text", reject_second_read)
     converter.convert(input_path, manifest, tmp_path / "dev_limits")
     assert reads == {manifest: 1, input_path: 1}
+
+
+@pytest.mark.parametrize('mutation', ['none', 'missing-marker', 'wire', 'selection', 'snapshot', 'missing-payload', 'extra-payload'])
+def test_current_protocol_closure_is_bound_before_planning_conversion(tmp_path, mutation):
+    """完整当前发布闭包可转换；自洽重签仍不能绕过来源/选择/成员检查。"""
+    import shutil
+    from scripts.dummy.installed_sdk import robot_bundle
+    manifest_path, limits_path, limits = source(tmp_path)
+    selected = robot_bundle()
+    current = json.loads((selected / 'manifest.json').read_text())
+    shutil.copytree(selected / 'protocol', tmp_path / 'protocol')
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update({key: current[key] for key in ('contract_sha256', 'protocol_release', 'wire_contract')})
+    manifest['runtime_contract_sha256'] = current['contract_sha256']
+    manifest['payloads'] += [dict(item) for item in current['payloads'] if item['path'].startswith('protocol/')]
+    if mutation == 'missing-marker':
+        manifest.pop('protocol_release')
+    elif mutation == 'wire':
+        manifest['contract_sha256'] = 'ab' * 32
+    elif mutation == 'selection':
+        manifest['protocol_release']['selection']['codec'] = 'protobuf'
+    elif mutation == 'snapshot':
+        manifest['protocol_release']['source_snapshot'] = {'kind': 'invented'}
+    elif mutation == 'missing-payload':
+        manifest['payloads'] = [item for item in manifest['payloads'] if item['path'] != 'protocol/include/wire_layouts.json']
+    elif mutation == 'extra-payload':
+        (tmp_path / 'protocol/unlisted').write_text('unlisted')
+        manifest['payloads'].append({'path': 'protocol/unlisted', 'sha256': hashlib.sha256(b'unlisted').hexdigest()})
+    manifest['payloads'].sort(key=lambda item: item['path'])
+    aggregate = hashlib.sha256('\n'.join(f"{item['path']}:{item['sha256']}" for item in manifest['payloads']).encode()).hexdigest()
+    manifest['payload_sorted_sha256'] = aggregate
+    manifest_path.write_text(json.dumps(manifest))
+    limits.update(candidate_manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                  candidate_payload_sorted_sha256=aggregate)
+    limits_path.write_text(json.dumps(limits))
+    if mutation == 'none':
+        converter.convert(limits_path, manifest_path, tmp_path / 'converted')
+    else:
+        with pytest.raises(ValueError, match='protocol'):
+            converter.convert(limits_path, manifest_path, tmp_path / 'converted')

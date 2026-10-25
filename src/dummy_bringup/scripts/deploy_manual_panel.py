@@ -23,7 +23,7 @@ from render_manual_panel_config import render_config
 # @return tuple[Path, Path]：运行资源根目录和面板 JSON 模板。
 def resources():
     source = Path(__file__).resolve().parents[3]
-    if (source/'contracts/dummy_robot_v2/codec/wire_layout.json').is_file():
+    if (source/'scripts/dummy/selected_protocol.py').is_file():
         return source, Path(__file__).resolve().parents[1]/'config/manual_joint_panel.json'
     from ament_index_python.packages import get_package_share_directory
     share=Path(get_package_share_directory('dummy_bringup'))
@@ -51,10 +51,21 @@ def deploy(native, firmware, identity, description):
         shutil.copy2(native,release/'dummy_joint_cli')
         shutil.copy2(firmware,release/'firmware.bin')
         for relative in ('scripts/dummy/join_real_6dof_evidence.py',
-                         'contracts/dummy_robot_v2/codec/wire_layout.json',
-                         'compatibility/wire2_4/wire_layout.json'):
+                         'scripts/dummy/selected_protocol.py'):
             target=release/'ros'/relative;target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copy2(source/relative,target)
+        bundled_protocol=source/'scripts/dummy/protocol'
+        if not (bundled_protocol/'manifest.json').is_file():
+            selected=os.environ.get('DPSDK_PROTOCOL_RELEASE')
+            if not selected:
+                prefix=os.environ.get('DPSDK_HOST_SDK_PREFIX')
+                if not prefix:
+                    raise ValueError('请明确选择DPSDK_PROTOCOL_RELEASE或DPSDK_HOST_SDK_PREFIX')
+                selected=str(Path(prefix)/'lib/cmake/DpProtocol')
+            bundled_protocol=Path(selected)
+        shutil.copytree(bundled_protocol,release/'ros/scripts/dummy/protocol')
+        if not (release/'ros/scripts/dummy/protocol/include/dp_protocol_layout_reader.py').is_file():
+            raise ValueError('所选安装发布缺少公共布局读取器')
         binding={key:ids[key] for key in ('contract_sha256','model_sha256','profile_sha256')}
         for role,filename in (('native','dummy_joint_cli'),('firmware','firmware.bin')):
             binding[role+'_path']=str(release/filename)

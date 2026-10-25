@@ -12,11 +12,12 @@ import hashlib
 import json
 from pathlib import Path
 import unittest
+from scripts.dummy.installed_sdk import robot_bundle
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
-BUNDLE = WORKSPACE_ROOT / "contracts" / "dummy_robot_v2"
-DPSDK_BUNDLE = WORKSPACE_ROOT.parent / "dpsdk_consolidated" / "contracts" / "dummy_robot_v2"
+BUNDLE = robot_bundle()
+DPSDK_RELEASE = BUNDLE.parents[2] / "lib/cmake/DpProtocol"
 
 
 ##
@@ -31,30 +32,17 @@ class R01ContractTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text())
 
         self.assertEqual("dummy_wire_release_v2", manifest["format"])
-        self.assertEqual("dummy-wire-v2", manifest["release_id"])
+        self.assertEqual("dummy-wire-v2.5", manifest["release_id"])
         self.assertEqual(2, manifest["schema_major"])
         payloads = manifest["payloads"]
         paths = [entry["path"] for entry in payloads]
         self.assertEqual(sorted(paths), paths)
         self.assertEqual(len(paths), len(set(paths)))
 
-        required = {
-            "codec/dp_dummy_robot_v2.hpp",
-            "codec/dp_dummy_robot_v2_dp_comm.hpp",
-            "codec/dp_dummy_robot_v2_static_requirements.h",
-            "codec/wire_layout.json",
-            "enums/dummy_enum_values_v2.json",
-            "idl/DummyDeviceStatusV2.msg",
-            "idl/DummyJointCommandV2.msg",
-            "idl/DummyJointStateV2.msg",
-            "idl/DummyManageV2.srv",
-            "metadata/dummy_robot_v2.yaml",
-            "model/model.yaml",
-            "profiles/sil_6dof.yaml",
-            "profiles/sil_j1.yaml",
-            "profiles/f405_j1_bench.yaml",
-        }
-        self.assertEqual(required, set(paths))
+        required = {"model/model.yaml", "profiles/sil_6dof.yaml", "profiles/sil_j1.yaml",
+                    "profiles/f405_j1_bench.yaml", "protocol/manifest.json",
+                    "protocol/include/wire_contract.json"}
+        self.assertTrue(required.issubset(paths))
         for entry in payloads:
             payload = BUNDLE / entry["path"]
             self.assertTrue(payload.is_file())
@@ -70,17 +58,14 @@ class R01ContractTest(unittest.TestCase):
     # @brief 要求固定兄弟SDK镜像目录、manifest完整相等并逐payload字节一致；不自动从环境变量选择SDK。
     # @return None；通过assert/unittest断言报告结果，失败抛异常。
     def test_wire_v2_mirror_matches_current_dpsdk_release(self):
-        self.assertTrue(DPSDK_BUNDLE.is_dir(), "sibling DPSDK contract bundle is missing")
-        ros_manifest = json.loads((BUNDLE / "manifest.json").read_text())
-        dpsdk_manifest = json.loads((DPSDK_BUNDLE / "manifest.json").read_text())
-        self.assertEqual("dummy-wire-v2", ros_manifest["release_id"])
-        self.assertEqual(dpsdk_manifest, ros_manifest)
-        for entry in dpsdk_manifest["payloads"]:
-            self.assertEqual(
-                (DPSDK_BUNDLE / entry["path"]).read_bytes(),
-                (BUNDLE / entry["path"]).read_bytes(),
-                entry["path"],
-            )
+        self.assertTrue(DPSDK_RELEASE.is_dir(), "installed protocol release is missing")
+        self.assertEqual((BUNDLE / "protocol/manifest.json").read_bytes(),
+                         (DPSDK_RELEASE / "manifest.json").read_bytes())
+        release = json.loads((DPSDK_RELEASE / "manifest.json").read_text())
+        for entry in release['payloads']:
+            self.assertEqual((BUNDLE / 'protocol' / entry['path']).read_bytes(),
+                             (DPSDK_RELEASE / entry['path']).read_bytes(),entry['path'])
+
 
 
 if __name__ == "__main__":

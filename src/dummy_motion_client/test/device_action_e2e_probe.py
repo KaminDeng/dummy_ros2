@@ -4,7 +4,7 @@
 # @file device_action_e2e_probe.py
 # @brief 实际ROS Gate/JTC与本机合成或DPSDK D08 peer的可运行组件探针。
 #
-# 入口会起peer/Gate/description进程、ROS服务/FJT目标及PTY原生桥或本机TCP。real指DPSDK实现POSIX peer，不是USB实物；严格SIL bundle是独立fixture pin，不等当前canonical/真实activation。synthetic完整矩阵、real单目标BENCH_RELEASE和smoke分支覆盖不同，证据仍无硬件资格。
+# 入口会起peer/Gate/description进程、ROS服务/FJT目标及PTY原生桥或本机TCP。real指DPSDK实现POSIX peer，不是USB实物；SIL bundle绑定当前安装SDK，独立于真实activation。synthetic完整矩阵、real单目标BENCH_RELEASE和smoke分支覆盖不同，证据仍无硬件资格。
 import json
 import hashlib
 from contextlib import contextmanager
@@ -29,7 +29,11 @@ from controller_manager_msgs.srv import ConfigureController, LoadController, Set
 from std_srvs.srv import Trigger
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-OFFLINE_SIL_CONTRACT_SHA256 = "0afb58ddfe9ce339c75da3c527b31abe875a261b3ac270e89d445ed96eda497b"
+def installed_bundle():
+    prefix = os.environ.get("DPSDK_HOST_SDK_PREFIX")
+    if not prefix:
+        raise ValueError("请显式设置DPSDK_HOST_SDK_PREFIX选择当前SDK")
+    return pathlib.Path(prefix) / "share/dummy_ref/robot_contract"
 SIX_AXIS_TARGET = (0.007, -0.010, 0.013, -0.016, 0.019, -0.022)
 
 
@@ -59,8 +63,8 @@ def call(node, service_type, name, request):
 
 
 ##
-# @brief 核v2.5 bundle每payload/排序聚合及固定OFFLINE_SIL pin，再按J1/六轴profile导能力；固件d8为fixture声明。
-# @param bundle 固定trusted_sil_bundle根Path，payload自洽还须strict pin。
+# @brief 核v2.5 bundle每payload/排序聚合及当前安装manifest pin，再按J1/六轴profile导能力；固件d8为fixture声明。
+# @param bundle 当前安装机器人bundle根Path，payload自洽还须strict pin。
 # @param profile_name 仅sil_j1或sil_6dof，默认J1。
 # @return 由固定fixture导出的能力字典，firmware d8为人工标记。
 def real_peer_capability(bundle, profile_name="sil_j1"):
@@ -80,7 +84,7 @@ def real_peer_capability(bundle, profile_name="sil_j1"):
         listing.append(f"{entry['path']}:{digest}")
     if listing != sorted(listing) or hashlib.sha256("\n".join(listing).encode()).hexdigest() != manifest["payload_sorted_sha256"]:
         raise ValueError("D08 fixture bundle aggregate hash mismatch")
-    if manifest["payload_sorted_sha256"] != OFFLINE_SIL_CONTRACT_SHA256:
+    if (bundle / "manifest.json").read_bytes() != (installed_bundle() / "manifest.json").read_bytes():
         raise ValueError("untrusted SIL fixture bundle")
     if profile_name not in ("sil_j1", "sil_6dof"):
         raise ValueError("unsupported D08 fixture profile")
@@ -105,7 +109,7 @@ def real_peer_capability(bundle, profile_name="sil_j1"):
         position_min = [joint["model_limits_rad"][0] for joint in model["joints"]]
         position_max = [joint["model_limits_rad"][1] for joint in model["joints"]]
     return {
-        "contract_sha256": manifest["payload_sorted_sha256"],
+        "contract_sha256": manifest["contract_sha256"],
         "model_sha256": payloads["model/model.yaml"],
         "profile_sha256": payloads[f"profiles/{profile_name}.yaml"],
         "compiled_policy_sha256": payloads[f"profiles/{profile_name}.yaml"],
@@ -121,7 +125,7 @@ def real_peer_capability(bundle, profile_name="sil_j1"):
 
 ##
 # @brief 在已pin能力上仅允许显式20ms/50ms State周期候选，保原控制节奏/静态摘要，不重签或升级资格。
-# @param bundle 固定trusted_sil_bundle根Path，payload自洽还须strict pin。
+# @param bundle 当前安装机器人bundle根Path，payload自洽还须strict pin。
 # @param profile_name 仅sil_j1或sil_6dof，默认J1。
 # @return 原能力或只覆写State周期的新字典。
 def fixture_capability(bundle, profile_name="sil_j1"):
@@ -397,7 +401,7 @@ def main():
 # @brief 真实启动组件并显式Enable/激活/JTC/FJT；unsupported验证零变更，smoke/六轴早退，real只核首目标及禁止第二/软件Release，synthetic才走续permit/Cancel/Abort。
 # @param gate device_action_gate可执行Path。
 # @param peer 要运行的POSIX peer可执行路径。
-# @param bundle 固定trusted_sil_bundle根Path，payload自洽还须strict pin。
+# @param bundle 当前安装机器人bundle根Path，payload自洽还须strict pin。
 # @param unsupported true测试合成peer motion_supported=false的零变更拒绝路径。
 # @param real_peer true运行DPSDK D08 POSIX peer；false合成C05 peer，不表示实体硬件。
 # @param capability fixture能力字典，含静态摘要/设备界/周期，未赋实机资格。

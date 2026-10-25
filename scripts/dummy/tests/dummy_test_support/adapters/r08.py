@@ -13,6 +13,10 @@ import os
 from pathlib import Path
 import subprocess
 from typing import Any
+try:
+    from installed_sdk import robot_bundle
+except ModuleNotFoundError:
+    from scripts.dummy.installed_sdk import robot_bundle
 
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -56,7 +60,7 @@ def _git(*arguments: str) -> subprocess.CompletedProcess[str]:
 # @return 现有报告mtime与内容状态是否通过；不重跑报告。
 def _runtime_reports_current() -> bool:
     reports = [ROOT / "build_dummy/reports/R06.json", ROOT / "build_dummy/reports/R07.json"]
-    sources = [ROOT / "contracts/dummy_robot_v2/manifest.json"]
+    sources = [robot_bundle() / "manifest.json"]
     for directory in (ROOT / "src/dummy_motion_client", ROOT / "src/dummy_ros_control"):
         sources.extend(path for path in directory.rglob("*") if path.is_file())
     ##
@@ -87,15 +91,15 @@ def _dpsdk_peer_current() -> bool:
         return False
     inputs = []
     for directory in (
-        DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2",
+        robot_bundle(),
         DPSDK_ROOT / "applications/dummy_ref_control",
     ):
         inputs.extend(
             path for path in directory.rglob("*")
             if path.is_file() and path.name != "dummy_ref_control_main.cpp"
         )
-    generated = DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2/codec"
-    inputs.extend(path for path in generated.glob("dp_dummy_robot_v2*") if path.is_file())
+    generated = Path(os.environ["DPSDK_HOST_SDK_PREFIX"]) / "lib/cmake/DpProtocol/include"
+    inputs.extend(path for path in generated.glob("dp_protocol_*") if path.is_file())
     inputs.append(DPSDK_ROOT / "config/products/posix_demo.cmake")
     return peer.stat().st_mtime_ns >= max(path.stat().st_mtime_ns for path in inputs)
 
@@ -134,10 +138,10 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     simulation_boundary = "simulation evidence only" in runbook or "只产生仿真证据" in runbook
     sil_boundary = "SIL uses" in runbook or "两个 SIL 入口仅使用" in runbook
     separated = simulation_boundary and sil_boundary and "`NOT_RUN`" in runbook
-    ros_manifest = json.loads((ROOT / "contracts/dummy_robot_v2/manifest.json").read_text())
-    dpsdk_manifest = json.loads((DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2/manifest.json").read_text())
+    ros_manifest = json.loads((robot_bundle() / "manifest.json").read_text())
+    dpsdk_manifest = json.loads((robot_bundle() / "manifest.json").read_text())
     wire_lock_matches_bundle = (
-        locks.get("wire_release") == ros_manifest.get("release_id") == "dummy-wire-v2"
+        locks.get("wire_release") == ros_manifest.get("release_id") == "dummy-wire-v2.5"
         and locks.get("wire_payload_sorted_sha256") == ros_manifest.get("payload_sorted_sha256")
         and ros_manifest == dpsdk_manifest
     )
@@ -146,8 +150,8 @@ def run_r08_case(case_id: str, stimulus: dict[str, Any]) -> dict[str, Any]:
     ##
     # @par Git检查路径
     # 这里按现有代码查询DPSDK根下contracts/dummy_robot_v2；manifest读取却来自applications/dummy_ref_control/contracts。路径文本不自动证明整个SDK工作树clean。
-    unstaged = _git("diff", "--quiet", "--", "contracts/dummy_robot_v2")
-    staged = _git("diff", "--cached", "--quiet", "--", "contracts/dummy_robot_v2")
+    unstaged = _git("diff", "--quiet", "--", "applications/dummy_ref_control/profiles", "applications/dummy_ref_control/model")
+    staged = _git("diff", "--cached", "--quiet", "--", "applications/dummy_ref_control/profiles", "applications/dummy_ref_control/model")
     dpsdk_contract_clean = unstaged.returncode == 0 and staged.returncode == 0
     dpsdk_peer_current = _dpsdk_peer_current()
     runtime_reports_current = _runtime_reports_current()

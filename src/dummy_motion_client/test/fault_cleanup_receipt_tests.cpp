@@ -1,16 +1,15 @@
 /**
  * @file fault_cleanup_receipt_tests.cpp
- * @brief 重放固定146原页并核故障清理强回执/当前Fault观测配对。
+ * @brief 合成当前协议五页并核故障清理强回执/当前Fault观测配对。
  *
- * 来自fixtures/ros05_fault146的固定载荷/接收时刻由正式codec和RawEvidenceCollector重新验证；执行会写本地raw文件并开writer线程，不连接设备。
- * 这是已有抓取夹具的宿主重放，不是新做硬件故障实验；文件flush、完整故障CAN组、当前raw Fault观测三层必须分别满足，不能只凭final4/release标志批准清理。
+ * 来自current_fault_fixture的当前合成载荷/接收时刻由正式codec和RawEvidenceCollector重新验证；执行会写本地raw文件并开writer线程，不连接设备。
+ * 这是当前codec生成的宿主组件测试；文件flush、完整故障CAN组、当前raw Fault观测三层必须分别满足，不能只凭final4/release标志批准清理。
  */
-#include "fixtures/ros05_fault146/original-once-decoded-146-payloads-fixture.hpp"
-#include "fixtures/ros05_fault146/original-once-decoded-current-fault-observations.hpp"
+#include "current_fault_fixture.hpp"
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dummy_ros_control/raw_evidence_collector.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
-#include "dp_dummy_robot_v2.hpp"
+#include "dummy_ref/wire_validation.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <chrono>
@@ -25,31 +24,31 @@
  * @note 链哈希按32+307+1=340字节重算，不让坏SHA先挡住本应验证的尾部语义。
  */
 static bool canonical_bad_tail_never_confirms(const char* base,unsigned mode) {
- using namespace dummy_ros_control;namespace wire=dp::protocol::dummy_robot_v2;
- RawEvidenceIdentity trust{original_fixture::client_id,original_fixture::contract_hash,original_fixture::model_hash,original_fixture::profile_hash,original_fixture::firmware_hash};
+ using namespace dummy_ros_control;namespace wire=dp::iface;
+ RawEvidenceIdentity trust{current_fixture::client_id,current_fixture::contract_hash,current_fixture::model_hash,current_fixture::profile_hash,current_fixture::firmware_hash};
  DeviceManagementChannel channel(TransportParameters{});RawEvidenceCollector collector(trust,&channel);
  const std::string path=std::string(base)+"-negative-"+std::to_string(mode);
  if(!collector.start(path)||!collector.expect_run(1))return false;
  std::array<std::uint8_t,32> previous{};
- std::copy_n(original_fixture::pages[0].begin()+307,32,previous.begin());
- for(std::size_t i=0;i<original_fixture::pages.size();++i) {
-  auto raw=original_fixture::pages[i];wire::DummyAttemptEvidenceV2 f{};wire::DummyAttemptEvidenceV2Codec::decode(raw.data(),raw.size(),&f);
-  if(i==143 && mode==0)f.set_sent_mask(31);
-  if(i==144 && mode==1)f.set_sent_mask(31);
-  if(i==143 && mode==2)f.set_motion_epoch(2);
-  if(i==145 && mode==3)f.set_release_committed(false);
-  if(i==145 && mode==4)f.set_motion_epoch(2);
-  if(i==145 && mode==5)f.set_final_state(5);
+ std::copy_n(current_fixture::pages[0].begin()+wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,32,previous.begin());
+ for(std::size_t i=0;i<current_fixture::pages.size();++i) {
+  auto raw=current_fixture::pages[i];wire::DummyAttemptEvidenceV2 f{};wire::DummyAttemptEvidenceV2Codec::decode(raw.data(),raw.size(),&f);
+  if(i==2 && mode==0)f.set_sent_mask(31);
+  if(i==3 && mode==1)f.set_sent_mask(31);
+  if(i==2 && mode==2)f.set_motion_epoch(2);
+  if(i==4 && mode==3)f.set_release_committed(false);
+  if(i==4 && mode==4)f.set_motion_epoch(2);
+  if(i==4 && mode==5)f.set_final_state(5);
   std::uint8_t prev_bytes[32];std::copy(previous.begin(),previous.end(),prev_bytes);f.set_previous_chain_sha256(prev_bytes);wire::DummyAttemptEvidenceV2Codec::encode(f,raw.data(),raw.size());
-  std::array<std::uint8_t,340> input{};std::copy(previous.begin(),previous.end(),input.begin());std::copy_n(raw.begin(),307,input.begin()+32);input.back()=raw[371];SHA256(input.data(),input.size(),previous.data());std::uint8_t next_bytes[32];std::copy(previous.begin(),previous.end(),next_bytes);f.set_chain_sha256(next_bytes);wire::DummyAttemptEvidenceV2Codec::encode(f,raw.data(),raw.size());
+  std::array<std::uint8_t,32+wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256+1> input{};std::copy(previous.begin(),previous.end(),input.begin());std::copy_n(raw.begin(),wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,input.begin()+32);input.back()=raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];SHA256(input.data(),input.size(),previous.data());std::uint8_t next_bytes[32];std::copy(previous.begin(),previous.end(),next_bytes);f.set_chain_sha256(next_bytes);wire::DummyAttemptEvidenceV2Codec::encode(f,raw.data(),raw.size());
   RawEvidencePage p{};p.raw=raw;p.boot_epoch=3498049537ULL;p.session_id=71;p.run_id=1;p.attempt_kind=1;p.evidence_seq=f.evidence_seq();p.group_count=f.group_count();p.category=f.category();p.final_state=f.final_state();p.terminal_reason=f.terminal_reason();p.final=f.final();p.evidence_lost=f.evidence_lost();std::copy(std::begin(f.previous_chain_sha256()),std::end(f.previous_chain_sha256()),p.previous_chain_sha256.begin());p.chain_sha256=previous;
-  if(!collector.offer_page(p,original_fixture::page_when[i])){collector.stop();return collector.failure()!=RawEvidenceCollector::Failure::kNone;}
+  if(!collector.offer_page(p,current_fixture::page_when[i])){collector.stop();return collector.failure()!=RawEvidenceCollector::Failure::kNone;}
   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);while(collector.pages_written()<i+1&&std::chrono::steady_clock::now()<deadline)std::this_thread::yield();if(collector.pages_written()<i+1)return false;
  }
  collector.stop();return !channel.raw_evidence_terminal_flushed().full_fault_groups_valid;
 }
 /**
- * @brief 把146页依序交异步collector，再配对当前观测及32个负例。
+ * @brief 把五页依序交异步collector，再配对当前观测及32个负例。
  * @param argc 参数个数（含程序名）。
  * @param argv 参数数组，模式/路径位置见下述说明。
  * @return 0表示所选检查通过；非零或断言/require异常表示失败。
@@ -61,20 +60,20 @@ int main(int argc,char**argv) {
  if(argc==1) {char* dir=mkdtemp(temp);if(!dir)return 1;permanent_path=std::string(dir)+"/component.raw";}
  const char* output_path=argc==1?permanent_path.c_str():argv[1];
  using namespace dummy_ros_control;
- namespace wire=dp::protocol::dummy_robot_v2;
+ namespace wire=dp::iface;
  if(argc!=1 && argc!=2)return 1;
  RawEvidenceIdentity trust{};
- trust.client_id=original_fixture::client_id;trust.contract_hash=original_fixture::contract_hash;
- trust.model_hash=original_fixture::model_hash;trust.profile_hash=original_fixture::profile_hash;trust.firmware_hash=original_fixture::firmware_hash;
+ trust.client_id=current_fixture::client_id;trust.contract_hash=current_fixture::contract_hash;
+ trust.model_hash=current_fixture::model_hash;trust.profile_hash=current_fixture::profile_hash;trust.firmware_hash=current_fixture::firmware_hash;
  DeviceManagementChannel channel(TransportParameters{});RawEvidenceCollector collector(trust,&channel);
  if(!collector.start(output_path)||!collector.expect_run(1))return 2;
- for(const auto& raw:original_fixture::pages) {
+ for(const auto& raw:current_fixture::pages) {
   wire::DummyAttemptEvidenceV2 f{};
   if(wire::DummyAttemptEvidenceV2Codec::decode(raw.data(),raw.size(),&f)!=wire::CodecResult::kOk)return 3;
   RawEvidencePage p{};p.raw=raw;p.boot_epoch=3498049537ULL;p.session_id=71;p.run_id=f.run_id();p.parent_run_id=f.parent_run_id();p.attempt_kind=f.attempt_kind();p.evidence_seq=f.evidence_seq();p.group_count=f.group_count();p.category=f.category();p.final_state=f.final_state();p.terminal_reason=f.terminal_reason();p.final=f.final();p.evidence_lost=f.evidence_lost();
   std::copy(std::begin(f.previous_chain_sha256()),std::end(f.previous_chain_sha256()),p.previous_chain_sha256.begin());
   std::copy(std::begin(f.chain_sha256()),std::end(f.chain_sha256()),p.chain_sha256.begin());
-  if(!collector.offer_page(p,original_fixture::page_when[f.evidence_seq()])) {std::printf("offer_failed=%u seq=%u\n",static_cast<unsigned>(collector.failure()),f.evidence_seq());return 4;}
+  if(!collector.offer_page(p,current_fixture::page_when[f.evidence_seq()])) {std::printf("offer_failed=%u seq=%u\n",static_cast<unsigned>(collector.failure()),f.evidence_seq());return 4;}
   // 原有4096字节队列容量不改；等真正异步writer，单页观察后继续。
   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
   while(collector.pages_written()<f.evidence_seq()+1 && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
@@ -89,7 +88,7 @@ int main(int argc,char**argv) {
  const auto fp=channel.raw_evidence_first_page_written();
  dummy_motion_client::RawFirstPageWritten first{fp.boot_epoch,fp.session_id,fp.run_id,fp.motion_epoch,fp.evidence_seq,fp.group_count,fp.attempt_kind,fp.category,fp.expected_mask,fp.submitted_mask,fp.sent_mask,fp.failed_mask,fp.final,fp.evidence_lost,fp.chain_valid,fp.full_six,fp.strict_refresh_successor};
  dummy_motion_client::DeviceObservation observation;observation.raw_cleanup_producer_valid=true;
- observation.state.assign(original_fixture::fault_state.begin(),original_fixture::fault_state.end());observation.status.assign(original_fixture::fault_status.begin(),original_fixture::fault_status.end());observation.state_received_us=original_fixture::fault_state_when;observation.status_received_us=original_fixture::fault_status_when;
+ observation.state.assign(current_fixture::fault_state.begin(),current_fixture::fault_state.end());observation.status.assign(current_fixture::fault_status.begin(),current_fixture::fault_status.end());observation.state_received_us=current_fixture::fault_state_when;observation.status_received_us=current_fixture::fault_status_when;
 
  std::array<std::uint8_t,16> device{};device[0]=1;
  const auto now=std::max(observation.state_received_us,observation.status_received_us);
@@ -119,6 +118,6 @@ int main(int argc,char**argv) {
   if(dummy_motion_client::raw_fault_cleanup_matches(r,ffirst,o,expected_boot,expected_session,expected_run,2,1,63,device,sample_now))return 40+n;
  }
  for(unsigned n=0;n<6;++n)if(!canonical_bad_tail_never_confirms(output_path,n))return 80+n;
- std::puts("strong_original_fault146_and_actual_current_observation_match + 26pairednegatives+6canonical-valid-chain-bad-tail PASS");
+ std::puts("synthetic_current_fault_receipt_and_observation_match + 26pairednegatives+6canonical-valid-chain-bad-tail PASS");
  return 0;
 }

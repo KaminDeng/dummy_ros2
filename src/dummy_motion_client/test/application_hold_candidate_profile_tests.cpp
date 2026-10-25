@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
   const auto identity = dummy_motion_client::inspect_device_bundle_identity(
     argv[1], "f405_6dof_bench");
   assert(identity.contract_hash != identity.bundle_hash);
-  assert(identity.contract_hash == digest(manifest["source_contract_sha256"].as<std::string>()));
+  assert(identity.contract_hash == digest(manifest["contract_sha256"].as<std::string>()));
   assert(identity.bundle_hash == digest(manifest["payload_sorted_sha256"].as<std::string>()));
   assert(identity.firmware_hash == digest(manifest["firmware_image_sha256"].as<std::string>()));
   assert(identity.policy_hash == digest(manifest["compiled_policy_sha256"].as<std::string>()));
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
   prebuild["format"] = "dummy_robot_bundle_v1";
   prebuild["profile_id"] = 201;
   prebuild["configured_mask"] = 63;
-  prebuild["contract_sha256"] = candidate["source_contract_sha256"].as<std::string>();
+  prebuild["contract_sha256"] = candidate["contract_sha256"].as<std::string>();
   prebuild["model_sha256"] = std::string(64U, '4');
   prebuild["profile_sha256"] = std::string(64U, '1');
   prebuild["compiled_policy_sha256"] = std::string(64U, '2');
@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
   activation["candidate_manifest_sha256"] = file_sha256(candidate_path);
   activation["candidate_payload_sorted_sha256"] = candidate["payload_sorted_sha256"].as<std::string>();
   activation["source_wire_manifest_sha256"] = file_sha256(source_root / "manifest.json");
-  activation["source_contract_sha256"] = candidate["source_contract_sha256"].as<std::string>();
+  activation["source_contract_sha256"] = candidate["contract_sha256"].as<std::string>();
   activation["model_sha256"] = candidate["model_sha256"].as<std::string>();
   activation["profile_sha256"] = candidate["payloads"][2]["sha256"].as<std::string>();
   activation["compiled_policy_sha256"] = candidate["compiled_policy_sha256"].as<std::string>();
@@ -255,7 +255,8 @@ int main(int argc, char **argv) {
   dummy_motion_client::Position zero_start{};
   assert(dummy_motion_client::validate_trajectory(zero_goal, activated.joints, &zero_start));
   assert(activated.candidate_profile_payload_hash == activated.profile_hash);
-  assert(activated.contract_hash == digest(source["payload_sorted_sha256"].as<std::string>()));
+  assert(activated.contract_hash == digest(source["contract_sha256"].as<std::string>()));
+  assert(candidate["source_contract_sha256"].as<std::string>() == source["payload_sorted_sha256"].as<std::string>());
 
   /**
    * @par 内部reject_request回调
@@ -396,7 +397,7 @@ int main(int argc, char **argv) {
   provenance["source_state"] = "DIRTY_UNQUALIFIED";
   provenance["firmware_sha256"] = file_sha256(image);
   provenance["host_sha256"] = file_sha256(host);
-  provenance["contract_sha256"] = candidate["source_contract_sha256"].as<std::string>();
+  provenance["contract_sha256"] = candidate["contract_sha256"].as<std::string>();
   provenance["model_sha256"] = candidate["model_sha256"].as<std::string>();
   provenance["compiled_policy_sha256"] = candidate["compiled_policy_sha256"].as<std::string>();
   provenance["build_config_sha256"] = prebuild["bundle_identity"]["build_config_sha256"].as<std::string>();
@@ -414,7 +415,7 @@ int main(int argc, char **argv) {
   hil["passed_cycles"] = 50;
   hil["firmware_sha256"] = file_sha256(image);
   hil["cli_sha256"] = file_sha256(host);
-  hil["contract_sha256"] = candidate["source_contract_sha256"].as<std::string>();
+  hil["contract_sha256"] = candidate["contract_sha256"].as<std::string>();
   hil["model_sha256"] = candidate["model_sha256"].as<std::string>();
   hil["profile_sha256"] = candidate["compiled_policy_sha256"].as<std::string>();
   hil["profile_id"] = 201;

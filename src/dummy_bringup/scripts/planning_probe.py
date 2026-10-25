@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import random
 import xml.etree.ElementTree as element_tree
@@ -36,12 +37,12 @@ import yaml
 # 测试固定六轴轴序与 START 都使用 rad；SOURCE_* 优先源码资源，不存在时从 ament 已安装包定位。
 JOINT_NAMES = tuple(f"Joint{index}" for index in range(1, 7))
 START = (0.0, 0.0, 1.5707963267948966, 0.0, 0.0, 0.0)
-SOURCE_MODEL = Path(__file__).resolve().parents[3] / "contracts/dummy_robot_v2/model/model.yaml"
+SOURCE_MODEL = Path(os.environ.get("DPSDK_HOST_SDK_PREFIX", "/nonexistent-explicit-sdk")) / "share/dummy_ref/robot_contract/model/model.yaml"
 MODEL = SOURCE_MODEL
 if not MODEL.is_file():
     MODEL = (
         Path(get_package_share_directory("dummy_bringup"))
-        / "contracts/dummy_robot_v2/model/model.yaml"
+        / "model/model.yaml"
     )
 SOURCE_SCENE = Path(__file__).resolve().parents[1] / "config/scene.yaml"
 SOURCE_WORLD = Path(__file__).resolve().parents[2] / "dummy_moveit_config/worlds/empty.sdf"

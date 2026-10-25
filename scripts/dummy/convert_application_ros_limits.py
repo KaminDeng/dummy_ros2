@@ -113,7 +113,7 @@ def number(value: object, field: str) -> float:
 ##
 # @brief 验证候选文件绑定、六轴边界及预算并冻结结果。
 # @param limits_path ROS限制JSON输入，必须声明NO_LOAD_DEV/UNQUALIFIED且runtime与实机许可false。
-# @param manifest_path 固定dummy-wire-v2.4候选manifest，恰含PAYLOADS三个文件。
+# @param manifest_path 固定dummy-wire-v2.5候选manifest，恰含PAYLOADS三个文件。
 # @return ValidatedLimits(只读limits,GateLease)；任何关系不符抛ValueError，I/O或解析异常向外传播。
 # 先比较manifest原字节SHA，再读取三份payload快照并重算排序聚合SHA；model/profile使用文件SHA，policy去顶层note后规范JSON SHA，三者含义不同。
 # 这里只核传入候选之间自洽与列出的模型/策略字段，没有独立外部信任锚或完整compile_policy动态约束验证，也没有设备在线实测。
@@ -133,15 +133,20 @@ def validate_bound(limits_path: Path, manifest_path: Path) -> ValidatedLimits:
     require(data.get("candidate_manifest_sha256") == hashlib.sha256(manifest_snapshot).hexdigest(),
             "candidate manifest SHA mismatch")
     require(manifest.get("format") == "dummy_wire_release_v2" and
-            manifest.get("release_id") == "dummy-wire-v2.4",
+            manifest.get("release_id") == "dummy-wire-v2.5",
             "unsupported candidate manifest")
     for key in ("candidate_payload_sorted_sha256", "model_sha256", "policy_sha256",
                 "profile_sha256"):
         require(isinstance(data.get(key), str) and SHA256.fullmatch(data[key]) and
                 data[key] != "0" * 64, f"{key}: SHA256 required")
     entries = manifest.get("payloads")
-    require(isinstance(entries, list) and len(entries) == len(PAYLOADS) and
-            [entry.get("path") for entry in entries if isinstance(entry, dict)] == list(PAYLOADS),
+    paths = [entry.get("path") for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+    require(isinstance(entries, list) and len(paths) == len(entries) and
+            all(isinstance(name, str) and name and not Path(name).is_absolute() and
+                '..' not in Path(name).parts and '\\' not in name and Path(name).as_posix() == name
+                for name in paths) and paths == sorted(set(paths)) and
+            set(PAYLOADS).issubset(paths) and
+            all(name in PAYLOADS or name.startswith('protocol/') for name in paths),
             "candidate payload list mismatch")
     payload_hashes = {}
     payload_snapshots = {}
@@ -151,11 +156,44 @@ def validate_bound(limits_path: Path, manifest_path: Path) -> ValidatedLimits:
         require(entry.get("sha256") == actual, f"{entry['path']}: payload SHA mismatch")
         payload_hashes[entry["path"]] = actual
         payload_snapshots[entry["path"]] = snapshot
-    listing = "\n".join(f"{name}:{payload_hashes[name]}" for name in PAYLOADS)
+    listing = "\n".join(f"{name}:{payload_hashes[name]}" for name in paths)
     aggregate = hashlib.sha256(listing.encode()).hexdigest()
     require(manifest.get("payload_sorted_sha256") == aggregate and
             data["candidate_payload_sorted_sha256"] == aggregate,
             "candidate payload aggregate SHA mismatch")
+    protocol_paths = set(paths) - set(PAYLOADS)
+    if protocol_paths:
+        require('protocol/manifest.json' in protocol_paths, 'candidate protocol manifest missing')
+        release = json_object(payload_snapshots['protocol/manifest.json'], manifest_path)
+        release_payloads = release.get('payloads')
+        require(isinstance(release_payloads, list) and
+                all(isinstance(item, dict) and isinstance(item.get('path'), str) for item in release_payloads),
+                'candidate protocol payload list mismatch')
+        release_names = [item['path'] for item in release_payloads]
+        require(release_names == sorted(set(release_names)), 'candidate protocol members must be sorted and unique')
+        expected = {'protocol/manifest.json'} | {'protocol/' + name for name in release_names}
+        require(protocol_paths == expected, 'candidate protocol payload closure mismatch')
+        for item in release_payloads:
+            require(payload_hashes.get('protocol/' + item['path']) == item.get('sha256'),
+                    'candidate protocol payload SHA mismatch')
+        reference, wire = manifest.get('protocol_release'), manifest.get('wire_contract')
+        contract = manifest.get('contract_sha256')
+        require(isinstance(reference, dict) and isinstance(wire, dict) and
+                isinstance(contract, str) and SHA256.fullmatch(contract) and contract != '0' * 64 and
+                isinstance(release.get('source_snapshot'), dict) and bool(release['source_snapshot']) and
+                reference.get('path') == 'protocol/manifest.json' and
+                reference.get('sha256') == payload_hashes['protocol/manifest.json'] and
+                reference.get('selection') == {key: release.get(key) for key in ('protocol_set', 'profile', 'codec')} and
+                release.get('protocol_set') == 'dummy' and release.get('codec') == 'raw-fixed' and
+                reference.get('source_snapshot') == release.get('source_snapshot') and
+                wire.get('path') == 'protocol/include/wire_contract.json' and
+                manifest.get('contract_sha256') == release.get('wire_contract_sha256') == wire.get('sha256') and
+                manifest.get('runtime_contract_sha256', manifest.get('contract_sha256')) == manifest.get('contract_sha256'),
+                'candidate current protocol identity mismatch')
+    else:
+        require(not any(key in manifest for key in ('contract_sha256', 'runtime_contract_sha256',
+                                                   'protocol_release', 'wire_contract')),
+                'candidate current protocol payload missing')
     require(manifest.get("model_sha256") == data["model_sha256"] == payload_hashes[PAYLOADS[0]] and
             data["profile_sha256"] == payload_hashes[PAYLOADS[2]],
             "candidate model/profile SHA mismatch")

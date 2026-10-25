@@ -27,7 +27,7 @@ def deployment(tmp_path):
     candidate = tmp_path / "candidate"
     candidate.mkdir()
     (candidate / "manifest.json").write_text(json.dumps({
-        "format": "dummy_wire_release_v2", "release_id": "dummy-wire-v2.4",
+        "format": "dummy_wire_release_v2", "release_id": "dummy-wire-v2.5",
         "runtime_enabled": False, "profile_id": 201, "configured_mask": 63,
     }))
     activation = tmp_path / "activation.json"

@@ -1,34 +1,26 @@
-"""当前正式contract镜像必须逐字节匹配canonical导出；不产生设备运行资格。"""
-##
-# @file test_formal_contract_mirror.py
-# @brief 正式ROS合同镜像与显式canonical导出的逐字节/摘要一致性。
-#
-# 模块导入时必须已有DPSDK_ROOT环境变量，canonical取其applications/dummy_ref_control/contracts路径。只核manifest列举payload，不运行SDK/codec/设备；摘要相同不赋予发布资格或动作许可。
+"""当前安装SDK机器人包的来源与文件完整性；不产生运行资格。"""
 import hashlib
-import os
 import json
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[3]
-MIRROR = ROOT / 'contracts/dummy_robot_v2'
-CANONICAL = Path(os.environ['DPSDK_ROOT']) / 'applications/dummy_ref_control/contracts/dummy_robot_v2'
+from scripts.dummy.installed_sdk import robot_bundle
 
 
-##
-# @brief manifest及每payload逐字节同canonical，路径非绝对/无..、原SHA/排序去重及聚合hash全部一致。
-# @return None；以assert/pytest.raises/unittest检查既定结论，不提供设备执行凭据。
 def test_manifest_and_every_payload_match_canonical_export():
-    assert (MIRROR / 'manifest.json').read_bytes() == (CANONICAL / 'manifest.json').read_bytes()
-    manifest = json.loads((MIRROR / 'manifest.json').read_text())
+    bundle = robot_bundle()
+    manifest = json.loads((bundle / 'manifest.json').read_text())
+    assert manifest['release_id'] == 'dummy-wire-v2.5'
+    assert (manifest['schema_major'], manifest['schema_minor']) == (2, 5)
     paths, rows = [], []
     for payload in manifest['payloads']:
         relative = Path(payload['path'])
         assert not relative.is_absolute() and '..' not in relative.parts
-        mirror, canonical = MIRROR / relative, CANONICAL / relative
-        assert mirror.read_bytes() == canonical.read_bytes(), str(relative)
-        actual = hashlib.sha256(mirror.read_bytes()).hexdigest()
+        actual = hashlib.sha256((bundle / relative).read_bytes()).hexdigest()
         assert actual == payload['sha256'], str(relative)
         paths.append(str(relative))
         rows.append(f'{relative}:{actual}')
     assert paths == sorted(set(paths))
     assert hashlib.sha256('\n'.join(rows).encode()).hexdigest() == manifest['payload_sorted_sha256']
+    release = manifest['protocol_release']
+    assert release['selection'] == {'protocol_set': 'dummy', 'profile': 'profile_full', 'codec': 'raw-fixed'}
+    assert hashlib.sha256((bundle / release['path']).read_bytes()).hexdigest() == release['sha256']
+    assert manifest['contract_sha256'] == manifest['wire_contract']['sha256']

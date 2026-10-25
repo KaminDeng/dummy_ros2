@@ -1118,7 +1118,7 @@ class JointPanel(QtWidgets.QWidget):
                 if (record[72] != 0 or result != 0 or interface != self.cfg['state_interface_id'] or not (4 <= size <= 4096)):
                     continue
                 try:
-                    # wire_layout决定2.4/2.5实际长度，禁止另维护301/350的尺寸副本。
+                    # 中央公共布局决定当前payload长度，面板不维护尺寸副本。
                     state = self.decode('DummyJointStateV2', record[224:224 + size])
                 except (ValueError, struct.error):
                     continue

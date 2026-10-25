@@ -20,12 +20,11 @@ MODULE = Path(__file__).resolve().parents[1] / "application_e2e.py"
 SPEC = importlib.util.spec_from_file_location("application_e2e", MODULE)
 application_e2e = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(application_e2e)
-LAYOUT = json.loads((Path(__file__).resolve().parents[3] /
-    "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
+from scripts.dummy.selected_protocol import LAYOUT
 
 
 ##
-# @brief 按当前wire_layout字段offset小端打包合成管理请求/响应，未指定字段留零；schema固定2.4，外层记录元数据与payload分开。
+# @brief 按当前wire_layout字段offset小端打包合成管理请求/响应，未指定字段留零；schema固定当前2.5，外层记录元数据与payload分开。
 # @param kind DPRAW记录种类：4请求、5响应；其它值也走响应布局，调用方只用4/5。
 # @param when 本条Host接收/记录单调时间µs，不是Source生产时间。
 # @param operation 请求操作号，8 Complete、9 Cancel、10 DisableAndRelease、12 Query。
@@ -50,7 +49,7 @@ def manage(kind, when, *, operation=0, request_id=1, run=0, session=3,
            motion_complete=None, release_committed=None):
     name = "DummyManageV2Request" if kind == 4 else "DummyManageV2Response"
     raw = bytearray(LAYOUT["payloads"][name]["encoded_size"])
-    values = {"schema_major": 2, "schema_minor": 4, "client_instance_id": client,
+    values = {"schema_major": 2, "schema_minor": 5, "client_instance_id": client,
               "device_id": "22" * 16, "request_id": request_id,
               "request_seq": request_id if request_seq is None else request_seq,
               "operation": operation,
@@ -120,7 +119,7 @@ def pages(identity, *, run, session, boot=2, epoch=2, kind=1, parent=0,
     for seq in range(len(group_ids) + 1):
         terminal = seq == len(group_ids)
         raw = bytearray(372)
-        struct.pack_into("<HHQIQII", raw, 0, 2, 4, run, seq,
+        struct.pack_into("<HHQIQII", raw, 0, 2, 5, run, seq,
                          0 if terminal else group_ids[seq], 0 if terminal else seq + 1,
                          (epoch if terminal_epoch is None else terminal_epoch) if terminal
                          else group_epochs[seq])
@@ -1788,7 +1787,7 @@ def test_malformed_evidence_fails_as_validation_error(evidence, field, value):
 
 def test_current_selected_schema_five_keeps_full_evidence_validation(evidence):
     """当前页由公共encode构造，独立SHA链及管理准入仍执行完整正向门。"""
-    from selected_protocol import current_layout, decode, evidence_parts
+    from scripts.dummy.selected_protocol import current_layout, decode, evidence_parts
 
     def values_for(layout, fields):
         result = {}

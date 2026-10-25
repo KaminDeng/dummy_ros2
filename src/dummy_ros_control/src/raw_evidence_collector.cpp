@@ -13,13 +13,8 @@
 #include <openssl/sha.h>
 #include <unistd.h>
 
-#if defined(DUMMY_LEGACY_WIRE_2_4)
-#include "dp_dummy_robot_v2.hpp"
-namespace collector_wire = dp::protocol::dummy_robot_v2;
-#else
 #include "dummy_ref/wire_validation.hpp"
 namespace collector_wire = dp::iface;
-#endif
 #include "dummy_ros_control/device_management_channel.hpp"
 
 namespace dummy_ros_control {
@@ -222,13 +217,8 @@ bool RawEvidenceCollector::verify_chain(const RawEvidencePage &page) noexcept {
     if (!::SHA256(seed.data(), seed.size(), expected_previous.data())) return false;
   } else expected_previous = last_chain_;
   if (page.previous_chain_sha256 != expected_previous) return false;
-  #if defined(DUMMY_LEGACY_WIRE_2_4)
-  constexpr std::size_t kPrefix = collector_wire::DummyAttemptEvidenceV2Codec::kCanonicalPrefixSize;
-  constexpr std::size_t kLostOffset = collector_wire::DummyAttemptEvidenceV2Codec::kEvidenceLostOffset;
-#else
   constexpr std::size_t kPrefix = collector_wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256;
   constexpr std::size_t kLostOffset = collector_wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost;
-#endif
   static_assert(RawEvidencePage::kRawSize == kLostOffset + 1U);
   std::array<std::uint8_t, 32U + kPrefix + 1U> input{};
   std::copy(expected_previous.begin(), expected_previous.end(), input.begin());

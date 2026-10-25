@@ -18,7 +18,7 @@ from scripts.dummy import join_real_6dof_evidence as joiner
 
 
 ##
-# @brief 按joiner.LAYOUT打包给定消息小端字节，schema默认2.4，其它未给字段留零；不调用设备codec发送。
+# @brief 按joiner.LAYOUT打包给定消息小端字节，schema默认当前2.5，其它未给字段留零；不调用设备codec发送。
 # @param name LAYOUT payload消息类型名。
 # @param values 字段名到值字典，数组hex先转bytes，其它按字段类型小端写入。
 # @return 固定encoded_size的原wire bytes。
@@ -28,7 +28,7 @@ def wire(name, **values):
     types = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
              "float64": "d", "bool": "B"}
     for field in layout["fields"]:
-        value = {"schema_major": 2, "schema_minor": 4, **values}.get(field["name"])
+        value = {"schema_major": 2, "schema_minor": 5, **values}.get(field["name"])
         if value is None:
             continue
         if field["count"] > 1:

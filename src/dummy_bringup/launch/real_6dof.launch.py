@@ -134,7 +134,7 @@ def _read_object(path):
 
 ##
 # @brief 验证外部钉住的开发activation、候选身份和明确设备路径。
-# 要求路径清单键集完全一致，文件/目录为绝对且末级非符号链接。核对 activation 原始字节摘要、NO_LOAD_DEV/UNQUALIFIED 作用域与候选 manifest 摘要；候选必须 dummy-wire-v2.4、runtime_enabled=False、profile 201、mask 63。设备非零32位小写ID、by-id STM32端点串号和activation字段须匹配后才调用 USB verifier；不在此授予电机控制。
+# 要求路径清单键集完全一致，文件/目录为绝对且末级非符号链接。核对 activation 原始字节摘要、NO_LOAD_DEV/UNQUALIFIED 作用域与候选 manifest 摘要；候选必须 dummy-wire-v2.5、runtime_enabled=False、profile 201、mask 63。设备非零32位小写ID、by-id STM32端点串号和activation字段须匹配后才调用 USB verifier；不在此授予电机控制。
 # @param paths_file 部署路径清单 JSON 文件，schema 必须为 no_load_dev_deployment_paths_v1。
 # @param expected_activation_sha256 外部给定非零 64 位小写 SHA-256，不能由待验证文件自我决定。
 # @param usb_verifier 可调用对象，接收 endpoint/usb_serial；生产入口传实际本机 STM32 USB 预检器。
@@ -176,7 +176,7 @@ def load_deployment(paths_file, expected_activation_sha256, usb_verifier):
             activation.get("candidate_manifest_sha256") != hashlib.sha256(
                 candidate_bytes).hexdigest() or
             candidate.get("format") != "dummy_wire_release_v2" or
-            candidate.get("release_id") != "dummy-wire-v2.4" or
+            candidate.get("release_id") != "dummy-wire-v2.5" or
             candidate.get("runtime_enabled") is not False or
             candidate.get("profile_id") != 201 or candidate.get("configured_mask") != 63):
         raise ValueError("unqualified no-load candidate identity mismatch")

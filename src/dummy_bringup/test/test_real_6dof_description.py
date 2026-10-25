@@ -130,8 +130,8 @@ def test_frozen_candidate_generates_matching_moveit_and_urdf_bench_bounds(
     dpsdk = ROOT.parent / "dpsdk"
     # 使用当前默认deny源码候选，历史7d89/model50产物不作为新model1测试输入。
     candidate = ROOT / "contracts/dummy_robot_v2_application_hold_no_load_candidate/manifest.json"
-    monkeypatch.syspath_prepend(str(dpsdk))
-    from tools.dummy.generate_application_ros_limits import generate
+    monkeypatch.syspath_prepend(str(dpsdk / "applications/dummy_ref_control/tools"))
+    from dummy_ref_tools.generate_application_ros_limits import generate
 
     converter_path = ROOT / "scripts/dummy/convert_application_ros_limits.py"
     spec = importlib.util.spec_from_file_location("convert_application_ros_limits", converter_path)

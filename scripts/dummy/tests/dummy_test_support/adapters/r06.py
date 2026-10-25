@@ -15,6 +15,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 from typing import Any
+try:
+    from installed_sdk import robot_bundle
+except ModuleNotFoundError:
+    from scripts.dummy.installed_sdk import robot_bundle
 
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -106,7 +110,7 @@ def _core_case(case_id: str) -> dict[str, Any]:
 # @param arguments 传给Git/组件的原样argv，是否可变参数见函数签名。
 # @return 执行标志、当前源码摘要、运行trace摘要及最后JSON。
 def _component(name: str, arguments: list[str]) -> dict[str, Any]:
-    codec = DPSDK_ROOT / "applications/dummy_ref_control/contracts/dummy_robot_v2/codec/dp_dummy_robot_v2.hpp"
+    codec = Path(os.environ["DPSDK_HOST_SDK_PREFIX"]) / "lib/cmake/DpProtocol/include/dp_protocol_raw_fixed.hpp"
     if not codec.is_file():
         raise RuntimeError(f"DPSDK_ROOT must contain the published manage_v2 codec: {codec}")
     binary = ROOT / "build_dummy/dummy_motion_client" / name
@@ -296,7 +300,7 @@ def _device_e2e_component() -> dict[str, Any]:
     script = ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"
     gate = ROOT / "build_dummy/dummy_motion_client/device_action_gate"
     peer = ROOT / "build_dummy/dummy_motion_client/c05_action_peer"
-    bundle = ROOT / "contracts/dummy_robot_v2"
+    bundle = robot_bundle()
     completed = subprocess.run(
         ["/usr/bin/python3", str(script), str(gate), str(peer), str(bundle)],
         cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,
@@ -332,7 +336,7 @@ def _real_device_e2e() -> dict[str, Any]:
     script = ROOT / "src/dummy_motion_client/test/device_action_e2e_probe.py"
     gate = ROOT / "build_dummy/dummy_motion_client/device_action_gate"
     peer = DPSDK_ROOT / "build/posix-zenohc/applications/dummy_ref_control/dummy_ref_d08_device_peer"
-    bundle = ROOT / "contracts/dummy_robot_v2"
+    bundle = robot_bundle()
     completed = subprocess.run(
         ["/usr/bin/python3", str(script), str(gate), str(peer), str(bundle), "real"],
         cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,

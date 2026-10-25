@@ -6,6 +6,9 @@ project(dummy_bringup)
 
 # ament_cmake 提供包索引、安装导出与测试集成；实际进程由用户选择 launch 后才创建。
 find_package(ament_cmake REQUIRED)
+find_package(DPSDKHostSDK CONFIG REQUIRED)
+get_target_property(_dummy_protocol_include dp_protocol::selected INTERFACE_INCLUDE_DIRECTORIES)
+get_filename_component(_dummy_protocol_release "${_dummy_protocol_include}" DIRECTORY)
 
 # 仅 BUILD_TESTING 开启时注册测试依赖与用例；注册不是运行，colcon/CTest 后续才调度。
 # pytest 主要验证配置/状态机及假服务；下方 add_launch_test 会建立独立运行图，应与纯离线检查区别。
@@ -51,16 +54,14 @@ install(FILES
   ../../scripts/dummy/real_six_axis_preflight.py
   ../../scripts/dummy/convert_application_ros_limits.py
   DESTINATION share/${PROJECT_NAME}/scripts)
-install(FILES ../../contracts/dummy_robot_v2/model/model.yaml
-  DESTINATION share/${PROJECT_NAME}/contracts/dummy_robot_v2/model)
-# panel_runtime 保留解码器的相对资源结构；同时携带2.5当前线布局及2.4兼容布局供实际payload选择。
-# 这些是部署时复制和验证的资源，不是独立USB owner，也不因安装产生运动许可。
+# 业务模型与解码发布均来自配置时选定的安装SDK。
+install(FILES "${DPSDKHostSDK_ROBOT_BUNDLE_DIR}/model/model.yaml"
+  DESTINATION share/${PROJECT_NAME}/model)
 install(FILES ../../scripts/dummy/join_real_6dof_evidence.py
+  ../../scripts/dummy/selected_protocol.py
   DESTINATION share/${PROJECT_NAME}/panel_runtime/scripts/dummy)
-install(FILES ../../contracts/dummy_robot_v2/codec/wire_layout.json
-  DESTINATION share/${PROJECT_NAME}/panel_runtime/contracts/dummy_robot_v2/codec)
-install(FILES ../../compatibility/wire2_4/wire_layout.json
-  DESTINATION share/${PROJECT_NAME}/panel_runtime/compatibility/wire2_4)
+install(DIRECTORY "${_dummy_protocol_release}/"
+  DESTINATION share/${PROJECT_NAME}/panel_runtime/scripts/dummy/protocol)
 # 可执行脚本安装至 lib/dummy_bringup，供 ros2 run/launch 查找；辅助模块同目录支持面板进程内导入。
 # 配置/部署工具只处理明确本机产物；手动面板独占Native通信，MoveIt/场景/探针通过既定ROS或面板接口协作。
 install(PROGRAMS
