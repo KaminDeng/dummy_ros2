@@ -4,7 +4,7 @@
 # @brief 离线关联Gate CSV、Action反馈、DPRAW原页和显式context。
 #
 # 不启动ROS/设备；重新读取SHA固定的源快照，按Host接收时刻及位置包络匹配反馈，并调用application_e2e作最终全链检查。
-# 解码支持2.4/2.5不等于最终E2E校验全部minor均可通过；后者现有页/管理断言仍限定2.4。所有正证据仍需独立资格流程。
+# 活动版本使用公共布局、2.4显式读取冻结合同；所有正证据仍需独立资格流程。
 """将同一次 ROS Gate 时间线与 DeviceTransport DPRAW01 原始流离线关联。"""
 
 import argparse
@@ -19,13 +19,13 @@ import os
 from pathlib import Path
 import struct
 from types import MappingProxyType
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from selected_protocol import decode as decode_selected, evidence_parts
 
 
 ROOT = Path(__file__).resolve().parents[2]
-LAYOUT = json.loads((ROOT / "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
-LEGACY_LAYOUT = json.loads((ROOT / "compatibility/wire2_4/wire_layout.json").read_text())
-TYPES = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
-         "float64": "d", "bool": "B"}
 ##
 # @brief DPRAW头39字节，按小端kind/size/Host when/boot/session/run/seq解包。
 # when为Host传输steady µs，消息produced/CAN时间为设备Source域；STATUS_MAX_AGE_US为1,000,000µs关联上限。
@@ -66,28 +66,7 @@ def _snapshot(path, expected=None):
 # @param raw 完整消息bytes。
 # @return 解码字段dict；schema/固定长度不符拒绝，未作业务成功判定。
 def _decode(name, raw):
-    if len(raw) < 4:
-        raise ValueError(f"invalid {name} wire size")
-    schema = struct.unpack_from("<HH", raw)
-    if schema == (2, 4):
-        selected_layout = LEGACY_LAYOUT
-    elif schema == (2, 5):
-        selected_layout = LAYOUT
-    else:
-        raise ValueError(f"invalid {name} schema")
-    layout = selected_layout["payloads"][name]
-    if len(raw) != layout["encoded_size"]:
-        raise ValueError(f"invalid {name} wire size")
-    result = {}
-    for field in layout["fields"]:
-        count = field["count"]
-        values = struct.unpack_from("<" + TYPES[field["type"]] * count,
-                                    raw, field["offset"])
-        result[field["name"]] = (bytes(values).hex() if count > 1 and
-            field["type"] == "uint8" else list(values) if count > 1 else values[0])
-    if (result["schema_major"], result["schema_minor"]) != schema:
-        raise ValueError(f"invalid {name} schema")
-    return result
+    return decode_selected(name, raw)
 
 
 ##
@@ -343,10 +322,10 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
         for index, item in enumerate(pages):
             raw_page = item["raw"]
             fields = item["fields"]
-            if (len(raw_page) != 372 or raw_page[307:339] != previous_chain or
-                    raw_page[371] != 0 or
-                    raw_page[339:371] != hashlib.sha256(
-                        previous_chain + raw_page[:307] + raw_page[371:372]).digest() or
+            chain = evidence_parts(raw_page)
+            if (chain["previous"] != previous_chain or chain["fields"]["evidence_lost"] or
+                    chain["chain"] != hashlib.sha256(
+                        previous_chain + chain["prefix"] + chain["lost"]).digest() or
                     fields["group_count"] < previous_group_count or
                     fields["group_count"] > total_groups or
                     (index < len(pages) - 1 and
@@ -358,7 +337,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
                      ((1,) if final_state == 6 else (1, 2))) or
                     (index < len(pages) - 1 and fields["group_id"] == 0)):
                 raise ValueError("unverified completed-run terminal chain")
-            previous_chain = raw_page[339:371]
+            previous_chain = chain["chain"]
             previous_group_count = fields["group_count"]
         terminal_fields = terminal["fields"]
         if (pages[-1] is not terminal or terminal["boot"] != identity[0] or
@@ -408,6 +387,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
                       "firmware_sha256"))
     previous = hashlib.sha256(seed.ljust(192, b"\0")).digest()
     raw = successor["raw"]
+    chain = evidence_parts(raw)
     if (later_run != run + 1 or successor["when"] <= terminal_when or
             successor["seq"] != 0 or page["evidence_seq"] != 0 or
             page["attempt_id"] != later_run or page["attempt_kind"] != 1 or
@@ -418,9 +398,9 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
             page["sent_mask"] != 63 or page["failed_mask"] != 0 or
             page["final"] != 1 or page["final_state"] != 0 or
             page["motion_complete"] or page["release_committed"] or
-            len(raw) != 372 or raw[371] != 0 or raw[307:339] != previous or
-            raw[339:371] != hashlib.sha256(
-                previous + raw[:307] + raw[371:372]).digest() or
+            chain["fields"]["evidence_lost"] or chain["previous"] != previous or
+            chain["chain"] != hashlib.sha256(
+                previous + chain["prefix"] + chain["lost"]).digest() or
             terminal["fields"]["final_state"] != final_state or
             terminal["fields"]["motion_complete"] != (final_state == 6) or
             old["evidence_chain_sha256"] != terminal["fields"]["chain_sha256"] or

@@ -1784,3 +1784,39 @@ def test_malformed_evidence_fails_as_validation_error(evidence, field, value):
     evidence[field] = value
     with pytest.raises(ValueError):
         application_e2e.validate_evidence(evidence)
+
+
+def test_current_selected_schema_five_keeps_full_evidence_validation(evidence):
+    """当前页由公共encode构造，独立SHA链及管理准入仍执行完整正向门。"""
+    from selected_protocol import current_layout, decode, evidence_parts
+
+    def values_for(layout, fields):
+        result = {}
+        for name, value in fields.items():
+            field = layout.field(name)
+            result[name] = (bytes.fromhex(value) if field.array and field.type == 'uint8'
+                            else bool(value) if field.type == 'bool' else value)
+        result['schema_minor'] = layout.constant('SCHEMA_MINOR')
+        return result
+
+    for record in evidence['management_records']:
+        name = 'DummyManageV2Request' if record['kind'] == 4 else 'DummyManageV2Response'
+        layout = current_layout(name)
+        values = values_for(layout, decode(name, bytes.fromhex(record['raw_hex'])))
+        record['raw_hex'] = layout.encode(values).hex()
+    layout = current_layout('DummyAttemptEvidenceV2')
+    for attempt in [*evidence['goals'], evidence['release']]:
+        seed = struct.pack('<QQ', attempt['run_id'], attempt['boot_epoch']) + bytes.fromhex(evidence['identity']['client_id'])
+        seed += b''.join(bytes.fromhex(evidence['identity'][name]) for name in
+                         ('contract_hash', 'model_hash', 'profile_hash', 'firmware_hash'))
+        previous = hashlib.sha256(seed.ljust(192, b'\0')).digest()
+        for page in attempt['evidence_pages']:
+            values = values_for(layout, decode('DummyAttemptEvidenceV2', bytes.fromhex(page['raw_hex'])))
+            values['previous_chain_sha256'] = previous
+            raw = layout.encode(values)
+            parts = evidence_parts(raw)
+            digest = hashlib.sha256(previous + parts['prefix'] + parts['lost']).digest()
+            values['chain_sha256'] = digest
+            page['raw_hex'] = layout.encode(values).hex()
+            previous = digest
+    assert application_e2e.validate_evidence(evidence) is None

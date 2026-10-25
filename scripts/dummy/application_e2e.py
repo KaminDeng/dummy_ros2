@@ -5,7 +5,7 @@
 #
 # 本文件只读已有JSON/raw字段并写报告，不启动ROS/串口/设备；传入手写JSON的结构验证与四份采集重放验证是两个等级。
 # 最终即使ROS_BENCH_E2E_POSITIVE也固定UNQUALIFIED/NOT_ASSERTED，不能签发运动或机械资格。
-# 现有校验硬编码schema2.4及372字节页/固定偏移；布局读取当前合同不代表本验证自动支持其后全部minor版本。
+# 活动字段消费公共所选协议；2.4仅走冻结兼容合同，规范SHA验链独立保留。
 """六轴 ROS/MoveIt 无负载 E2E 原始证据门禁。"""
 
 import argparse
@@ -15,15 +15,10 @@ import json
 import math
 from pathlib import Path
 import struct
+import sys
 
-
-##
-# @brief 导入时读取本地wire布局；TYPES按小端格式解码整数/浮点/布尔。
-# 此依赖是源码中的格式定义，不是采集时固件身份的独立认证。
-LAYOUT = json.loads((Path(__file__).resolve().parents[2] /
-    "contracts/dummy_robot_v2/codec/wire_layout.json").read_text())
-WIRE_TYPES = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
-              "float64": "d", "bool": "B"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from selected_protocol import decode as decode_selected, evidence_parts
 
 
 ##
@@ -36,17 +31,8 @@ def _manage_fields(item):
     if kind not in (4, 5):
         raise ValueError("invalid management record kind")
     name = "DummyManageV2Request" if kind == 4 else "DummyManageV2Response"
-    layout = LAYOUT["payloads"][name]
-    raw = _hex_bytes(item, "raw_hex", layout["encoded_size"])
-    fields = {}
-    for field in layout["fields"]:
-        values = struct.unpack_from("<" + WIRE_TYPES[field["type"]] * field["count"],
-                                    raw, field["offset"])
-        fields[field["name"]] = (bytes(values).hex() if field["count"] > 1 and
-            field["type"] == "uint8" else list(values) if field["count"] > 1 else values[0])
-    if (fields["schema_major"], fields["schema_minor"]) != (2, 4):
-        raise ValueError("invalid management wire schema")
-    return fields
+    raw = _hex_bytes(item, "raw_hex", None)
+    return decode_selected(name, raw)
 
 
 ##
@@ -241,7 +227,7 @@ def _six_finite(record, name, positive=False):
 # @return bytes；形状或hex解码错误ValueError，不独立要求小写或非零。
 def _hex_bytes(record, name, size):
     value = _required(record, name)
-    if not isinstance(value, str) or len(value) != size * 2:
+    if not isinstance(value, str) or (size is not None and len(value) != size * 2):
         raise ValueError(f"invalid {name}")
     try:
         return bytes.fromhex(value)
@@ -280,14 +266,18 @@ def _validate_pages(attempt, identity, *, run, session, boot, epoch, kind,
     observed_group_ids = set()
     previous_group_count = 0
     for seq, page in enumerate(pages):
-        raw = _hex_bytes(page, "raw_hex", 372)
+        raw = _hex_bytes(page, "raw_hex", None)
+        chain = evidence_parts(raw)
+        fields = chain["fields"]
         if page.get("boot_epoch") != boot or page.get("session_id") != session:
             raise ValueError("unlinked evidence identity")
-        major, minor, page_run, page_seq, group_id, _, page_epoch = struct.unpack_from(
-            "<HHQIQII", raw)
-        category, expected, submitted, sent, failed, final = raw[32:38]
-        group_count, attempt_id, page_kind, page_parent, motion_complete, release_committed, state, _ = \
-            struct.unpack_from("<IQBQBBBH", raw, 281)
+        major, minor = fields["schema_major"], fields["schema_minor"]
+        page_run, page_seq, group_id, page_epoch = [fields[name] for name in
+            ("run_id", "evidence_seq", "group_id", "motion_epoch")]
+        category, expected, submitted, sent, failed, final = [fields[name] for name in
+            ("category", "expected_mask", "submitted_mask", "sent_mask", "failed_mask", "final")]
+        group_count, attempt_id, page_kind, page_parent, motion_complete, release_committed, state = [fields[name] for name in
+            ("group_count", "attempt_id", "attempt_kind", "parent_run_id", "motion_complete", "release_committed", "final_state")]
         terminal = seq == len(pages) - 1
         if (group_count > len(pages) - 1 or group_count < previous_group_count or
                 (terminal and group_count != len(pages) - 1) or
@@ -298,13 +288,13 @@ def _validate_pages(attempt, identity, *, run, session, boot, epoch, kind,
             else epoch if group_epochs is None else group_epochs[seq]
         if attempt_id != run:
             raise ValueError("unlinked raw attempt id")
-        if (major, minor, page_run, page_seq, page_epoch, page_kind, page_parent) != \
-                (2, 4, run, seq, expected_epoch, kind, parent) or raw[371] != 0:
+        if (page_run, page_seq, page_epoch, page_kind, page_parent) != \
+                (run, seq, expected_epoch, kind, parent) or fields["evidence_lost"]:
             raise ValueError("unlinked or lost evidence page")
-        if raw[307:339] != previous or hashlib.sha256(
-                previous + raw[:307] + raw[371:372]).digest() != raw[339:371]:
+        if chain["previous"] != previous or hashlib.sha256(
+                previous + chain["prefix"] + chain["lost"]).digest() != chain["chain"]:
             raise ValueError("invalid evidence chain")
-        previous = raw[339:371]
+        previous = chain["chain"]
         if not terminal:
             if (category not in (1, 2, 3) or group_id == 0 or group_id in observed_group_ids or
                     expected != 63 or
@@ -641,14 +631,14 @@ def validate_evidence(evidence):
     active = release["terminal"] == "CANCELED_AND_RELEASED"
     if last["action_status"] == "CANCELED" and (
             release["run_id"] != last["run_id"] + 1 or
-            not any(bytes.fromhex(page["raw_hex"])[32] == 3 for page in
+            not any(decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["category"] == 3 for page in
                               release["evidence_pages"][:-1])):
         raise ValueError("cancel release lacks next-run six-axis Disable SENT")
     group_epochs = None
     if active:
         group_pages = release["evidence_pages"][:-1]
-        categories = [bytes.fromhex(page["raw_hex"])[32] for page in group_pages]
-        group_epochs = [struct.unpack_from("<I", bytes.fromhex(page["raw_hex"]), 28)[0]
+        categories = [decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["category"] for page in group_pages]
+        group_epochs = [decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["motion_epoch"]
                         for page in group_pages]
         if (release_epoch >= 0xffffffff or len(categories) < 2 or
                 1 not in categories or
@@ -656,8 +646,8 @@ def validate_evidence(evidence):
                 categories != sorted(categories) or
                 any(category not in (1, 2, 3) for category in categories) or
                 any(category == 2 and (
-                    struct.unpack_from("<H", bytes.fromhex(page["raw_hex"]), 38)[0] != 0 or
-                    bytes.fromhex(page["raw_hex"])[40] != 0)
+                    decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["first_failure_source"] != 0 or
+                    decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["first_failure_axis_mask"] != 0)
                     for category, page in zip(categories, group_pages)) or
                 any(group_epoch != release_epoch for category, group_epoch in
                     zip(categories, group_epochs) if category == 1) or
