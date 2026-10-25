@@ -5,7 +5,7 @@
 #
 # 本文件只读已有JSON/raw字段并写报告，不启动ROS/串口/设备；传入手写JSON的结构验证与四份采集重放验证是两个等级。
 # 最终即使ROS_BENCH_E2E_POSITIVE也固定UNQUALIFIED/NOT_ASSERTED，不能签发运动或机械资格。
-# 活动字段消费公共所选协议；2.4仅走冻结兼容合同，规范SHA验链独立保留。
+# 活动字段只消费当前公共所选协议，规范SHA验链独立保留。
 """六轴 ROS/MoveIt 无负载 E2E 原始证据门禁。"""
 
 import argparse
@@ -17,14 +17,23 @@ from pathlib import Path
 import struct
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from selected_protocol import decode as decode_selected, evidence_parts
+# 每个部署目录绑定自己的所选协议，避免进程全局同名模块缓存串到另一份发布。
+_protocol_path = Path(__file__).resolve().with_name('selected_protocol.py')
+_protocol_name = '_dummy_protocol_' + hashlib.sha256(str(_protocol_path).encode()).hexdigest()[:16]
+if _protocol_name not in sys.modules:
+    _protocol_spec = importlib.util.spec_from_file_location(_protocol_name, _protocol_path)
+    _protocol_module = importlib.util.module_from_spec(_protocol_spec)
+    sys.modules[_protocol_name] = _protocol_module
+    _protocol_spec.loader.exec_module(_protocol_module)
+_selected_protocol = sys.modules[_protocol_name]
+decode_selected = _selected_protocol.decode
+evidence_parts = _selected_protocol.evidence_parts
 
 
 ##
 # @brief 从管理记录raw_hex解出固定布局字段。
 # @param item kind4请求或kind5响应的JSON记录。
-# @return 字段dict；不支持kind、长度或schema非2.4时ValueError。
+# @return 字段dict；不支持kind、长度或schema与当前选择不符时ValueError。
 # uint8数组转hex字符串，其它数组转list，标量取单值；此函数不判断事务是否成功。
 def _manage_fields(item):
     kind = item.get("kind") if isinstance(item, dict) else None

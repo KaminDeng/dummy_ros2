@@ -4,7 +4,7 @@
 # @brief 离线关联Gate CSV、Action反馈、DPRAW原页和显式context。
 #
 # 不启动ROS/设备；重新读取SHA固定的源快照，按Host接收时刻及位置包络匹配反馈，并调用application_e2e作最终全链检查。
-# 活动版本使用公共布局、2.4显式读取冻结合同；所有正证据仍需独立资格流程。
+# 只消费当前公共布局；所有正证据仍需独立资格流程。
 """将同一次 ROS Gate 时间线与 DeviceTransport DPRAW01 原始流离线关联。"""
 
 import argparse
@@ -21,8 +21,19 @@ import struct
 from types import MappingProxyType
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from selected_protocol import decode as decode_selected, evidence_parts
+# 每个部署目录绑定自己的所选协议，避免进程全局同名模块缓存串到另一份发布。
+_protocol_path = Path(__file__).resolve().with_name('selected_protocol.py')
+_protocol_name = '_dummy_protocol_' + hashlib.sha256(str(_protocol_path).encode()).hexdigest()[:16]
+if _protocol_name not in sys.modules:
+    _protocol_spec = importlib.util.spec_from_file_location(_protocol_name, _protocol_path)
+    _protocol_module = importlib.util.module_from_spec(_protocol_spec)
+    sys.modules[_protocol_name] = _protocol_module
+    _protocol_spec.loader.exec_module(_protocol_module)
+_selected_protocol = sys.modules[_protocol_name]
+decode_selected = _selected_protocol.decode
+evidence_parts = _selected_protocol.evidence_parts
+LAYOUT = _selected_protocol.LAYOUT
+TYPES = _selected_protocol.TYPES
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,7 +72,7 @@ def _snapshot(path, expected=None):
 
 
 ##
-# @brief 按wire前4字节选择2.4历史布局或2.5当前布局。
+# @brief 使用当前受管版本解码字段，拒绝其他版本。
 # @param name 指定payload类型名。
 # @param raw 完整消息bytes。
 # @return 解码字段dict；schema/固定长度不符拒绝，未作业务成功判定。
