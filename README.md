@@ -187,7 +187,7 @@ The collision geometry and scene-owner checks are described in
 - [Trajectory execution](docs/dummy/moveit-path-execution.md).
 - [Versioned contract data](docs/dummy/contracts-data-reading/README.md).
 - [Generated codecs](docs/dummy/generated-codecs/README.md).
-- [Current contracts](contracts/README.md); historical wire 2.4 decoding resources live in `compatibility/wire2_4/`.
+- [Robot business data](contracts/README.md); protocol definitions and codecs come from the explicitly selected SDK release.
 
 ## Contributing and license
 

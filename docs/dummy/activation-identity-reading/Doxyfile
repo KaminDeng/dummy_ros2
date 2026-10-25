@@ -1,8 +1,0 @@
-PROJECT_NAME = Activation_identity
-INPUT = docs/dummy/activation-identity-reading/policy-functions.dox
-OUTPUT_DIRECTORY = /tmp/activation-identity4s-ros
-GENERATE_HTML = NO
-GENERATE_LATEX = NO
-GENERATE_XML = YES
-QUIET = YES
-WARN_LOGFILE = /tmp/activation-identity4s-ros/warnings.log

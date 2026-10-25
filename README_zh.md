@@ -63,7 +63,7 @@ flowchart LR
 
 其他目录：
 
-- [contracts](contracts/README.md)：保留当前V2正式合同及仍被工具引用的离线候选；历史2.4仅留必要解码/回归资源，位于 `compatibility/wire2_4/`。
+- [contracts](contracts/README.md)：只保留模型、profile和策略等业务材料；当前协议定义及Codec来自显式选定的安装SDK公共发布。
 - [scripts/dummy](scripts/dummy)：离线构建、预检、证据拼接、模型工具及独立规划回归。
 - [docs/dummy](docs/dummy)：运行说明、模型变更及按阶段保存的验证记录。
 - [模型资源逐文件说明](docs/dummy/mesh-reading-guide.md)：35 个网格、材质和严格 JSON
@@ -72,7 +72,6 @@ flowchart LR
   历史 Python 字节码和 RViz 窗口状态的用途，以及各类文件的注释格式。
 - [冻结合同与证据逐项说明](docs/dummy/contracts-data-reading/README.md)：保留原件字节，解释字段、单位、版本、SHA及历史验收边界。
 - [生成codec阅读说明](docs/dummy/generated-codecs/README.md)：当前V2代码生成产物保持原身份，按真实符号阅读。
-- [激活校验器说明](docs/dummy/activation-identity-reading/README.md)：完整参数、停止预算与结构校验边界，校验通过不等于允许实机运动。
 - `build_*`、`install_*`、`log_*`：本机构建、安装和日志输出。修改与阅读以 `src/` 为主；
   `--symlink-install` 也不代表所有已运行进程会自动重新加载资源。
 
@@ -198,8 +197,7 @@ source install_dummy/setup.bash
 协议由 SDK 中的 `DpProtocol` 完整 release 提供，机器人模型/profile 包独立位于
 `share/dummy_ref/robot_contract`。运行 `contract_hash` 使用稳定 `wire_contract_sha256`；
 完整载荷聚合、profile、工具和 release manifest SHA 分别保留，不能互换。ROS 包版本与
-ROS typesupport type hash 属于 ROS 接口层，不能替代设备 wire 身份。冻结 `contracts/`
-及 wire2.4 回归原件继续保留，其字节不作为本次 current SDK 的发布身份。
+ROS typesupport type hash 属于 ROS 接口层，不能替代设备 wire 身份。`contracts/`仅保留业务模型/profile和策略材料；未发布旧协议及其专属回归原件已删除。
 
 仅构建这两个包可使用显式 `colcon --packages-select dummy_ros_control dummy_motion_client`。
 定向 CTest `sdk_input_lock_tests` 检查真实 SDK 缺包、错 Codec/ABI 和载荷篡改；
