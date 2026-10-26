@@ -237,7 +237,7 @@ def renewal_transport(monkeypatch, receipts=None):
     monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
     transport=object.__new__(module.RosTransport)
     transport.node = NS(count_services=lambda _: 1, count_publishers=lambda _: 1)
-    transport.closed=False;transport.goal=None;transport._submission=None
+    transport.closed=False;transport.goal=None;transport._submission=None;transport._readonly_requests={}
     transport.uuid_type=lambda **kwargs:NS(**kwargs)
     transport.action_type=NS(Goal=lambda:NS())
     transport.status_max_age_ms=731;transport.feedback_max_age_ms=251
@@ -562,7 +562,7 @@ def test_control_graph_counts_real_servers_and_refuses_existing_owner(monkeypatc
 
 def test_duplicate_control_graph_blocks_management_and_fjt_without_wire_requests():
     from manual_panel_ros_backend import RosTransport
-    transport = object.__new__(RosTransport)
+    transport = object.__new__(RosTransport);transport.closed=False
     transport.node = NS(count_services=lambda _:2, count_publishers=lambda _:1)
     events = []
     transport.request('disable_and_release', lambda result:events.append(result))
@@ -650,3 +650,76 @@ def test_owner_preflight_default_allows_700ms_dds_departure_but_never_takes_live
     with pytest.raises(RuntimeError,match='已有ROS控制链'):
         transport.assert_no_existing_owner()
     assert 2.<=clock[0]<2.03 and transport._startup_owner_conflict
+
+
+def readonly_rpc_transport(monkeypatch):
+    import manual_panel_ros_backend as module
+    clock=[10.];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    class Future:
+        def __init__(self):self.callback=None;self.value=None;self.cancelled=False
+        def add_done_callback(self,callback):self.callback=callback
+        def result(self):return self.value
+        def cancel(self):
+            self.cancelled=True
+            if self.callback:self.callback(self)  # 取消也可同步触发旧回调。
+        def resolve(self,success,message):
+            self.value=NS(success=success,message=message);self.callback(self)
+    transport=module.RosTransport.__new__(module.RosTransport)
+    transport.closed=False;transport._submission=None;transport._readonly_requests={}
+    transport.goal=None;transport.trigger=NS(Request=lambda:NS(),Response=lambda **kw:NS(**kw))
+    transport.node=NS(count_services=lambda _:1,count_publishers=lambda _:1,
+        destroy_timer=lambda _:None,destroy_client=lambda _:None,destroy_subscription=lambda _:None)
+    transport.retry_timer=object();transport.parameter_client=object();transport.subscriptions=[]
+    transport.action=NS(destroy=lambda:None)
+    calls=[]
+    def call(service):
+        future=Future();calls.append((service,future));return future
+    transport.clients={name:NS(service_is_ready=lambda:True,call_async=lambda _,name=name:call(name))
+        for name in ['bootstrap_status','manual_control_status','baseline_status','manual_reference_status','last_goal_rejection','disable_and_release','prepare_manual_control']}
+    return module,transport,clock,calls
+
+
+def test_lost_readonly_rpc_does_not_block_release_and_late_reply_cannot_confirm_it(monkeypatch):
+    module,transport,clock,calls=readonly_rpc_transport(monkeypatch);events=[]
+    backend=module.RosBackend(transport,lambda *event:events.append(event));backend.connect()
+    backend.poll();old=calls[-1][1]
+    assert backend.pending and calls[-1][0]=='bootstrap_status'
+    backend.release();deadline=backend._release_deadline
+    assert len(calls)==1 and backend.release_pending
+    clock[0]+=1.01;transport._poll_trajectory_retry()
+    assert not backend.pending and old.cancelled and not backend.released
+    assert events[-1][0]=='progress' and 'READONLY_REQUEST_TIMEOUT' in events[-1][1]
+    backend.poll();assert calls[-1][0]=='disable_and_release' and backend.pending
+    calls[-1][1].resolve(False,'RELEASE_QUEUED')
+    old.resolve(True,'RELEASED_IDLE')
+    assert not backend.released and backend._release_deadline==deadline
+    backend.poll();assert calls[-1][0]=='bootstrap_status'
+    calls[-1][1].resolve(True,'RELEASED_IDLE')
+    assert backend.released and events[-1][0]=='released'
+    assert [x[0] for x in calls].count('disable_and_release')==1
+
+
+def test_trigger_mutation_is_never_expired_or_reissued_and_close_retires_readonly(monkeypatch):
+    module,transport,clock,calls=readonly_rpc_transport(monkeypatch);events=[]
+    transport.request('prepare_manual_control',events.append)
+    mutation=calls[-1][1];clock[0]+=40.;transport._poll_trajectory_retry()
+    assert len(calls)==1 and not mutation.cancelled and not events
+    transport.request('manual_control_status',events.append);readonly=calls[-1][1]
+    transport.close();readonly.resolve(True,'MANUAL_CONTROL_READY');mutation.resolve(True,'QUEUED')
+    assert readonly.cancelled and not transport._readonly_requests and not events
+    transport.node.count_services=lambda _:(_ for _ in ()).throw(AssertionError('关闭后不得再访问图'))
+    transport.request('bootstrap_status',events.append)
+    assert not events
+
+
+def test_repeated_readonly_timeout_preserves_original_release_deadline(monkeypatch):
+    module,transport,clock,calls=readonly_rpc_transport(monkeypatch);events=[]
+    backend=module.RosBackend(transport,lambda *event:events.append(event));backend.connect();backend.release()
+    calls[-1][1].resolve(False,'RELEASE_QUEUED');deadline=backend._release_deadline
+    for _ in range(4):
+        backend.poll();clock[0]+=1.01;transport._poll_trajectory_retry()
+        assert backend._release_deadline==deadline and not backend.released
+    clock[0]=deadline;backend.poll()
+    assert not backend.released and backend._release_timeout_reported
+    assert [x[0] for x in calls].count('disable_and_release')==1
+    assert 'RELEASE_UNCONFIRMED' in events[-1][1]

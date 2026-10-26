@@ -4,11 +4,46 @@
 
 本轮已调整为SDK先行：先从Native真实行为提取公共参考/状态预算策略并安装SDK，再让ROS C++消费SDK公开常量，最后进行软件回归和实机验收。Status预算沿用Native真实1秒，默认与上限由SDK/C++约束；不继续先修ROS局部500ms规则。中央协议与REF不因此增设副本，Native CLI行为不改。公共化完成、软件测试和实机验收是分别证明的事项，不能相互代替。
 
-## 当前验证边界
+## 最终GUI24交还：正常确认、真实Hold及失能有效参考
 
-当前事实分层：旧boot的run16受限物理基线及薄面板06完整公开FJT/到位/释放通过保持有效，不覆盖新boot全部手工动态场景。新boot已完成16及17–19建立ref1，安全区恢复可沿已有参考直接SetPermit→EnableHold。GUI16的2°/s、0.1rad/s²仅是基础回归条件，5条实际FJT均正式SUCCEEDED；末端IK的等效腕解导致外部nominal关节断言失败，不是Action失败。交付默认仍60°/s、4rad/s²，未降限。
+GUI22交还后用户报告“使能无反应”，不能只凭此前无运动Stop/重连成功认定后续确认交互也通过。现场XQueryKeymap仅显示Escape（keycode9）held=True；无ROS、无hook的纯标准Qt QMessageBox实际收到KeyPress16777216并clicked No，约20–75ms自动关闭。AA_DontUseNativeDialogs不改变此行为。执行xdotool keyup Escape后，同样标准确认框保持5.05秒，直到诊断Timer主动reject。该证据定位到当时的输入状态及Qt行为，不推断Esc按下状态的来源，也不是ROS管理服务或设备拒绝的证据。
 
-GUI17在Active阶段已实测六轴非零joint_states、实测RobotModel动态TF全部齐全。ReadOnly阶段隐藏没有当前广播证据的实际RobotModel，相关Qt7/7通过；不以旧姿态或零值伪装新鲜TF。该轮HIGH在起点真实模型自碰撞时拒绝规划，零FJT，不能写高速验收通过；维护复原等待用户单独许可，不做碰撞豁免。原D10已有独立raw完整链、COMMITTED/释放终页及fresh双Idle/session0/permit0/ref1成功证据。Host旧RELEASE_UNCONFIRMED是manual保留参考的Disabling→Idle跨流过渡未识别；最小修复软件定向释放7/7通过并已安装，但尚未同case实机复放。补全真实Hold双CAN SENT前置的旧wire fixture后，默认wire集合及该7项合计8/8通过；不改产品门限。GUI17该控制链当时已按证明归属正常退出；GUI20最新无运动只读重连事实另见DDS退订等待记录。
+遇到确认框一闪即逝，可先释放键盘Esc；X11/Xwayland环境可手动运行`xdotool keyup Escape`。该命令只释放输入键，不发送ROS/USB指令、不确认双限位、不使能或授权运动；随后重新点击按钮，按当前真实物理状态正常回答确认框。
+
+GUI23仅使用sys.setprofile只读跟踪，不改动作、不自动答复；真实恢复按钮打开的正常确认框保持约60秒，AT-SPI实际点击Yes后达到MANUAL_CONTROL_ACCEPTED、Hold及READY，session2316631754780395781，随后真实Stop→RELEASED_IDLE。该过程作为诊断证据，不冒充无hook人工交还验收。GUI24最终使用正常生产窗口，无private PYTHONPATH/sitecustomize/TestApp/profiling。实际启动确认通过AT-SPI点击No保留已有参考；实际恢复按钮打开的正常QMessageBox保持后，再通过AT-SPI实际点击Yes，未绕过或替换正常确认逻辑。16:48:50 MANUAL_CONTROL_ACCEPTED，16:48:51 READY；独立类型化双源证明真实Hold4、State hold_ready=true、hold_valid_mask/position_valid_mask均63，session4357804659931202042，Status permitted=true且permit_remaining_us=873663631，boot/ref1不变。证据在gui24-human-ready/normal-enable-proof.json。
+
+实际Stop于16:49:27 QUEUED/PENDING，16:49:28已released/RELEASED_IDLE；单次Reconnect及正常启动No后建立新ReadOnly。最终独立双源证明双Idle2/session0/ref1/permit0/position_valid63，见final-independent-idle.json；desktop-input-check.json证明当时held_keycodes为空、Escape=false。窗口已交还用户，后续执行者不再进行设备IO或重启。用户此前失能时曾手动移动关节，本轮Enable仅在实测姿态保持，不能将当前有效参考或Hold解释为当前名义HOME。本轮无FJT或MOVE；GUI21四项运动及TF全部通过保持，GUI22后来交互失败保留。
+
+GUI23的cpp-enable-release-proof.json另有Enable COMMITTED与双Hold、D10全63 SENT及无丢证终页/最终Idle的只读诊断关联；不含16–19或FJT，不冒充GUI24无hook交还证明。产品源码、b603后端/d632 UI、SDK/FW与协议pin未因此改变。
+
+## GUI22当时无运动复测：只读查询有限超时
+
+GUI21四项默认动态运动、正式FJT终态/实际到位及原D10证据保持通过，但后续长时ReadOnly连接暴露新的薄客户端阻塞：15:47:54连接后，服务端15:47:55出现bootstrap_status响应发送timeout、client will not receive response的WARN；15:53点击Stop未出现RELEASE_QUEUED，原20秒后报release deadline expired。同时独立订阅仍有fresh双Idle，服务端正常响应独立调用。WARN与一次只读Future不返回的路径吻合，但不足以定位或证明具体DDS丢包原因。
+
+代码缺口是RosBackend._request仅靠Future回调清pending，而RosTransport的Trigger请求无截止；一个永不完成的只读status查询可长期占用客户端槽，阻止后续正常释放请求。已实现的最小修复只为bootstrap_status、manual_control_status、baseline_status、manual_reference_status及last_goal_rejection这些只读Trigger查询设置1秒宿主单调超时；先退休本次Future/token再cancel，返回success=false的READONLY_REQUEST_TIMEOUT，由薄Backend清pending并报告progress，随后按原轮询继续。迟到或取消同步回调不得确认后续释放，关闭后不回写状态；超时不等于设备失败或已失能，也不据此补造回应。该1秒机制不退休或自动重发带副作用的prepare/自动任务/disable_and_release；既有UNAVAILABLE有界重试与QUEUED后只poll原终态的规则不变，原20秒释放绝对截止不重开，C++/SDK/FW/FJT不改。
+
+Root随后通过独立公共disable_and_release取得RELEASED_IDLE，并独立确认fresh双Idle/session0/permit0/ref1，才按已证明归属关闭旧控制组及自己的外层窗口；不能把外部收尾记为当时UI自动Stop成功。单元复现先RED后GREEN，43 pass/1 skip（保留原隔离集成跳过），覆盖丢失只读回复后仍能释放、迟到旧回复不得假确认、mutator不超时重发、关闭退休查询以及反复只读超时不延长原释放截止。最终Backend源码及安装SHA256均为b603be79c10c07bee60e25941f625696b853801ee200a331efb9c07226b810d3；Main、C++、SDK、固件及FJT未改。
+
+GUI22正常生产窗口没有私有sitecustomize/TestApp/PYTHONPATH，也没有自动确认hook；仅通过正常启动问题Escape回答双限位No，后续正常确认均保留。真实单次Stop约3.1秒取得RELEASED_IDLE，单次Reconnect约3.8秒恢复ReadOnly；gui22-human-ready/normal-stop-reconnect-proof.json保留现场结果。随后独立类型化订阅确认fresh双Idle/session0/permit0/ref1，证据见final-independent-idle.txt。本轮没有Enable、MOVE或FJT，不能冒充再次四项运动或丢包故障注入实机复放；GUI21四项目标及实际TF全部通过的结论保持，旧UI后来Stop失败也保留。最终交还的是正常人工使用窗口，不代替用户继续操作，后续不再由执行者主动操作设备。
+
+## 当前验证边界：GUI21默认动态四项通过
+
+GUI21在用户明确授权的一次Native维护恢复之后，从实际HOME起始，完整通过ROS默认60°/s、4rad/s²四项目标：关节页REST→关节页HOME→末端页面命名REST→末端页面命名HOME。四条公开FJT均accepted并正式terminal_success，随后均由fresh实际反馈独立确认到位；每条76个路径点、78条命令、1.54秒。没有降低动态上限，不借Native完成这些ROS目标，也未跳过真实模型碰撞检查。末端页本轮使用命名Home/Rest，不把此前XYZ/RPY→IK等效腕解强制等同于nominal关节解。
+
+Native维护另存native-maintenance-home-21：同boot/ref1保留，3次MOVE_COMPLETED实际恢复到HOME，随后RELEASE_CONFIRMED并退出0，raw TransportComplete且无丢帧。此路线只恢复起点，不计ROS标定、ROS四项目标或ROS释放通过；维护与ROS owner串行，无共享USB FD。新boot最初reference0→1仍由此前GUI8真实ROS16及17–19建立，不在HOME重采零。
+
+| ROS目标 | 公开Goal UUID | 原始run | 最大到位误差（度） |
+|---|---|---:|---:|
+| 关节页 REST | `1b194d2aa98747bb8f2802a551e0bd0e` | 31 | 0.045765644 |
+| 关节页 HOME | `742a6211fd584b0c957f942898863138` | 32 | 0.076345962 |
+| 末端页命名 REST | `cb17b0daf69d4867b1c892b67e952d33` | 33 | 0.048858982 |
+| 末端页命名 HOME | `6ba57d510d4940428b97cc866176ae45` | 34 | 0.077609390 |
+
+四目标完整轨迹SHA及accepted/before_begin/terminal_success同UUID关联见ros-session-35ljocwo/goal-timeline.jsonl（文件内容实际为CSV，按字段读取，末行COMPLETE不是第五个Goal）。motion epoch依次71→73、73→75、75→77、77→79，四次完整业务终态分别属于run31–34。gui21-high-from-home保留本轮面板/MoveIt记录，原始证据由中央SDK布局解析，chain_errors=[]。最终FINAL_RELEASE_CONFIRMED后重连ReadOnly/ref1/session0/core2通过，不把GUI20无运动重连当作本轮enabled释放证据。
+
+GUI21最终D10根请求13191556776482737655，经对应Query取得operation429、transaction_phase3（COMMITTED），release run35的category3 Disable页expected/submitted/sent均63、failed0，终页release_committed=true且noEvidenceLost，整链chain_errors=[]。四个业务run31–34均motion_complete、无Failure、无丢证。冻结raw SHA256为d0cd9729cdbf8c30f04403b95a60f6413ca12726d164aee8abfd5b5cccce3d7e。首Idle State宿主时间268369968828µs，首Idle Status为268370475753µs，跨流间隔506925µs；之前最后Status core7，不是8。因此本次证明正常使能后释放及约507ms跨流等待真实成功，不能宣称精准复放GUI17的8→2竞态。该精确分支仍由510799µs软件RED/GREEN与严格身份/Fault反例覆盖。
+
+GUI21四项目标后当时另独立执行一次安全HOME的Prepare，仅核Active实际TF：18个actual links全部可解析，missing_tf=[]，六轴实际joint_states齐全，没有新增FJT或MOVE。随后真实UI Stop完成释放，独立新鲜订阅再次确认同boot/ref1、双Idle/session0/permit0；面板保持已失能。此额外Hold/TF检查属独立session，不改写四Goal的UUID/run证据。gui21-high-from-home/final-evidence.json、active-tf.json及final-independent-idle.txt分别保留业务/释放、显示链和独立失能观测。CAN SENT只证明提交/发送，不等于驱动器独立失能readback；不扩为正式资源、长时负载或外部位移资格。
 
 ## 从只读连接到有条件运动
 
@@ -202,14 +237,14 @@ panel05原始完整轨迹也成功，但Python Backend首次UNAVAILABLE未重试
 最终Runtime默认start_new_session并记录owned PGID，仅在released已确认后向自身进程组优雅SIGINT，共享6秒截止等待parent与活children退出，不影响独立external；超时保留Error与owner，不强杀。8/8真实进程组生命周期测试通过。UI同步FK/IK/plan及异步preset FK图异常均显示错误并回滚，不退出、不发运动；clicked(bool)包装回归及18个旧fixture补backend=real后，页面75/75通过。该软件回归不提升为全部Qt人工运动已实测。
 
 
-## 后续用户主动重启与当前不可测试边界
+## 历史GUI4–7：用户重启与当时不可测试边界
 
 后续GUI4操作暴露旧GUI3崩溃遗留的child launch/Gate未随parent退出，与新GUI4 child/Gate并存，导致CM冲突且prepare可能送到旧链。Root按已证明归属准确SIGINT旧child、新child与新GUI parent，未使用killall；新PGID保护不能追溯接管旧版本遗留实例，首次仍须明确清理。当前不能称Qt可直接测试。用户随后主动重启机械臂并确认双限位，先前boot/ref1不再可复用；后续仅唯一控制链按新boot与本次明确确认重新标定，实际结果待提供。旧run16/panel06及Qt只读证据仅属于旧boot历史，不代表重启后的当前状态。
 
 此前生成HTML仅是旧冻结点快照，最终发布暂停，待新boot单链事实与源码再次冻结。
 
 
-## 最终当前状态：新boot单链只读
+## 历史GUI7快照：当时新boot单链只读
 
 最终owner防误绑定保护已安装，Backend软件37 pass/1 skip、Qt针对性5 pass。GUI5/6拒绝启动是正确保护：旧run06还残留baseline orphan（并非Gate/MoveIt）；Root按owned-chain日志证明归属后准确SIGINT清理。GUI7随后真正唯一控制链连接成功，实际visible=true、backend=ros、runtime=ReadOnly、error与graph为空。用户主动重启后的新boot为0x1858026637c57a9d、reference=0，本次双限位明确确认true已传入，但连接本身不使能；等待用户本次使能/恢复零点与人工标定，不自动抢操作，不声称新boot标定或运动已实测。旧run16基线与panel06完整接口实机PASS仍成立，但仅属旧boot历史。
 
@@ -222,10 +257,10 @@ GUI8已在新boot1754154692906416797从reference0、真实双限位确认出发�
 
 reference0首次建立参考应使用“双限位标定→Rest”；“使能/恢复零点”只用于已有同boot参考的恢复。此前Root曾指导错误按钮，已明确纠正；不得把已有参考恢复与首次采参考混为一谈。
 
-新发现只prepare/只读规划、0 goal后的释放，Gate错误向GoalTimeline写kRelease导致stickyIncomplete。原始raw202组chain_errors=[]、原D10 COMMITTED、六轴Disable SENT63/failed0及新鲜双Idle真实成立；不能把该软件账本错误写成设备未失能，也不能据原始释放事实忽略sticky错误。最小有意义RED/GREEN修复进行中，待安装后验证同boot/ref1 prepare→plan-only→D10→重连；最终源码/HTML暂不冻结。
+新发现只prepare/只读规划、0 goal后的释放，Gate错误向GoalTimeline写kRelease导致stickyIncomplete。原始raw202组chain_errors=[]、原D10 COMMITTED、六轴Disable SENT63/failed0及新鲜双Idle真实成立；不能把该软件账本错误写成设备未失能，也不能据原始释放事实忽略sticky错误。这是GUI8当时的失败快照；后续最小RED/GREEN修复及GUI11 prepare→plan-only→D10→重连已完成，不代表当前仍在等待源码/HTML冻结。
 
 
-## 最终GUI11真实释放与重连交接
+## 历史GUI11真实释放与重连交接
 
 最终GUI11实机闭环通过：同boot1754154692906416797/ref1、operator_confirmed=false复用已有参考且不新capture；PREPARE_SUBMITTED→REAL_HOLD，生产MoveIt规划J1+0.2°成功（4点、6碰撞样本），本次无FJT。随后AUTHORITY_RELEASED，重连达到USER_HANDOFF_DISABLED_REFERENCE_READY，实际ReadOnly/ref1、resumeEnabled=true、graph为空，已交用户测试。此轮证明prepare/plan-only/真实释放/重连，不替代旧panel06完整FJT执行及到位证据。
 
@@ -245,7 +280,7 @@ reference0首次建立参考应使用“双限位标定→Rest”；“使能/�
 ROS历史0x1008仅在显式ClearFault后当前first_failure_reason0、core2/session0/permit0、cleanup3/正式释放/noLost及同boot/ref/原链/水位严格满足时接纳只读baseline；Fault4/source4104保留，不自动清错、不伪成功、不绕过17–19资格。旧实现红测、修后17/17针对性回归与control构建/install通过。
 
 
-## GUI14–16修复与当前受限验证草稿
+## 历史GUI14–16修复与低速验证边界
 
 GUI14低速Home实测到位，但不能称业务通过：Complete消费permit后C++自动恢复处于core3时，Qt沿用Native通用in-flight/not-authorized门误Cancel，外部harness又把executing=false误认为正式终态并二次STOP，后续产生0x1024历史run18。修复为ROS accepted in-flight等待同UUID正式C++ Action结果，保留fresh boot/ref与原deadline；正常permit0/core3→7→4继续等，身份变化或超时仍取消，Native原逻辑不改。completed后清旧path不覆盖成功。真实Qt两轮77项RED/GREEN通过；harness也改为正式结果+fresh actualHold，不按executing=false或瞬时到位判通过，错误不自行重复STOP。
 
@@ -256,7 +291,7 @@ GUI15暴露普通安全区已有同boot参考恢复不应无条件再17：Native
 GUI16普通Home/ref1恢复约1.5秒达actualHold，未发17；低速setupRest完整2318命令/46.34秒及随后四leg均已有正式Action SUCCEEDED。末端Rest等效腕角导致外部nominal关节断言失败，不能记为默认高速验收；最终D10及fresh双Idle已独立确认。
 
 
-## 实际RViz动态TF与控制器激活握手修复草稿
+## 实际RViz动态TF与控制器激活握手修复
 
 GUI16实际RobotModel红色错误已只读定位为缺实测动态TF：joint_state_broadcaster处于inactive而arm_controller active，/joint_states虽存在publisher但无样本，六轴link动态TF全缺；实际URDF灰色，非目标预览红或碰撞材质。启动时JSB仍unconfigured，Node BEST_EFFORT双激活仅凭ok推进，掩盖了JSB失败。旧RSP已由Root按日志归属准确关闭。
 
@@ -264,11 +299,11 @@ Node现先ListControllers等待两者配置完成，在同一次STRICT事务激�
 
 GUI16低速2°/s、0.1rad/s²的setupRest、joint HOME/REST、末端XYZ/RPY→IK HOME/REST共5次实际FJT均正式SUCCEEDED；末端Rest选择等效腕角约±118°，外部按nominal关节角比较失败，不是Action失败。末端等效解应按真实FK的Cartesian pose比较，不能要求同一关节解；该轮仍不能充当默认60°/s、4rad/s²验收。Root已D10并核新鲜双Idle/session0/permit0/ref1；下一轮默认动态以命名预设具体六角做四leg并独立验证。
 
-## GUI17释放跨流时序修复（待下一次整链复验）
+## 历史GUI17释放跨流修复与GUI21复验边界
 
 GUI17实测已验证六轴非零joint_states及实测RobotModel动态TF齐全，JSB配置/STRICT激活修复有效。该轮默认动态setupRest在发任何FJT前被真实起点自碰撞拒绝，不能记为高速运动通过。随后原D10已COMMITTED，独立raw双Idle2/session0/permit0/ref1、完整释放终页均成立；Host却误报RELEASE_UNCONFIRMED。根因是D10后Disabling Status仍携原owner/ref1，Idle State先到且session0/ref1；Status合法约500ms周期，511378µs后才到Idle Status。旧有限过渡helper仅接受bench 7→1/ref0，未识别manual 8→2/ref1，释放路径又以250ms检查Status，导致下一Status前579µs先按连续性失效，Bootstrap进入Fault，后续IDENTITY_CHANGED掩盖最早原因。
 
-最小修复只在manual、明确expectedReference非零、原D10绑定及stage2启用保留参考的8→2有限等待：boot/原owner/reference相同、motion与management均恰+1，State session0且同ref，Status使用SDK独立1秒预算，State仍250ms。原5秒意图截止、最终fresh双Idle验收、普通RUN/Fault/身份/hash门均不放宽，bench默认7→1/ref0不变；这不是把诊断cache变成控制授权。真实510799µs时序先RED，身份/epoch/过期/Fault负例及相关释放回归7/7 GREEN，Gate已增量安装；当前物理释放证据与修复后下一次整链复验分开记录，尚不声称高速四leg通过。
+最小修复只在manual、明确expectedReference非零、原D10绑定及stage2启用保留参考的8→2有限等待：boot/原owner/reference相同、motion与management均恰+1，State session0且同ref，Status使用SDK独立1秒预算，State仍250ms。原5秒意图截止、最终fresh双Idle验收、普通RUN/Fault/身份/hash门均不放宽，bench默认7→1/ref0不变；这不是把诊断cache变成控制授权。真实510799µs时序先RED，身份/epoch/过期/Fault负例及相关释放回归7/7 GREEN，Gate已增量安装；当前物理释放证据与修复后下一次整链复验分开记录，此GUI17当时未有高速四leg通过证据；后续GUI21的四项真实通过另行记录，不反推该失败为通过。
 
 ## 正常Stop后的DDS退订等待（现场无运动复测通过）
 

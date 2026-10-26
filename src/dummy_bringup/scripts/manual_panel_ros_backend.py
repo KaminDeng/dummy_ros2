@@ -13,6 +13,9 @@ CONTROL_SERVICES = ('/device_action_gate/bootstrap_status',
                     '/manual_ros_baseline/get_parameters',
                     '/controller_manager/list_controllers')
 CONTROL_TOPICS = ('/device_action_gate/device_status', '/device_action_gate/device_state')
+# 只有无副作用的Trigger查询可退休超时回包；管理写请求绝不自动重发。
+READONLY_TRIGGER_SERVICES = frozenset(('bootstrap_status', 'manual_control_status',
+    'baseline_status', 'manual_reference_status', 'last_goal_rejection'))
 
 def confirmed_ros_launch_argv(argv, confirmed):
     """只传递当次明确姿态确认；连接本身仍不触发标定或使能。"""
@@ -193,6 +196,7 @@ class RosTransport:
         self.feedback_max_age_ms = None
         self.parameter_pending = False
         self.parameter_generation = 0
+        self._readonly_requests = {}
         self.parameter_future = None
         self.parameter_retry_at = 0.
         self.closed = False
@@ -306,6 +310,8 @@ class RosTransport:
         return self.clients[service].service_is_ready()
 
     def request(self, service, callback):
+        if self.closed:
+            return
         error = self.control_graph_error()
         if error:
             callback(RuntimeError(error))
@@ -315,13 +321,36 @@ class RosTransport:
             callback(RuntimeError('ROS 服务尚未就绪：' + service))
             return
         future = client.call_async(self.trigger.Request())
+        token = object() if service in READONLY_TRIGGER_SERVICES else None
+        context = None
+        if token is not None:
+            context = dict(future=future, deadline=time.monotonic()+1.,
+                           callback=callback, service=service)
+            self._readonly_requests[token] = context
         def done(result):
+            if self.closed:
+                return
+            if token is not None and self._readonly_requests.pop(token, None) is not context:
+                return
             try:
                 response = result.result()
             except Exception as error:
                 response = error
             callback(response)
         future.add_done_callback(done)
+
+    def _expire_readonly_requests(self):
+        if self.closed:
+            return
+        now = time.monotonic()
+        for token, context in list(self._readonly_requests.items()):
+            if now < context['deadline']:
+                continue
+            # 先退休本次Future，再取消；同步或迟到回调均不能覆盖新的请求。
+            del self._readonly_requests[token]
+            context['future'].cancel()
+            context['callback'](self.trigger.Response(success=False,
+                message='READONLY_REQUEST_TIMEOUT:' + context['service']))
 
     def _fresh_retry_binding(self):
         state, status = getattr(self, 'latest_state', None), getattr(self, 'latest_status', None)
@@ -354,6 +383,7 @@ class RosTransport:
             self._submission_failed(context, 'ROS目标尚未受理；已撤销待重试请求')
 
     def _poll_trajectory_retry(self):
+        self._expire_readonly_requests()
         context = getattr(self, '_submission', None)
         if self.closed or context is None or context['stage'] not in ('receipt', 'renewal'):
             return
@@ -472,6 +502,11 @@ class RosTransport:
     def close(self):
         self.cancel_pending_submission()
         self.closed = True
+        # 关闭只销毁查询Future，不产生终态或回调到已关闭界面。
+        pending = list(self._readonly_requests.values())
+        self._readonly_requests.clear()
+        for context in pending:
+            context['future'].cancel()
         self.node.destroy_timer(self.retry_timer)
         self.node.destroy_client(self.parameter_client)
         self.action.destroy()
