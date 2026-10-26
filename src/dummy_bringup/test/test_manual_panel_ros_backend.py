@@ -621,3 +621,32 @@ def test_lost_parameter_reply_retries_and_ignores_old_generation(monkeypatch):
     assert (transport.status_max_age_ms,transport.feedback_max_age_ms)==(1000,250)
     transport.closed=True;futures[0].callback(futures[0])
     assert transport.status_max_age_ms==1000
+
+
+def test_owner_preflight_default_allows_700ms_dds_departure_but_never_takes_live_owner(monkeypatch):
+    import manual_panel_ros_backend as module
+    clock=[0.]
+    monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(module.time,'sleep',lambda delay:clock.__setitem__(0,clock[0]+delay))
+    transport=module.RosTransport.__new__(module.RosTransport)
+    transport._startup_owner_conflict='previous startup refused'
+    transport.node=NS(count_services=lambda _:int(clock[0]<.7),count_publishers=lambda _:int(clock[0]<.7))
+    transport.assert_no_existing_owner()
+    assert .7<=clock[0]<2. and not transport._startup_owner_conflict
+    # 始终为空仍只消耗原半秒发现期，不能无条件延长所有连接。
+    clock[0]=0.
+    transport.node=NS(count_services=lambda _:0,count_publishers=lambda _:0)
+    transport.assert_no_existing_owner()
+    assert .5<=clock[0]<.53
+    # 真拥有者始终存在；原固定2秒截止拒绝，不接管或清理外部链。
+    clock[0]=0.
+    transport.node=NS(count_services=lambda _:1,count_publishers=lambda _:1)
+    with pytest.raises(RuntimeError,match='已有ROS控制链'):
+        transport.assert_no_existing_owner()
+    assert 2.<=clock[0]<2.03 and transport._startup_owner_conflict
+    # 发现期中较晚出现的新拥有者也必须拒绝，不能只采第一个空图。
+    clock[0]=0.
+    transport.node=NS(count_services=lambda _:int(clock[0]>=.3),count_publishers=lambda _:0)
+    with pytest.raises(RuntimeError,match='已有ROS控制链'):
+        transport.assert_no_existing_owner()
+    assert 2.<=clock[0]<2.03 and transport._startup_owner_conflict

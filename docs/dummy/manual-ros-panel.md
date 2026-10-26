@@ -8,7 +8,7 @@
 
 当前事实分层：旧boot的run16受限物理基线及薄面板06完整公开FJT/到位/释放通过保持有效，不覆盖新boot全部手工动态场景。新boot已完成16及17–19建立ref1，安全区恢复可沿已有参考直接SetPermit→EnableHold。GUI16的2°/s、0.1rad/s²仅是基础回归条件，5条实际FJT均正式SUCCEEDED；末端IK的等效腕解导致外部nominal关节断言失败，不是Action失败。交付默认仍60°/s、4rad/s²，未降限。
 
-GUI17在Active阶段已实测六轴非零joint_states、实测RobotModel动态TF全部齐全。ReadOnly阶段隐藏没有当前广播证据的实际RobotModel，相关Qt7/7通过；不以旧姿态或零值伪装新鲜TF。该轮HIGH在起点真实模型自碰撞时拒绝规划，零FJT，不能写高速验收通过；维护复原等待用户单独许可，不做碰撞豁免。原D10已有独立raw完整链、COMMITTED/释放终页及fresh双Idle/session0/permit0/ref1成功证据。Host旧RELEASE_UNCONFIRMED是manual保留参考的Disabling→Idle跨流过渡未识别；最小修复软件定向释放7/7通过并已安装，但尚未同case实机复放。补全真实Hold双CAN SENT前置的旧wire fixture后，默认wire集合及该7项合计8/8通过；不改产品门限。当前控制链已按证明归属正常退出，没有再次运动。
+GUI17在Active阶段已实测六轴非零joint_states、实测RobotModel动态TF全部齐全。ReadOnly阶段隐藏没有当前广播证据的实际RobotModel，相关Qt7/7通过；不以旧姿态或零值伪装新鲜TF。该轮HIGH在起点真实模型自碰撞时拒绝规划，零FJT，不能写高速验收通过；维护复原等待用户单独许可，不做碰撞豁免。原D10已有独立raw完整链、COMMITTED/释放终页及fresh双Idle/session0/permit0/ref1成功证据。Host旧RELEASE_UNCONFIRMED是manual保留参考的Disabling→Idle跨流过渡未识别；最小修复软件定向释放7/7通过并已安装，但尚未同case实机复放。补全真实Hold双CAN SENT前置的旧wire fixture后，默认wire集合及该7项合计8/8通过；不改产品门限。GUI17该控制链当时已按证明归属正常退出；GUI20最新无运动只读重连事实另见DDS退订等待记录。
 
 ## 从只读连接到有条件运动
 
@@ -269,3 +269,11 @@ GUI16低速2°/s、0.1rad/s²的setupRest、joint HOME/REST、末端XYZ/RPY→IK
 GUI17实测已验证六轴非零joint_states及实测RobotModel动态TF齐全，JSB配置/STRICT激活修复有效。该轮默认动态setupRest在发任何FJT前被真实起点自碰撞拒绝，不能记为高速运动通过。随后原D10已COMMITTED，独立raw双Idle2/session0/permit0/ref1、完整释放终页均成立；Host却误报RELEASE_UNCONFIRMED。根因是D10后Disabling Status仍携原owner/ref1，Idle State先到且session0/ref1；Status合法约500ms周期，511378µs后才到Idle Status。旧有限过渡helper仅接受bench 7→1/ref0，未识别manual 8→2/ref1，释放路径又以250ms检查Status，导致下一Status前579µs先按连续性失效，Bootstrap进入Fault，后续IDENTITY_CHANGED掩盖最早原因。
 
 最小修复只在manual、明确expectedReference非零、原D10绑定及stage2启用保留参考的8→2有限等待：boot/原owner/reference相同、motion与management均恰+1，State session0且同ref，Status使用SDK独立1秒预算，State仍250ms。原5秒意图截止、最终fresh双Idle验收、普通RUN/Fault/身份/hash门均不放宽，bench默认7→1/ref0不变；这不是把诊断cache变成控制授权。真实510799µs时序先RED，身份/epoch/过期/Fault负例及相关释放回归7/7 GREEN，Gate已增量安装；当前物理释放证据与修复后下一次整链复验分开记录，尚不声称高速四leg通过。
+
+## 正常Stop后的DDS退订等待（现场无运动复测通过）
+
+正常owned Stop后，进程已退出与DDS图端点全部消退不是同一个时刻。旧预检在0.5秒发现期一到就锁存仍可见的旧端点，因而误拒随后重连。修复仅调整RosTransport.assert_no_existing_owner的有界等待：空图仍保留原0.5秒发现期；若该时刻仍有旧endpoint，最多等到本次调用开始即固定的2秒截止，只有实际服务/发布者counts全部为0才解除冲突并返回。若截止仍有任何真实owner端点则严格拒绝；点击不延长截止，也不接管、杀进程、发管理请求或自动使能。循环只等DDS独立更新，不spin ROS回调或重入Qt业务。
+
+纯Python隔离测试先RED后GREEN，40 pass/1 skip，覆盖空图发现期、700ms后退订、持续真实owner拒绝及无回调重入。此变更仅Backend及其测试，不改Main、Native、固件或协议；GUI20真实无运动Stop/单次重连已通过，现场证据与40项软件验证分别保留。
+
+GUI20已用新Python进程完成真实无运动Stop/重连复测：方法签名为(self, timeout=2.0)，确认加载本次Backend；UI Stop收到RELEASED_IDLE后只点击一次Reconnect，ReadOnly→Starting→ReadOnly，error与graph_error均为空，约4.21秒完成（包含新进程启动）。旧自有进程组及其记录成员均退出，新组只读单链建立；同boot/ref1、session0/core2，界面速度60°/s与加速度4rad/s²未改，实际RobotModel隐藏且Python joint-state publisher不存在。本次没有使能、FJT或运动，故只证明无运动收尾与重连，不覆盖默认高速四项，也不是enabled的8→2保留参考释放修复实机复放。

@@ -232,25 +232,29 @@ class RosTransport:
         invalid = [(name, count) for name, count in services + publishers if count != 1]
         return ('ROS控制链缺失或存在重复实例：' + ', '.join(name+'='+str(count) for name, count in invalid)) if invalid else ''
 
-    def assert_no_existing_owner(self, timeout=.5):
-        deadline = time.monotonic() + timeout
+    def assert_no_existing_owner(self, timeout=2.):
+        started = time.monotonic()
+        deadline = started + timeout
+        discovery_deadline = started + min(.5, timeout)
         while True:
             existing = [(name, self.node.count_services(name)) for name in CONTROL_SERVICES]
             existing += [(name, self.node.count_publishers(name)) for name in CONTROL_TOPICS]
             existing = [(name, count) for name, count in existing if count]
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                if existing:
-                    self._startup_owner_conflict = '已有ROS控制链，拒绝创建或接管：' + ', '.join(name+'='+str(count) for name, count in existing)
-                    raise RuntimeError(self._startup_owner_conflict)
-                # 只有本次固定截止时实际图已为空，才清除前次冲突；
-                # 单凭点击绝不解除冲突。
+            now = time.monotonic()
+            remaining = deadline - now
+            if not existing and now >= discovery_deadline:
+                # 只有本次原发现期后实际全图为空才解除旧冲突；点击本身不解除。
                 self._startup_owner_conflict = ''
                 return
-            # Jazzy rclpy公开服务和发布者计数，但没有公开的图事件等待接口。
-            # DDS发现独立于spin_once更新图；重连时不重入Qt或业务回调。
-            # 轮询只使用原0.5秒发现预算的剩余时间。
-            time.sleep(min(.02, remaining))
+            if remaining <= 0:
+                self._startup_owner_conflict = '已有ROS控制链，拒绝创建或接管：' + ', '.join(name+'='+str(count) for name, count in existing)
+                raise RuntimeError(self._startup_owner_conflict)
+            # 空图保留原半秒发现期；旧DDS端点消退可等到同一次固定两秒截止。
+            # 图由DDS独立更新，不spin_once或重入Qt业务，也不发送清理请求。
+            wait = min(.02, remaining)
+            if now < discovery_deadline:
+                wait = min(wait, discovery_deadline - now)
+            time.sleep(wait)
 
     def refresh_status_budget(self):
         now = time.monotonic()
