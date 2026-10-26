@@ -135,18 +135,22 @@ class RosBackend:
         return self._request('disable_and_release', received)
 
     def poll(self):
-        if self._release_expired():
-            return False
-        if self.release_pending:
+        expired = self._release_expired()
+        if self.release_pending and not expired:
             return self._send_release()
         def status(response):
-            if self._release_expired():
-                return
             message = response.message
-            if self.operation == 'release' and response.success and message in ('RELEASED_IDLE', 'FAULT_CLEANUP_CONFIRMED'):
+            release_intent = not self.released and (self.operation == 'release' or self._release_deadline is not None)
+            physical_release = ((response.success and message in ('RELEASED_IDLE', 'FAULT_CLEANUP_CONFIRMED')) or
+                                message == 'EVIDENCE_INCOMPLETE;RELEASED_IDLE')
+            # 原释放期限只封锁写请求；迟到的权威只读确认仍可退休owner，原证据错误不改成成功。
+            if release_intent and physical_release:
                 self.released = True
+                self.release_pending = False
                 self.operation = None
                 self.callback('released', message)
+            elif release_intent and self._release_expired():
+                self.callback('progress', message)
             elif self.operation == 'manual' and response.success and message.startswith('MANUAL_CONTROL_READY'):
                 if not self.manual_ready:
                     self.manual_ready = True
@@ -170,7 +174,7 @@ class RosBackend:
                 self.callback('failed', message)
             else:
                 self.callback('progress', message)
-        return self._request('baseline_status' if self.operation == 'auto' else 'manual_control_status' if self.operation == 'manual' else 'bootstrap_status', status)
+        return self._request('bootstrap_status' if self._release_deadline is not None else 'baseline_status' if self.operation == 'auto' else 'manual_control_status' if self.operation == 'manual' else 'bootstrap_status', status)
 
     def close(self):
         if not self.released:

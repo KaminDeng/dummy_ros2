@@ -550,7 +550,8 @@ def test_release_unavailable_expires_original_deadline_and_repeat_cannot_restart
     assert not backend.released and not backend.close() and not transport.closed
     assert events[-1][0] == 'failed' and 'RELEASE_UNCONFIRMED' in events[-1][1]
     backend.release(); now[0] = 80.0; backend.poll()
-    assert len(transport.calls) == 2
+    assert sum(name == 'disable_and_release' for name, _ in transport.calls) == 2
+    assert transport.calls[-1][0] == 'bootstrap_status'
     assert sum(event[0] == 'failed' for event in events) == 1
 
 
@@ -797,3 +798,46 @@ def test_preflight_never_sends_on_owner_drift_stale_or_unready(failure,monkeypat
     clock[0]=deadline+.001
     t._poll_trajectory_retry()
     assert t._submission is None and events[-1][0]=='failed' and not calls
+
+
+@pytest.mark.parametrize('tag,confirmed',[
+ ('EVIDENCE_INCOMPLETE;RELEASED_IDLE',True),
+ ('EVIDENCE_INCOMPLETE;RELEASE_UNCONFIRMED',False),
+ ('EVIDENCE_INCOMPLETE;RELEASE_PENDING',False),
+ ('prefix EVIDENCE_INCOMPLETE;RELEASED_IDLE',False)])
+def test_release_compound_tag_requires_explicit_intent_and_exact_authority(tag,confirmed):
+    from manual_panel_ros_backend import RosBackend
+    calls=[];events=[]
+    t=NS(request=lambda name,cb:(calls.append(name),cb(NS(success=False,message='RELEASE_QUEUED' if name=='disable_and_release' else tag))),close=lambda:None)
+    b=RosBackend(t,lambda *x:events.append(x));b.connect();b.release();b.poll()
+    assert b.released is confirmed
+    if confirmed:assert events[-1]==('released',tag) and b.close()
+    other=RosBackend(t,lambda *x:events.append(x));other.operation='auto';other.poll()
+    assert not other.released and other.operation=='auto'
+
+
+def test_late_readonly_release_confirmation_unlocks_close_without_resending_d10(monkeypatch):
+    import manual_panel_ros_backend as m
+    clock=[1.];monkeypatch.setattr(m.time,'monotonic',lambda:clock[0])
+    calls=[];events=[];reply=['RELEASE_PENDING']
+    t=NS(request=lambda name,cb:(calls.append(name),cb(NS(success=False,message='RELEASE_QUEUED' if name=='disable_and_release' else reply[0]))),close=lambda:None)
+    b=m.RosBackend(t,lambda *x:events.append(x));b.release();clock[0]=22.;b.poll()
+    assert not b.released and any(x[0]=='failed'for x in events)
+    reply[0]='EVIDENCE_INCOMPLETE;RELEASED_IDLE'
+    b.poll()
+    assert b.released and b.close()
+    assert calls.count('disable_and_release')==1 and calls[-1]=='bootstrap_status'
+    assert any('deadline expired'in str(x)for x in events)
+
+
+def test_confirmed_readonly_release_cancels_unsent_write_and_emits_once():
+    from manual_panel_ros_backend import RosBackend
+    calls=[];events=[];callbacks=[]
+    t=NS(request=lambda name,cb:(calls.append(name),callbacks.append(cb)))
+    b=RosBackend(t,lambda *x:events.append(x));b.poll();b.release()
+    callbacks.pop(0)(NS(success=True,message='RELEASED_IDLE'))
+    assert b.released
+    b.poll()
+    assert calls==['bootstrap_status','bootstrap_status']
+    callbacks.pop(0)(NS(success=True,message='RELEASED_IDLE'))
+    assert sum(x[0]=='released' for x in events)==1

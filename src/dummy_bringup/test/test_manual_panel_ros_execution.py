@@ -39,6 +39,35 @@ def test_ros_trajectory_rejects_invalid_time():
         ros_trajectory(NS(points=((0.,)*6, (1.,)*6), period=0.), list('abcdef'))
 
 
+@pytest.mark.parametrize('speed,acceleration', [(60.,4.), (1.,.1), (.1,.05)])
+def test_ros_start_slot_covers_existing_start_error_and_brakes_before_unchanged_path(speed, acceleration):
+    from manual_moveit_execution import ros_trajectory, joint_goal_path
+    path = joint_goal_path([0.]*6, [.01]*6, [[-90.,90.]]*6, speed, acceleration)
+    trajectory = ros_trajectory(path, list('abcdef'), start_tolerance_rad=.003)
+    assert tuple(tuple(p.positions) for p in trajectory.points) == path.points
+    times = [p.time_from_start.sec+p.time_from_start.nanosec/1e9 for p in trajectory.points]
+    for offset in (-.003, .003, -.0016514525758204446):
+        q = [offset]*6; velocity = [0.]*6; previous_time = 0.; previous_dt = times[0]
+        for point, stamp in zip(trajectory.points, times):
+            dt = stamp-previous_time
+            following = [(b-a)/dt for a,b in zip(q,point.positions)]
+            assert max(map(abs,following)) <= __import__('math').radians(speed)
+            assert max(abs(v-p)/min(dt,previous_dt) for v,p in zip(following,velocity)) <= acceleration
+            q,velocity,previous_time,previous_dt = list(point.positions),following,stamp,dt
+    if speed == 60.:
+        assert times[0] == .04
+    assert all(abs((b-a)-.02)<1e-9 for a,b in zip(times,times[1:]))
+
+
+def test_start_error_budget_requires_duplicate_first_points_and_complete_duration_budget():
+    from manual_moveit_execution import ros_trajectory
+    from manual_moveit_continuous import PreparedPath
+    with pytest.raises(ValueError):
+        ros_trajectory(PreparedPath(((0.,)*6,(.001,)*6),60.,4.), list('abcdef'), start_tolerance_rad=.003)
+    with pytest.raises(ValueError):
+        ros_trajectory(PreparedPath(((0.,)*6,)*31500,60.,4.), list('abcdef'), start_tolerance_rad=.003)
+
+
 def test_duplicate_ros_state_does_not_refresh_arrival():
     from manual_joint_panel import JointPanel
     panel = NS(ros_backend=NS(latest_state=None), last_state={'boot_epoch': 7, 'state_seq': 10}, last_state_ns=123)
@@ -50,7 +79,7 @@ def test_ros_ui_submits_whole_checked_path_without_native(tmp_path):
     from manual_moveit_tab import MoveItTab
     from manual_moveit_continuous import PreparedPath
     from PyQt5 import QtWidgets
-    path = ((0.,)*6, (.001,)*6, (0.,)*6)
+    path = ((0.,)*6, (0.,)*6, (.001,)*6, (0.,)*6)
     prepared = PreparedPath(path, 1., .1)
     submitted = []
     events = []

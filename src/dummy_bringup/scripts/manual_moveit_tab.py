@@ -729,13 +729,15 @@ class MoveItTab(QtWidgets.QWidget):
                         segment_timeout_s=self.segment_timeout_s)
             if self.panel.backend == 'ros':
                 from manual_moveit_execution import ros_trajectory
-                trajectory = ros_trajectory(self.continuous_path, self.planner.names)
+                trajectory = ros_trajectory(self.continuous_path, self.planner.names, start_tolerance_rad=.003)
                 validate_trajectory(trajectory, self.planner.names, self.panel.limits)
                 self.execution.waiting = True
-                self.segment_deadline = time.monotonic() + self.continuous_path.duration + 30.
+                final_stamp = trajectory.points[-1].time_from_start
+                duration = final_stamp.sec + final_stamp.nanosec/1e9
+                self.segment_deadline = time.monotonic() + duration + 30.
                 self.ros_execution_goal = tuple(self.continuous_path.points[-1])
                 self.record('ROS_TRAJECTORY_SUBMITTED', points=self.continuous_path.points,
-                            duration_s=self.continuous_path.duration,
+                            duration_s=duration,
                             sha256=hashlib.sha256(json.dumps(self.continuous_path.points).encode()).hexdigest())
                 if not self.panel.ros_backend.submit_trajectory(trajectory):
                     raise ValueError('ROS完整轨迹未提交')

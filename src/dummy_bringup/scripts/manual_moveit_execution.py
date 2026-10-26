@@ -173,22 +173,42 @@ def joint_goal_path(start, goal, limits_deg, speed, acceleration):
     return prepare_path(points, (0., 1.), speed, acceleration, ((0.,) * 6,) * 2)
 
 
-def ros_trajectory(path, names):
+def ros_trajectory(path, names, start_tolerance_rad=0.):
     """完整传递已检查的定周期折线；空导数明确选择 JTC 线性插值。
 
-    首点位于真实首个命令周期，保留全部位置与空导数，不虚构t=0瞬时跳变。
+    首点保留正时长；指定已有起点容差时，为Hold到首点及下一重复点停车
+    共同预留动态预算。仅平移时间轴，保留全部位置与空导数，不虚构t=0跳变。
     不添加未检查的三次/五次插值。动态准入和最终完成仍由公开 C++ gate 判定。
     """
     from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
     points = checked_points(path.points)
     if len(names) != 6 or len(set(names)) != 6 or not math.isfinite(path.period) or path.period <= 0:
         raise ValueError('ROS轨迹关节名或周期无效')
+    if not math.isfinite(start_tolerance_rad) or start_tolerance_rad < 0:
+        raise ValueError('ROS轨迹起点容差无效')
+    first_slot = path.period
+    if start_tolerance_rad:
+        if points[0] != points[1]:
+            raise ValueError('起点动态预算要求保留重复首点，未提交轨迹')
+        if (not math.isfinite(path.speed) or path.speed <= 0 or
+                not math.isfinite(path.acceleration) or path.acceleration <= 0):
+            raise ValueError('ROS轨迹首段需要有效速度和加速度上限')
+        velocity = math.radians(path.speed) * (1.-1e-4)
+        acceleration = path.acceleration * (1.-1e-4)
+        # 首段从Hold零速起步；下一重复点归零，必须同时满足两次速度差。
+        needed = max(path.period, math.sqrt(start_tolerance_rad/acceleration),
+                     start_tolerance_rad/(acceleration*path.period),
+                     start_tolerance_rad/velocity)
+        first_slot = math.ceil(needed/path.period) * path.period
+    duration = first_slot + (len(points)-1) * path.period
+    if not math.isfinite(duration) or duration > 630.:
+        raise ValueError('ROS完整轨迹含起点连接超过630秒预算，未提交')
     message = JointTrajectory()
     message.joint_names = list(names)
     for index, positions in enumerate(points):
         point = JointTrajectoryPoint()
         point.positions = list(positions)
-        timestamp = round((index + 1) * path.period * 1_000_000_000)
+        timestamp = round((first_slot + index * path.period) * 1_000_000_000)
         point.time_from_start.sec, point.time_from_start.nanosec = divmod(timestamp, 1_000_000_000)
         message.points.append(point)
     return message

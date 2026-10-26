@@ -945,7 +945,7 @@ class JointPanel(QtWidgets.QWidget):
             try:
                 path = joint_goal_path(self.actual_q, [math.radians(v) for v in goal], self.limits,
                                        self.speed_input.value(), self.acceleration_input.value())
-                trajectory = ros_trajectory(path, [j['name'] for j in self.cfg['joints']])
+                trajectory = ros_trajectory(path, [j['name'] for j in self.cfg['joints']], start_tolerance_rad=.003)
                 if hasattr(self, 'moveit_tab'):
                     self.moveit_tab.invalidate()
                 self.busy = True
