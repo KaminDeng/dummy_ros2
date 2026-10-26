@@ -5,6 +5,7 @@
  */
 #pragma once
 #include <string>
+#include <memory>
 #include <vector>
 #include "dummy_motion_client/action_coordinator.hpp"
 #include "dummy_motion_client/management_client.hpp"
@@ -28,10 +29,14 @@ struct Trajectory {
 struct JointProfile {
   std::vector<std::string> joints;
   std::vector<double> lower, upper, velocity, acceleration, path_tolerance, goal_tolerance;
+  // 仅手动部署允许从名义范围内的真实越界起点单调退回工作区，不修改测量值。
+  bool manual_inward_start=false;
+  std::vector<double> nominal_lower, nominal_upper;
 };
 /**
  * @brief 按profile重排并校验完整轨迹及可选实测起点。
  * 前两个匿名引用依次为输入Trajectory和JointProfile。要求1..6轴集合完整唯一、时间非负严格递增、向量维度/有限性/逐点范围与显式动态限制满足；空/0容差用profile默认，非零不能更宽。终点显式速度须在1e-9 rad/s内为零；纯位置轨迹另查分段差分速度和相邻段加速度。此函数不做碰撞检查或完整插值曲线动态证明。
+ * 显式手动策略只允许名义范围内的真实起点沿纯位置折线单调退入工作区，终点仍须位于工作区；未开启时全部点保持原范围要求。
  * @param measured_start 可空六轴rad容器；非空时将前profile轴作为position-only首段起点。
  * @return 规范化轨迹或nullopt，不修改输入。
  */
@@ -40,6 +45,44 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &, const JointPro
 /**
  * @brief 管理请求身份模板加session/reference/permit三个独立资格标志；标志由上层真实观测建立，不是自造设备许可。
  */
+// 只有完整非实时校验成功才能构造；控制拍只能消费不可变结果。
+class PreparedTrajectory {
+ public:
+  const Trajectory& trajectory() const noexcept {return trajectory_;}
+  bool positions_only() const noexcept {return positions_only_;}
+  bool matches(const JointProfile&) const noexcept;
+ private:
+  PreparedTrajectory(Trajectory value,JointProfile profile,bool positions_only)
+      :trajectory_(std::move(value)),profile_(std::move(profile)),positions_only_(positions_only){}
+  Trajectory trajectory_;JointProfile profile_;bool positions_only_;
+  friend std::shared_ptr<const PreparedTrajectory> prepare_trajectory(const Trajectory&,const JointProfile&);
+  friend bool validate_prepared_start(const PreparedTrajectory&,const Position&) noexcept;
+};
+std::shared_ptr<const PreparedTrajectory> prepare_trajectory(const Trajectory&,const JointProfile&);
+bool validate_prepared_start(const PreparedTrajectory&,const Position&) noexcept;
+// 尾部资格只由完整非实时校验与共同前缀精确比较产生；控制拍不再遍历全路径。
+class PreparedTrajectoryTail {
+ public:
+  const std::shared_ptr<const PreparedTrajectory>& candidate() const noexcept {return candidate_;}
+ private:
+  std::shared_ptr<const PreparedTrajectory> base_,candidate_;
+  std::uint64_t through_ns_=0;
+  friend class ActionGate;
+  friend std::shared_ptr<const PreparedTrajectoryTail> prepare_trajectory_tail(
+      std::shared_ptr<const PreparedTrajectory>,std::shared_ptr<const PreparedTrajectory>,std::uint64_t);
+};
+std::shared_ptr<const PreparedTrajectoryTail> prepare_trajectory_tail(
+    std::shared_ptr<const PreparedTrajectory> base,std::shared_ptr<const PreparedTrajectory> candidate,
+    std::uint64_t unchanged_through_ns);
+// 每个目标只保留首个本地采样拒绝；定长值对象，不在控制拍分配。
+enum class UpdateRejectReason { kNone,kGeneration,kEpoch,kSequence,kFrozen,kPhase,kNonfinite,kRange,kInward,kPrimeContinuity };
+struct UpdateRejection {
+  UpdateRejectReason reason=UpdateRejectReason::kNone;
+  Phase phase=Phase::kIdle;unsigned axis=6;
+  std::uint64_t generation=0,expected_generation=0;
+  std::uint32_t epoch=0,expected_epoch=0,sequence=0,previous_sequence=0;
+  Position candidate{},prime{},previous{};
+};
 struct Authorization {
   ManageRequest identity{};
   bool session=false, reference=false, permit=false;
@@ -136,6 +179,7 @@ class ActionGate {
    * @return bool：本地受理目标；真正Running还需设备/prime握手。
    */
   bool submit(const Trajectory &, std::uint64_t now);
+  bool submit_prepared(std::shared_ptr<const PreparedTrajectory>,std::uint64_t now);
   /**
    * @brief 轮询管理、续租延迟及握手/排空超时。
    * 延期Cancel/Complete等待匹配续租COMMITTED且仍在原截止，刷新ticket后提交；超时/异常按当前阶段进入受控取消或Fault。不会靠tick次数延长原预算。
@@ -259,6 +303,9 @@ class ActionGate {
    * @return Phase值，不是设备core_state。
    */
   Phase phase() const { return phase_; }
+  bool can_extend_prepared(const std::shared_ptr<const PreparedTrajectoryTail>&,std::uint64_t phase_ns) const noexcept;
+  bool extend_prepared(const std::shared_ptr<const PreparedTrajectoryTail>&,std::uint64_t phase_ns) noexcept;
+  const UpdateRejection& first_update_rejection() const noexcept { return update_rejection_; }
   /**
    * @brief 读取门控内部执行代。
    * @return 宿主64位generation，不是设备motion epoch或线producer_seq。
@@ -271,7 +318,7 @@ class ActionGate {
   const std::string &error() const { return error_; }
  private:
   // 纯位置轨迹必须先由当前fresh实际Hold起点证明首槽/整段动态界限。
-  bool valid_begin_trajectory(const Trajectory &, std::uint64_t now);
+  bool valid_begin_trajectory(const PreparedTrajectory &, std::uint64_t now);
   /**
    * @brief 核对延期Cancel根仍恰等当前完整授权身份。
    * @return bool；不产生新管理权限或更新时间。
@@ -335,7 +382,11 @@ class ActionGate {
   /**
    * @brief 本地授权快照与规范化轨迹；phase/terminal和operation各描述不同状态维度，不可用任一字段单独推断设备使能。
    */
-  Authorization authorization_{}; Trajectory trajectory_{};
+  Authorization authorization_{};
+  std::shared_ptr<const PreparedTrajectory> prepared_trajectory_;
+  const Trajectory* trajectory_=nullptr;
+  bool positions_only_trajectory_=false;
+  UpdateRejection update_rejection_{};
   Phase phase_=Phase::kIdle; Terminal terminal_=Terminal::kNone;
   ManageOperation operation_=ManageOperation::kEnable;
   /**

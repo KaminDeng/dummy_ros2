@@ -1,0 +1,11 @@
+unique_identifier_msgs/UUID goal_id
+uint32 motion_epoch
+uint64 expected_version
+uint64 unchanged_through_ns
+trajectory_msgs/JointTrajectory trajectory
+---
+bool accepted
+uint64 version
+uint64 phase_ns
+uint8[32] trajectory_digest
+string reason

@@ -10,7 +10,7 @@ import time
 import yaml
 
 mode = sys.argv[2] if len(sys.argv) > 2 else "denied"
-assert mode in ("external_release", "external_release_no_authority", "denied", "stale", "shutdown", "unconfirmed", "retained", "wrongref", "owner", "noowner", "status_cadence", "status_qualification_cadence", "state_stale_status_live", "can_stale", "status_stale", "calibration_motion", "release_retry", "release_unavailable", "planning_duplicate_nodes", "planning_duplicate_servers", "planning_private_scene", "planning_unrelated_scene", "planning_bad_private_suffix", "planning_wrong_scene_namespace", "renewal_retry", "renewal_wrong_uuid", "renewal_no_receipt", "renewal_owner_drift", "renewal_pending", "consumed_permit", "consumed_permit_denied", "consumed_owner_drift", "scene_normalized", "scene_wrong_pose", "scene_wrong_dimensions", "scene_wrong_frame", "scene_equivalent_local", "scene_wrong_orientation", "scene_full_positive_origin", "scene_full_negative_origin", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
+assert mode in ("released_fault", "released_fault_wrong_reference", "released_fault_no_commit", "released_fault_wrong_tag", "external_release", "external_release_no_authority", "denied", "stale", "shutdown", "unconfirmed", "retained", "wrongref", "owner", "noowner", "status_cadence", "status_qualification_cadence", "state_stale_status_live", "can_stale", "status_stale", "calibration_motion", "release_retry", "release_unavailable", "planning_duplicate_nodes", "planning_duplicate_servers", "planning_private_scene", "planning_unrelated_scene", "planning_bad_private_suffix", "planning_wrong_scene_namespace", "renewal_retry", "renewal_wrong_uuid", "renewal_no_receipt", "renewal_owner_drift", "renewal_pending", "consumed_permit", "consumed_permit_denied", "consumed_owner_drift", "scene_normalized", "scene_wrong_pose", "scene_wrong_dimensions", "scene_wrong_frame", "scene_equivalent_local", "scene_wrong_orientation", "scene_full_positive_origin", "scene_full_negative_origin", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
 os.environ.setdefault("ROS_DOMAIN_ID", str(100 + os.getpid() % 100))
 
 import rclpy
@@ -23,6 +23,7 @@ from moveit_msgs.srv import GetMotionPlan, GetPlanningScene, ApplyPlanningScene,
 
 rclpy.init()
 node = Node("baseline_software_peer")
+fault_release_mode = mode.startswith("released_fault")
 external_mode = mode.startswith("external_release")
 planning_mode = external_mode or mode in ("planning_duplicate_nodes", "planning_duplicate_servers", "planning_private_scene", "planning_unrelated_scene", "planning_bad_private_suffix", "planning_wrong_scene_namespace", "renewal_retry", "renewal_wrong_uuid", "renewal_no_receipt", "renewal_owner_drift", "renewal_pending", "consumed_permit", "consumed_permit_denied", "consumed_owner_drift", "scene_normalized", "scene_wrong_pose", "scene_wrong_dimensions", "scene_wrong_frame", "scene_equivalent_local", "scene_wrong_orientation", "scene_full_positive_origin", "scene_full_negative_origin", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
 full_scene_mode = mode in ("scene_full_positive_origin", "scene_full_negative_origin", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
@@ -70,7 +71,7 @@ sequence = 0
 last_status_published = 0.0
 status_period_index = 0
 calibration_at = 0.0
-calibration_denied = mode in ("denied", "unconfirmed", "retained", "wrongref", "release_retry", "release_unavailable")
+calibration_denied = fault_release_mode or mode in ("denied", "unconfirmed", "retained", "wrongref", "release_retry", "release_unavailable")
 
 
 def publish():
@@ -93,6 +94,11 @@ def publish():
     status = DummyDeviceStatusV2()
     status.boot_epoch = 23
     status.device_id = [1] * 16
+    if fault_release_mode:
+        status.reference_epoch = 8 if released and mode=="released_fault_wrong_reference" else 7
+        if released:
+            status.core_state=9
+            status.cleanup_state=3
     if mode in ("retained", "wrongref"):
         status.reference_epoch = 8 if mode == "wrongref" and released else 7
     if planning_mode:
@@ -112,7 +118,9 @@ def publish():
     status.core_state = 5 if cancel_running and not released else 4 if planning_mode and held and not released else (2 if status.reference_epoch else 1)
     status.configured_mask = 63
     status.run_id = 9 if cancel_running else 0
-    status.release_committed = released
+    status.release_committed = released and mode!="released_fault_no_commit"
+    if fault_release_mode and released:
+        status.core_state=9
     if mode == "owner":
         status.session_id = 42
         status.real_motion_permitted = True
@@ -180,6 +188,10 @@ def release(_request, response):
 
 
 def bootstrap_status(_request, response):
+    if fault_release_mode and released:
+        response.success=False
+        response.message="EVIDENCE_INCOMPLETE;RELEASED_FAULT"+(" extra" if mode=="released_fault_wrong_tag" else "")
+        return response
     if mode == "external_release_no_authority" and released:
         response.success = False
         response.message = "RELEASE_PENDING"
@@ -562,7 +574,7 @@ try:
         assert calls == {"calibrate": 1, "release": 1}, calls
         print("PASS SIGTERM finally cleanup confirmed; report:", root)
         sys.exit(0)
-    deadline = time.monotonic() + (25 if mode in ("unconfirmed", "wrongref", "release_retry", "release_unavailable") else (18 if consumed_mode else 8))
+    deadline = time.monotonic() + (25 if (fault_release_mode or mode in ("unconfirmed", "wrongref", "release_retry", "release_unavailable")) else (18 if consumed_mode else 8))
     while time.monotonic() < deadline:
         spin_once()
         response = call("/device_action_gate/baseline_status")
@@ -658,7 +670,7 @@ try:
         assert time.monotonic() - calibration_at >= 0.95, (response, root)
     if mode in ("state_stale_status_live", "can_stale"):
         assert time.monotonic() - calibration_at < 0.8, (response, root)
-    cleanup = "cleanup=UNCONFIRMED" if mode in ("unconfirmed", "wrongref", "release_unavailable") else "cleanup=RELEASED_IDLE"
+    cleanup = ("cleanup=RELEASED_FAULT" if mode=="released_fault" else "cleanup=UNCONFIRMED") if fault_release_mode else ("cleanup=UNCONFIRMED" if mode in ("unconfirmed", "wrongref", "release_unavailable") else "cleanup=RELEASED_IDLE")
     assert cleanup in response.message, response
     if mode == "release_retry":
         assert calls == {"calibrate": 1, "release": 3}, calls

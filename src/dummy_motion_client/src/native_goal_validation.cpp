@@ -44,7 +44,7 @@ bool tolerances_valid(const std::vector<control_msgs::msg::JointTolerance> &valu
  * @param profile 明确轴序、范围、动态和容差限制。
  * @return 规范化Trajectory或nullopt，原Goal不修改。
  */
-std::optional<Trajectory> convert_goal(const NativeGoal &goal,const JointProfile &profile) {
+std::optional<Trajectory> convert_goal(const NativeGoal &goal,const JointProfile &profile,bool validate=true) {
   if (!duration_valid(goal.goal_time_tolerance) || !goal.multi_dof_trajectory.points.empty() ||
       !goal.component_path_tolerance.empty() || !goal.component_goal_tolerance.empty() ||
       !tolerances_valid(goal.path_tolerance,profile.joints,0.15) ||
@@ -74,7 +74,7 @@ std::optional<Trajectory> convert_goal(const NativeGoal &goal,const JointProfile
     trajectory.points.push_back({point.positions,point.velocities,point.accelerations,
         static_cast<double>(point.time_from_start.sec)+point.time_from_start.nanosec*1e-9});
   }
-  return validate_trajectory(trajectory,profile);
+  return validate ? validate_trajectory(trajectory,profile) : std::optional<Trajectory>(std::move(trajectory));
 }
 /**
  * @brief 对明确设备profile只接受当前实现支持的即时位置轨迹语义。
@@ -88,6 +88,13 @@ std::optional<Trajectory> validated_device_trajectory(const NativeGoal &goal,con
   for(const auto &value:goal.path_tolerance) if(value.velocity!=0 || value.acceleration!=0) return {};
   for(const auto &value:goal.goal_tolerance) if(value.velocity!=0 || value.acceleration!=0) return {};
   return convert_goal(goal,profile);
+}
+std::shared_ptr<const PreparedTrajectory> prepared_device_trajectory(const NativeGoal& goal,const JointProfile& profile) {
+ if(goal.trajectory.header.stamp.sec!=0 || goal.trajectory.header.stamp.nanosec!=0)return {};
+ for(const auto& value:goal.path_tolerance)if(value.velocity!=0 || value.acceleration!=0)return {};
+ for(const auto& value:goal.goal_tolerance)if(value.velocity!=0 || value.acceleration!=0)return {};
+ const auto converted=convert_goal(goal,profile,false);
+ return converted ? prepare_trajectory(*converted,profile) : nullptr;
 }
 /**
  * @brief 按固定Native六轴限制校验并转换Goal。

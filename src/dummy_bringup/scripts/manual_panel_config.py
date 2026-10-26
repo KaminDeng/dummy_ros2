@@ -7,6 +7,7 @@
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 
@@ -46,12 +47,46 @@ def resolve_config_path(config_argument, backend, template_path):
 
 
 ##
+# @brief 仅调整 ROS 内存配置的工作边界，保持部署文件和 Native 行为不变。
+# @param config 已读取的面板配置；无关节的路径检查配置不包含运动范围。
+# @exception ValueError 余量、范围非有限，或没有有效工作区。
+def _ros_working_bounds(config):
+    """从名义弧度边界计算停车余量，避免角度域先相减造成固件边界拒绝。"""
+    if not config.get('joints'):
+        return
+    try:
+        margin = float(config['working_margin_deg'])
+        if not math.isfinite(margin) or margin < 0:
+            raise ValueError('停车余量无效')
+        # 与 REF 相同，先将名义边界和停车余量各自换算成弧度再相加减。
+        margin_rad = margin * math.pi / 180
+        for joint in config['joints']:
+            nominal_lo, nominal_hi = map(float, joint['nominal_limits_deg'])
+            declared_lo, declared_hi = map(float, joint['limits_deg'])
+            if not all(map(math.isfinite, (nominal_lo, nominal_hi, declared_lo, declared_hi))):
+                raise ValueError('边界必须有限')
+            lo_rad = math.nextafter(nominal_lo * math.pi / 180 + margin_rad, math.inf)
+            hi_rad = math.nextafter(nominal_hi * math.pi / 180 - margin_rad, -math.inf)
+            lower = max(declared_lo, math.degrees(lo_rad))
+            upper = min(declared_hi, math.degrees(hi_rad))
+            # 界面仍使用角度；额外向内舍入，覆盖角度转回弧度时的舍入误差。
+            for _ in range(2):
+                lower = math.nextafter(lower, math.inf)
+                upper = math.nextafter(upper, -math.inf)
+            if not lower < upper:
+                raise ValueError('停车余量与声明范围无交集')
+            joint['limits_deg'] = [lower, upper]
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
+        raise ValueError('ROS 工作范围无效：' + str(error)) from error
+
+
+##
 # @brief 读取配置并验证当前后端所需的部署文件。
 # 真机拒绝未部署模板；存在 deployment_manifest 时逐文件比对 SHA-256，再检查 Native 可执行权限和解码入口。清单并非数字签名，不能代替固件在线身份确认。
 # @exception ValueError 配置格式、部署完整性、后端或产物入口不满足条件。
 # @note 模型路径使用 strict=True 解析，缺失文件的文件系统异常会继续交给调用方。
 # @param config_path JSON 配置路径，允许 ~。
-# @param backend real 执行部署校验；simulator 去掉模板中的部署占位标志。
+# @param backend real 执行部署校验；ros 内收数值边界；simulator 去掉模板部署标志。
 # @param description_xacro 可选的模型覆盖路径；空值时先使用配置值，再查询已安装模型。
 # @return dict：载入的配置，并补充绝对 description_xacro 与内部 _config_path。
 def load_panel_config(config_path, backend, description_xacro=''):
@@ -85,6 +120,7 @@ def load_panel_config(config_path, backend, description_xacro=''):
         command = config.get('ros_launch_command', [])
         if not isinstance(command, list) or any(not isinstance(arg, str) for arg in command):
             raise ValueError('ros_launch_command 必须为 argv 列表')
+        _ros_working_bounds(config)
         config.pop('deployment_required', None)
     elif backend == 'simulator':
         config.pop('deployment_required', None)

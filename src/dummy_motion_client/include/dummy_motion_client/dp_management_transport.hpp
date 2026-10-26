@@ -464,6 +464,16 @@ class DpManagementTransport final : public ManagementTransport {
    * @return 值或默认空值；不要求channel仍ready，历史回执须按boot/session/run再匹配。
    */
   RawTerminalIdentity raw_terminal_flushed() const noexcept;
+  // 只退休已自主失能的原owner，不恢复任何控制权限或动作成功。
+  // True只表示一次SafetyStop意图入队；实际释放仍需独立设备确认。
+  bool request_owner_safety_stop(std::uint64_t boot,std::uint64_t original_session,std::uint32_t reference) noexcept;
+  bool readonly_released_owner_observed(std::uint64_t now,std::uint64_t boot,
+      std::uint64_t original_session,std::uint32_t reference,std::uint64_t min_root_run) const noexcept;
+  bool autonomous_fault_owner_retirement_confirmed(std::uint64_t now,std::uint64_t boot,
+      std::uint64_t original_session,std::uint32_t reference,std::uint64_t expected_root_run) const noexcept;
+  bool local_readonly_retirement_allowed(std::uint64_t now) const noexcept;
+  bool readonly_fault_owner_retirement_confirmed(std::uint64_t now,std::uint64_t boot,
+      std::uint64_t session,std::uint32_t reference) const noexcept;
   /**
    * @brief 读取writer写出后的故障清理原始观测。
    * raw_cleanup_producer_valid由非零可信State接收锚导出；此lane不恢复正常admission/控制资格。

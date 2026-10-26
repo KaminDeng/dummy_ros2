@@ -144,11 +144,34 @@ controller_interface::return_type GuardedJointTrajectoryController::update(
     }
   // CM传入实际调度间隔，而固件按生产序号差×20ms验证导数。
   // 复用JTC自身traj_time_推进，不把壁钟抖动注入固定生产相位。
-  } else result = JointTrajectoryController::update(time, update_period_);
+  } else {
+    if(entry_prime_) {
+      // Begin已确认的prime是命令插值入口；首拍新actual仅作反馈，不改写已校验首槽。
+      // 预采首点锁定同一时基，基类不再以量化漂移后的actual覆盖point_before。
+      for(std::size_t axis=0;axis<dof_;++axis)state_desired_.positions[axis]=(*entry_prime_)[axis];
+      std::fill(state_desired_.velocities.begin(),state_desired_.velocities.end(),0.0);
+      std::fill(state_desired_.accelerations.begin(),state_desired_.accelerations.end(),0.0);
+      current_trajectory_->set_point_before_trajectory_msg(time,state_desired_,joints_angle_wraparound_);
+      joint_trajectory_controller::TrajectoryPointConstIter a,b;
+      if(!current_trajectory_->sample(time,interpolation_method_,state_desired_,a,b))
+        return controller_interface::return_type::ERROR;
+      traj_time_=time-update_period_;
+      entry_prime_.reset();
+    }
+    result = JointTrajectoryController::update(time, update_period_);
+  }
   /**
    * @brief 奇数序号标记采样写入中，写六轴原子actual/desired后再发布偶数；execution_sample只读一次，不忙等。
    */
-  sample_sequence_.fetch_add(1,std::memory_order_acq_rel);
+  if(sample_sequence_.load(std::memory_order_acquire)%2==0)
+    sample_sequence_.fetch_add(1,std::memory_order_acq_rel);
+  if(prime) {
+    sample_phase_ns_.store(0,std::memory_order_relaxed);
+    sample_start_ns_.store(0,std::memory_order_relaxed);
+  } else if(result==controller_interface::return_type::OK && current_trajectory_->is_sampled_already()) {
+    sample_phase_ns_.store(std::max<std::int64_t>(0,(traj_time_-current_trajectory_->time_from_start()).nanoseconds()),std::memory_order_relaxed);
+    sample_start_ns_.store(current_trajectory_->time_from_start().nanoseconds(),std::memory_order_relaxed);
+  }
   for(std::size_t index=0;index<dof_ && index<6;++index) {
     sample_actual_[index].store(state_current_.positions[index],std::memory_order_relaxed);
     sample_desired_[index].store(state_desired_.positions[index],std::memory_order_relaxed);
@@ -220,29 +243,69 @@ bool GuardedJointTrajectoryController::register_goal(const GoalCredential &crede
  * @param trajectory 非空共享消息；本方法复制并按本地轴序整理。
  * @return bool；成功消费登记、取消prime并放入基类轨迹缓冲。
  */
-bool GuardedJointTrajectoryController::submit_registered_goal(
-    const GoalCredential &credential,
-    const std::shared_ptr<trajectory_msgs::msg::JointTrajectory> &trajectory) {
-  std::lock_guard<std::mutex> lock(gate_mutex_);
-  if (!gate_.permits(credential) || !trajectory) return false;
-  try {
-    /**
-     * @brief 摘要覆盖原消息全内容，先对登记值验证再按本地关节序重排，避免同UUID替换轨迹。
-     */
-    if (trajectory_digest(*trajectory) != credential.digest) return false;
-  } catch (const std::invalid_argument &) {
-    return false;
-  }
-  if (!validate_trajectory_msg(*trajectory)) return false;
-  auto ordered = std::make_shared<trajectory_msgs::msg::JointTrajectory>(*trajectory);
-  if (ordered->joint_names.size() != command_joint_names_.size()) return false;
-  sort_to_local_joint_order(ordered);
-  add_new_trajectory_msg(ordered);
-  prime_buffer_.writeFromNonRT(nullptr);
-  gate_ = gate_.clear();
-  return true;
+std::shared_ptr<const GuardedJointTrajectoryController::PreparedGoal>
+GuardedJointTrajectoryController::prepare_goal(const GoalCredential& credential,
+    const std::shared_ptr<trajectory_msgs::msg::JointTrajectory>& trajectory) {
+ if(!trajectory)return {};
+ try {if(trajectory_digest(*trajectory)!=credential.digest)return {};}catch(const std::invalid_argument&){return {};}
+ if(!validate_trajectory_msg(*trajectory))return {};
+ auto prepared=std::make_shared<PreparedGoal>();prepared->owner=this;prepared->credential=credential;
+ prepared->message=std::make_shared<trajectory_msgs::msg::JointTrajectory>(*trajectory);
+ if(prepared->message->joint_names.size()!=command_joint_names_.size())return {};
+ sort_to_local_joint_order(prepared->message);
+ prepared->trajectory=std::make_shared<joint_trajectory_controller::Trajectory>(prepared->message);
+ return prepared;
 }
-
+bool GuardedJointTrajectoryController::install_prepared_goal(const GoalCredential& credential,
+    const std::shared_ptr<const PreparedGoal>& prepared) {
+ std::lock_guard<std::mutex> lock(gate_mutex_);
+ if(!prepared || prepared->owner!=this || !(prepared->credential==credential) || !gate_.permits(credential) || prepared->installed.exchange(true))return false;
+ // 同一个已重排消息同时安装两个槽，基类首拍无需再全量fill/sort/update。
+ // 新母Goal在其首次update前没有执行样本；不可继承上一Goal的长相位。
+ if(sample_sequence_.load(std::memory_order_acquire)%2==0)
+   sample_sequence_.fetch_add(1,std::memory_order_acq_rel);
+ sample_phase_ns_.store(0,std::memory_order_relaxed);sample_start_ns_.store(0,std::memory_order_relaxed);
+ // 保留奇数作为未采样标记，下一update发布偶数；序号不回绕，避免跨Goal读者ABA。
+ entry_prime_=*prime_buffer_.readFromRT();
+ active_goal_uuid_=credential.uuid;
+ current_trajectory_=prepared->trajectory;
+ new_trajectory_msg_.initRT(prepared->message);
+ prime_buffer_.writeFromNonRT(nullptr);
+ gate_=gate_.clear();return true;
+}
+std::shared_ptr<const GuardedJointTrajectoryController::PreparedGoal>
+GuardedJointTrajectoryController::prepare_tail(const GoalCredential& credential,
+    const std::shared_ptr<trajectory_msgs::msg::JointTrajectory>& message) {
+ if(*prime_buffer_.readFromNonRT())return {};
+ auto base=prepare_goal(credential,message);if(!base)return {};
+ const auto sample=execution_sample();if(!sample || sample->trajectory_start_ns<=0 ||
+    sample->phase_ns<static_cast<std::uint64_t>(rclcpp::Duration(base->message->points.front().time_from_start).nanoseconds()))return {};
+ auto prepared=std::const_pointer_cast<PreparedGoal>(base);
+ prepared->tail=true;prepared->prepared_phase_ns=sample->phase_ns;prepared->start_ns=sample->trajectory_start_ns;
+ trajectory_msgs::msg::JointTrajectoryPoint point;point.positions=prepared->message->points.front().positions;
+ const rclcpp::Time start(prepared->start_ns,RCL_ROS_TIME);
+ prepared->trajectory->set_point_before_trajectory_msg(start,point);
+ joint_trajectory_controller::TrajectoryPointConstIter a,b;
+ // 首次sample锁定原RUN起点，再在非实时端扫描到当前相位；基类下一拍只扫有限邻段。
+ if(!prepared->trajectory->sample(start,interpolation_method_,point,a,b) ||
+    !prepared->trajectory->sample(start+rclcpp::Duration::from_nanoseconds(sample->phase_ns),interpolation_method_,point,a,b))return {};
+ return prepared;
+}
+bool GuardedJointTrajectoryController::install_prepared_tail(const GoalCredential& credential,
+    const std::shared_ptr<const PreparedGoal>& prepared) {
+ const auto sample=execution_sample();
+ if(!prepared || !prepared->tail || prepared->owner!=this || credential.uuid!=active_goal_uuid_ || !(prepared->credential==credential) ||
+    !sample || *prime_buffer_.readFromRT() || sample->trajectory_start_ns!=prepared->start_ns ||
+    sample->phase_ns<prepared->prepared_phase_ns ||
+    sample->phase_ns-prepared->prepared_phase_ns>4U*static_cast<std::uint64_t>(update_period_.nanoseconds()) ||
+    prepared->installed.exchange(true))return false;
+ current_trajectory_=prepared->trajectory;new_trajectory_msg_.initRT(prepared->message);return true;
+}
+bool GuardedJointTrajectoryController::submit_registered_goal(const GoalCredential& credential,
+    const std::shared_ptr<trajectory_msgs::msg::JointTrajectory>& trajectory) {
+ const auto prepared=prepare_goal(credential,trajectory);
+ return install_prepared_goal(credential,prepared);
+}
 /**
  * @brief 在非实时端分配保持目标并写RT缓冲。
  * @param position 六轴容器中的前dof项rad，dof只允许1或6。
@@ -259,6 +322,7 @@ bool GuardedJointTrajectoryController::prime_position(const std::array<double,6>
  * 若采样正在更新可无新prime；本地保持不是设备受控停车/释放回执，外部gate仍负责Stop流程。
  */
 void GuardedJointTrajectoryController::cancel_execution() {
+  entry_prime_.reset();
   clear_registration();
   if(const auto sample=execution_sample()) prime_position(sample->actual);
 }
@@ -270,6 +334,8 @@ std::optional<GuardedExecutionSample> GuardedJointTrajectoryController::executio
   const auto sequence=sample_sequence_.load(std::memory_order_acquire);
   if(sequence==0 || sequence%2) return {};
   GuardedExecutionSample sample; sample.sequence=sequence;
+  sample.phase_ns=sample_phase_ns_.load(std::memory_order_relaxed);
+  sample.trajectory_start_ns=sample_start_ns_.load(std::memory_order_relaxed);
   for(std::size_t i=0;i<6;++i) {
     sample.actual[i]=sample_actual_[i].load(std::memory_order_relaxed);
     sample.desired[i]=sample_desired_[i].load(std::memory_order_relaxed);

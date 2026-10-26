@@ -29,4 +29,5 @@ std::optional<Trajectory> validated_native_trajectory(const NativeGoal &);
  * @return 按调用方profile重排/校验的Trajectory或nullopt。
  */
 std::optional<Trajectory> validated_device_trajectory(const NativeGoal &, const JointProfile &);
+std::shared_ptr<const PreparedTrajectory> prepared_device_trajectory(const NativeGoal&,const JointProfile&);
 }  // namespace dummy_motion_client

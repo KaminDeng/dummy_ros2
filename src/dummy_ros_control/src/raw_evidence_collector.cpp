@@ -388,6 +388,9 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     safety_hold_valid_ = false;
     safety_hold_regressed_ = false;
     terminal_seen_ = false;
+    owner_last_disable_valid_=false;owner_group_counts_valid_=true;
+    owner_disable_motion_=0U;owner_disable_source_=0U;owner_disable_axis_mask_=0U;
+    owner_connection_generation_=channel_?channel_->worker_connection_generation_.load():0U;
     fault_groups_valid_=true;fault_group_phase_=0U;fault_motion_epoch_=0U;
     fault_stop_epoch_=0U;fault_disable_count_=0U;fault_last_group_id_=0U;fault_group_source_=0U;
   }
@@ -495,6 +498,11 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
       const auto q=decoded.queued_at_us()[axis],take=decoded.taken_at_us()[axis],sub=decoded.submitted_at_us()[axis],sent=decoded.sent_at_us()[axis];
       valid=valid && q!=0U && q<=take && take<=sub && sub<=sent && sent-q<=100000U && decoded.abort_at_us()[axis]==0U;
     }
+    // 独立退休证明只消费完整链中最后一组的真实SENT及设备时间，不要求旧fault相位。
+    owner_group_counts_valid_=owner_group_counts_valid_ && page.group_count==can_page_count_+1U;
+    owner_last_disable_valid_=valid && decoded.category()==3U;
+    owner_disable_motion_=decoded.motion_epoch();owner_disable_source_=decoded.first_failure_source();
+    owner_disable_axis_mask_=decoded.first_failure_axis_mask();
     if(decoded.category()==1U) {
       valid=valid && fault_group_phase_==0U && decoded.first_failure_source()==0U && decoded.first_failure_axis_mask()==0U &&
         decoded.motion_epoch()>=first_motion_epoch_ && decoded.motion_epoch()-first_motion_epoch_<=1U &&
@@ -549,6 +557,16 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
       decoded.submitted_mask()==0U && decoded.sent_mask()==0U && decoded.failed_mask()==0U && zero_terminal_times &&
       decoded.final_state()==4U && decoded.release_committed() && !decoded.motion_complete() && !decoded.evidence_lost() &&
       decoded.first_failure_source()!=0U && decoded.first_failure_source()==fault_group_source_ && decoded.first_failure_axis_mask()==63U;
+    record.owner_retirement_disable_valid=owner_last_disable_valid_ && owner_group_counts_valid_ &&
+      page.attempt_kind==1U && page.parent_run_id==0U && decoded.motion_epoch()==first_motion_epoch_ &&
+      decoded.group_id()==0U && decoded.expected_mask()==0U && decoded.submitted_mask()==0U &&
+      decoded.sent_mask()==0U && decoded.failed_mask()==0U && zero_terminal_times &&
+      decoded.final_state()==4U && decoded.release_committed() && !decoded.motion_complete() && !decoded.evidence_lost() &&
+      decoded.first_failure_source()!=0U && decoded.first_failure_source()==owner_disable_source_ &&
+      decoded.first_failure_axis_mask()!=0U && (decoded.first_failure_axis_mask() & ~63U)==0U &&
+      decoded.first_failure_axis_mask()==owner_disable_axis_mask_;
+    record.owner_retirement_motion_epoch=owner_disable_motion_;
+    record.connection_generation=owner_connection_generation_;
     record.safety_hold_motion_epoch = safety_hold_motion_epoch_;
     record.safety_hold_valid = safety_hold_valid_ &&
         decoded.motion_epoch() == first_motion_epoch_;
@@ -654,7 +672,8 @@ void RawEvidenceCollector::write_loop() noexcept {
            record.evidence_lost, record.motion_complete,
            record.release_committed, true, record.safety_hold_motion_epoch,
            record.safety_hold_valid,record.attempt_motion_epoch,record.fault_stop_motion_epoch,
-           record.terminal_received_us,record.terminal_chain,record.full_fault_groups_valid,record.identity_hashes,record.terminal_group_count});
+           record.terminal_received_us,record.terminal_chain,record.full_fault_groups_valid,record.identity_hashes,record.terminal_group_count,
+           record.owner_retirement_disable_valid,record.owner_retirement_motion_epoch,record.connection_generation});
       terminal_written_run_id_.store(record.run_id, std::memory_order_release);
     }
     ++written_;

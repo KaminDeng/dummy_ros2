@@ -308,29 +308,189 @@ def test_ros_auto_start_uses_selected_session_not_calibration_baseline():
     s._begin.assert_called_once()
 
 
-def test_ros_continuous_collects_checked_blends_then_one_fjt_including_home():
-    from manual_moveit_continuous import PreparedPath
-    s,t=session();t.panel.backend='ros';s.ros_batch=True;s.chain_enabled=True;s.requested_seconds=.01
-    s.ros_batch_count=0;s.chain_last=None;s._begin=Mock();s._submit=Mock();t.request_ready=lambda:True
-    start=tuple(t.panel.actual_q);end=tuple(q+.01 for q in start)
-    path=PreparedPath((start,end),60.,4.,.02)
-    s.queued=dict(continuous_path=path,joined_path=None,goal=end,start=start,home=False)
-    s._ros_chain_tick()
-    assert s.chain_path is path and s._submit.call_count==0
-    s.queued=dict(continuous_path=path,joined_path=path,goal=end,start=end,home=False)
-    s._ros_chain_tick()
-    assert s._begin.call_args.kwargs == {'home':True} and s._submit.call_count==0
-    s.queued=dict(continuous_path=path,joined_path=path,goal=start,start=end,home=True,pose=None)
-    s._ros_chain_tick()
-    assert s._submit.call_count==1 and s.executing_home and s.chain_live
-    assert s.queued['continuous_path'] is path and s.queued['start']==start
+def test_ros_stream_start_selects_rolling_and_keeps_original_test_deadline(monkeypatch):
+    s,t=session();s.active=False;t.panel.backend='ros';t.panel.busy=False
+    t.request_ready=lambda:True;t.pending=None;t.invalidate=Mock();t.preview_timer=Mock()
+    t.panel.confirm_execution=Mock(return_value=__import__('PyQt5.QtWidgets',fromlist=['QMessageBox']).QMessageBox.Yes)
+    t.amplitude=NS(currentData=lambda:'large',currentText=lambda:'大')
+    t.ik_preference=NS(currentData=lambda:'nearest',currentText=lambda:'最近')
+    t.scene_revision=lambda:1;t.continuous_enabled=True;t.auto_continuous=NS(isChecked=lambda:True)
+    t.panel.speed_input.value=lambda:63.;t.panel.acceleration_input.value=lambda:4.
+    s._begin=Mock();monkeypatch.setattr('manual_moveit_autotest.time.monotonic',lambda:10.)
+    assert s.start(180.) and s.ros_stream and s.chain_version==0
+    assert s.deadline==190. and not s.chain_live
+    assert '整轮预规划' not in t.panel.confirm_execution.call_args.args[1]
 
 
 def test_ros_continuous_capacity_rejection_never_submits_or_uses_native():
     from manual_moveit_continuous import PreparedPath
-    s,t=session();s.ros_batch=True;s.chain_live=False;s._submit=Mock();t.request_ready=lambda:True
-    q=tuple(t.panel.actual_q)
-    s.queued=dict(continuous_path=PreparedPath((q,q),60.,4.,631.),home=True)
+    s,t=stream_session();q=s.anchor
+    path=PreparedPath((q,)*31502,60.,4.)
+    s.queued=dict(continuous_path=path,joined_path=path,home=False,join_cut=200)
     with pytest.raises(ValueError,match='630秒'):
-        s._ros_chain_tick()
-    s._submit.assert_not_called()
+        s._chain_tick()
+    t.panel.ros_backend.extend_trajectory.assert_not_called();t.panel.command.assert_not_called()
+
+@pytest.mark.parametrize('ros_stream',[True,False])
+def test_ros_stream_valid_joint_candidate_goes_direct_to_plan_native_keeps_fk(ros_stream):
+    from concurrent.futures import Future
+    s,t=session();s.ros_stream=ros_stream;s.stage='validity';s.plan_home=False;s.plan_deadline=float('inf')
+    s.plan_start=tuple(t.panel.actual_q);s.goal=tuple(q+.01 for q in s.plan_start)
+    t.planner=NS(request_fk=Mock(return_value=Future()),request_plan=Mock(return_value=Future()))
+    s.future=Future();s.future.set_result(NS(valid=True));s._poll_plan()
+    if ros_stream:
+        t.planner.request_plan.assert_called_once_with(s.plan_start,s.goal)
+        t.planner.request_fk.assert_not_called();assert s.stage=='plan'
+    else:
+        t.planner.request_fk.assert_called_once_with(s.goal)
+        t.planner.request_plan.assert_not_called();assert s.stage=='fk'
+
+
+def test_ros_home_collision_never_replaces_home_with_random_candidate():
+    from concurrent.futures import Future
+    s,t=session();s.ros_stream=True;s.plan_home=True;s.stage='validity';s.plan_deadline=float('inf')
+    s.future=Future();s.future.set_result(NS(valid=False));s._candidate=Mock()
+    with pytest.raises(ValueError,match='Home.*碰撞'):
+        s._poll_plan()
+    s._candidate.assert_not_called()
+
+
+def test_ros_preplan_progress_reports_prepared_targets_duration_and_deadline(monkeypatch):
+    from manual_moveit_continuous import PreparedPath
+    s,t=session();t.panel.backend='ros';s.ros_stream=True;s.chain_enabled=True;s.chain_live=False
+    s.scene_version=1;t.scene_ready=lambda:True;t.scene_revision=lambda:1
+    s.deadline=1000.;s.ros_preplan_deadline=100.;s.requested_seconds=180.;s.chain_markers=[100,200]
+    s.chain_path=PreparedPath((tuple(t.panel.actual_q),)*501,60.,4.)
+    s.stage='validity';s.attempts=2;t.auto_status=Mock()
+    s._poll_plan=Mock();s._chain_tick=Mock();s.update_preview=Mock()
+    monkeypatch.setattr('manual_moveit_autotest.time.monotonic',lambda:10.)
+    s.tick();text=t.auto_status.setText.call_args.args[0]
+    assert '准备起步前瞻' in text and '10.0/6' in text
+    assert '90' in text and '寻找目标' not in text
+
+
+def test_ros_stream_180_second_representative_planning_saves_queries_keeps_collision_samples(monkeypatch):
+    from concurrent.futures import Future
+    from collections import Counter
+    from manual_moveit_continuous import PreparedPath
+    monkeypatch.setattr('manual_moveit_autotest.pose_values',lambda pose:((0.,)*3,(0.,)*3))
+    totals=[]
+    for ros_stream in (False,True):
+        count=Counter()
+        for _ in range(90):  # 180秒、每段2秒的服务替身工作量，不冒充现场耗时。
+            s,t=session();s.ros_stream=ros_stream;s.chain_enabled=False;s.plan_home=False
+            s.plan_deadline=float('inf');s.attempts=1;s.speed=60.;s.acceleration=4.
+            s.preference='nearest';s.amplitude='medium';t.panel.cfg['rest_deg']=[0,0,90,0,0,0]
+            s.plan_start=tuple(t.panel.actual_q);s.goal=tuple(q+.01 for q in s.plan_start)
+            t.panel.limits=[(-179.,179.)]*6;t.continuous_enabled=True
+            prepared=PreparedPath((s.plan_start,)*100+(s.goal,),60.,4.)
+            monkeypatch.setattr('manual_moveit_autotest.prepare_path',lambda *a,**k:prepared)
+            monkeypatch.setattr('manual_moveit_autotest.collision_samples',lambda points:(points[0],points[50],points[-1]))
+            def ready(kind,response):
+                count[kind]+=1;future=Future();future.set_result(response);return future
+            def ik(*a):
+                future=ready('ik',NS(error_code=NS(val=1)));future.selected_goal=s.goal;return future
+            trajectory=NS(joint_names=[f'Joint{i}' for i in range(6)],points=[NS(positions=q,time_from_start=NS(sec=i,nanosec=0)) for i,q in enumerate((s.plan_start,s.goal))])
+            t.planner=NS(names=trajectory.joint_names,
+                request_validity=lambda goal:ready('validity',NS(valid=True)),
+                request_fk=lambda goal:ready('fk',NS(error_code=NS(val=1),pose_stamped=[NS(pose=NS())])),
+                request_ik=ik,
+                request_plan=lambda *a:ready('plan',NS(motion_plan_response=NS(error_code=NS(val=1),trajectory=NS(joint_trajectory=trajectory)))))
+            s.stage='validity';s.future=t.planner.request_validity(s.goal)
+            for _ in range(10):
+                s._poll_plan()
+                if s.queued is not None:break
+            assert s.queued is not None and not s.samples and not s.checks
+            assert s.queued['continuous_path'] is prepared
+        totals.append(count)
+    assert totals[0]==dict(validity=450,fk=90,ik=90,plan=90)
+    assert totals[1]==dict(validity=360,plan=90)
+
+
+def test_ros_preplan_deadline_aborts_without_submitting_or_extending_budget(monkeypatch):
+    s,t=session();t.panel.backend='ros';s.ros_stream=True;s.chain_enabled=True;s.chain_live=False
+    s.scene_version=1;t.scene_ready=lambda:True;t.scene_revision=lambda:1
+    s.deadline=1000.;s.ros_preplan_deadline=20.;s._poll_plan=Mock();s._submit=Mock()
+    monkeypatch.setattr('manual_moveit_autotest.time.monotonic',lambda:20.)
+    s.tick()
+    assert not s.active and s.result=='error' and s.ros_preplan_deadline==20.
+    s._poll_plan.assert_not_called();s._submit.assert_not_called()
+    t.panel.release.assert_called_once_with('STOP')
+
+
+def stream_session():
+    from manual_moveit_continuous import PreparedPath
+    s,t=session();s.ros_stream=True;s.chain_enabled=True;s.chain_live=True;s.chain_version=0
+    t.panel.backend='ros';t.started_motion=None;t.planner=NS(names=[f'Joint{i}' for i in range(6)])
+    t.panel.ros_backend=NS(extend_trajectory=Mock(return_value=True))
+    t.panel.command=Mock(side_effect=AssertionError('ROS不得使用Native续接'))
+    t.panel.set_preview_pose=Mock();t.execution=NS(points=(s.anchor,s.anchor))
+    s.ros_first_slot_ns=40_000_000;s.chain_phase=400_000;s.chain_received_at=10.
+    s.chain_path=PreparedPath(tuple((max(0,i-1)*.001,)+s.anchor[1:] for i in range(301)),60.,4.)
+    s.chain_last=dict(path=(s.anchor,s.chain_path.points[-1]),times=(0.,6.),pose=None,home=False,
+                      start=s.anchor,goal=s.chain_path.points[-1])
+    t.ros_execution_goal=s.chain_path.points[-1];s._begin=Mock()
+    return s,t
+
+
+def test_ros_stream_submits_tail_without_native_begin_and_waits_for_commit():
+    from manual_moveit_continuous import PreparedPath
+    s,t=stream_session();old=s.chain_path
+    joined=PreparedPath(old.points+tuple((old.points[-1][0]+i*.001,)+s.anchor[1:] for i in range(1,101)),60.,4.)
+    s.queued=dict(home=False,joined_path=joined,continuous_path=joined,join_cut=250,
+                  start=old.points[-1],goal=joined.points[-1])
+    s._chain_tick()
+    assert s.chain_pending is not None and s.chain_path is old
+    trajectory,version,through=t.panel.ros_backend.extend_trajectory.call_args.args
+    assert version==0 and through==5_040_000_000
+    assert trajectory.points[0].time_from_start.nanosec==40_000_000
+    assert len(trajectory.points)==len(joined.points)
+    s._begin.assert_not_called();t.panel.command.assert_not_called()
+    s.ros_event('trajectory_extended',dict(version=1,phase_ns=540_000_000,trajectory_digest=[1]*32))
+    assert s.chain_path is joined and s.chain_version==1 and s.chain_pending is None
+    assert t.ros_execution_goal==joined.points[-1] and s.chain_phase==500_000
+    s._begin.assert_called_once_with(joined.points[-1])
+
+
+def test_ros_stream_feedback_moves_preview_and_never_changes_actual(monkeypatch):
+    s,t=stream_session();actual=tuple(t.panel.actual_q)
+    monkeypatch.setattr('manual_moveit_autotest.time.monotonic',lambda:10.)
+    assert s.ros_event('progress',NS(desired=NS(time_from_start=NS(sec=1,nanosec=40_000_000))))
+    s.update_preview();q=t.panel.set_preview_pose.call_args.args[0]
+    assert q[0]==pytest.approx(math.degrees(.0565))
+    assert s.chain_phase==1_000_000 and tuple(t.panel.actual_q)==actual
+    s.ros_event('progress',NS(desired=NS(time_from_start=NS(sec=0,nanosec=540_000_000))))
+    assert s.chain_phase==1_000_000
+
+
+def test_ros_stream_rejected_tail_keeps_original_safe_buffer():
+    s,t=stream_session();old=s.chain_path
+    s.chain_pending=dict(item={},path=old,origin=0,marker=100,file=None,deadline=float('inf'))
+    assert s.ros_event('trajectory_extension_rejected',dict(version=0,phase_ns=440_000_000,reason='LATE'))
+    assert s.active and s.chain_path is old and s.chain_pending is None and s.chain_draining
+    t.panel.release.assert_not_called();t.cancel_execution.assert_not_called()
+
+
+def test_ros_stream_starts_after_short_lookahead_instead_of_whole_test():
+    s,t=stream_session();s.chain_live=False;s.requested_seconds=180.;s.chain_markers=[100,200]
+    s._submit=Mock();s._chain_tick()
+    assert s.chain_live and s.chain_path.duration==6.
+    s._submit.assert_called_once();s._begin.assert_called_once_with(s.chain_path.points[-1])
+
+
+def test_ros_stream_preserves_queued_tail_until_feedback_passes_first_slot():
+    from manual_moveit_continuous import PreparedPath
+    s,t=stream_session();old=s.chain_path;s.chain_phase=0;s.chain_received_at=None
+    joined=PreparedPath(old.points+tuple((old.points[-1][0]+i*.001,)+s.anchor[1:] for i in range(1,101)),60.,4.)
+    queued=dict(home=False,joined_path=joined,continuous_path=joined,join_cut=250,
+                start=old.points[-1],goal=joined.points[-1])
+    s.queued=queued
+    for phase_ns in (0,20_000_000,40_000_000):
+        s.ros_event('progress',NS(desired=NS(time_from_start=NS(sec=0,nanosec=phase_ns))))
+        s._chain_tick()
+        assert s.queued is queued and s.chain_pending is None and s.chain_path is old
+        t.panel.ros_backend.extend_trajectory.assert_not_called()
+    s.ros_event('progress',NS(desired=NS(time_from_start=NS(sec=0,nanosec=60_000_000))))
+    s._chain_tick();s._chain_tick()
+    t.panel.ros_backend.extend_trajectory.assert_called_once()
+    assert s.queued is None and s.chain_pending['path'] is joined and s.chain_path is old

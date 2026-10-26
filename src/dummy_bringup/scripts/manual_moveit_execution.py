@@ -154,10 +154,11 @@ class SegmentedExecution:
         self.aborted = True
 
 
-def joint_goal_path(start, goal, limits_deg, speed, acceleration):
+def joint_goal_path(start, goal, limits_deg, speed, acceleration, nominal_limits_deg=None,
+                    start_tolerance_rad=.003):
     """关节直控的同步直线：检查范围和动态上限，不调用MoveIt碰撞服务。
 
-    输入位置为rad、范围为deg；保留实际起点，使用首末零速Hermite插值，
+    输入位置为rad、范围为deg；不修改实际输入，命令起点只在既有连续性预算内投影至工作区，使用首末零速Hermite插值，
     再按现有20ms准备器检查每个命令的速度/加速度。设备准入仍由C++负责。
     """
     points = checked_points((start, goal))
@@ -165,9 +166,27 @@ def joint_goal_path(start, goal, limits_deg, speed, acceleration):
             not all(math.isfinite(v) for v in bounds) or bounds[0] > bounds[1]
             for bounds in limits_deg)):
         raise ValueError('关节直控需要完整有效的六轴范围')
+    start_limits = nominal_limits_deg if nominal_limits_deg is not None else limits_deg
+    if (len(start_limits) != 6 or any(len(bounds) != 2 or
+            not all(math.isfinite(v) for v in bounds) or bounds[0] > bounds[1]
+            for bounds in start_limits)):
+        raise ValueError('关节直控需要完整有效的六轴名义范围')
     if any(not math.radians(lo) <= value <= math.radians(hi)
-           for point in points for value, (lo, hi) in zip(point, limits_deg)):
-        raise ValueError('关节直控起点或目标超出工作范围，未提交运动')
+           for value, (lo, hi) in zip(points[0], start_limits)):
+        raise ValueError('关节直控实测起点超出名义范围，未提交运动')
+    if any(not math.radians(lo) <= value <= math.radians(hi)
+           for value, (lo, hi) in zip(points[-1], limits_deg)):
+        raise ValueError('关节直控目标超出工作范围，未提交运动')
+    if not math.isfinite(start_tolerance_rad) or start_tolerance_rad < 0 or start_tolerance_rad > .003:
+        raise ValueError('关节直控起点连续性预算无效')
+    command_start = tuple(max(math.radians(lo), min(math.radians(hi), value))
+                          for value, (lo, hi) in zip(points[0], limits_deg))
+    if any(abs(command-actual) > start_tolerance_rad
+           for command, actual in zip(command_start, points[0])):
+        raise ValueError('关节直控实测起点超出工作区连续性容许带，未提交运动')
+    # 对照Native命令起点准备：反馈原值不变，在采样前重新生成完整工作区轨迹。
+    # 后续仍须以新鲜实测起点核验首槽动态，不在Begin后替换已登记轨迹。
+    points = (command_start, points[-1])
     # 延迟导入避免与准备器的checked_points依赖形成模块初始化环。
     from manual_moveit_continuous import prepare_path
     return prepare_path(points, (0., 1.), speed, acceleration, ((0.,) * 6,) * 2)

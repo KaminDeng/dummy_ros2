@@ -6,6 +6,7 @@
 # 仅导入配置模块、建临时文件与修改进程环境；不执行Native或扫描硬件。显式旧配置兼容与带manifest部署摘要校验是不同路径，不能宣称所有real配置都经过同等不可变产物校验。
 import importlib.util
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -23,6 +24,68 @@ def runtime():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def ros_bounds_config(tmp_path, *, nominal=(-73, 90), limits=(-72.45, 89.45), margin=.55):
+    """仅构造本地配置，不启动 ROS，也不改部署文件。"""
+    description = tmp_path / 'model.xacro'
+    description.write_text('<robot name="fixture"/>')
+    controller = tmp_path / 'controller.yaml'
+    controller.write_text('controller: {}')
+    path = tmp_path / 'panel.json'
+    path.write_text(json.dumps(dict(sdk_prefix=str(tmp_path),
+        ros_controller_config=str(controller), description_xacro=str(description),
+        working_margin_deg=margin, joints=[dict(nominal_limits_deg=nominal, limits_deg=limits)])))
+    return path
+
+
+@pytest.mark.parametrize('nominal', [(-170, 170), (-73, 90), (35, 180),
+                                   (-180, 180), (-100, 100), (-720, 720)])
+def test_ros_projection_roundtrip_stays_inside_ref_working_bounds(tmp_path, nominal):
+    # REF 先转换名义边界，再加减停车余量；不能先在角度域减余量再转换。
+    limits = [nominal[0] + .55, nominal[1] - .55]
+    path = ros_bounds_config(tmp_path, nominal=nominal, limits=limits)
+    original = path.read_bytes()
+    loaded = runtime().load_panel_config(path, 'ros')['joints'][0]['limits_deg']
+    margin_rad = .55 * math.pi / 180
+    lower = nominal[0] * math.pi / 180 + margin_rad
+    upper = nominal[1] * math.pi / 180 - margin_rad
+    assert math.radians(loaded[0]) > lower
+    assert math.radians(loaded[1]) < upper
+    assert loaded[0] >= limits[0] and loaded[1] <= limits[1]
+    assert path.read_bytes() == original
+
+
+def test_ros_projection_preserves_narrower_configured_bounds(tmp_path):
+    path = ros_bounds_config(tmp_path, limits=(-60, 80))
+    lower, upper = runtime().load_panel_config(path, 'ros')['joints'][0]['limits_deg']
+    assert -60 <= lower < upper <= 80
+
+
+def test_ros_upper_limit_projection_keeps_complete_default_speed_path_inside_ref(tmp_path):
+    from manual_moveit_execution import joint_goal_path
+    path = ros_bounds_config(tmp_path)
+    config = json.loads(path.read_text())
+    nominal = [(-170, 170), (-73, 90), (35, 180), (-180, 180), (-100, 100), (-720, 720)]
+    config['joints'] = [dict(nominal_limits_deg=bounds,
+                            limits_deg=[bounds[0]+.55, bounds[1]-.55]) for bounds in nominal]
+    path.write_text(json.dumps(config))
+    limits = [j['limits_deg'] for j in runtime().load_panel_config(path, 'ros')['joints']]
+    start = [0., 0., math.pi/2, 0., 0., 0.]
+    goal = start.copy()
+    goal[1] = math.radians(limits[1][1])
+    prepared = joint_goal_path(start, goal, limits, 63., 4.)
+    assert prepared.points[-1][1] == goal[1]
+    assert len(prepared.points) > 2
+    ref_upper = math.pi / 2 - .55 * math.pi / 180
+    assert all(point[1] < ref_upper for point in prepared.points)
+
+
+@pytest.mark.parametrize('margin', [float('nan'), float('inf'), -.55, 100])
+def test_ros_projection_rejects_invalid_working_bounds(tmp_path, margin):
+    path = ros_bounds_config(tmp_path, margin=margin)
+    with pytest.raises(ValueError, match='工作范围'):
+        runtime().load_panel_config(path, 'ros')
 
 
 ##

@@ -91,7 +91,7 @@ struct HistoricalIdleBaselineContext {
 
 /**
  * @brief 仅在无本次证据写入且历史释放链相符时识别冷Idle基线。
- * 接纳已释放根/释放子尝试；manual模式另允许当前已清除的REST超时根或已知失能超时Release故障历史。
+ * 接纳已释放根/释放子尝试；manual模式另接纳当前已清错的合法Motion/Safety/Release故障历史。
  * 历史失败仍是失败，仅作为读取基线，不能复用历史运动授权。
  * @param value 提供状态访问器的设备Status对象。
  * @param context 当前/历史boot-run、链及本地采集水位。
@@ -107,38 +107,17 @@ bool historical_released_idle_baseline(const Status &value,
        value.final_state() == 2U) ||
       (value.attempt_kind() == 3U && value.run_id() > 1U &&
        value.parent_run_id() == value.run_id()-1U && value.final_state() == 8U);
-  // 显式ClearFault只清当前故障，保留Fault4/source；严格已释放形状只提供只读基线。
-  // 已知REST超时、首样本超时及导数拒绝共享同一形状，未知原因仍拒绝。
-  const bool cleared_known_motion_fault =
-      context.manual_reference_mode && value.attempt_kind() == 1U &&
-      value.parent_run_id() == 0U && value.final_state() == 4U &&
-      value.core_state() == 2U && value.reference_epoch() != 0U &&
-      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
-      value.can_failed_mask() == 0U &&
-      (value.failure_source() == 0x1067U || value.failure_source() == 0x1024U ||
-       value.failure_source() == 0x1008U);
-  // 已知失能超时的Release失败账本在ClearFault后仍保持Fault终态，不能伪装为成功释放。
-  const bool cleared_release_timeout =
-      context.manual_reference_mode &&
-      value.attempt_kind() ==
-          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_RELEASE &&
-      value.run_id() > 1U && value.parent_run_id() == value.run_id() - 1U &&
-      value.final_state() ==
-          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_FINAL_STATE_FAULT_LATCHED_AND_RELEASED &&
-      value.core_state() == 2U && value.reference_epoch() != 0U &&
-      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
-      value.can_failed_mask() == 0U && value.failure_source() == 0x1064U;
-  // 已清除的位置限位Safety故障只允许建立只读基线，历史Fault终态保持不变。
-  const bool cleared_safety_position_limit =
-      context.manual_reference_mode &&
-      value.attempt_kind() ==
-          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_SAFETY &&
-      value.run_id() > 1U && value.parent_run_id() == value.run_id() - 1U &&
-      value.final_state() ==
-          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_FINAL_STATE_FAULT_LATCHED_AND_RELEASED &&
-      value.core_state() == 2U && value.reference_epoch() != 0U &&
-      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
-      value.can_failed_mask() == 0U && value.failure_source() == 0x1002U;
+  // 与Native一致：显式ClearFault只清当前故障，历史Fault及原因保留。
+  // 仅接纳合法已释放谱系的只读冷基线，不按历史故障源枚举，也不验收旧原件或恢复授权。
+  const bool fault_lineage =
+      (value.attempt_kind()==1U && value.parent_run_id()==0U) ||
+      ((value.attempt_kind()==2U || value.attempt_kind()==3U) && value.run_id()>1U &&
+       value.parent_run_id()==value.run_id()-1U);
+  const bool cleared_fault_history =
+      context.manual_reference_mode && fault_lineage && value.final_state()==4U &&
+      value.core_state()==2U && value.reference_epoch()!=0U &&
+      value.cleanup_state()==3U && value.first_failure_reason()==0U &&
+      value.can_failed_mask()==0U && value.failure_source()!=0U;
   const bool clean_idle =
       value.boot_epoch() != 0U && value.run_id() != 0U &&
       value.session_id() == 0U &&
@@ -160,8 +139,7 @@ bool historical_released_idle_baseline(const Status &value,
       std::equal(context.historical_chain.begin(),
                  context.historical_chain.end(),
                  std::begin(value.evidence_chain_sha256()));
-  return (released_attempt || cleared_known_motion_fault || cleared_release_timeout ||
-          cleared_safety_position_limit) &&
+  return (released_attempt || cleared_fault_history) &&
          clean_idle && context.pages_written == 0U &&
          context.terminal_written_run_id == 0U &&
          (cold_start || same_historical_run);

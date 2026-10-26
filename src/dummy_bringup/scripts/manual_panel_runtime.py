@@ -3,13 +3,14 @@
 import subprocess
 import os
 import signal
+import stat
 import time
 import tempfile
 from pathlib import Path
 
 
 class PanelRuntime:
-    def __init__(self, spawn=None):
+    def __init__(self, spawn=None, serial_endpoint=None, sysfs_root='/sys/dev/char'):
         self._owns_group = spawn is None
         self.spawn = spawn or (lambda argv: subprocess.Popen(argv, start_new_session=True))
         self.owned_pgid = None
@@ -17,10 +18,16 @@ class PanelRuntime:
         self.state = 'Disconnected'
         self.error = ''
         self.launch_argv = []
+        self.serial_endpoint = serial_endpoint
+        self._serial_identity = None
+        self._sysfs_root = Path(sysfs_root)
 
-    def start(self, argv=()):
+    def start(self, argv=(), serial_endpoint=None):
         if self.state != 'Disconnected':
             raise RuntimeError('ROS 生命周期尚未结束')
+        if serial_endpoint is not None:
+            self.serial_endpoint = serial_endpoint
+        self._serial_identity = self._serial_device_identity() if argv else None
         self.state = 'Starting'
         try:
             if argv:
@@ -57,6 +64,9 @@ class PanelRuntime:
         if not released:
             self.fail('失能未确认：保留 ROS 拥有者，禁止切换后端')
             return False
+        return self._stop_owned_process()
+
+    def _stop_owned_process(self):
         self.state = 'Stopping'
         try:
             if self.process is not None:
@@ -82,17 +92,77 @@ class PanelRuntime:
         self.state = 'Disconnected'
         return True
 
-    def _owned_group_alive(self):
-        # Linux /proc membership is checked only against our recorded PGID.
-        # Reparented live children still count; exited zombies cannot own ROS IO.
-        for stat in Path('/proc').glob('[0-9]*/stat'):
+    def _serial_device_path(self):
+        endpoint = self.serial_endpoint
+        if not isinstance(endpoint, str) or not endpoint.startswith('serial/'):
+            return None
+        path = endpoint[len('serial/'):].split('#', 1)[0]
+        return path if path.startswith('/dev/') else None
+
+    @staticmethod
+    def _char_identity(path):
+        value = os.stat(path)
+        return (value.st_dev, value.st_ino, value.st_rdev) if stat.S_ISCHR(value.st_mode) else None
+
+    def _serial_device_identity(self):
+        path = self._serial_device_path()
+        try:
+            return self._char_identity(path) if path else None
+        except (OSError, ValueError):
+            return None
+
+    def _owned_group_pids(self):
+        # 只按创建时记录的PGID识别成员，绝不查看其他进程的FD或按名字认领。
+        members = []
+        for source in Path('/proc').glob('[0-9]*/stat'):
             try:
-                fields = stat.read_text().rsplit(')', 1)[1].split()
+                fields = source.read_text().rsplit(')', 1)[1].split()
                 if int(fields[2]) == self.owned_pgid and fields[0] != 'Z':
-                    return True
+                    members.append(int(source.parent.name))
             except (OSError, ValueError, IndexError):
                 continue
-        return False
+        return members
+
+    def _owned_group_alive(self):
+        return bool(self._owned_group_pids())
+
+    def _owned_serial_detached(self):
+        original = self._serial_identity
+        if not self._owns_group or self.process is None or self.owned_pgid is None or original is None:
+            return False
+        try:
+            current = self._serial_device_identity()
+            if current is None or current == original:
+                return False
+            driver = self._sysfs_root / f'{os.major(original[2])}:{os.minor(original[2])}'
+            if driver.exists():
+                return False
+            found = False
+            for pid in self._owned_group_pids():
+                for fd in (Path('/proc') / str(pid) / 'fd').iterdir():
+                    identity = self._char_identity(fd)
+                    if identity == current:
+                        return False
+                    if identity == original:
+                        if not os.readlink(fd).endswith(' (deleted)'):
+                            return False
+                        found = True
+            return found
+        except (OSError, ValueError):
+            return False
+
+    def retire_disconnected_owner(self):
+        """仅退休已物理断开的本组TTY拥有者，不确认设备失能或动作成功。"""
+        if not self._owned_serial_detached():
+            return False
+        original_error = self.error
+        # 发SIGINT前再核一次；无法证明或已有新设备FD则保持原UNCONFIRMED。
+        if not self._owned_serial_detached():
+            return False
+        stopped = self._stop_owned_process()
+        if stopped:
+            self.error = original_error
+        return stopped
 
 
 ROS_RUNTIME_KEYS = (

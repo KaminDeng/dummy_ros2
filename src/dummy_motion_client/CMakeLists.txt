@@ -12,6 +12,7 @@ project(dummy_motion_client)
 find_package(ament_cmake REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(dummy_motion_interfaces REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(dummy_ros_control REQUIRED)
 find_package(controller_interface REQUIRED)
@@ -78,7 +79,7 @@ target_link_libraries(device_action_gate dummy_panel_feedback dummy_dp_managemen
   dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
   dummy_goal_timeline)
 ament_target_dependencies(device_action_gate controller_manager control_msgs rclcpp rclcpp_action
-  controller_interface joint_trajectory_controller trajectory_msgs std_srvs dpsdk_interfaces)
+  controller_interface joint_trajectory_controller trajectory_msgs std_srvs dpsdk_interfaces dummy_motion_interfaces)
 install(TARGETS device_action_gate DESTINATION lib/${PROJECT_NAME})
 install(TARGETS native_action_gate DESTINATION lib/${PROJECT_NAME})
 add_library(dummy_manual_ros_baseline STATIC src/manual_ros_baseline.cpp)
@@ -164,7 +165,7 @@ if(BUILD_TESTING)
   add_executable(device_profile_tests test/device_profile_tests.cpp)
   target_link_libraries(device_profile_tests dummy_device_profile)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
-  foreach(mode IN ITEMS denied stale shutdown unconfirmed retained wrongref status_cadence status_qualification_cadence state_stale_status_live can_stale status_stale calibration_motion release_retry release_unavailable planning_duplicate_nodes planning_duplicate_servers planning_private_scene planning_unrelated_scene planning_bad_private_suffix planning_wrong_scene_namespace renewal_retry renewal_wrong_uuid renewal_no_receipt renewal_owner_drift renewal_pending consumed_permit consumed_permit_denied consumed_owner_drift scene_normalized scene_equivalent_local scene_wrong_pose scene_wrong_dimensions scene_wrong_frame scene_wrong_orientation scene_full_positive_origin scene_full_negative_origin scene_unrelated_plan_error scene_restore_plan_failure scene_clear_plan_failure scene_blocked_plan_success)
+  foreach(mode IN ITEMS released_fault released_fault_wrong_reference released_fault_no_commit released_fault_wrong_tag denied stale shutdown unconfirmed retained wrongref status_cadence status_qualification_cadence state_stale_status_live can_stale status_stale calibration_motion release_retry release_unavailable planning_duplicate_nodes planning_duplicate_servers planning_private_scene planning_unrelated_scene planning_bad_private_suffix planning_wrong_scene_namespace renewal_retry renewal_wrong_uuid renewal_no_receipt renewal_owner_drift renewal_pending consumed_permit consumed_permit_denied consumed_owner_drift scene_normalized scene_equivalent_local scene_wrong_pose scene_wrong_dimensions scene_wrong_frame scene_wrong_orientation scene_full_positive_origin scene_full_negative_origin scene_unrelated_plan_error scene_restore_plan_failure scene_clear_plan_failure scene_blocked_plan_success)
     add_test(NAME manual_ros_baseline_e2e_${mode} COMMAND ${Python3_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/manual_ros_baseline_e2e_tests.py"
       "$<TARGET_FILE:manual_ros_baseline_node>" ${mode})
@@ -402,7 +403,7 @@ if(BUILD_TESTING)
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
     dummy_goal_timeline)
   ament_target_dependencies(direct_hold_handoff_tests controller_manager control_msgs rclcpp rclcpp_action
-    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs dummy_motion_interfaces)
   add_test(NAME direct_hold_handoff_tests COMMAND direct_hold_handoff_tests)
   add_test(NAME gate_control_slow_stderr
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../dummy_ros_control/test/run_slow_stderr_fixture.py"
@@ -413,14 +414,14 @@ if(BUILD_TESTING)
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
     dummy_goal_timeline)
   ament_target_dependencies(device_lease_transition_tests controller_manager control_msgs rclcpp rclcpp_action
-    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs dummy_motion_interfaces)
   add_test(NAME device_lease_transition_tests COMMAND device_lease_transition_tests)
 # 完成阶段的排队续租：正例、完整身份错配、ACK/过期、撤销状态等分别注册mode；-UNDEBUG保留必要断言推进。
   add_executable(queued_renew_completion_tests test/queued_renew_completion_tests.cpp)
   target_link_libraries(queued_renew_completion_tests dummy_panel_feedback dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
   ament_target_dependencies(queued_renew_completion_tests controller_manager control_msgs rclcpp rclcpp_action
-    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs dummy_motion_interfaces)
   target_compile_options(queued_renew_completion_tests PRIVATE -UNDEBUG)
   foreach(mode IN ITEMS positive sent_complete not_frozen wrong_boot wrong_session wrong_reference wrong_motion wrong_management wrong_profile wrong_mask wrong_device wrong_client missing_ack old_ack expired withdraw_positive withdraw_explicit withdraw_started withdraw_owns_busy withdraw_nonrenew withdraw_not_reserved withdraw_not_running withdraw_actual_inflight withdraw_stale_state withdraw_wrong_run withdraw_status_lag)
     add_test(NAME queued_renew_completion_${mode} COMMAND queued_renew_completion_tests ${mode})
@@ -431,7 +432,7 @@ if(BUILD_TESTING)
   target_link_libraries(queued_renew_cancel_tests dummy_panel_feedback dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
   ament_target_dependencies(queued_renew_cancel_tests controller_manager control_msgs rclcpp rclcpp_action
-    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs dummy_motion_interfaces)
   target_compile_options(queued_renew_cancel_tests PRIVATE -UNDEBUG)
   foreach(mode IN ITEMS positive wrong_boot wrong_session wrong_ref wrong_motion wrong_mgmt wrong_profile wrong_mask wrong_device wrong_client not_cancel abort request_missing no_cancel lost_authorization expired started actual_inflight owns_busy nonrenew not_reserved not_running)
     add_test(NAME queued_renew_cancel_${mode} COMMAND queued_renew_cancel_tests ${mode})
@@ -443,7 +444,7 @@ if(BUILD_TESTING)
   target_link_libraries(inflight_renew_cancel_tests dummy_panel_feedback dummy_device_action dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
   ament_target_dependencies(inflight_renew_cancel_tests controller_manager control_msgs rclcpp rclcpp_action
-    controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+    controller_interface joint_trajectory_controller trajectory_msgs std_srvs dummy_motion_interfaces)
   target_compile_options(inflight_renew_cancel_tests PRIVATE -UNDEBUG)
   foreach(mode IN ITEMS positive wrong_boot wrong_session wrong_ref wrong_motion wrong_management wrong_profile wrong_mask wrong_device wrong_client expired failed_renew invalidate no_cancel abort guard_boot guard_session guard_ref guard_motion guard_management guard_profile guard_mask guard_operation waiting_abort)
     add_test(NAME inflight_renew_cancel_${mode} COMMAND inflight_renew_cancel_tests ${mode})

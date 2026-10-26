@@ -151,7 +151,10 @@ class JointPanel(QtWidgets.QWidget):
             from manual_panel_runtime import PanelRuntime
             self.worker = QtCore.QProcess(self)  # 仅为旧 UI 状态查询保留，不启动。
             self.ros_status = None
-            self.ros_runtime = PanelRuntime()
+            arguments = self.cfg.get('native_arguments', [])
+            endpoint = (arguments[arguments.index('--endpoint') + 1]
+                        if '--endpoint' in arguments else None)
+            self.ros_runtime = PanelRuntime(serial_endpoint=endpoint)
             self.ros_backend = RosBackend(RosTransport(self.node, self.ros_status_received, self.ros_state_received), self.ros_event)
             self.ros_last_poll = 0
             self.ros_auto_pending = bool(self.cfg.pop('auto_calibrate_and_test', False))
@@ -194,7 +197,7 @@ class JointPanel(QtWidgets.QWidget):
                     self.message(str(error))
                     return
             self.message('先请求停止释放，等待 ROS 控制链确认后切换。')
-            if not self.ros_backend.released:
+            if not getattr(self.ros_backend, 'can_close', self.ros_backend.released):
                 self.release('RELEASE')
                 return
             if not self.ros_runtime.stop(True):
@@ -310,10 +313,21 @@ class JointPanel(QtWidgets.QWidget):
                 self.pending_backend = 'ros'
                 self.apply_backend_change()
                 return
-            if not self.ros_backend.released:
+            if not getattr(self.ros_backend, 'can_close', self.ros_backend.released):
+                self.ros_reconnect_pending = True
+                if getattr(self.ros_runtime, 'retire_disconnected_owner', lambda: False)():
+                    # 仅确认旧USB连接已消失，不把原D10或失能验证改成成功。
+                    self.authorized = False
+                    self.ros_reconnect_pending = False
+                    self.ros_backend.transport.close()
+                    self.message('旧USB连接已物理断开，已退出本窗口的旧通信进程；原释放未确认记录保留。重新建立只读连接，不自动恢复运动。')
+                    self.pending_backend = 'ros'
+                    self.apply_backend_change()
+                    return
                 self.release('RELEASE')
-                self.message('先等待 ROS 控制链确认失能释放，再次点击重连；重连不自动恢复运动。')
+                self.message('正在确认 ROS 失能释放，确认后重新建立只读连接。')
                 return
+            self.ros_reconnect_pending = False
             if not self.ros_runtime.stop(True) or not self.ros_backend.close():
                 return
             self.pending_backend = 'ros'
@@ -944,7 +958,8 @@ class JointPanel(QtWidgets.QWidget):
             from manual_moveit_execution import joint_goal_path, ros_trajectory
             try:
                 path = joint_goal_path(self.actual_q, [math.radians(v) for v in goal], self.limits,
-                                       self.speed_input.value(), self.acceleration_input.value())
+                                       self.speed_input.value(), self.acceleration_input.value(),
+                                       nominal_limits_deg=nominal)
                 trajectory = ros_trajectory(path, [j['name'] for j in self.cfg['joints']], start_tolerance_rad=.003)
                 if hasattr(self, 'moveit_tab'):
                     self.moveit_tab.invalidate()
@@ -1285,9 +1300,14 @@ class JointPanel(QtWidgets.QWidget):
             self.timer.stop()
             self.close()
             return
-        # 有界批量消费只读规划响应；避免逐帧一次回调使碰撞检查耗时近一分钟。
-        for _ in range(8):
+        # ROS反馈与规划响应共用executor：突发时多排空，但限制单帧GUI占用。
+        # Native沿用原8次批量，不改变已验证的链路调度。
+        ros = self.backend == 'ros'
+        callback_deadline = time.perf_counter() + .003 if ros else None
+        for _ in range(32 if ros else 8):
             rclpy.spin_once(self.node, timeout_sec=0)
+            if ros and time.perf_counter() >= callback_deadline:
+                break
         if self.backend == 'ros':
             self.ros_tick()
             return
@@ -1408,7 +1428,18 @@ class JointPanel(QtWidgets.QWidget):
     # @param event Qt QCloseEvent；未能确认进程结束时 ignore 保持窗口。
     # @return None；执行上述状态更新、界面或日志操作。
     def ros_event(self, kind, value):
-        self.message('ROS ' + kind + ': ' + str(value))
+        now = time.monotonic()
+        if kind == 'progress' and not isinstance(value, str):
+            # 完整采样证据由控制链保存；操作员日志只保留每秒进度，不格式化大消息。
+            if now - getattr(self, '_ros_feedback_log_at', -math.inf) >= 1.:
+                self._ros_feedback_log_at = now
+                stamp = getattr(getattr(value, 'desired', None), 'time_from_start', None)
+                elapsed = getattr(stamp, 'sec', 0) + getattr(stamp, 'nanosec', 0) * 1e-9
+                self.message(f'ROS 执行反馈：已执行 {elapsed:.2f} 秒')
+        elif kind != 'progress' or value != getattr(self, '_ros_progress_text', None) or now - getattr(self, '_ros_progress_log_at', -math.inf) >= 10.:
+            if kind == 'progress':
+                self._ros_progress_text, self._ros_progress_log_at = value, now
+            self.message('ROS ' + kind + ': ' + str(value))
         if hasattr(self, 'moveit_tab'):
             self.moveit_tab.ros_event(kind, value)
         if hasattr(self, 'obstacle_tab'):
@@ -1419,8 +1450,10 @@ class JointPanel(QtWidgets.QWidget):
         elif kind == 'manual_ready':
             self.busy = False
             self.ros_runtime.active()
-        elif kind in ('released', 'canceled'):
+        elif kind in ('released', 'retired', 'canceled'):
             self.busy = False
+            if kind in ('released', 'retired') and getattr(self, 'ros_reconnect_pending', False):
+                QtCore.QTimer.singleShot(0, self.request_reconnect)
         elif kind == 'accepted':
             self.busy = True
         elif kind == 'completed':
@@ -1445,8 +1478,28 @@ class JointPanel(QtWidgets.QWidget):
             for label, value in zip(self.feedback_labels, state.position_rad):
                 label.setText(f'{math.degrees(value):.3f}°')
 
+    def refresh_ros_connection_controls(self):
+        # 图/控制器异常只禁止运动，不能让重连按钮继承运动中的禁用状态。
+        quiet = not self.closing and not self.busy and not self.helper_active()
+        self.reconnect.setEnabled(quiet)
+        parameter_busy = hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue)
+        self.backend_choice.setEnabled(quiet and self.connection_action is None and not parameter_busy)
+
     def ros_tick(self):
+        self.refresh_ros_connection_controls()
         now = time.monotonic()
+        if (not self.closing and getattr(self, 'ros_reconnect_pending', False) and
+                not getattr(self.ros_backend, 'can_close', self.ros_backend.released) and
+                now >= getattr(self, '_ros_detach_retry_at', 0.)):
+            self._ros_detach_retry_at = now + .5
+            if getattr(self.ros_runtime, 'retire_disconnected_owner', lambda: False)():
+                self.authorized = False
+                self.ros_reconnect_pending = False
+                self.ros_backend.transport.close()
+                self.message('旧USB连接已物理断开，退出旧通信进程后只读重连；不自动使能。')
+                self.pending_backend = 'ros'
+                self.apply_backend_change()
+                return
         self.ros_runtime.check_startup_timeout(now - self.ros_started_at, float(self.cfg.get('ros_startup_timeout_s', 30)))
         graph_error = self.ros_backend.transport.control_graph_error()
         if graph_error:
@@ -1503,12 +1556,9 @@ class JointPanel(QtWidgets.QWidget):
             state['core_state']==2 and status.core_state==2 and state['session_id']==0 and
             status.session_id==0 and not status.real_motion_permitted and status.permit_remaining_us==0))
         self.zero.setEnabled(status_fresh and not self.closing and not self.busy and self.ros_backend.admitting and not self.ros_backend.released)
-        self.stop.setEnabled(not self.ros_backend.released)
+        self.stop.setEnabled(not getattr(self.ros_backend, 'can_close', self.ros_backend.released))
         # ROS同样刷新连接控件，不能继承Native忙期的disabled状态。
-        quiet = not self.closing and not self.busy and not self.helper_active()
-        self.reconnect.setEnabled(quiet)
-        parameter_busy = hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue)
-        self.backend_choice.setEnabled(quiet and self.connection_action is None and not parameter_busy)
+        self.refresh_ros_connection_controls()
         self.copy.setEnabled(self.fresh() and hasattr(self, 'actual_q'))
         if hasattr(self, 'motor_parameter_tab'):
             self.motor_parameter_tab.tick()
@@ -1525,14 +1575,14 @@ class JointPanel(QtWidgets.QWidget):
     def closeEvent(self, event):
         if self.backend == 'ros':
             self.closing = True
-            if not self.ros_backend.released:
+            if not getattr(self.ros_backend, 'can_close', self.ros_backend.released):
                 self.release('RELEASE')
                 deadline = time.monotonic() + float(self.cfg.get('ros_release_timeout_s', 6))
-                while not self.ros_backend.released and time.monotonic() < deadline:
+                while not getattr(self.ros_backend, 'can_close', self.ros_backend.released) and time.monotonic() < deadline:
                     rclpy.spin_once(self.node, timeout_sec=0.02)
                     self.ros_tick()
                     QtWidgets.QApplication.processEvents()
-            if not self.ros_runtime.stop(self.ros_backend.released):
+            if not self.ros_runtime.stop(getattr(self.ros_backend, 'can_close', self.ros_backend.released)):
                 self.message(self.ros_runtime.error)
                 self.closing = False
                 event.ignore()

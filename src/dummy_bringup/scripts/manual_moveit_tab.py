@@ -80,6 +80,7 @@ class MoveItTab(QtWidgets.QWidget):
         self.revision = 0
         self.play_index = None
         self.execution = None
+        self.ros_inflight_uuid = None
         self.completed_marker = None
         self.started_motion = None
         ##
@@ -262,14 +263,14 @@ class MoveItTab(QtWidgets.QWidget):
     # @brief 查询本面板圆柱场景是否已确认且未封锁。
     # @return bool：没有圆柱控制器时 True；否则 scene_ready 且 not blocked。
     def refresh_auto_backend_options(self):
-        """ROS采用整轮预规划单FJT；Native保留在线滚动续接。"""
+        """两条链路均短前瞻后在线续接；ROS仍保留单次RUN的630秒上限。"""
         ros = self.panel.backend == 'ros'
         if getattr(self, '_auto_options_backend', self.panel.backend) != self.panel.backend:
             self.continuous_enabled = ros or self.panel.cfg.get('moveit_continuous_execution', True)
         self._auto_options_backend = self.panel.backend
         self.auto_duration.setMaximum(9.5 if ros else (57. if self.auto_continuous.isChecked() else 1440.))
         self.auto_continuous.setToolTip(
-            'ROS：整轮预规划随机段与Home回程，逐样本碰撞检查后一次提交连续轨迹；非在线续接。最长9.5分钟，完整路径上限630秒。'
+            'ROS：准备短前瞻后起步，边运动边规划并平滑续接；每次检查完整修改曲线。补充不及时沿已检查尾段停车。最长9.5分钟，单次运行上限630秒。'
             if ros else '提前规划并检查连接曲线，在同一RUN内滚动补充；目标附近圆滑过渡，不要求逐目标停稳。补充不及时则沿已检查尾段停车。')
 
     def scene_ready(self):
@@ -730,6 +731,8 @@ class MoveItTab(QtWidgets.QWidget):
             if self.panel.backend == 'ros':
                 from manual_moveit_execution import ros_trajectory
                 trajectory = ros_trajectory(self.continuous_path, self.planner.names, start_tolerance_rad=.003)
+                first_stamp=trajectory.points[0].time_from_start
+                self.auto_test.ros_first_slot_ns=first_stamp.sec*1_000_000_000+first_stamp.nanosec
                 validate_trajectory(trajectory, self.planner.names, self.panel.limits)
                 self.execution.waiting = True
                 final_stamp = trajectory.points[-1].time_from_start
@@ -739,6 +742,7 @@ class MoveItTab(QtWidgets.QWidget):
                 self.record('ROS_TRAJECTORY_SUBMITTED', points=self.continuous_path.points,
                             duration_s=duration,
                             sha256=hashlib.sha256(json.dumps(self.continuous_path.points).encode()).hexdigest())
+                self.ros_inflight_uuid = None
                 if not self.panel.ros_backend.submit_trajectory(trajectory):
                     raise ValueError('ROS完整轨迹未提交')
             else:
@@ -757,6 +761,7 @@ class MoveItTab(QtWidgets.QWidget):
             self.auto_test.abort(reason,stop=stop)
             return
         was_active = self.executing
+        self.ros_inflight_uuid = None
         if self.execution:
             self.execution.abort()
         self.execution = None
@@ -772,11 +777,14 @@ class MoveItTab(QtWidgets.QWidget):
                 self.panel.release('STOP')
 
     def ros_event(self, kind, value):
+        if self.auto_test.ros_event(kind,value):return
         if not self.executing:
             return
         if kind == 'accepted':
+            self.ros_inflight_uuid = value.get('goal_uuid') if isinstance(value, dict) else None
             self.record('ROS_GOAL_ACCEPTED', details=value if isinstance(value, dict) else str(value))
         elif kind == 'completed':
+            self.ros_inflight_uuid = None
             self.execution = None
             # 正式Action终态退休旧起点路径，不让下一拍把成功覆写成未发送。
             self.path = self.continuous_path = self.noop_goal = None
@@ -787,7 +795,7 @@ class MoveItTab(QtWidgets.QWidget):
             self.record('PATH_COMPLETED', backend='ros', result=str(value))
             if self.auto_test.active:
                 self.auto_test.ros_completed_goal = self.ros_execution_goal
-                self.auto_test.ros_completion_deadline = self.segment_deadline
+                self.auto_test.ros_completion_deadline = min(self.segment_deadline, time.monotonic()+2.)
                 self.auto_test.ros_completion_pending = True
             self.status.setText('公开 ROS Action 已确认整轨迹完成。')
         elif kind in ('failed', 'canceled'):
@@ -902,10 +910,44 @@ class MoveItTab(QtWidgets.QWidget):
     # @brief 推进异步阶段、完整曲线碰撞检查、预览及执行超时。
     # 更新控件后校验场景、参考身份和实测起点；过期/旧版本 future 本地取消并保留目标输入。规划结果保留全部路点，连续模式重采样后检查实际曲线；最多八个碰撞请求并行。预览仅改目标输入。执行中失鲜、失权或超时按是否已提交决定 STOP，最后推进自动测试。
     # @return None；执行上述状态更新、界面或日志操作。
+    def _wait_for_ros_inflight_feedback(self):
+        """只等待已受理母FJT的本地DDS缓存；不改变C++源反馈门或任何时间锚。"""
+        p = self.panel
+        if (p.backend != 'ros' or not self.executing or p.fresh() or
+                getattr(p, 'closing', False) or not self.ros_inflight_uuid):
+            return False
+        transport = getattr(getattr(p, 'ros_backend', None), 'transport', None)
+        submission = getattr(transport, '_submission', None)
+        goal = getattr(transport, 'goal', None)
+        state = p.last_state
+        if (submission is None or goal is None or state is None or
+                (self.auto_test.active and hasattr(self.auto_test, 'scene_version') and
+                 self.scene_revision() != self.auto_test.scene_version) or
+                state.get('position_valid_mask') != 63 or state.get('velocity_valid_mask') != 63 or
+                any(age > transport.feedback_max_age_ms*1000 for age in state.get('can_rx_age_us', [float('inf')])) or
+                bytes(goal.goal_id.uuid).hex() != self.ros_inflight_uuid or
+                (state['boot_epoch'],state['reference_epoch'],state['session_id']) != self.execution.identity or
+                transport.control_graph_error() or
+                transport._extension_binding(submission, require_fresh=False) is None):
+            return False
+        # 绑定最后实际接收锚，而非第一次发现失鲜的tick；反复tick不能续期。
+        anchor = min(transport.state_at, transport.status_at,
+                     getattr(p, 'last_state_ns', 0)/1e9)
+        now = time.monotonic()
+        if anchor <= 0 or now < max(transport.state_at,transport.status_at):
+            return False
+        if now >= anchor+2. or now > self.segment_deadline:
+            self.cancel_execution('ROS在途反馈等待原2秒期限已到，停止路径。',stop=True)
+        else:
+            self.status.setText('等待新鲜ROS反馈；已受理轨迹仍由ROS控制链监督。')
+        return True
+
     def tick(self):
         self.refresh_auto_backend_options()
         if not self.scene_ready() and (self.path or self.pending):
             self.scene_change_requested()
+        if self._wait_for_ros_inflight_feedback():
+            return
         available = self.panel.fresh() and hasattr(self.panel, 'actual_q')
         state = self.panel.last_state
         observed_identity = (state['boot_epoch'], state['reference_epoch']) if state else None

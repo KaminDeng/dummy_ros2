@@ -14,6 +14,7 @@
  */
 static bool cancel_status_terminal7_variant=false;
 static bool manual_history_mode = false;
+static bool owner_safety_stop_case = false;
 static bool manual_release_mode = false;
 static bool manual_fault_diagnostic_mode = false;
 static bool manual_recovered_idle_mode = false;
@@ -135,7 +136,28 @@ int test_released_idle_startup_baseline() {
         return 383;
     }
   }
-  for (const auto known_source : {0x1067U, 0x1024U, 0x1008U}) {
+  // 清错只清当前故障；三种合法历史谱系都可恢复只读，未知历史源不自行变成新尝试。
+  for (const auto kind : {1U, 2U, 3U}) {
+    for (const auto source : {0x100aU, 0x1068U}) {
+      HistoricalIdleBaselineContext context{};context.manual_reference_mode=true;
+      Status value;value.set_boot_epoch(8290386956477645553ULL);value.set_run_id(9U);
+      value.set_attempt_kind(kind);value.set_parent_run_id(kind==1U?0U:8U);
+      value.set_final_state(4U);value.set_core_state(2U);value.set_reference_epoch(1U);
+      value.set_cleanup_state(3U);value.set_release_committed(true);
+      value.set_failure_source(source);value.set_failure_axis_mask(2U);value.set_configured_mask(63U);
+      // 首次零链固定后不能被迟到的非零摘要替换；这里只识别历史，不验收历史原件。
+      if(!historical_released_idle_baseline(value,context))return 430;
+      // Native只读恢复不以历史轴掩码授资格，零掩码不应阻断冷接入。
+      value.set_failure_axis_mask(0U);
+      if(!historical_released_idle_baseline(value,context))return 433;
+      context.current_boot=value.boot_epoch();context.historical_run_boot=value.boot_epoch();
+      context.historical_run_id=9U;context.historical_reference_epoch=1U;
+      if(!historical_released_idle_baseline(value,context))return 431;
+      std::uint8_t changed_chain[32]{1};value.set_evidence_chain_sha256(changed_chain);
+      if(historical_released_idle_baseline(value,context))return 432;
+    }
+  }
+  for (const auto known_source : {0x100aU, 0x1068U, 0x1067U, 0x1024U, 0x1008U}) {
     HistoricalIdleBaselineContext manual{};
     manual.manual_reference_mode = true;
     Status recovered;
@@ -148,6 +170,12 @@ int test_released_idle_startup_baseline() {
     recovered.set_release_committed(true);
     recovered.set_cleanup_state(3);
     recovered.set_failure_source(known_source);
+    recovered.set_failure_axis_mask(63U);recovered.set_configured_mask(63U);
+    // GUI42已显式ClearFault：当前Idle，历史Motion故障保留，链摘要尚为全零也合法。
+    if (known_source==0x100aU) {
+      recovered.set_boot_epoch(8290386956477645553ULL);recovered.set_run_id(9U);
+      recovered.set_motion_epoch(21U);recovered.set_management_epoch(38U);
+    }
     if (known_source==0x1024U) {
       recovered.set_boot_epoch(17820284845494219766ULL);
       recovered.set_run_id(99U); // panel-interface-02当前已Clear的历史Fault4。
@@ -158,6 +186,8 @@ int test_released_idle_startup_baseline() {
     }
     if (!historical_released_idle_baseline(recovered, manual))
       return 360;
+    auto partial = recovered;partial.set_failure_axis_mask(2U);
+    if (!historical_released_idle_baseline(partial, manual))return 394;
     auto bench = manual;
     bench.manual_reference_mode = false;
     if (historical_released_idle_baseline(recovered, bench))
@@ -172,7 +202,7 @@ int test_released_idle_startup_baseline() {
         bad.set_core_state(9);
         break;
       case 2:
-        bad.set_failure_source(0x1068);
+        bad.set_failure_source(0);
         break;
       case 3:
         bad.set_cleanup_state(2);
@@ -240,6 +270,7 @@ int test_released_idle_startup_baseline() {
     recovered.set_release_committed(true);
     recovered.set_cleanup_state(3);
     recovered.set_failure_source(0x1064);
+    recovered.set_failure_axis_mask(63U);recovered.set_configured_mask(63U);
     if (!historical_released_idle_baseline(recovered, manual))
       return 390;
     auto bench = manual;
@@ -259,10 +290,10 @@ int test_released_idle_startup_baseline() {
         bad.set_release_committed(false);
         break;
       case 3:
-        bad.set_failure_source(0x1067);
+        bad.set_failure_source(0);
         break;
       case 4:
-        bad.set_attempt_kind(2);
+        bad.set_attempt_kind(4);
         break;
       case 5:
         bad.set_parent_run_id(57);
@@ -293,6 +324,7 @@ int test_released_idle_startup_baseline() {
     recovered.set_release_committed(true);
     recovered.set_cleanup_state(3);
     recovered.set_failure_source(0x1002);
+    recovered.set_failure_axis_mask(63U);recovered.set_configured_mask(63U);
     if (!historical_released_idle_baseline(recovered, manual)) return 410;
     auto bench = manual;
     bench.manual_reference_mode = false;
@@ -303,7 +335,7 @@ int test_released_idle_startup_baseline() {
       case 0: bad.set_first_failure_reason(0x1002); break;
       case 1: bad.set_core_state(9); break;
       case 2: bad.set_release_committed(false); break;
-      case 3: bad.set_failure_source(0x1003); break;
+      case 3: bad.set_failure_source(0U); break;
       case 4: bad.set_parent_run_id(59); break;
       case 5: bad.set_cleanup_state(2); break;
       case 6: bad.set_can_failed_mask(1); break;
@@ -1308,7 +1340,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     parameters.raw_evidence_path = capture_path;
   }
   parameters.manual_reference_mode =
-      manual_history_mode || manual_release_mode ||
+      owner_safety_stop_case || manual_history_mode || manual_release_mode ||
       manual_fault_diagnostic_mode || manual_recovered_idle_mode ||
       released_child_case != 0U;
   GuardedZenbeddedSystem system;
@@ -1336,6 +1368,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         raw_order_case >= 20U && raw_order_case <= 23U ? 121U :
         raw_order_case != 0U ? 1U : 3U);
     valid.status.set_attempt_kind(1U);
+  }
+  if(owner_safety_stop_case) {
+    valid.status.set_core_state(4);valid.state.set_core_state(4);
+    valid.status.set_management_epoch(1);valid.state.set_management_epoch(1);
+    valid.status.set_operation_id(42);valid.state.set_operation_id(42);
   }
   valid.status.set_reference_epoch(9U);
   valid.state.set_reference_epoch(9U);
@@ -1749,6 +1786,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             explicit_release->response.size(), &release_receipt) != wire::CodecResult::kOk ||
             release_receipt.transaction_phase() != (release_deactivate_mode == 7U ? 3U : 1U))
           return 233;
+        // GUI49：普通Gate D10直接COMMITTED也必须归档原根，不能只等后续worker Query。
+        if(release_deactivate_mode==7U && !wait_for([&] {
+          const auto root=channel->worker_release_commit_snapshot();
+          return root.request==80U && root.operation==80U && root.run==2U &&
+            root.boot==7U && root.session==8U && root.reference==9U && root.generation!=0U;
+        }))return 388;
         /**
          * @brief 先缓存Stopping7 Status与同op42的早到Idle State，但没有强COMMITTED时不能替换已接纳State。
          * 先给六个错误State（Pending/op0/错op/boot/motion/management）分别验证拒绝；合法早Idle也仅为待后续回执解锁的候选。
@@ -2512,6 +2555,34 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   if((raw_order_case>=83U && raw_order_case<=86U)) {valid.status.set_core_state(raw_order_case==84U?4U:5U);valid.state.set_core_state(raw_order_case==84U?4U:5U);}
   if(!(raw_order_case>=83U && raw_order_case<=86U) && !wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 12;
+  if(owner_safety_stop_case) {
+    // 先通过真实PTY管理回调建立本client COMMITTED owner，而非直接伪造所有权槽。
+    auto pending=std::make_shared<DeviceManagementRequest>();Management::Request request;
+    request.set_schema_major(2);request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);request.set_request_id(44);request.set_request_seq(1);request.set_operation(1);
+    std::uint8_t request_client[16];
+    std::copy(parameters.client_instance_id.begin(),parameters.client_instance_id.end(),request_client);
+    request.set_device_id(valid.status.device_id());request.set_client_instance_id(request_client);
+    request.set_expected_boot_epoch(7);request.set_expected_session_id(8);request.set_expected_reference_epoch(9);
+    request.set_expected_motion_epoch(9);request.set_expected_management_epoch(0);request.set_expected_profile_id(1);request.set_configured_mask(63);
+    if(wire::DummyManageV2RequestCodec::encode(request,pending->request.data(),pending->request.size())!=wire::CodecResult::kOk)return 880;
+    {std::lock_guard<std::mutex> lock(channel->mutex);channel->queued=pending;}
+    if(!wait_for([&]{send(valid);return pending->complete.load();}))return 881;
+    // 错链原页使真实collector粘错；诊断源继续新鲜，不能将该错误当授权或清除它。
+    auto bad=valid;bad.send_status=false;bad.send_state=false;bad.send_evidence=true;
+    bad.evidence.set_schema_major(2);bad.evidence.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
+    bad.evidence.set_run_id(3);bad.evidence.set_attempt_id(3);bad.evidence.set_attempt_kind(1);bad.evidence.set_category(1);
+    bad.evidence.set_group_id(1);bad.evidence.set_group_count(1);bad.evidence.set_final(1);
+    if(!send(bad) || !wait_for([&]{send(valid);return channel->raw_evidence_failure.load()!=0;}))return 882;
+    if(!wait_for([&]{send(valid);return channel->request_owner_safety_stop(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()),7,8,9);}))return 883;
+    const auto now=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    if(channel->request_owner_safety_stop(now,7,8,9))return 884;
+    pollfd stop_fd{stops_input,POLLIN,0};Management::Request stop;
+    if(::poll(&stop_fd,1,1000)!=1 || ::read(stops_input,&stop,sizeof(stop))!=sizeof(stop) || stop.operation()!=10U)return 885;
+    transport.stop();
+    const auto stats=transport.statistics();
+    return stats.stop_requests_sent==1U && channel->raw_evidence_failure.load()!=0U?0:886;
+  }
   if((raw_order_case>=83U && raw_order_case<=86U)) {
     if(!send(valid))return 333;
     if(!wait_for([&] {
@@ -5513,6 +5584,11 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
  * @note 本入口不是严格枚举parser，未识别第三参数可落到默认ACK超时选择；应按已注册测试的确切参数调用。
  */
 int main(int argc, char **argv) {
+  if(argc==2 && std::strcmp(argv[1],"owner_safety_stop")==0) {
+    owner_safety_stop_case=true;
+    return run_component_case(true,false,false,false,false,false,false,false,false,true);
+  }
+
   // 仅新增固定Source测试模式；普通registered场景保原路径。
   if(argc==3 && std::strncmp(argv[2],"cancel_coordination_",20U)==0) {
     source_cancel_coordination=true;

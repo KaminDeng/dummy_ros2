@@ -10,6 +10,7 @@
   <exec_depend>ament_index_python</exec_depend><!-- 运行时通过 ament 索引定位显式安装区资源，不依赖源码工作目录。 -->
   <exec_depend>builtin_interfaces</exec_depend><!-- Duration 等基础时间消息供规划和轨迹请求使用；时间字段的秒/纳秒单位由消息定义。 -->
   <exec_depend>dpsdk_interfaces</exec_depend>
+  <exec_depend>dummy_motion_interfaces</exec_depend><!-- 同一ROS运行中的受控轨迹尾部更新；不改变设备协议。 -->
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>dummy_ros_control</exec_depend>
   <exec_depend>controller_manager</exec_depend>

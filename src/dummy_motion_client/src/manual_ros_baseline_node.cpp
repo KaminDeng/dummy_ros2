@@ -162,7 +162,7 @@ public:
               ((manual_ready_ && flow_.stage() == BaselineStage::kSingleAxis &&
                 moving_ready() && state_.session_id == manual_session_ &&
                 state_.reference_epoch == expected_reference_) ||
-               (manual_external_release_ && released_ && !flow_.active()));
+               (manual_external_release_ && released_ && !released_fault_ && !flow_.active()));
           response->message = description();
         });
     status_service_ = create_service<Trigger>(
@@ -253,11 +253,11 @@ private:
   }
   std::string description() const {
     if (manual_mode_) {
-      if (manual_external_release_ && released_ && !flow_.active())
+      if (manual_external_release_ && released_ && !released_fault_ && !flow_.active())
         return "MANUAL_CONTROL_RELEASED boot=" + std::to_string(boot_);
       if (flow_.stage() == BaselineStage::kFailed)
         return "MANUAL_CONTROL_FAILED: " + flow_.failure() +
-               " cleanup=" + (released_ ? "RELEASED_IDLE" : "UNCONFIRMED");
+               " cleanup=" + (released_ ? (released_fault_ ? "RELEASED_FAULT" : "RELEASED_IDLE") : "UNCONFIRMED");
       if (manual_ready_ && flow_.stage() == BaselineStage::kSingleAxis)
         return "MANUAL_CONTROL_READY boot=" + std::to_string(boot_) +
                " session=" + std::to_string(manual_session_);
@@ -271,7 +271,7 @@ private:
       return "BASELINE_FAILED: " + flow_.failure() + " cleanup=" +
              (!management_requested_
                   ? "NOT_ACQUIRED"
-                  : (released_ ? "RELEASED_IDLE" : "UNCONFIRMED"));
+                  : (released_ ? (released_fault_ ? "RELEASED_FAULT" : "RELEASED_IDLE") : "UNCONFIRMED"));
     return std::string("BASELINE_") + baseline_stage_name(flow_.stage()) + " " +
            detail_;
   }
@@ -285,6 +285,7 @@ private:
       return false;
     }
     const auto started_at = steady_us();
+    released_fault_=false;
     if (!flow_.start(started_at))
       return false;
     controllers_active_ = false;
@@ -369,8 +370,18 @@ private:
       return;
     const auto now = steady_us();
     flow_.tick(now);
-    if (flow_.stage() != BaselineStage::kRelease && boot_ && !fresh())
+    if (flow_.stage() != BaselineStage::kRelease && boot_ && !fresh()) {
+      // 首次失鲜保留独立接收锚/轴推进/CAN年龄，不能把DDS停发误称设备源停发。
+      std::string detail="state_age_us="+std::to_string(state_at_?now-state_at_:UINT64_MAX)+
+        " status_age_us="+std::to_string(status_at_?now-status_at_:UINT64_MAX)+
+        " state_seq="+std::to_string(state_.state_seq)+" boot="+std::to_string(state_.boot_epoch)+
+        " status_boot="+std::to_string(status_.boot_epoch)+" expected_boot="+std::to_string(boot_)+
+        " device_match="+std::to_string(state_.device_id==status_.device_id && device_==state_.device_id);
+      for(unsigned i=0;i<6;++i)detail+=" axis"+std::to_string(i)+"_progress_age_us="+
+        std::to_string(axis_at_[i]?now-axis_at_[i]:UINT64_MAX)+" can_age_us="+std::to_string(state_.can_rx_age_us[i]);
+      record("FRESHNESS_FAILED",detail);
       fail("设备身份改变或源反馈停止进展");
+    }
     if (busy_ &&
         (goal_ && goal_deadline_us_ ? now >= goal_deadline_us_
                                     : now - pending_since_ > 15000000)) {
@@ -1556,6 +1567,8 @@ private:
           return;
         }
         if (response.message == "RELEASE_QUEUED" ||
+            response.message == "EVIDENCE_INCOMPLETE;RELEASED_IDLE" ||
+            response.message == "EVIDENCE_INCOMPLETE;RELEASED_FAULT" ||
             (response.success && response.message == "RELEASED_IDLE"))
           ++substep_;
         else {
@@ -1575,9 +1588,24 @@ private:
             status_.reference_epoch == expected_reference_ &&
             state_.core_state == (expected_reference_ ? 2 : 1) &&
             state_.core_state == status_.core_state;
-        if (response.success &&
-            response.message.find("RELEASED_IDLE") != std::string::npos &&
-            dual_idle && status_.release_committed) {
+        const bool dual_fault = fresh() && state_.state_seq!=release_seq_ &&
+            state_.core_state==9 && status_.core_state==9 && !state_.session_id && !status_.session_id &&
+            state_.profile_id==status_.profile_id && state_.motion_epoch==status_.motion_epoch &&
+            state_.management_epoch==status_.management_epoch && state_.operation_id==status_.operation_id &&
+            state_.reference_epoch==expected_reference_ &&
+            status_.reference_epoch==expected_reference_ && !state_.hold_ready &&
+            state_.raw_position_valid_mask==63 && !state_.can_failed_mask && !status_.can_failed_mask &&
+            !status_.real_motion_permitted && !status_.permit_remaining_us && status_.release_committed &&
+            status_.cleanup_state==3 && !status_.evidence_lost;
+        if(response.message=="EVIDENCE_INCOMPLETE;RELEASED_FAULT" && dual_fault) {
+          released_=true;released_fault_=true;
+          flow_.fail("设备故障已失能释放，运动证据仍不完整",steady_us());
+          record("RELEASE_CONFIRMED",response.message);++substep_;
+          return;
+        }
+        if (((response.success && response.message=="RELEASED_IDLE") ||
+             response.message=="EVIDENCE_INCOMPLETE;RELEASED_IDLE") && dual_idle && status_.release_committed) {
+          if(!response.success)flow_.fail("失能释放已确认，运动证据仍不完整",steady_us());
           // release_committed仅由gate原页/双状态确认后发布；上层不可由零填充状态替代。
           released_ = true;
           record("RELEASE_CONFIRMED", response.message);
@@ -1613,7 +1641,7 @@ private:
   bool obstacle_clear_before_{}, obstacle_contact_confirmed_{}, obstacle_blocked_plan_{};
   Plan::Request::SharedPtr obstacle_probe_request_;
   bool automatic_{}, automatic_attempted_{}, busy_{}, released_{},
-      cylinder_owned_{};
+      cylinder_owned_{}, released_fault_{};
   bool plan_ready_{}, result_waiting_{}, feedback_moved_{}, goal_running_{},
       cancel_test_{}, cancel_requested_{}, cancel_ack_{};
   std::uint64_t boot_{}, state_at_{}, status_at_{}, age_us_{250000},

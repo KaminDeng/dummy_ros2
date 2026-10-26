@@ -78,6 +78,25 @@ def test_direct_joint_path_preserves_limits_and_requested_dynamic_caps():
     assert previous == (0.,) * 6 and path.duration < 4.
 
 
+def test_direct_joint_path_projects_command_start_but_keeps_real_measurement():
+    start = [0., math.radians(89.47010551691055), 0., 0., 0., 0.]
+    limits = [[-89.45, 89.45]] * 6
+    path = execution.joint_goal_path(start, [0.] * 6, limits, 60., 4.,
+                                     nominal_limits_deg=[[-90., 90.]] * 6)
+    assert start[1] == math.radians(89.47010551691055)
+    assert path.points[0][1] == math.radians(89.45)
+    assert abs(start[1]-path.points[0][1]) <= .003
+    assert path.points[-1] == (0.,) * 6
+    assert all(b[1] <= a[1] for a, b in zip(path.points, path.points[1:]))
+
+
+@pytest.mark.parametrize('start,goal', [(90.1, 0.), (89.47, 89.46)])
+def test_inward_start_does_not_relax_nominal_start_or_working_goal(start, goal):
+    with pytest.raises(ValueError):
+        execution.joint_goal_path([math.radians(start)] * 6, [math.radians(goal)] * 6,
+            [[-89.45, 89.45]] * 6, 60., 4., nominal_limits_deg=[[-90., 90.]] * 6)
+
+
 @pytest.mark.parametrize('bad', [float('nan'), 2.])
 def test_direct_joint_path_rejects_nonfinite_and_out_of_range_goals(bad):
     with pytest.raises(ValueError):
@@ -105,3 +124,23 @@ def test_ros_release_retires_ui_goals_before_authoritative_device_release(automa
     JointPanel.release(p,'RELEASE')
     assert calls[-1]=='release' and 'retire' in calls
     assert p.busy and not p.authorized
+
+
+def test_gui44_t1_t2_quantization_command_start_stays_working():
+    actual = [0., math.radians(-72.451140642), math.radians(179.452265668), 0., 0., 0.]
+    fresh = [0., math.radians(-72.452968729), math.radians(179.451281297), 0., 0., 0.]
+    limits = [[-170.,170.],[-72.45,89.45],[35.55,179.45],[-180.,180.],[-100.,100.],[-720.,720.]]
+    nominal = [[-170.,170.],[-73.,90.],[35.,180.],[-180.,180.],[-100.,100.],[-720.,720.]]
+    frozen = tuple(actual)
+    path = execution.joint_goal_path(actual,[0.,0.,math.pi/2,0.,0.,0.],limits,60.,4.,nominal_limits_deg=nominal)
+    assert tuple(actual) == frozen
+    assert all(abs(a-b) <= .003 for a,b in zip(path.points[0], fresh))
+    assert all(math.radians(lo) <= q <= math.radians(hi)
+               for point in path.points for q,(lo,hi) in zip(point, limits))
+
+
+@pytest.mark.parametrize('offset', [.0031, float('nan')])
+def test_command_start_projection_budget_is_strict(offset):
+    with pytest.raises(ValueError):
+        execution.joint_goal_path([math.radians(89.45)+offset]*6,[0.]*6,
+            [[-89.45,89.45]]*6,60.,4.,nominal_limits_deg=[[-90.,90.]]*6)

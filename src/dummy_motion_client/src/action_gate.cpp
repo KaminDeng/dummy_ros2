@@ -46,11 +46,31 @@ bool finite(const std::vector<double> &values) {
   return std::all_of(values.begin(),values.end(),[](double v) { return std::isfinite(v); });
 }
 /**
- * @brief 校验用户容差形状和最大值，零值后续映射到profile默认。
- * @param values 可为空的用户容差向量。
- * @param limits 同轴序profile容差上限。
- * @param allow_unspecified_limit 路径默认0仅不设置附加Host上限，显式正值仍有效。
- * @return 空向量或有限非负且满足已有非零上限时true；零值不是零误差要求。
+ * @brief 预验与运行采样共用的边界退入检查；起点限于名义范围和既有完成容差带。
+ * @param origin 原始起点；previous 是上一个已接受的位置，均不裁剪到工作边界。
+ * @param value 本次待验位置；一旦 previous 已进入工作区，不允许再次越界。
+ * @return 工作区内位置或同侧单调向内的位置为 true；不授予运动权限。
+ */
+bool inward_boundary_step(const JointProfile& profile,std::size_t axis,
+                          double origin,double previous,double value) {
+  if(value>=profile.lower[axis] && value<=profile.upper[axis])return true;
+  if(!profile.manual_inward_start || profile.nominal_lower.size()!=profile.joints.size() ||
+     profile.nominal_upper.size()!=profile.joints.size() || !std::isfinite(origin) ||
+     !std::isfinite(previous) || !std::isfinite(value) ||
+     origin<profile.nominal_lower[axis] || origin>profile.nominal_upper[axis] ||
+     value<profile.nominal_lower[axis] || value>profile.nominal_upper[axis])return false;
+  if(origin>profile.upper[axis])
+    return origin-profile.upper[axis]<=profile.goal_tolerance[axis] &&
+      previous>profile.upper[axis] && value>profile.upper[axis] && value<=previous;
+  if(origin<profile.lower[axis])
+    return profile.lower[axis]-origin<=profile.goal_tolerance[axis] &&
+      previous<profile.lower[axis] && value<profile.lower[axis] && value>=previous;
+  return false;
+}
+/**
+ * @brief 校验用户容差形状和最大值，零值后续映射到 profile 默认。
+ * @param values 可为空的容差；limits 为同轴序上限。
+ * @param allow_unspecified_limit 为 true 时，路径默认零不设置附加 Host 上限。
  */
 bool tolerance(const std::vector<double> &values, const std::vector<double> &limits,
                bool allow_unspecified_limit = false) {
@@ -120,7 +140,6 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
     for (std::size_t i=0;i<count;++i) {
       if (profile.lower[i]>profile.upper[i] || profile.velocity[i]<=0 || profile.acceleration[i]<=0 ||
           profile.path_tolerance[i]<0 || profile.goal_tolerance[i]<=0 ||
-          point.positions[i]<profile.lower[i] || point.positions[i]>profile.upper[i] ||
           (!point.velocities.empty() && std::abs(point.velocities[i])>profile.velocity[i]) ||
           (!point.accelerations.empty() && std::abs(point.accelerations[i])>profile.acceleration[i])) return {};
     }
@@ -133,6 +152,44 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
   const bool position_only=std::all_of(output.points.begin(),output.points.end(),[](const auto &point) {
     return point.velocities.empty() && point.accelerations.empty();
   });
+  // 仅显式手动策略可保留工作区外、名义范围内的真实起点；每轴一旦进入工作区不得再离开。
+  if(profile.manual_inward_start &&
+     (profile.nominal_lower.size()!=count || profile.nominal_upper.size()!=count ||
+      !finite(profile.nominal_lower) || !finite(profile.nominal_upper)))return {};
+  for(std::size_t axis=0;axis<count;++axis) {
+    if(profile.manual_inward_start &&
+       (profile.nominal_lower[axis]>profile.lower[axis] ||
+        profile.nominal_upper[axis]<profile.upper[axis]))return {};
+    const double origin=measured_start ? (*measured_start)[axis] : output.points.front().positions[axis];
+    if(!std::isfinite(origin))return {};
+    int side=origin<profile.lower[axis] ? -1 : origin>profile.upper[axis] ? 1 : 0;
+    if(side && (!profile.manual_inward_start || !position_only ||
+       origin<profile.nominal_lower[axis] || origin>profile.nominal_upper[axis]))return {};
+    // 与设备既有完成容差带一致；名义范围并非任意越过工作边界的许可。
+    if(side && (side<0 ? profile.lower[axis]-origin : origin-profile.upper[axis])>
+       profile.goal_tolerance[axis])return {};
+    double previous=origin;
+    if(measured_start && side) {
+      const double first=output.points.front().positions[axis];
+      const bool first_outside=first<profile.lower[axis] || first>profile.upper[axis];
+      if(first_outside) {
+        // 对照Core首采样连续性例外：保留新鲜测量与原首点的微小差异，后续仍从原首点严格向内。
+        if(std::abs(first-origin)>profile.goal_tolerance[axis] ||
+           (side<0 ? first>=profile.lower[axis] : first<=profile.upper[axis]) ||
+           first<profile.nominal_lower[axis] || first>profile.nominal_upper[axis] ||
+           (side<0 ? profile.lower[axis]-first : first-profile.upper[axis])>
+             profile.goal_tolerance[axis])return {};
+        previous=first;
+      }
+    }
+    for(const auto& point:output.points) {
+      const double value=point.positions[axis];
+      if(value>=profile.lower[axis] && value<=profile.upper[axis])side=0;
+      else if(!side || !inward_boundary_step(profile,axis,origin,previous,value))return {};
+      previous=value;
+    }
+    if(side)return {};
+  }
   if (position_only) {
     std::vector<double> previous_position;
     double previous_time=0, previous_duration=0;
@@ -143,8 +200,7 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
       previous_velocity.assign(count,0.0);
       previous_duration=output.points.front().time;
       for (std::size_t i=0;i<count;++i)
-        if (!std::isfinite(previous_position[i]) || previous_position[i]<profile.lower[i] ||
-            previous_position[i]>profile.upper[i]) return {};
+        if (!std::isfinite(previous_position[i])) return {};
     }
     /**
      * @brief 有实测起点时从t=0到第0点也须有正时长且起点在profile内；无起点时以第0点为已知锚。
@@ -173,6 +229,42 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
   }
   return output;
 }
+bool PreparedTrajectory::matches(const JointProfile& p) const noexcept {
+ return p.joints==profile_.joints && p.lower==profile_.lower && p.upper==profile_.upper &&
+  p.velocity==profile_.velocity && p.acceleration==profile_.acceleration &&
+  p.path_tolerance==profile_.path_tolerance && p.goal_tolerance==profile_.goal_tolerance &&
+  p.manual_inward_start==profile_.manual_inward_start && p.nominal_lower==profile_.nominal_lower && p.nominal_upper==profile_.nominal_upper;
+}
+std::shared_ptr<const PreparedTrajectory> prepare_trajectory(const Trajectory& input,const JointProfile& profile) {
+ auto value=validate_trajectory(input,profile);if(!value)return {};
+ const bool positions_only=std::all_of(value->points.begin(),value->points.end(),[](const auto& point){return point.velocities.empty()&&point.accelerations.empty();});
+ return std::shared_ptr<const PreparedTrajectory>(new PreparedTrajectory(std::move(*value),profile,positions_only));
+}
+// 实测起点只影响首槽及下一段的速度差，完整后续路径已经不可变地验证。
+bool validate_prepared_start(const PreparedTrajectory& prepared,const Position& actual) noexcept {
+ const auto& path=prepared.trajectory_;const auto& p=prepared.profile_;const auto& first=path.points.front();
+ for(std::size_t axis=0;axis<p.joints.size();++axis) {
+  const double origin=actual[axis],q=first.positions[axis];
+  if(!std::isfinite(origin))return false;
+  const bool outside=origin<p.lower[axis] || origin>p.upper[axis];
+  if(outside && (!prepared.positions_only_ || !p.manual_inward_start ||
+      origin<p.nominal_lower[axis] || origin>p.nominal_upper[axis] ||
+      (origin<p.lower[axis]?p.lower[axis]-origin:origin-p.upper[axis])>p.goal_tolerance[axis]))return false;
+  if(q<p.lower[axis] || q>p.upper[axis]) {
+   if(!outside || std::abs(q-origin)>p.goal_tolerance[axis] || !inward_boundary_step(p,axis,origin,q,q))return false;
+  }
+  if(!prepared.positions_only_)continue;
+  const double dt=first.time;if(dt<=0)return false;
+  const double velocity=(q-origin)/dt;
+  if(std::abs(velocity)>p.velocity[axis] || std::abs(velocity)/dt>p.acceleration[axis])return false;
+  if(path.points.size()>1) {
+   const auto& second=path.points[1];const double next_dt=second.time-dt;
+   const double next_velocity=(second.positions[axis]-q)/next_dt;
+   if(std::abs(next_velocity-velocity)/std::min(dt,next_dt)>p.acceleration[axis])return false;
+  }
+ }
+ return true;
+}
 /**
  * @brief 保存借用依赖、profile值副本与握手预算，不创建会话或控制线程。
  * @param client 串行管理端口，寿命覆盖gate。
@@ -191,7 +283,7 @@ ActionGate::ActionGate(ManagementClient &client, ActionPort &port, JointProfile 
  * @note 仅Complete和无错误的正常用户Cancel可等待占槽续租；不是任意Busy请求都可延期。
  */
 bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t existing_deadline) {
-  if (operation==ManageOperation::kBegin && !valid_begin_trajectory(trajectory_,now)) {
+  if (operation==ManageOperation::kBegin && !valid_begin_trajectory(*prepared_trajectory_,now)) {
     // Begin尚未提交：不发Stop/Cancel、不撤现有Hold，不制造新的设备事务。
     terminal_=Terminal::kAborted; request_=0; deadline_=0; hold_drain_pending_=false;
     return false;
@@ -281,11 +373,8 @@ bool ActionGate::renew_permit(const Authorization &authorization) {
  * @param now 宿主µs，排空与随后Begin共用同一截止。
  * @return 本地受理时true；设备Running和内部轨迹启动均尚需后继握手。
  */
-bool ActionGate::valid_begin_trajectory(const Trajectory &trajectory,std::uint64_t now) {
-  const bool position_only=std::all_of(trajectory.points.begin(),trajectory.points.end(),[](const auto &point) {
-    return point.velocities.empty() && point.accelerations.empty();
-  });
-  if (!position_only) return true;
+bool ActionGate::valid_begin_trajectory(const PreparedTrajectory &prepared,std::uint64_t now) {
+  if(!prepared.positions_only())return true;
   // 上层transport另核源序号/CAN年龄；本层仍不准以旧Hold位置启动新的纯位置路径。
   if (!hold_state_observed_us_ || now<hold_state_observed_us_ ||
       now-hold_state_observed_us_>250000U ||
@@ -294,18 +383,53 @@ bool ActionGate::valid_begin_trajectory(const Trajectory &trajectory,std::uint64
     error_="FRESH_HOLD_START_REQUIRED";
     return false;
   }
-  if (!validate_trajectory(trajectory,profile_,&measured_hold_q_)) {
+  if (!validate_prepared_start(prepared,measured_hold_q_)) {
     error_="TRAJECTORY_LIMIT_VIOLATION";
     return false;
   }
   return true;
 }
-bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
-  if (!ready() || !authorization_.session || !authorization_.reference || !authorization_.permit) return false;
-  const auto validated=validate_trajectory(trajectory,profile_);
-  if (!validated) { error_="TRAJECTORY_LIMIT_VIOLATION"; return false; }
-  if (!valid_begin_trajectory(*validated,now)) return false;
-  trajectory_=*validated; terminal_=Terminal::kNone; error_.clear(); frozen_=false; frozen_seq_=0;
+std::shared_ptr<const PreparedTrajectoryTail> prepare_trajectory_tail(
+    std::shared_ptr<const PreparedTrajectory> base,std::shared_ptr<const PreparedTrajectory> candidate,
+    std::uint64_t through) {
+ if(!base || !candidate || !through)return {};
+ const auto& a=base->trajectory();const auto& b=candidate->trajectory();
+ if(a.joints!=b.joints || a.path_tolerance!=b.path_tolerance || a.goal_tolerance!=b.goal_tolerance ||
+    a.goal_time_tolerance!=b.goal_time_tolerance || b.points.back().time>630. ||
+    b.points.back().time*1e9<=static_cast<double>(through))return {};
+ bool matched=false;
+ for(std::size_t i=0;i<a.points.size();++i) {
+   const auto& x=a.points[i];const auto stamp=static_cast<std::uint64_t>(std::llround(x.time*1e9));
+   if(stamp>through)break;
+   if(i>=b.points.size())return {};const auto& y=b.points[i];
+   if(x.time!=y.time || x.positions!=y.positions || x.velocities!=y.velocities || x.accelerations!=y.accelerations)return {};
+   if(stamp==through)matched=true;
+ }
+ if(!matched)return {};
+ auto value=std::make_shared<PreparedTrajectoryTail>();value->base_=std::move(base);
+ value->candidate_=std::move(candidate);value->through_ns_=through;return value;
+}
+bool ActionGate::can_extend_prepared(const std::shared_ptr<const PreparedTrajectoryTail>& tail,std::uint64_t phase_ns) const noexcept {
+ return tail && phase_==Phase::kRunning && terminal_==Terminal::kNone && !frozen_ &&
+   authorization_.session && authorization_.reference && tail->base_==prepared_trajectory_ &&
+   tail->candidate_->matches(profile_) && tail->through_ns_>=phase_ns &&
+   tail->through_ns_-phase_ns>=400000000ULL;
+}
+bool ActionGate::extend_prepared(const std::shared_ptr<const PreparedTrajectoryTail>& tail,std::uint64_t phase_ns) noexcept {
+ if(!can_extend_prepared(tail,phase_ns))return false;
+ prepared_trajectory_=tail->candidate_;trajectory_=&prepared_trajectory_->trajectory();
+ positions_only_trajectory_=prepared_trajectory_->positions_only();return true;
+}
+bool ActionGate::submit(const Trajectory& trajectory,std::uint64_t now) {
+ return submit_prepared(prepare_trajectory(trajectory,profile_),now);
+}
+bool ActionGate::submit_prepared(std::shared_ptr<const PreparedTrajectory> prepared,std::uint64_t now) {
+ if(!ready() || !authorization_.session || !authorization_.reference || !authorization_.permit)return false;
+ if(!prepared || !prepared->matches(profile_)){error_="TRAJECTORY_LIMIT_VIOLATION";return false;}
+ if(!valid_begin_trajectory(*prepared,now))return false;
+ prepared_trajectory_=std::move(prepared);trajectory_=&prepared_trajectory_->trajectory();
+ positions_only_trajectory_=prepared_trajectory_->positions_only();
+ update_rejection_={};terminal_=Terminal::kNone;error_.clear();frozen_=false;frozen_seq_=0;
   /**
    * @brief 端口不提供冻结时直接提交Begin；支持冻结则保存宿主代/线序号，等待worker处理水位和新State的提交/SENT水位。
    */
@@ -343,9 +467,9 @@ bool ActionGate::prime(const ManageReply &reply,Phase phase,std::uint64_t now) {
    * @brief 进入运动时用刚取得的实测rad起点重验纯位置首段，防止初始验证后实际起点变化造成动态越限。
    */
   if (phase==Phase::kPrimeMotion) {
-    const auto validated=validate_trajectory(trajectory_,profile_,&prime_q_);
-    if (!validated) { stop(false,"TRAJECTORY_LIMIT_VIOLATION",now); return false; }
-    trajectory_=*validated;
+    if(!prepared_trajectory_ || !validate_prepared_start(*prepared_trajectory_,prime_q_)) {
+      stop(false,"TRAJECTORY_LIMIT_VIOLATION",now);return false;
+    }
   }
   if(auto* journal=dummy_ros_control::current_host_diagnostics) {
         journal->detail( "GATE_PRIME_DIAG phase=%u epoch=%u generation=%llu q0=%.9f\n",
@@ -578,7 +702,7 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
   }
   if (!handshake(reply)) return;
   if (phase_==Phase::kPrimeMotion) {
-    phase_=Phase::kRunning; port_.start(trajectory_,generation_); deadline_=0;
+    phase_=Phase::kRunning; port_.start(*trajectory_,generation_); deadline_=0;
   } else if ((phase_==Phase::kPrimeHold || phase_==Phase::kPrimeCompletionHold || phase_==Phase::kPrimeStopHold) && reply.hold_ready) {
     if (phase_==Phase::kPrimeCompletionHold) terminal_=Terminal::kSucceeded;
     if (phase_==Phase::kPrimeStopHold) terminal_=cancel_terminal_ ? Terminal::kCanceled : Terminal::kAborted;
@@ -615,7 +739,7 @@ bool ActionGate::bounded_completion_intent(const ManageRequest &live, std::uint3
   if(phase_!=Phase::kCompleting || terminal_!=Terminal::kNone || !frozen_ ||
      !frozen_seq_ || frozen_seq_!=last_seq_ || !committed_seq ||
      !sequence_at_or_after(committed_seq,frozen_seq_) || !deadline_ || now>=deadline_ ||
-     !authorization_.session || !authorization_.reference || trajectory_.points.empty() ||
+     !authorization_.session || !authorization_.reference || !trajectory_ || trajectory_->points.empty() ||
      (operation_!=ManageOperation::kBegin && operation_!=ManageOperation::kComplete) ||
      (operation_==ManageOperation::kBegin && !request_) ||
      (operation_==ManageOperation::kComplete && !request_ && !completing_after_renewal_) ||
@@ -631,13 +755,13 @@ bool ActionGate::bounded_completion_intent(const ManageRequest &live, std::uint3
      !std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(identity.device_id())) ||
      !std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(identity.client_instance_id())))
     return false;
-  const auto &target=trajectory_.points.back().positions;
-  if(target.size()!=profile_.joints.size() || trajectory_.goal_tolerance.size()!=target.size()) return false;
+  const auto &target=trajectory_->points.back().positions;
+  if(target.size()!=profile_.joints.size() || trajectory_->goal_tolerance.size()!=target.size()) return false;
   for(std::size_t axis=0;axis<target.size();++axis) {
     if(!std::isfinite(frozen_q_[axis]) || !std::isfinite(last_q_[axis]) ||
-       !std::isfinite(target[axis]) || !std::isfinite(trajectory_.goal_tolerance[axis]) ||
-       trajectory_.goal_tolerance[axis]<0.0 || frozen_q_[axis]!=last_q_[axis] ||
-       std::abs(frozen_q_[axis]-target[axis])>trajectory_.goal_tolerance[axis]) return false;
+       !std::isfinite(target[axis]) || !std::isfinite(trajectory_->goal_tolerance[axis]) ||
+       trajectory_->goal_tolerance[axis]<0.0 || frozen_q_[axis]!=last_q_[axis] ||
+       std::abs(frozen_q_[axis]-target[axis])>trajectory_->goal_tolerance[axis]) return false;
   }
   return true;
 }
@@ -809,19 +933,36 @@ void ActionGate::tick(std::uint64_t now) {
  * @param seq 非零且严格较last_seq新的线序号。
  * @param q 六轴容器，配置轴位置rad。
  * @param producer_generation 非零时为真实宿主控制代；0兼容回退为seq。
- * @return 通过阶段/身份/数值门并保存时true。只有Running检查profile上下限；其他阶段每个样本及Running首样本须在1e-9 rad内等prime_q。
+ * @return 通过阶段/身份/数值门并保存时true。Running核工作边界及显式手动纯位置退入特例；其他阶段每个样本及Running首样本须在1e-9 rad内等prime_q。
  * @note 登记不证明队列、网络、设备commit或CAN SENT。
  */
 bool ActionGate::record_update(std::uint64_t generation,std::uint32_t epoch,std::uint32_t seq,
                                const Position &q,std::uint64_t producer_generation) {
-  if (generation!=generation_ || epoch!=epoch_ || !seq ||
-      (last_seq_ && !sequence_newer(seq,last_seq_)) || frozen_ ||
-      phase_==Phase::kStopping || phase_==Phase::kFault || phase_==Phase::kIdle || phase_==Phase::kCompleting)
+  const auto reject=[&](UpdateRejectReason reason,unsigned axis=6U) {
+    if(update_rejection_.reason==UpdateRejectReason::kNone) {
+      update_rejection_={reason,phase_,axis,generation,generation_,epoch,epoch_,seq,last_seq_,q,prime_q_,last_q_};
+      std::fprintf(stderr,"CONTROL_UPDATE_REJECT_DIAG reason=%u phase=%u axis=%u generation=%llu expected_generation=%llu epoch=%u expected_epoch=%u seq=%u previous_seq=%u frozen=%u sampled=%u candidate=[%.17g,%.17g,%.17g,%.17g,%.17g,%.17g] prime=[%.17g,%.17g,%.17g,%.17g,%.17g,%.17g] previous=[%.17g,%.17g,%.17g,%.17g,%.17g,%.17g]\n",
+        static_cast<unsigned>(reason),static_cast<unsigned>(phase_),axis,
+        static_cast<unsigned long long>(generation),static_cast<unsigned long long>(generation_),epoch,epoch_,seq,last_seq_,frozen_,sampled_,
+        q[0],q[1],q[2],q[3],q[4],q[5],prime_q_[0],prime_q_[1],prime_q_[2],prime_q_[3],prime_q_[4],prime_q_[5],
+        last_q_[0],last_q_[1],last_q_[2],last_q_[3],last_q_[4],last_q_[5]);
+    }
     return false;
-  for (std::size_t i=0;i<profile_.joints.size();++i) {
-    if (!std::isfinite(q[i]) ||
-        (phase_==Phase::kRunning && (q[i]<profile_.lower[i] || q[i]>profile_.upper[i]))) return false;
-    if ((phase_!=Phase::kRunning || !sampled_) && std::abs(q[i]-prime_q_[i])>1e-9) return false;
+  };
+  if(generation!=generation_)return reject(UpdateRejectReason::kGeneration);
+  if(epoch!=epoch_)return reject(UpdateRejectReason::kEpoch);
+  if(!seq || (last_seq_ && !sequence_newer(seq,last_seq_)))return reject(UpdateRejectReason::kSequence);
+  if(frozen_)return reject(UpdateRejectReason::kFrozen);
+  if(phase_==Phase::kStopping || phase_==Phase::kFault || phase_==Phase::kIdle || phase_==Phase::kCompleting)
+    return reject(UpdateRejectReason::kPhase);
+  for(std::size_t i=0;i<profile_.joints.size();++i) {
+    if(!std::isfinite(q[i]))return reject(UpdateRejectReason::kNonfinite,i);
+    if(phase_==Phase::kRunning && (q[i]<profile_.lower[i] || q[i]>profile_.upper[i])) {
+      if(!positions_only_trajectory_ || !profile_.manual_inward_start)return reject(UpdateRejectReason::kRange,i);
+      if(!inward_boundary_step(profile_,i,prime_q_[i],sampled_?last_q_[i]:prime_q_[i],q[i]))return reject(UpdateRejectReason::kInward,i);
+    }
+    if((phase_!=Phase::kRunning || !sampled_) && std::abs(q[i]-prime_q_[i])>1e-9)
+      return reject(UpdateRejectReason::kPrimeContinuity,i);
   }
   if (!sampled_) {
     prime_seq_=seq;
@@ -844,7 +985,7 @@ void ActionGate::inner_result(std::uint64_t generation,Terminal result,const std
   if (result!=Terminal::kSucceeded) { stop(false,error.empty()?"INNER_ABORT":error,now); return; }
   if (!last_seq_) { stop(false,"NO_TERMINAL_SAMPLE",now); return; }
   for (std::size_t i=0;i<profile_.joints.size();++i)
-    if (std::abs(last_q_[i]-trajectory_.points.back().positions[i])>trajectory_.goal_tolerance[i]) {
+    if (std::abs(last_q_[i]-trajectory_->points.back().positions[i])>trajectory_->goal_tolerance[i]) {
       stop(false,"BAD_TERMINAL_POSITION",now); return;
     }
   port_.disable(); frozen_=true; frozen_seq_=last_seq_; frozen_q_=last_q_;

@@ -21,6 +21,7 @@
 #include "dummy_ros_control/guarded_joint_trajectory_controller.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "dummy_motion_interfaces/srv/extend_joint_trajectory.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1041,6 +1042,32 @@ template<class Handle> class GoalCancelAdmission {
  * @brief 把ActionPort的prime/执行/禁用落到实际JTC或直接Hold生产器。
  * 本对象在控制线程使用，借用/共享持有已发现Controller；命令始终经ros_control进程内通道和唯一DeviceTransport发送。direct_hold只用于没有active JTC时的保持prime，不具备独立轨迹执行能力。
  */
+// 非控制线程创建的不可变目标；原输入摘要和实际JTC消息摘要分别保留。
+struct PreparedDeviceGoal {
+ std::shared_ptr<const Follow::Goal> original_goal;
+ dummy_ros_control::GoalUuid uuid{};
+ dummy_ros_control::TrajectoryDigest input_digest{};
+ std::shared_ptr<const PreparedTrajectory> motion;
+ std::shared_ptr<Controller> controller;
+ dummy_ros_control::GoalCredential credential{};
+ std::shared_ptr<const Controller::PreparedGoal> controller_goal;
+};
+using ExtendService=dummy_motion_interfaces::srv::ExtendJointTrajectory;
+struct TailUpdate {
+ std::shared_ptr<const PreparedDeviceGoal> base,next;
+ std::shared_ptr<const PreparedTrajectoryTail> proof;
+ std::shared_ptr<rmw_request_id_t> header;
+ std::uint64_t generation=0,version=0,run=0,deadline_us=0,phase_ns=0;
+ std::uint32_t motion=0;
+ std::atomic<unsigned> outcome{0}; // 0待控制拍、1已安装、2拒绝、3非实时截止退休。
+ const char* reason="TAIL_UPDATE_REJECTED";
+};
+struct TailSnapshot {
+ std::shared_ptr<const PreparedDeviceGoal> base;
+ std::uint64_t generation=0,version=0,run=0,phase_ns=0;
+ std::uint32_t motion=0;
+ bool running=false;
+};
 class GuardedPort final : public ActionPort {
  public:
   /**
@@ -1061,7 +1088,8 @@ class GuardedPort final : public ActionPort {
    * @brief active_count为1或6；trajectory存完整规范路径，hold_position为rad目标值，不可把它当实际反馈。
    */
   std::size_t active_count=0;
-  Trajectory trajectory;
+  const Trajectory* trajectory=nullptr;
+  std::shared_ptr<const PreparedDeviceGoal> prepared_goal;
   Position hold_position{};
   /**
    * @brief 切到指定设备motion并用真实JTC update或直接通道产生首Hold目标。
@@ -1146,18 +1174,13 @@ class GuardedPort final : public ActionPort {
    * @param generation gate已握手后的执行代。
    */
   void start(const Trajectory &value,std::uint64_t generation) override {
-    auto message=std::make_shared<trajectory_msgs::msg::JointTrajectory>();
-    message->joint_names=value.joints;
-    for(const auto &point:value.points) {
-      trajectory_msgs::msg::JointTrajectoryPoint item;
-      item.positions=point.positions; item.velocities=point.velocities; item.accelerations=point.accelerations;
-      item.time_from_start=rclcpp::Duration::from_seconds(point.time); message->points.push_back(std::move(item));
+    if(!controller || !prepared_goal || prepared_goal->uuid!=uuid ||
+       prepared_goal->controller.get()!=controller.get() ||
+       !controller->register_goal(prepared_goal->credential) ||
+       !controller->install_prepared_goal(prepared_goal->credential,prepared_goal->controller_goal)) {
+      failed=true;return;
     }
-    const dummy_ros_control::GoalCredential credential{uuid,dummy_ros_control::trajectory_digest(*message)};
-    if(!controller || !controller->register_goal(credential) || !controller->submit_registered_goal(credential,message)) {
-      failed=true; return;
-    }
-    trajectory=value; motion_generation=generation; started_us=management_now_us(); executing=true;
+    trajectory=&value;motion_generation=generation;started_us=management_now_us();executing=true;
   }
   /**
    * @brief 冻结后继update生产，保留已经存在的最后命令代供commit。
@@ -1443,6 +1466,19 @@ class DeviceActionGate final : public rclcpp::Node {
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         auto admission=cancel_admission_.try_control();
         if(!admission) { response->success=false; response->message="BOOTSTRAP_STATUS_UNAVAILABLE"; return; }
+        if(confirm_local_readonly_retirement(management_now_us())) {
+          response->success=false;response->message="LOCAL_READONLY_RETIRED";return;
+        }
+        if(confirm_readonly_idle_owner_retirement(management_now_us())) {
+          response->success=false;
+          response->message="EVIDENCE_INCOMPLETE;RELEASED_IDLE";
+          return;
+        }
+        if(confirm_readonly_fault_owner_retirement(management_now_us())) {
+          response->success=false;
+          response->message="EVIDENCE_INCOMPLETE;RELEASED_FAULT";
+          return;
+        }
         if(fault_cleanup_confirmed_.load() && !evidence_incomplete_.load() && transport_->raw_evidence_failure()==0U) {
           response->success=true;response->message="FAULT_CLEANUP_CONFIRMED";return;
         }
@@ -1573,9 +1609,36 @@ class DeviceActionGate final : public rclcpp::Node {
             return;
           }
           const auto release_now = management_now_us();
+          readonly_owner_retirement_requested_=true;
+          if(confirm_local_readonly_retirement(release_now)) {
+            response->success=false;response->message="LOCAL_READONLY_RETIRED";return;
+          }
+          if(confirm_readonly_idle_owner_retirement(release_now)) {
+            response->success=false;
+            response->message="EVIDENCE_INCOMPLETE;RELEASED_IDLE";
+            return;
+          }
           const bool readonly_fresh = readonly_release_samples_fresh(
               panel_status_received_us_, panel_state_received_us_, release_now,
               state_max_age_us_);
+          // Native 同样允许原运动 run 自主故障失能后释放连接；动作与管理失败记录继续保留。
+          if(confirm_readonly_fault_owner_retirement(release_now)) {
+            response->success=false;
+            response->message="EVIDENCE_INCOMPLETE;RELEASED_FAULT";
+            return;
+          }
+          // 审计失效不阻挡本owner的安全停止；worker复核后仍沿原D10/Query流程。
+          // true只表示意图排队，不能据此报告Stop成功或设备已经失能。
+          if(manual_reference_mode_ && evidence_incomplete_.load() &&
+             transport_->request_owner_safety_stop(
+                 latest_bootstrap_.boot_epoch,expected_session_id_,
+                 latest_bootstrap_.reference_epoch)) {
+            admission_prerequisites_=false;ready_=false;
+            enable_available_=false;renew_available_=false;
+            response->success=false;
+            response->message="EVIDENCE_INCOMPLETE;RELEASE_PENDING";
+            return;
+          }
           if (manual_reference_mode_ && observation_ready_.load() &&
               !observation_lost_ &&
               panel_status_.boot_epoch() == latest_bootstrap_.boot_epoch &&
@@ -1634,9 +1697,33 @@ class DeviceActionGate final : public rclcpp::Node {
     /**
      * @brief 公开FJT入口绑定三个不同回调：目标准入、取消准入、已接受句柄交接。ACCEPT_AND_EXECUTE仅ROS宿主接纳，实际Begin尚待控制拍重验和设备握手。
      */
+    extend_service_=create_service<ExtendService>("/device_action_gate/extend_trajectory",
+      [this](std::shared_ptr<rmw_request_id_t> header,std::shared_ptr<ExtendService::Request> request) {
+        prepare_tail_update(std::move(header),std::move(request));
+      });
+    extend_response_timer_=create_wall_timer(std::chrono::milliseconds(20),[this]{finish_tail_response();});
     server_=rclcpp_action::create_server<Follow>(this,"/arm_controller/follow_joint_trajectory",
       [this](const rclcpp_action::GoalUUID &uuid,std::shared_ptr<const Follow::Goal> goal) {
-        if(!validated_device_trajectory(*goal,profile_)) {
+        // 此回调属于非控制executor；完整转换、验证、摘要与排序均不占控制拍。
+        auto prepared=std::make_shared<PreparedDeviceGoal>();prepared->uuid=uuid;prepared->original_goal=goal;
+        prepared->motion=prepared_device_trajectory(*goal,profile_);
+        if(prepared->motion) {
+          prepared->input_digest=dummy_ros_control::trajectory_digest(goal->trajectory);
+          prepared->controller=std::atomic_load(&discovered_controller_);
+          if(prepared->controller) {
+            auto message=std::make_shared<trajectory_msgs::msg::JointTrajectory>();
+            const auto& value=prepared->motion->trajectory();message->joint_names=value.joints;
+            message->points.reserve(value.points.size());
+            for(const auto& point:value.points) {
+              trajectory_msgs::msg::JointTrajectoryPoint item;item.positions=point.positions;
+              item.velocities=point.velocities;item.accelerations=point.accelerations;
+              item.time_from_start=rclcpp::Duration::from_seconds(point.time);message->points.push_back(std::move(item));
+            }
+            prepared->credential={uuid,dummy_ros_control::trajectory_digest(*message)};
+            prepared->controller_goal=prepared->controller->prepare_goal(prepared->credential,message);
+          }
+        }
+        if(!prepared->motion || !prepared->controller_goal) {
           port_.diagnostics.reject_from_context(dummy_ros_control::DiagnosticReason::kGoalValidation,
             management_now_us(),"kInvalid");
           goal_rejection_receipt_.record(uuid,GoalRejectionReason::kInvalid,
@@ -1691,6 +1778,11 @@ class DeviceActionGate final : public rclcpp::Node {
             management_now_us(),"budget_admission_changed");
           busy_=false;
           return rclcpp_action::GoalResponse::REJECT;
+        }
+        {
+          std::lock_guard<std::mutex> lock(goal_mutex_);
+          // 上次退休的大对象只由非控制线程回收；控制拍仅移动共享指针。
+          prepared_retired_.reset();prepared_pending_=std::move(prepared);
         }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
@@ -1819,6 +1911,47 @@ class DeviceActionGate final : public rclcpp::Node {
   std::optional<dummy_ros_control::DiagnosticBlob> diagnostic_blob() const noexcept { return port_.diagnostics.blob_record(); }
 
  private:
+   // 与Native共用物理释放规则；证据失败仍失败，只关闭本连接的旧owner。
+   // 原始写请求期限届满后，只读轮询仍可确认设备自主失能，绝不重发使能。
+   bool confirm_local_readonly_retirement(std::uint64_t now) noexcept {
+     if(local_readonly_retired_)return true;
+     if(!manual_reference_mode_ || !readonly_owner_retirement_requested_ || !transport_ || active_ ||
+        management_request_.load()!=0 || manual_calibration_requested_.load() ||
+        enable_requested_.load() || single_enable_requested_.load() ||
+        (bootstrap_ && bootstrap_->management_operation_pending()) ||
+        !transport_->local_readonly_retirement_allowed(now))return false;
+     // 仅封闭本地控制入口；不发送D10，不改原失败与设备失能判定。
+     local_readonly_retired_=true;release_stage_=4;admission_prerequisites_=false;ready_=false;
+     enable_available_=false;renew_available_=false;release_available_=false;enabled_=false;
+     transport_->allow_inactive_prime(false);return true;
+   }
+   bool confirm_readonly_fault_owner_retirement(std::uint64_t now) noexcept {
+     if(!manual_reference_mode_ || !readonly_owner_retirement_requested_ || !transport_ ||
+        !(transport_->readonly_fault_owner_retirement_confirmed(now,latest_bootstrap_.boot_epoch,
+             expected_session_id_,latest_bootstrap_.reference_epoch) ||
+          transport_->autonomous_fault_owner_retirement_confirmed(now,latest_bootstrap_.boot_epoch,
+             expected_session_id_,latest_bootstrap_.reference_epoch,goal_run_id_)))return false;
+     readonly_fault_owner_retirement_confirmed_=true;release_stage_=4;
+     admission_prerequisites_=false;ready_=false;enable_available_=false;renew_available_=false;
+     enable_requested_=false;single_enable_requested_=false;
+     enabled_=false;transport_->allow_inactive_prime(false);evidence_incomplete_=true;
+     return true;
+   }
+   bool confirm_readonly_idle_owner_retirement(std::uint64_t now) noexcept {
+     if(!manual_reference_mode_ || !readonly_owner_retirement_requested_ ||
+        !transport_ || !evidence_incomplete_.load() || active_ ||
+        management_request_.load()!=0 || manual_calibration_requested_.load() ||
+        (bootstrap_ && bootstrap_->management_operation_pending()) ||
+        !transport_->readonly_released_owner_observed(
+            now,latest_bootstrap_.boot_epoch,expected_session_id_,
+            latest_bootstrap_.reference_epoch,goal_run_id_)) return false;
+     release_stage_=4;
+     admission_prerequisites_=false;ready_=false;
+     enable_available_=false;renew_available_=false;
+     enable_requested_=false;single_enable_requested_=false;
+     enabled_=false;transport_->allow_inactive_prime(false);
+     return true;
+   }
    bool
    observed_release_idle(const wire::DummyDeviceStatusV2 &status,
                          const wire::DummyJointStateV2 &state) const noexcept {
@@ -1829,57 +1962,32 @@ class DeviceActionGate final : public rclcpp::Node {
                       status, state, manual_release_reference_)
                 : released_idle_observation(status, state);
    }
-   // 在非控制executor发布；快照复制受同一个有限准入锁保护，DDS不占控制拍。
+   // 控制缓存只在准入锁可得时复制；诊断发布和其水位不依赖控制准入。
    void publish_panel_feedback() {
-     wire::DummyDeviceStatusV2 status;
-     wire::DummyJointStateV2 state;
-     bool publish_status = false, publish_state = false;
      const auto diagnostic = transport_->diagnostic_observation();
+     PanelFeedbackCache control;
      {
        auto admission = cancel_admission_.try_control();
-       if (!admission)
-         return;
-       const auto now = management_now_us();
-       if (panel_status_received_us_ != 0U &&
-           panel_status_received_us_ > panel_status_published_us_ &&
-           (now <= panel_status_received_us_ ||
-            now - panel_status_received_us_ <= state_max_age_us_)) {
-         status = panel_status_;
-         panel_status_published_us_ = panel_status_received_us_;
-         publish_status = true;
-       }
-       if (panel_state_received_us_ != 0U &&
-           panel_state_received_us_ > panel_state_published_us_ &&
-           (now <= panel_state_received_us_ ||
-            now - panel_state_received_us_ <= state_max_age_us_)) {
-         state = panel_state_;
-         panel_state_published_us_ = panel_state_received_us_;
-         publish_state = true;
-       }
-       // 非授权诊断只更新本次DDS消息和发布水位，绝不回填panel_控制/释放缓存。
-       if (diagnostic.status_received_us > panel_status_published_us_ &&
-           now >= diagnostic.status_received_us &&
-           now - diagnostic.status_received_us <= state_max_age_us_ &&
-           wire::DummyDeviceStatusV2Codec::decode(
-               diagnostic.status.data(), diagnostic.status.size(), &status) ==
-               wire::CodecResult::kOk) {
-         panel_status_published_us_ = diagnostic.status_received_us;
-         publish_status = true;
-       }
-       if (diagnostic.state_received_us > panel_state_published_us_ &&
-           now >= diagnostic.state_received_us &&
-           now - diagnostic.state_received_us <= state_max_age_us_ &&
-           wire::DummyJointStateV2Codec::decode(
-               diagnostic.state.data(), diagnostic.state.size(), &state) ==
-               wire::CodecResult::kOk) {
-         panel_state_published_us_ = diagnostic.state_received_us;
-         publish_state = true;
+       if (admission) {
+         control.available = true;
+         control.status = panel_status_;
+         control.state = panel_state_;
+         control.status_received_us = panel_status_received_us_;
+         control.state_received_us = panel_state_received_us_;
        }
      }
-     if (publish_status)
-       panel_status_publisher_->publish(panel_status_message(status));
-     if (publish_state)
-       panel_state_publisher_->publish(panel_state_message(state));
+     // 仅发布timer串行拥有水位；诊断不回填控制/释放缓存，也不延寿原接收锚。
+     const auto selected = select_panel_feedback(
+         control,
+         {diagnostic.status.data(), diagnostic.status.size(), diagnostic.status_received_us},
+         {diagnostic.state.data(), diagnostic.state.size(), diagnostic.state_received_us},
+         management_now_us(), state_max_age_us_,
+         dummy_ref::host::kManualReferenceStatusMaxAgeUs,
+         panel_status_published_us_, panel_state_published_us_);
+     if (selected.status)
+       panel_status_publisher_->publish(panel_status_message(*selected.status));
+     if (selected.state)
+       panel_state_publisher_->publish(panel_state_message(*selected.state));
    }
   /**
    * @brief 在已有准入scope下预约一次Hold或RUN续租。
@@ -2816,13 +2924,102 @@ class DeviceActionGate final : public rclcpp::Node {
    * 反馈header使用ROS时钟；actual/desired/error位置为rad。每拍查path容差，末时刻后actual在goal容差且desired等末点才innerSucceeded；超过goal_time_tolerance+0.25秒还不到则内部Aborted。最终设备Complete/原页/Timeline仍在后续，不以此立即succeed外部Action。
    * @param now 宿主µs，用于elapsed相对秒。
    */
+  void prepare_tail_update(std::shared_ptr<rmw_request_id_t> header,std::shared_ptr<ExtendService::Request> request) {
+    TailSnapshot snapshot;
+    {std::lock_guard<std::mutex> lock(tail_mutex_);snapshot=tail_snapshot_;}
+    auto reject=[&](const std::string& reason) {
+      ExtendService::Response response;response.version=snapshot.version;response.phase_ns=snapshot.phase_ns;response.reason=reason;
+      extend_service_->send_response(*header,response);
+    };
+    if(request->trajectory.points.size()>31500U || !snapshot.running || !snapshot.base || request->goal_id.uuid!=snapshot.base->uuid ||
+       request->motion_epoch!=snapshot.motion || request->expected_version!=snapshot.version ||
+       snapshot.version==UINT64_MAX) {reject("GOAL_IDENTITY_VERSION_OR_PHASE_MISMATCH");return;}
+    if(request->unchanged_through_ns<snapshot.phase_ns || request->unchanged_through_ns-snapshot.phase_ns<400000000ULL) {
+      reject("INSUFFICIENT_LOOKAHEAD");return;
+    }
+    try {
+      auto goal=std::make_shared<Follow::Goal>(*snapshot.base->original_goal);
+      goal->trajectory=request->trajectory;
+      auto candidate=prepared_device_trajectory(*goal,profile_);
+      auto proof=prepare_trajectory_tail(snapshot.base->motion,candidate,request->unchanged_through_ns);
+      if(!proof) {reject("INVALID_TRAJECTORY_OR_CHANGED_PREFIX");return;}
+      auto next=std::make_shared<PreparedDeviceGoal>();next->original_goal=std::move(goal);next->uuid=snapshot.base->uuid;
+      next->motion=std::move(candidate);next->controller=snapshot.base->controller;
+      next->input_digest=dummy_ros_control::trajectory_digest(request->trajectory);
+      auto message=std::make_shared<trajectory_msgs::msg::JointTrajectory>();
+      message->joint_names=next->motion->trajectory().joints;
+      for(const auto& point:next->motion->trajectory().points) {
+        trajectory_msgs::msg::JointTrajectoryPoint item;item.positions=point.positions;
+        item.velocities=point.velocities;item.accelerations=point.accelerations;
+        item.time_from_start=rclcpp::Duration::from_seconds(point.time);message->points.push_back(std::move(item));
+      }
+      next->credential={next->uuid,dummy_ros_control::trajectory_digest(*message)};
+      next->controller_goal=next->controller->prepare_tail(next->credential,message);
+      if(!next->controller_goal) {reject("CONTROLLER_NOT_RUNNING_OR_INVALID_TAIL");return;}
+      auto update=std::make_shared<TailUpdate>();update->base=snapshot.base;update->next=std::move(next);
+      update->proof=std::move(proof);update->header=header;update->generation=snapshot.generation;
+      update->run=snapshot.run;update->motion=snapshot.motion;update->version=snapshot.version;
+      update->deadline_us=management_now_us()+2000000U;
+      {std::lock_guard<std::mutex> lock(tail_mutex_);
+        if(tail_pending_ || tail_snapshot_.base!=snapshot.base || !tail_snapshot_.running || tail_snapshot_.version!=snapshot.version) {
+          reject("TAIL_UPDATE_BUSY_OR_SUPERSEDED");return;
+        }
+        tail_pending_=std::move(update);
+      }
+    } catch(const std::exception&) {reject("INVALID_TRAJECTORY");}
+  }
+  void finish_tail_response() {
+    std::shared_ptr<TailUpdate> update;
+    {std::lock_guard<std::mutex> lock(tail_mutex_);
+      if(!tail_pending_)return;
+      if(tail_pending_->outcome.load(std::memory_order_acquire)==0 && management_now_us()>=tail_pending_->deadline_us) {
+        unsigned pending=0;tail_pending_->outcome.compare_exchange_strong(pending,3);
+      }
+      if(tail_pending_->outcome.load(std::memory_order_acquire)==0)return;
+      update=std::move(tail_pending_);
+    }
+    ExtendService::Response response;response.accepted=update->outcome.load()==1;
+    response.version=update->version+(response.accepted?1U:0U);response.phase_ns=update->phase_ns;
+    response.trajectory_digest=update->next->input_digest;
+    response.reason=response.accepted?"TAIL_INSTALLED":update->outcome.load()==3?"TAIL_UPDATE_DEADLINE_EXPIRED":update->reason;
+    extend_service_->send_response(*update->header,response);
+    std::string digest;digest.reserve(64);constexpr char hex[]="0123456789abcdef";
+    for(auto byte:response.trajectory_digest){digest.push_back(hex[byte>>4]);digest.push_back(hex[byte&15]);}
+    RCLCPP_INFO(get_logger(),"TAIL_UPDATE version=%llu phase_ns=%llu accepted=%u reason=%s sha256=%s",
+      static_cast<unsigned long long>(response.version),static_cast<unsigned long long>(response.phase_ns),response.accepted,response.reason.c_str(),digest.c_str());
+    // 旧全量路径、JTC缓存与请求只在非控制线程释放。
+  }
+  void apply_tail_update(std::uint64_t now) {
+    std::unique_lock<std::mutex> lock(tail_mutex_,std::try_to_lock);if(!lock)return;
+    const auto sample=port_.controller?port_.controller->execution_sample():std::nullopt;
+    const bool running=active_ && active_->is_active() && port_.executing && sample &&
+      gate_->phase()==Phase::kRunning && observation_ready_.load() && !observation_lost_ &&
+      !evidence_incomplete_.load() && release_stage_.load()==0;
+    if(tail_pending_ && tail_pending_->outcome.load(std::memory_order_acquire)==0) {
+      auto& update=*tail_pending_;update.phase_ns=sample?sample->phase_ns:0;
+      bool installed=false;
+      if(running && now<update.deadline_us && update.base==prepared_active_ && update.generation==gate_->generation() &&
+         update.run==goal_run_id_ && update.motion==port_.identity.motion_epoch && update.version==tail_version_ &&
+         gate_->can_extend_prepared(update.proof,update.phase_ns) &&
+         port_.controller==update.next->controller && port_.controller->install_prepared_tail(update.next->credential,update.next->controller_goal)) {
+        installed=gate_->extend_prepared(update.proof,update.phase_ns);
+        if(installed) {
+          prepared_active_=update.next;port_.prepared_goal=update.next;port_.trajectory=&update.next->motion->trajectory();++tail_version_;
+        }
+      }
+      update.outcome.store(installed?1U:2U,std::memory_order_release);
+    }
+    tail_snapshot_.base=prepared_active_;tail_snapshot_.generation=gate_->generation();tail_snapshot_.version=tail_version_;
+    tail_snapshot_.run=goal_run_id_;tail_snapshot_.phase_ns=sample?sample->phase_ns:0;
+    tail_snapshot_.motion=port_.identity.motion_epoch;tail_snapshot_.running=running;
+  }
   void check_execution(std::uint64_t now) {
     if(!port_.executing || !port_.controller) return;
     const auto sample=port_.controller->execution_sample(); if(!sample) return;
     /**
-     * @brief elapsed由宿主steady起步锚转秒；反馈的ROS header是另一个时钟域，不作票据/状态新鲜判断。
+     * @brief elapsed取JTC固定生产相位；ROS header与宿主steady仍用于各自时间戳/新鲜度，不延长任何设备许可。
      */
-    const auto elapsed=(now>port_.started_us ? now-port_.started_us : 0)*1e-6;
+    const auto elapsed=sample->phase_ns*1e-9;
     if(active_ && active_->is_active()) {
       auto feedback=std::make_shared<Follow::Feedback>();
       feedback->header.stamp=this->now(); feedback->joint_names=profile_.joints;
@@ -2835,7 +3032,7 @@ class DeviceActionGate final : public rclcpp::Node {
       feedback->error.time_from_start=feedback->actual.time_from_start;
       active_->publish_feedback(feedback);
     }
-    const auto &trajectory=port_.trajectory;
+    const auto &trajectory=*port_.trajectory;
     const auto position_check=check_execution_positions(*sample,trajectory);
     if(!position_check.path_valid) {
       gate_->inner_result(port_.motion_generation,Terminal::kAborted,"PATH_TOLERANCE_VIOLATED",now); return;
@@ -2934,7 +3131,10 @@ class DeviceActionGate final : public rclcpp::Node {
      */
     { std::unique_lock<std::mutex> lock(goal_mutex_,std::try_to_lock);
       if(lock && pending_) {
-        active_=std::move(pending_); port_.uuid=active_->get_goal_id();
+        prepared_retired_=std::move(prepared_active_);
+        prepared_active_=std::move(prepared_pending_);
+        active_=std::move(pending_); tail_version_=0; port_.uuid=active_->get_goal_id();
+        port_.prepared_goal=prepared_active_;
         if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
            (!transport_->raw_evidence_capture_enabled() ||
             !limited_goal_budget_.consume(port_.identity.boot,port_.identity.session))) {
@@ -2956,7 +3156,7 @@ class DeviceActionGate final : public rclcpp::Node {
         if(timeline_) {
           timeline_has_goal_=true;
           timeline_uuid_=port_.uuid;
-          timeline_digest_=dummy_ros_control::trajectory_digest(active_->get_goal()->trajectory);
+          timeline_digest_=prepared_active_->input_digest;
           timeline_goal_open_=true; timeline_after_=timeline_terminal_=timeline_hold_=false;
           fault_cleanup_confirmed_=false;timeline_fault_cleanup_=false;
           timeline_goal_hold_confirmed_=false;
@@ -2968,8 +3168,8 @@ class DeviceActionGate final : public rclcpp::Node {
         /**
          * @brief 控制方在ROS准入之后再次按当前profile转换并submit；失败直接abort本goal并清busy，不偷偷改成末点普通运动。
          */
-        const auto trajectory=validated_device_trajectory(*active_->get_goal(),profile_);
-        if(evidence_incomplete_.load() || !trajectory || !gate_->submit(*trajectory,now)) {
+        const auto trajectory=prepared_active_ ? prepared_active_->motion : nullptr;
+        if(evidence_incomplete_.load() || !trajectory || !gate_->submit_prepared(trajectory,now)) {
           auto result=std::make_shared<Follow::Result>(); result->error_code=Follow::Result::INVALID_GOAL;
           result->error_string=evidence_incomplete_.load() ? "EVIDENCE_INCOMPLETE" :
               (!trajectory ? "TRAJECTORY_LIMIT_VIOLATION" :
@@ -2984,6 +3184,7 @@ class DeviceActionGate final : public rclcpp::Node {
     }
     port_.refresh_direct_hold();
     if(port_.failed) gate_->abort("GUARDED_REGISTRATION_FAILED",now);
+    apply_tail_update(now);
     check_execution(now);
     /**
      * @brief gate终态只进入结果封口阶段，先记录终态/可信Hold，再核writer与原run终页；不能因为内部JTC或管理Ok就立即返回ROS成功。
@@ -3228,6 +3429,12 @@ class DeviceActionGate final : public rclcpp::Node {
    * @brief ROS实体归Node持有；诊断组独立互斥以免JSON阻塞control admission。普通服务写原子意图，不直接改多数控制线程私有状态。
    */
   rclcpp_action::Server<Follow>::SharedPtr server_;
+  rclcpp::Service<ExtendService>::SharedPtr extend_service_;
+  rclcpp::TimerBase::SharedPtr extend_response_timer_;
+  std::mutex tail_mutex_;
+  TailSnapshot tail_snapshot_;
+  std::shared_ptr<TailUpdate> tail_pending_;
+  std::uint64_t tail_version_=0;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr enable_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bootstrap_status_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr last_goal_rejection_service_;
@@ -3261,6 +3468,8 @@ class DeviceActionGate final : public rclcpp::Node {
   ManualReleaseIntent manual_release_intent_;
   bool manual_release_waiting_ = false;
   bool readonly_release_confirmed_ = false;
+  bool local_readonly_retired_ = false;
+  bool readonly_owner_retirement_requested_ = false;
   std::atomic<bool> release_available_{false};
   /**
    * @brief 释放stage：0无、1回调排队、2控制线程已发/等待、3管理+Idle已证、4未确认；management_request是wire操作编号单槽，非request_id。
@@ -3286,6 +3495,7 @@ class DeviceActionGate final : public rclcpp::Node {
    * @brief pending由accept回调在goal_mutex下交接，active只由control处理；last_update为宿主控制代，last_control_update_us为最近真实采样宿主锚。
    */
   std::shared_ptr<GoalHandle> pending_, active_;
+  std::shared_ptr<const PreparedDeviceGoal> prepared_pending_,prepared_active_,prepared_retired_;
   std::uint64_t last_update_=0;
   std::uint64_t last_control_update_us_=0;
   std::uint64_t last_typed_reject_seen_us_=0;
@@ -3349,6 +3559,7 @@ class DeviceActionGate final : public rclcpp::Node {
   bool timeline_goal_open_=false, timeline_after_=false, timeline_terminal_=false;
   bool timeline_goal_hold_confirmed_=false;
   bool cancel_refresh_diagnostic_logged_=false;
+  bool readonly_fault_owner_retirement_confirmed_=false;
   std::atomic<bool> fault_cleanup_confirmed_{false};
   bool timeline_fault_cleanup_=false;
   bool timeline_hold_=false, timeline_hold_observed_=false, timeline_release_recorded_=false;

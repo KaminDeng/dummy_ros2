@@ -108,3 +108,33 @@ dpsdk_interfaces::msg::DummyJointStateV2 panel_state_message(const dp::iface::Du
   return output;
 }
 }
+
+namespace dummy_motion_client {
+PanelFeedbackSelection select_panel_feedback(
+    const PanelFeedbackCache &control, PanelFeedbackBytes diagnostic_status,
+    PanelFeedbackBytes diagnostic_state, std::uint64_t now,
+    std::uint64_t state_max_age_us, std::uint64_t status_max_age_us,
+    std::uint64_t &status_published_us, std::uint64_t &state_published_us) {
+  PanelFeedbackSelection selected;
+  const auto fresh = [now](std::uint64_t at, std::uint64_t age) {
+    return at != 0U && now >= at && now - at <= age;
+  };
+  if (control.available && control.status_received_us > status_published_us && fresh(control.status_received_us,status_max_age_us)) {
+    selected.status = control.status; status_published_us = control.status_received_us;
+  }
+  if (control.available && control.state_received_us > state_published_us && fresh(control.state_received_us,state_max_age_us)) {
+    selected.state = control.state; state_published_us = control.state_received_us;
+  }
+  dp::iface::DummyDeviceStatusV2 status;
+  if (diagnostic_status.received_us > status_published_us && fresh(diagnostic_status.received_us,status_max_age_us) &&
+      dp::iface::DummyDeviceStatusV2Codec::decode(diagnostic_status.data,diagnostic_status.size,&status)==dp::iface::CodecResult::kOk) {
+    selected.status = status; status_published_us = diagnostic_status.received_us;
+  }
+  dp::iface::DummyJointStateV2 state;
+  if (diagnostic_state.received_us > state_published_us && fresh(diagnostic_state.received_us,state_max_age_us) &&
+      dp::iface::DummyJointStateV2Codec::decode(diagnostic_state.data,diagnostic_state.size,&state)==dp::iface::CodecResult::kOk) {
+    selected.state = state; state_published_us = diagnostic_state.received_us;
+  }
+  return selected;
+}
+}

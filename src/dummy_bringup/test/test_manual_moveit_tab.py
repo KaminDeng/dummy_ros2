@@ -1385,44 +1385,29 @@ class MoveItTabTests(unittest.TestCase):
         self.assertEqual(self.panel.commands,[])
 
 
-    def test_ros_auto_continuous_batch_submits_one_full_fjt_and_waits_real_home(self):
-        from manual_moveit_continuous import prepare_path, blend_paths
-        self.panel.backend = 'ros'
-        self.tab.continuous_enabled = True
-        sent = []
-        self.panel.ros_backend = NS(submit_trajectory=lambda trajectory: sent.append(trajectory) or True)
-        home = tuple(self.panel.actual_q)
-        q1 = (home[0]+.05,)+home[1:]
-        q2 = (home[0]+.10,)+home[1:]
-        speed = self.panel.speed_input.value()
-        acceleration = self.panel.acceleration_input.value()
-        first = prepare_path((home,q1),(0.,1.),speed,acceleration)
-        second = prepare_path((q1,q2),(0.,1.),speed,acceleration)
-        joined,_ = blend_paths(first,second)
-        back = prepare_path((q2,home),(0.,1.5),speed,acceleration)
-        full,_ = blend_paths(joined,back)
-        auto = self.tab.auto_test
-        auto.active = True;auto.ros_batch = True;auto.chain_enabled = True
-        auto.ros_batch_count = 2;auto.identity = self.tab.execution_identity()
-        auto.scene_version = self.tab.scene_revision();auto.started_at = module.time.monotonic()
-        auto.queued = dict(joined_path=full,continuous_path=back,home=True,goal=home,start=q2,
-            pose=NS(position=NS(x=0.,y=0.,z=0.),orientation=NS(x=0.,y=0.,z=0.,w=1.)))
-        auto._ros_chain_tick()
-        self.assertTrue(self.tab.executing)
-        self.assertEqual(len(sent),1)
-        self.assertEqual(len(sent[0].points),len(full.points))
+    def test_ros_rolling_home_result_waits_for_fresh_actual_without_native(self):
+        from manual_moveit_continuous import prepare_path
+        self.panel.backend='ros';self.tab.continuous_enabled=True
+        sent=[];self.panel.ros_backend=NS(submit_trajectory=lambda trajectory:sent.append(trajectory) or True)
+        home=tuple(self.panel.actual_q);start=(home[0]+.1,)+home[1:]
+        back=prepare_path((start,home),(0.,1.5),self.panel.speed_input.value(),self.panel.acceleration_input.value())
+        self.panel.actual_q=list(start)
+        auto=self.tab.auto_test
+        auto.active=True;auto.ros_stream=True;auto.chain_enabled=True;auto.completed=2
+        auto.identity=self.tab.execution_identity();auto.scene_version=self.tab.scene_revision()
+        auto.started_at=module.time.monotonic()
+        auto.queued=dict(path=(start,home),times=(0.,back.duration),continuous_path=back,
+                         home=True,goal=home,start=start,pose=None,checked_at=module.time.monotonic())
+        auto._submit()
+        self.assertTrue(self.tab.executing);self.assertTrue(auto.executing_home)
+        self.assertEqual(len(sent),1);self.assertEqual(len(sent[0].points),len(back.points))
         self.assertEqual(tuple(sent[0].points[-1].positions),home)
         self.assertEqual(self.panel.commands,[])
-        self.panel.actual_q = list(q2)
         self.tab.ros_event('completed',{})
         self.assertTrue(auto.active)
-        self.panel.authorized = False
-        auto.tick()
-        self.assertTrue(auto.active)
-        self.panel.actual_q = list(home)
-        auto.tick()
-        self.assertEqual(auto.result,'completed')
-        self.assertEqual(auto.completed,2)
+        self.panel.authorized=False;auto.tick();self.assertTrue(auto.active)
+        self.panel.actual_q=list(home);auto.tick()
+        self.assertEqual(auto.result,'completed');self.assertEqual(auto.completed,2)
         self.assertEqual(len(sent),1)
 
     def test_other_ros_action_result_does_not_complete_idle_moveit_tab(self):
@@ -1439,7 +1424,7 @@ class MoveItTabTests(unittest.TestCase):
         self.panel.backend = 'ros'
         self.tab.refresh_auto_backend_options()
         self.assertEqual(self.tab.auto_duration.maximum(),9.5)
-        self.assertIn('非在线续接',self.tab.auto_continuous.toolTip())
+        self.assertIn('边运动边规划',self.tab.auto_continuous.toolTip())
         self.assertTrue(self.tab.continuous_enabled)
         self.panel.backend = 'real'
         self.tab.refresh_auto_backend_options()
@@ -1449,3 +1434,144 @@ class MoveItTabTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def _inflight_cache_wait_fixture(case, clock):
+    from unittest.mock import Mock
+    from manual_panel_ros_backend import RosTransport
+    case.prepare_execution();case.prepare_ros_inflight()
+    case.panel.last_state.update(core_state=5,position_valid_mask=63,can_rx_age_us=[0]*6)
+    case.panel.last_state_ns=int(clock[0]*1e9)
+    transport=object.__new__(RosTransport)
+    transport.closed=False;transport.state_at=transport.status_at=clock[0]
+    transport.node=NS(count_services=lambda _:1,count_publishers=lambda _:1)
+    transport.feedback_max_age_ms=250;transport.status_max_age_ms=1000
+    state=NS(**case.panel.last_state,device_id=[1]*16,profile_id=201)
+    transport.latest_state=state
+    transport.latest_status=NS(**vars(state),real_motion_permitted=True,permit_remaining_us=1000000,evidence_lost=False)
+    transport.goal=NS(goal_id=NS(uuid=[2]*16))
+    transport._submission=dict(stage='active',binding=((1,)*16,201,7,9,2,10))
+    case.panel.ros_backend.transport=transport
+    case.tab.ros_event('accepted',{'goal_uuid':bytes([2]*16).hex()})
+    case.panel.is_fresh=False
+    case.tab.auto_test.active=True
+    case.tab.auto_test.scene_version=case.tab.scene_revision()
+    case.tab.auto_test.identity=(7,2,9)
+    case.tab.auto_test.deadline=clock[0]+180.
+    case.tab.auto_test.started_at=clock[0]
+    case.tab.auto_test.tick=Mock(wraps=case.tab.auto_test.tick)
+    return transport
+
+
+def test_ros_inflight_cache_wait_keeps_entire_tick_quiet_then_resumes():
+    MoveItTabTests.setUpClass()
+    case=MoveItTabTests();case.setUp()
+    try:
+        clock=[10.]
+        with patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+            transport=_inflight_cache_wait_fixture(case,clock)
+            old_path=case.tab.path;clock[0]=10.3
+            case.tab.tick()
+            assert case.tab.auto_test.active and case.tab.path is old_path and case.tab.executing
+            case.tab.auto_test.tick.assert_not_called()
+            assert case.ros_cancels==[] and case.panel.releases==[]
+            transport.state_at=transport.status_at=clock[0]
+            case.panel.last_state_ns=int(clock[0]*1e9);case.panel.is_fresh=True
+            case.tab.tick()
+            assert case.tab.auto_test.active and case.tab.executing
+            case.tab.auto_test.tick.assert_called_once()
+    finally:case.tearDown()
+
+
+def test_ros_inflight_cache_wait_deadline_is_original_receive_anchor():
+    MoveItTabTests.setUpClass()
+    case=MoveItTabTests();case.setUp()
+    try:
+        clock=[10.]
+        with patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+            _inflight_cache_wait_fixture(case,clock)
+            for now in (10.3,10.9,11.99):
+                clock[0]=now;case.tab.tick();assert case.tab.auto_test.active
+            clock[0]=12.;case.tab.tick();case.tab.tick()
+            assert not case.tab.auto_test.active and not case.tab.executing
+            assert len(case.panel.releases)+len(case.ros_cancels)==1
+    finally:case.tearDown()
+
+
+def test_ros_inflight_cache_wait_does_not_hide_real_changes_edit_or_native():
+    MoveItTabTests.setUpClass()
+    for change in ('boot','reference','session','uuid','permission','core','can','edit','scene','native'):
+        case=MoveItTabTests();case.setUp()
+        try:
+            clock=[10.]
+            with patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+                transport=_inflight_cache_wait_fixture(case,clock);clock[0]=10.3
+                if change in ('boot','reference','session'):
+                    case.panel.last_state[{'boot':'boot_epoch','reference':'reference_epoch','session':'session_id'}[change]]+=1
+                elif change=='uuid': transport.goal.goal_id.uuid[0]+=1
+                elif change=='permission': transport.latest_status.real_motion_permitted=False
+                elif change=='core': transport.latest_state.core_state=9
+                elif change=='can': case.panel.last_state['can_rx_age_us'][0]=300000
+                elif change=='scene':
+                    case.tab.scene_revision=lambda:1
+                    auto=case.tab.auto_test
+                    auto.tick=type(auto).tick.__get__(auto,type(auto))
+                elif change=='native': case.panel.backend='real'
+                elif change=='edit': case.tab.invalidate()
+                case.tab.tick()
+                assert not case.tab.auto_test.active and not case.tab.executing, change
+                assert len(case.panel.releases)+len(case.ros_cancels)==1, change
+        finally:case.tearDown()
+
+
+def _completed_cache_fixture(case, clock):
+    _inflight_cache_wait_fixture(case,clock)
+    case.panel.is_fresh=True
+    case.tab.ros_execution_goal=tuple(case.panel.actual_q)
+    case.tab.auto_test.executing_home=True
+    case.tab.ros_event('completed',{})
+    return case.tab.auto_test
+
+
+def test_ros_completed_waits_for_fresh_actual_before_confirming_home():
+    MoveItTabTests.setUpClass();case=MoveItTabTests();case.setUp()
+    try:
+        clock=[10.]
+        with patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+            auto=_completed_cache_fixture(case,clock)
+            case.panel.is_fresh=False;clock[0]=10.3;auto.tick()
+            assert auto.active and auto.ros_completion_pending
+            case.panel.is_fresh=True;clock[0]=10.4;auto.tick()
+            assert not auto.active and auto.result=='completed'
+    finally:case.tearDown()
+
+
+def test_ros_completed_wait_rejects_real_identity_change_or_closing():
+    MoveItTabTests.setUpClass()
+    for change in ('boot_epoch','reference_epoch','session_id','closing'):
+        case=MoveItTabTests();case.setUp()
+        try:
+            clock=[10.]
+            with patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+                auto=_completed_cache_fixture(case,clock);case.panel.is_fresh=False
+                if change=='closing':case.panel.closing=True
+                else:case.panel.last_state[change]+=1
+                auto.tick()
+                assert not auto.active and auto.result=='error',change
+        finally:case.tearDown()
+
+
+def test_ros_completed_wait_keeps_two_second_deadline_and_late_feedback_cannot_revive():
+    MoveItTabTests.setUpClass();case=MoveItTabTests();case.setUp()
+    try:
+        clock=[10.]
+        with patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+            auto=_completed_cache_fixture(case,clock);case.panel.is_fresh=False
+            assert auto.ros_completion_deadline==12.
+            for now in (10.3,11.,11.99):
+                clock[0]=now;auto.tick();assert auto.active and auto.ros_completion_deadline==12.
+            clock[0]=12.;auto.tick()
+            assert not auto.active and auto.result=='error'
+            case.panel.is_fresh=True;case.tab.ros_event('completed',{});auto.tick()
+            assert not auto.active and auto.result=='error'
+    finally:case.tearDown()

@@ -550,7 +550,134 @@ void positions_only_real_command_entry_before_begin() {
     }
   }
 }
+// GUI41真实J3工作边界外起点必须在真正Running阶段保持向内资格。
+void running_manual_inward_boundary_samples(bool manual=true,bool reproduce=false,bool projected=false) {
+ namespace wire=dp::iface;
+ constexpr double rad=3.14159265358979323846/180.;
+ JointProfile limits;limits.joints={"Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"};
+ limits.lower.assign(6,-10.);limits.upper.assign(6,10.);
+ limits.velocity.assign(6,1.1);limits.acceleration.assign(6,4.);
+ limits.path_tolerance.assign(6,0.);limits.goal_tolerance.assign(6,.003);
+ limits.nominal_lower.assign(6,-11.);limits.nominal_upper.assign(6,11.);limits.manual_inward_start=manual;
+ limits.lower[1]=-72.45*rad;limits.nominal_lower[1]=-73.*rad;
+ limits.upper[2]=179.45*rad;limits.nominal_upper[2]=180.*rad;
+ Position actual{};actual[1]=(manual?-72.46:-72.44)*rad;actual[2]=(manual?179.45353124:179.44)*rad;
+ if(reproduce){actual[1]=-72.452968729*rad;actual[2]=179.451281297*rad;}
+ Client client;Port port;ActionGate gate(client,port,limits);
+ Authorization auth;auth.session=auth.reference=auth.permit=true;
+ auth.identity.set_expected_session_id(9);auth.identity.set_configured_mask(63);
+ check(gate.enable(auth,1));auto ready=reply(1,1);ready.position=ready.hold_position=actual;
+ gate.observe(ready,2);check(gate.record_update(gate.generation(),1,1,actual));
+ ready.result_valid=ready.succeeded=ready.hold_ready=true;gate.observe(ready,3);check(gate.ready());
+ wire::DummyJointStateV2 state;state.set_schema_major(2);state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
+ state.set_session_id(9);state.set_configured_mask(63);state.set_position_valid_mask(63);state.set_motion_epoch(1);
+ state.set_core_state(wire_value(WireCoreState::kHold));state.set_hold_ready(true);state.set_can_submitted_mask(63);
+ state.set_can_sent_mask(63);state.set_committed_producer_seq(1);state.set_state_seq(1);double actual_wire[6];std::copy(actual.begin(),actual.end(),actual_wire);state.set_position_rad(actual_wire);
+ std::vector<std::uint8_t> bytes(wire::DummyJointStateV2Codec::kEncodedSize);
+ check(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
+ check(gate.observe_state(bytes.data(),bytes.size(),4));
+ Position home{};home[2]=90.*rad;Trajectory motion;motion.joints=limits.joints;
+ motion.points={{{actual.begin(),actual.end()},{},{},1.},{{home.begin(),home.end()},{},{},4.},{{home.begin(),home.end()},{},{},7.}};
+ if(projected) {
+   motion.points.front().positions[1]=limits.lower[1];
+   motion.points.front().positions[2]=limits.upper[2];
+ }
+ auto wrong_profile=limits;wrong_profile.velocity[0]*=.5;
+ check(!gate.submit_prepared(prepare_trajectory(motion,wrong_profile),5));
+ const auto prepared=prepare_trajectory(motion,limits);check(bool(prepared));
+ check(gate.submit_prepared(prepared,5));auto begin=reply(2,2);begin.position=begin.hold_position=actual;
+ gate.observe(begin,6);check(gate.record_update(gate.generation(),2,1,actual));
+ begin.result_valid=begin.succeeded=begin.hold_ready=true;gate.observe(begin,7);check(gate.phase()==Phase::kRunning);
+ const auto generation=gate.generation();
+ if(projected) {
+   auto tail=motion;tail.points.back().time=8.;
+   auto candidate=prepare_trajectory(tail,limits);check(bool(candidate));
+   auto update=prepare_trajectory_tail(prepared,candidate,4000000000ULL);check(bool(update));
+   check(!gate.extend_prepared(update,3900000000ULL));
+   check(gate.extend_prepared(update,1000000000ULL));
+   check(!gate.extend_prepared(update,1000000000ULL));
+   auto second=tail;second.points.back().time=9.;
+   auto next=prepare_trajectory_tail(candidate,prepare_trajectory(second,limits),4000000000ULL);check(bool(next));
+   check(gate.extend_prepared(next,1100000000ULL));
+   auto changed=second;changed.points[1].positions[0]+=.001;
+   check(!prepare_trajectory_tail(prepare_trajectory(second,limits),prepare_trajectory(changed,limits),4000000000ULL));
+
+   auto command=actual;command[1]=limits.lower[1];command[2]=limits.upper[2];
+   check(gate.record_update(generation,2,2,command));
+   auto inward=command;inward[1]+=.00001;inward[2]-=.00001;
+   check(!gate.record_update(generation+1,2,3,inward));
+   check(gate.record_update(generation,2,3,inward));
+   auto outward=actual;check(!gate.record_update(generation,2,4,outward));
+   return;
+ }
+ if(reproduce) {
+   auto submitted_first=actual;submitted_first[1]=-72.451140642*rad;submitted_first[2]=179.452265668*rad;
+   check(!gate.record_update(generation,2,2,submitted_first));
+   const auto& rejected=gate.first_update_rejection();
+   check(rejected.reason==UpdateRejectReason::kInward && rejected.axis==2 && rejected.phase==Phase::kRunning);
+   check(rejected.candidate==submitted_first && rejected.prime==actual && rejected.previous==actual);
+   auto another=submitted_first;another[2]+=1e-5;
+   check(!gate.record_update(generation+1,2,2,another));
+   check(gate.first_update_rejection().candidate==submitted_first);
+   return;
+ }
+ check(gate.record_update(generation,2,2,actual));
+ if(!manual) {auto outside=actual;outside[2]=179.45353124*rad;check(!gate.record_update(generation,2,3,outside));return;}
+ auto inward=actual;inward[1]+=.00001;inward[2]-=.00001;
+ check(!gate.record_update(generation+1,2,3,inward));check(!gate.record_update(generation,3,3,inward));
+ auto outward=actual;outward[2]+=.000001;check(!gate.record_update(generation,2,3,outward));
+ check(gate.record_update(generation,2,3,inward));
+ auto entered=actual;entered[1]=limits.lower[1]+.001;entered[2]=limits.upper[2]-.001;
+ check(gate.record_update(generation,2,4,entered));
+ check(!gate.record_update(generation,2,5,inward));
+}
+// 大轨迹的全路径证明不能遗漏中间点，且原输入后续修改不能污染准备结果。
+void immutable_prepared_trajectory_checks() {
+ auto p=profile();Trajectory path;path.joints=p.joints;
+ for(unsigned i=0;i<9132;++i)path.points.push_back({{0.},{},{},.04+.02*i});
+ const auto prepared=prepare_trajectory(path,p);check(bool(prepared));
+ Position actual{};check(validate_prepared_start(*prepared,actual));
+ path.points[4500].positions[0]=2.;check(!prepare_trajectory(path,p));
+ check(prepared->trajectory().points[4500].positions[0]==0.);
+ actual[0]=.1;check(!validate_prepared_start(*prepared,actual));
+}
+// 一母RUN两次续接；最后只发一次Complete，取消后任何迟到续接均拒绝。
+void rolling_tail_lifecycle() {
+ for(bool cancel:{false,true}) {
+  Client client;Port port;auto limits=profile();ActionGate gate(client,port,limits);
+  Authorization auth;auth.session=auth.reference=auth.permit=true;auth.identity.set_expected_session_id(9);
+  check(gate.enable(auth,1));gate.observe(reply(1,1),2);check(gate.record_update(gate.generation(),1,1,Position{}));
+  gate.observe(reply(1,1,true),3);check(gate.ready());
+  Trajectory path;path.joints=limits.joints;path.points={{{0.},{0.},{},.1},{{.2},{0.},{},1.}};
+  auto base=prepare_trajectory(path,limits);check(bool(base));check(gate.submit_prepared(base,4));
+  gate.observe(reply(2,2),5);check(gate.record_update(gate.generation(),2,1,Position{}));
+  gate.observe(reply(2,2,true),6);check(gate.phase()==Phase::kRunning);
+  std::shared_ptr<const PreparedTrajectoryTail> tail;
+  for(unsigned version=0;version<2;++version) {
+   const auto through=static_cast<std::uint64_t>((version+1)*1000000000ULL);
+   path.points.push_back({{.3+.1*version},{0.},{},2.+version});auto candidate=prepare_trajectory(path,limits);
+   tail=prepare_trajectory_tail(base,candidate,through);check(bool(tail));
+   check(!gate.extend_prepared(tail,through-399999999ULL));
+   check(gate.extend_prepared(tail,200000000ULL+version*100000000ULL));
+   check(!gate.extend_prepared(tail,200000000ULL));base=std::move(candidate);
+  }
+  check(port.starts==1 && client.requests.size()==2);
+  if(cancel) {gate.cancel(7);check(!gate.extend_prepared(tail,300000000ULL));check(port.cancels==1);continue;}
+  Position end{};end[0]=.4;check(gate.record_update(gate.generation(),2,2,end));
+  gate.inner_result(gate.generation(),Terminal::kSucceeded,"",8);auto accepted=reply(2,2,true);accepted.accepted_seq=2;
+  gate.observe(accepted,9);check(client.requests.size()==3 && client.requests.back().operation()==wire_value(ManageOperation::kComplete));
+  check(client.requests.back().terminal_position_rad()[0]==.4);
+  gate.observe(reply(3,3),10);check(gate.record_update(gate.generation(),3,1,Position{}));
+  gate.observe(reply(3,3,true),11);check(gate.terminal()==Terminal::kSucceeded);
+ }
+}
 int main() {
+  rolling_tail_lifecycle();
+  immutable_prepared_trajectory_checks();
+  running_manual_inward_boundary_samples(true,true);
+  running_manual_inward_boundary_samples(true,true,true);
+  running_manual_inward_boundary_samples();
+  running_manual_inward_boundary_samples(false);
   positions_only_real_command_entry_before_begin();
   cancel_receipt_rejects_foreign_owner();
   discarded_local_hold_generation_does_not_block_begin();

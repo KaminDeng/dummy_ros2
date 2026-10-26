@@ -38,6 +38,7 @@ class RosBackend:
     def __init__(self, transport, callback):
         self.transport, self.callback = transport, callback
         self.released = False
+        self.local_retired = False
         self.admitting = False
         self.pending = False
         self.operation = None
@@ -46,12 +47,29 @@ class RosBackend:
         self._release_retry_at = 0.0
         self._release_timeout_reported = False
         self.manual_ready = False
+        self._cleanup_retirement_pending = False
         self.latest_status = None
         self.latest_state = None
 
     def connect(self):
         self.admitting = True
         self.callback('connected', 'ReadOnly')
+
+    @property
+    def can_close(self):
+        return self.released or self.local_retired
+
+    def _accept_local_retirement(self, response):
+        # 只消费用户退出意图下的精确C++回执；不把本地只读退出写成设备失能。
+        if (self.can_close or self._release_deadline is None or
+                response.message != 'LOCAL_READONLY_RETIRED'):
+            return False
+        self.local_retired = True
+        self.admitting = self.manual_ready = self.release_pending = False
+        self._cleanup_retirement_pending = False
+        self.operation = None
+        self.callback('retired', response.message)
+        return True
 
     def _request(self, service, callback):
         if self.pending:
@@ -89,6 +107,12 @@ class RosBackend:
             return False
         return self.transport.submit_trajectory(trajectory, self.callback)
 
+    def extend_trajectory(self, trajectory, expected_version, unchanged_through_ns):
+        if not self._motion_ready() or self.released:
+            return False
+        return self.transport.extend_trajectory(trajectory, expected_version,
+            unchanged_through_ns, self.callback)
+
     def cancel(self):
         return self.transport.cancel()
 
@@ -105,6 +129,8 @@ class RosBackend:
         return False
 
     def release(self):
+        if self.can_close:
+            return True
         self.admitting = False
         getattr(self.transport, 'cancel_pending_submission', lambda: None)()
         # Repeated clicks retain the original intent/deadline; QUEUED is not
@@ -124,6 +150,8 @@ class RosBackend:
             return False
         self.release_pending = False
         def received(response):
+            if self._accept_local_retirement(response):
+                return
             if self._release_expired():
                 return
             if response.message == 'RELEASE_UNAVAILABLE':
@@ -139,14 +167,19 @@ class RosBackend:
         if self.release_pending and not expired:
             return self._send_release()
         def status(response):
+            if self._accept_local_retirement(response):
+                return
             message = response.message
-            release_intent = not self.released and (self.operation == 'release' or self._release_deadline is not None)
-            physical_release = ((response.success and message in ('RELEASED_IDLE', 'FAULT_CLEANUP_CONFIRMED')) or
-                                message == 'EVIDENCE_INCOMPLETE;RELEASED_IDLE')
+            release_intent = not self.can_close and (self.operation == 'release' or self._release_deadline is not None or self._cleanup_retirement_pending)
+            physical_release = ((response.success and message in ('RELEASED_IDLE', 'RELEASED_FAULT', 'FAULT_CLEANUP_CONFIRMED')) or
+                                message in ('EVIDENCE_INCOMPLETE;RELEASED_IDLE', 'EVIDENCE_INCOMPLETE;RELEASED_FAULT'))
             # 原释放期限只封锁写请求；迟到的权威只读确认仍可退休owner，原证据错误不改成成功。
             if release_intent and physical_release:
                 self.released = True
+                self.manual_ready = False
+                self.admitting = False
                 self.release_pending = False
+                self._cleanup_retirement_pending = False
                 self.operation = None
                 self.callback('released', message)
             elif release_intent and self._release_expired():
@@ -160,7 +193,10 @@ class RosBackend:
                 self.callback('released', message)
             elif self.operation == 'manual' and message.startswith('MANUAL_CONTROL_FAILED:'):
                 self.admitting = False
-                self.released = message.endswith('cleanup=RELEASED_IDLE')
+                self.released = message.endswith((' cleanup=RELEASED_IDLE', ' cleanup=RELEASED_FAULT'))
+                self.manual_ready = False
+                # 本次C++任务已主动进入cleanup；终态错误保留，只等后续权威只读释放确认。
+                self._cleanup_retirement_pending = message.endswith(' cleanup=UNCONFIRMED')
                 self.operation = None
                 self.callback('failed', message)
             elif response.success and (message == 'BASELINE_PASSED' or message.startswith('BASELINE_PASSED ')) and self.operation == 'auto':
@@ -169,7 +205,10 @@ class RosBackend:
                 self.callback('completed', message)
             elif self.operation == 'auto' and message.startswith('BASELINE_FAILED:'):
                 self.admitting = False
-                self.released = message.endswith('cleanup=RELEASED_IDLE')
+                self.released = message.endswith((' cleanup=RELEASED_IDLE', ' cleanup=RELEASED_FAULT'))
+                self.manual_ready = False
+                # 本次C++任务已主动进入cleanup；终态错误保留，只等后续权威只读释放确认。
+                self._cleanup_retirement_pending = message.endswith(' cleanup=UNCONFIRMED')
                 self.operation = None
                 self.callback('failed', message)
             else:
@@ -177,7 +216,7 @@ class RosBackend:
         return self._request('bootstrap_status' if self._release_deadline is not None else 'baseline_status' if self.operation == 'auto' else 'manual_control_status' if self.operation == 'manual' else 'bootstrap_status', status)
 
     def close(self):
-        if not self.released:
+        if not self.can_close:
             return False
         self.transport.close()
         return True
@@ -193,6 +232,7 @@ class RosTransport:
         from control_msgs.action import FollowJointTrajectory
         from rclpy.action import ActionClient
         from unique_identifier_msgs.msg import UUID
+        from dummy_motion_interfaces.srv import ExtendJointTrajectory
         self.node = node
         self.trigger = Trigger
         self.get_parameters_type = GetParameters
@@ -210,6 +250,10 @@ class RosTransport:
         self.clients = {name: node.create_client(Trigger, '/device_action_gate/' + name) for name in (
             'auto_calibrate_and_test', 'prepare_manual_control', 'manual_control_status', 'manual_reference_status', 'baseline_status',
             'disable_and_release', 'bootstrap_status', 'last_goal_rejection')}
+        self.extension_type = ExtendJointTrajectory
+        self.extension_client = node.create_client(ExtendJointTrajectory,
+            '/device_action_gate/extend_trajectory')
+        self._extension = None
         self.uuid_type = UUID
         self.latest_state = self.latest_status = None
         self.state_at = self.status_at = 0.
@@ -384,12 +428,14 @@ class RosTransport:
             context['callback']('failed', reason)
 
     def cancel_pending_submission(self):
+        self._retire_extension()
         context = getattr(self, '_submission', None)
         if context is not None and context['stage'] != 'active':
             self._submission_failed(context, 'ROS目标尚未受理；已撤销待重试请求')
 
     def _poll_trajectory_retry(self):
         self._expire_readonly_requests()
+        self._poll_extension()
         context = getattr(self, '_submission', None)
         if self.closed or context is None or context['stage'] not in ('preflight', 'receipt', 'renewal'):
             return
@@ -448,6 +494,132 @@ class RosTransport:
                     self._send_trajectory_attempt(context)
         self.request('last_goal_rejection' if stage == 'receipt' else 'bootstrap_status', response)
 
+    def _extension_binding(self, submission, require_fresh=True):
+        state, status = self.latest_state, self.latest_status
+        if self.closed or self.goal is None or self._submission is not submission or submission['stage'] != 'active':
+            return None
+        if state is None or status is None or self.status_max_age_ms is None or self.feedback_max_age_ms is None:
+            return None
+        now = time.monotonic()
+        if require_fresh and not (0 <= now-self.state_at <= self.feedback_max_age_ms/1000. and
+                0 <= now-self.status_at <= self.status_max_age_ms/1000.):
+            return None
+        def identity(value):
+            return (tuple(value.device_id), value.profile_id, value.boot_epoch,
+                    value.session_id, value.reference_epoch, value.motion_epoch)
+        binding = identity(state)
+        if (binding != identity(status) or binding[:5] != submission['binding'][:5] or
+                state.core_state != 5 or status.core_state != 5 or
+                not status.real_motion_permitted or status.permit_remaining_us <= 0 or status.evidence_lost):
+            return None
+        active_motion = submission.get('extension_motion')
+        if active_motion is not None and binding[5] != active_motion:
+            return None
+        return binding
+
+    def _retire_extension(self):
+        context = getattr(self, '_extension', None)
+        self._extension = None
+        if context is not None and context.get('future') is not None:
+            context['future'].cancel()
+
+    def _extension_failed(self, context, reason):
+        if getattr(self, '_extension', None) is not context:
+            return
+        self._retire_extension()
+        # 回执失联不能当安装成功；请求取消母目标，正式Action终态仍由原回调报告。
+        if self.goal is context['goal'] and self._submission is context['submission']:
+            self.goal.cancel_goal_async()
+        context['callback']('failed', reason)
+
+    def _extension_diagnostic(self):
+        now = time.monotonic()
+        state, status = self.latest_state, self.latest_status
+        return ('state_age_ms=%.3f status_age_ms=%.3f state_budget_ms=%s status_budget_ms=%s '
+                'state_session=%s status_session=%s state_motion=%s status_motion=%s '
+                'state_boot=%s status_boot=%s state_ref=%s status_ref=%s '
+                'state_core=%s status_core=%s permit=%s evidence_lost=%s' % (
+                    (now-self.state_at)*1000., (now-self.status_at)*1000.,
+                    self.feedback_max_age_ms, self.status_max_age_ms,
+                    getattr(state, 'session_id', None), getattr(status, 'session_id', None),
+                    getattr(state, 'motion_epoch', None), getattr(status, 'motion_epoch', None),
+                    getattr(state, 'boot_epoch', None), getattr(status, 'boot_epoch', None),
+                    getattr(state, 'reference_epoch', None), getattr(status, 'reference_epoch', None),
+                    getattr(state, 'core_state', None), getattr(status, 'core_state', None),
+                    getattr(status, 'real_motion_permitted', None), getattr(status, 'evidence_lost', None)))
+
+    def _poll_extension(self):
+        context = getattr(self, '_extension', None)
+        if context is None:
+            return
+        if self.closed or self._submission is not context['submission'] or self.goal is not context['goal']:
+            self._retire_extension()
+            return
+        reason = None
+        if time.monotonic() >= context['deadline']:
+            reason = 'DEADLINE_EXPIRED: ROS轨迹续接原2秒期限已到'
+        elif tuple(self.goal.goal_id.uuid) != context['uuid']:
+            reason = 'UUID_CHANGED: ROS母目标身份已改变'
+        elif self.control_graph_error():
+            reason = 'CONTROL_GRAPH_CHANGED: ' + self.control_graph_error()
+        elif self._extension_binding(context['submission'], require_fresh=False) != context['binding']:
+            reason = 'IDENTITY_OR_PERMISSION_CHANGED: ROS续接身份或状态权限已改变'
+        elif time.monotonic() < self.state_at or time.monotonic() < self.status_at:
+            reason = 'FEEDBACK_CLOCK_REGRESSION: ROS反馈接收时钟倒退'
+        if reason is not None:
+            self._extension_failed(context, reason + '; ' + self._extension_diagnostic())
+            return
+        # Qt可能刚完成全路径准备，DDS新反馈尚在executor队列中。
+        # 仅本地缓存龄超限时保留原回执和原截止；不重发，也不视为已安装确认。
+        if self._extension_binding(context['submission']) != context['binding']:
+            return
+        response = context.get('response')
+        if response is None:
+            return
+        self._extension = None
+        if response.accepted:
+            context['callback']('trajectory_extended', dict(version=response.version,
+                phase_ns=response.phase_ns, trajectory_digest=[int(v) for v in response.trajectory_digest]))
+        else:
+            context['callback']('trajectory_extension_rejected', dict(reason=response.reason,
+                phase_ns=response.phase_ns, version=response.version))
+
+    def extend_trajectory(self, trajectory, expected_version, unchanged_through_ns, callback):
+        submission = getattr(self, '_submission', None)
+        if (submission is None or getattr(self, '_extension', None) is not None or
+                self.control_graph_error() or not self.extension_client.service_is_ready()):
+            return False
+        binding = self._extension_binding(submission)
+        if binding is None or not isinstance(expected_version, int) or not 0 <= expected_version < 2**64 or not isinstance(unchanged_through_ns, int) or not 0 <= unchanged_through_ns < 2**64:
+            return False
+        request = self.extension_type.Request()
+        request.goal_id = self.uuid_type(uuid=list(self.goal.goal_id.uuid))
+        request.motion_epoch = binding[5]
+        request.expected_version = expected_version
+        request.unchanged_through_ns = unchanged_through_ns
+        request.trajectory = copy.deepcopy(trajectory)
+        submission['extension_motion'] = binding[5]
+        context = dict(submission=submission, goal=self.goal, binding=binding,
+            callback=callback, deadline=time.monotonic()+2., future=None,
+            uuid=tuple(self.goal.goal_id.uuid), response=None)
+        self._extension = context
+        def done(future):
+            if getattr(self, '_extension', None) is not context:
+                return
+            try:
+                context['response'] = future.result()
+            except Exception as error:
+                self._extension_failed(context, 'RPC_ERROR: ' + str(error) + '; ' + self._extension_diagnostic())
+                return
+            self._poll_extension()
+        try:
+            context['future'] = self.extension_client.call_async(request)
+            context['future'].add_done_callback(done)
+        except Exception as error:
+            self._extension_failed(context, str(error))
+            return False
+        return True
+
     def submit_trajectory(self, trajectory, callback):
         error = self.control_graph_error()
         if error:
@@ -501,6 +673,7 @@ class RosTransport:
                 def finished(future):
                     if self._submission is not context or self.closed:
                         return
+                    self._retire_extension()
                     self._submission = None
                     self.goal = None
                     try:
@@ -523,12 +696,14 @@ class RosTransport:
             self._submission_failed(context, str(error))
 
     def cancel(self):
+        self._retire_extension()
         self.cancel_pending_submission()
         if self.goal is not None:
             return self.goal.cancel_goal_async()
         return None
 
     def close(self):
+        self._retire_extension()
         self.cancel_pending_submission()
         self.closed = True
         # 关闭只销毁查询Future，不产生终态或回调到已关闭界面。
@@ -539,6 +714,8 @@ class RosTransport:
         self.node.destroy_timer(self.retry_timer)
         self.node.destroy_client(self.parameter_client)
         self.action.destroy()
+        if getattr(self, 'extension_client', None) is not None:
+            self.node.destroy_client(self.extension_client)
         for client in self.clients.values():
             self.node.destroy_client(client)
         for subscription in self.subscriptions:

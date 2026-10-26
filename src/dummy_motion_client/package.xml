@@ -14,6 +14,7 @@
   <depend>dpsdk_host_sdk</depend>
   <depend>control_msgs</depend>
   <depend>rclcpp</depend>
+  <depend>dummy_motion_interfaces</depend>
   <depend>rclcpp_action</depend>
   <depend>controller_manager</depend>
   <depend>std_srvs</depend>

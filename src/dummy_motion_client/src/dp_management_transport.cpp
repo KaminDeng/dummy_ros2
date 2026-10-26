@@ -583,6 +583,34 @@ RawTerminalIdentity DpManagementTransport::raw_terminal_flushed() const noexcept
  * @return 独立模式/无channel为空；可信State接收锚非零才置raw_cleanup_producer_valid。
  * @note 此lane不恢复正常admission、session/参考/permit或运动资格。
  */
+bool DpManagementTransport::request_owner_safety_stop(std::uint64_t boot,std::uint64_t session,std::uint32_t reference) noexcept {
+  if(impl_->connection!=Connection::kDeviceWorker)return false;
+  const auto channel=impl_->shared_channel();
+  return channel && channel->request_owner_safety_stop(management_now_us(),boot,session,reference);
+}
+bool DpManagementTransport::readonly_released_owner_observed(std::uint64_t now,std::uint64_t boot,
+    std::uint64_t session,std::uint32_t reference,std::uint64_t min_root_run) const noexcept {
+  if(impl_->connection!=Connection::kDeviceWorker)return false;
+  const auto channel=impl_->shared_channel();
+  return channel && channel->readonly_released_owner_observed(now,boot,session,reference,min_root_run);
+}
+bool DpManagementTransport::autonomous_fault_owner_retirement_confirmed(std::uint64_t now,
+    std::uint64_t boot,std::uint64_t session,std::uint32_t reference,std::uint64_t run) const noexcept {
+  if(impl_->connection!=Connection::kDeviceWorker)return false;
+  const auto channel=impl_->shared_channel();
+  return channel && channel->autonomous_fault_owner_retirement_confirmed(now,boot,session,reference,run);
+}
+bool DpManagementTransport::local_readonly_retirement_allowed(std::uint64_t now) const noexcept {
+  if(impl_->connection!=Connection::kDeviceWorker)return false;
+  const auto channel=impl_->shared_channel();
+  return channel && channel->local_readonly_retirement_allowed(now);
+}
+bool DpManagementTransport::readonly_fault_owner_retirement_confirmed(std::uint64_t now,
+    std::uint64_t boot,std::uint64_t session,std::uint32_t reference) const noexcept {
+  if(impl_->connection!=Connection::kDeviceWorker)return false;
+  const auto channel=impl_->shared_channel();
+  return channel && channel->readonly_fault_owner_retirement_confirmed(now,boot,session,reference);
+}
 DeviceObservation
 DpManagementTransport::diagnostic_observation() const noexcept {
   if (impl_->connection != Connection::kDeviceWorker)
@@ -634,6 +662,11 @@ std::unique_ptr<ManagementTransport::RequestHandle> DpManagementTransport::send(
     if(bytes.size()!=wire::DummyManageV2RequestCodec::kEncodedSize) {
       log_admission(AdmissionReason::kWrongSize,bytes); return {};
     }
+    Service::Request attempted;
+    if(wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&attempted)!=wire::CodecResult::kOk)return {};
+    // QueryResult为只读；其他实际尝试过的管理操作均保守取消“从未控制”资格。
+    constexpr std::uint16_t kQueryResultOperation=12U;
+    if(attempted.operation()!=kQueryResultOperation)channel->note_management_attempt(attempted.expected_boot_epoch());
     auto pending=std::make_shared<dummy_ros_control::DeviceManagementRequest>();
     std::copy(bytes.begin(),bytes.end(),pending->request.begin());
     std::unique_lock<std::mutex> lock(channel->mutex,std::try_to_lock);

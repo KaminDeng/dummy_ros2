@@ -27,7 +27,8 @@ TrajectoryDigest trajectory_digest(const trajectory_msgs::msg::JointTrajectory &
  */
 struct GuardedExecutionSample {
   std::array<double,6> actual{}, desired{};
-  std::uint64_t sequence=0;
+  std::uint64_t sequence=0, phase_ns=0;
+  std::int64_t trajectory_start_ns=0;
 };
 
 /**
@@ -72,6 +73,27 @@ class GuardedJointTrajectoryController
    * @return false表示登记槽忙；不在此执行轨迹。
    */
   bool register_goal(const GoalCredential &credential);
+  // 消息验证、重排、摘要与基类Trajectory构造只在非控制线程执行。
+  class PreparedGoal {
+    friend class GuardedJointTrajectoryController;
+    const GuardedJointTrajectoryController* owner=nullptr;
+    GoalCredential credential{};
+    mutable std::atomic<bool> installed{false};
+    bool tail=false;
+    std::uint64_t prepared_phase_ns=0;
+    std::int64_t start_ns=0;
+    std::shared_ptr<trajectory_msgs::msg::JointTrajectory> message;
+    std::shared_ptr<joint_trajectory_controller::Trajectory> trajectory;
+  };
+  std::shared_ptr<const PreparedGoal> prepare_goal(const GoalCredential&,
+      const std::shared_ptr<trajectory_msgs::msg::JointTrajectory>&);
+  bool install_prepared_goal(const GoalCredential&,const std::shared_ptr<const PreparedGoal>&);
+
+  // 非实时预热JTC索引；实时切换不重置母轨迹相位或生产序号。
+  std::shared_ptr<const PreparedGoal> prepare_tail(const GoalCredential&,
+      const std::shared_ptr<trajectory_msgs::msg::JointTrajectory>&);
+  bool install_prepared_tail(const GoalCredential&,const std::shared_ptr<const PreparedGoal>&);
+
   /**
    * @brief 核对登记/实际摘要及JTC消息有效性后移交轨迹。
    * 成功表示控制器接纳，不是设备已发送/到位。失败保留现有登记，调用方负责clear或处理错误。
@@ -121,13 +143,16 @@ class GuardedJointTrajectoryController
   rcl_clock_type_t last_update_clock_type_=RCL_ROS_TIME;
   std::mutex gate_mutex_;
   GoalRegistrationGate gate_;
+  GoalUuid active_goal_uuid_{};
+  std::shared_ptr<const std::array<double,6>> entry_prime_;
   std::atomic<UpdateSink> update_sink_{nullptr};
   std::atomic<void *> update_sink_context_{nullptr};
   /**
    * @brief 非实时写共享prime，RT只读；sample_sequence奇数写入中、偶数完成，actual/desired均rad原子字段。
    */
   realtime_tools::RealtimeBuffer<std::shared_ptr<std::array<double,6>>> prime_buffer_;
-  std::atomic<std::uint64_t> sample_sequence_{0};
+  std::atomic<std::uint64_t> sample_sequence_{0}, sample_phase_ns_{0};
+  std::atomic<std::int64_t> sample_start_ns_{0};
   std::array<std::atomic<double>,6> sample_actual_{}, sample_desired_{};
 };
 

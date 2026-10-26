@@ -1104,6 +1104,12 @@ struct DeviceTransport::Impl {
     gate_release.operation_id=response.operation_id();
     gate_release.run_id=response.run_id();
     gate_release.committed = true;
+    // 原Gate D10已严格COMMITTED时立即保存绑定；后续Safety抢占Query不抹去此事实。
+    // 只供同连接代次、同根的fresh Fault子尝试退休，不更改Stop/原页审计结果。
+    if(response.session_id()==0U && response.run_id()!=0U)
+      management->publish_worker_release_commit({gate_release.request_id,response.operation_id(),
+        response.run_id(),gate_release.boot_epoch,gate_release.session_id,0U,
+        gate_release.reference_epoch,response.motion_epoch(),response.management_epoch()});
     const auto candidate=early_release_idle;
     early_release_idle={};early_worker_status={};
     const auto now=transport_steady_now_us();
@@ -2973,7 +2979,8 @@ struct DeviceTransport::Impl {
      * D10重建本次释放根和sent_us，Cancel重置64槽安全目标episode并绑定当时run；这些都只声明本地enqueue。raw记录用host发送观察时间，不冒称设备Received。
      * @param pending 仍被shared_ptr持有的完整请求对象。
      */
-    auto capture_sent_request = [&](const DeviceManagementRequest &pending) {
+    auto capture_sent_request = [&](DeviceManagementRequest &pending) {
+      pending.connection_generation=management->worker_connection_generation_.load();
       Management::Request sent;
       if(stop_confirmation_pending.load() && wire::DummyManageV2RequestCodec::decode(pending.request.data(),pending.request.size(),&sent)==wire::CodecResult::kOk &&
          sent.operation()==kWireDisableAndRelease && sent.request_id()==stop_original.request_id()) {
@@ -3013,6 +3020,9 @@ struct DeviceTransport::Impl {
       if (!pending || pending == processed_management ||
           !pending->complete.load(std::memory_order_acquire)) return;
       Management::Request q; Management::Response r;
+      if(wire::DummyManageV2RequestCodec::decode(pending->request.data(),pending->request.size(),&q)==wire::CodecResult::kOk &&
+         wire::DummyManageV2ResponseCodec::decode(pending->response.data(),pending->response.size(),&r)==wire::CodecResult::kOk)
+        management->observe_owned_management_commit(q,r,pending->connection_generation);
       if(owned_cancel && wire::DummyManageV2RequestCodec::decode(pending->request.data(),pending->request.size(),&q)==wire::CodecResult::kOk &&
          (q.request_id()==owned_cancel->request_id() || cancel_query_matches(q))) {
         if(wire::DummyManageV2ResponseCodec::decode(pending->response.data(),pending->response.size(),&r)!=wire::CodecResult::kOk ||
@@ -3059,6 +3069,15 @@ struct DeviceTransport::Impl {
      * @brief 连接调度循环：所有管理句柄/回调上下文在这里串行交接；读共享queued只在短mutex内move出，网络RPC不持channel mutex执行。
      */
     while (running.load(std::memory_order_acquire)) {
+      // 显式owner停止只转发现有SafetyStop机器，绝不从诊断lane恢复控制授权。
+      if(const auto intent=management->take_owner_safety_stop_request(transport_steady_now_us())) {
+        if(!stop_latched && !stop_confirmation_pending.load(std::memory_order_acquire) &&
+           status.boot_epoch()==intent->boot && status.session_id()==intent->session && status.reference_epoch()==intent->reference &&
+           authorized_motion_epoch==intent->motion && authorized_management_epoch==intent->management &&
+           last_freshness_ticket==intent->ticket)
+          system.request_transport_stop();
+      }
+
       /**
        * @brief 调用方取消等待时清本地RequestHandle；已发送Complete的根摘要保留用于后继Query，尚未发的deferred不具有后继epoch权威。
        */
@@ -3639,6 +3658,10 @@ struct DeviceTransport::Impl {
                     (parameters.manual_reference_mode &&
                      response.reference_epoch() ==
                          stop_original.expected_reference_epoch()))) {
+          // 同一次Worker原D10的COMMITTED证人仅用于后续只读退休，不改Stop原deadline。
+          management->publish_worker_release_commit({stop_original.request_id(),response.operation_id(),
+            response.run_id(),response.boot_epoch(),stop_original.expected_session_id(),0U,
+            stop_original.expected_reference_epoch(),response.motion_epoch(),response.management_epoch()});
           authorized_motion_epoch = response.motion_epoch();
           authorized_management_epoch = response.management_epoch();
           stop_idle_observed = false;
@@ -3996,6 +4019,7 @@ struct DeviceTransport::Impl {
        */
       ready = false;
       management->ready = false;
+      management->reset_worker_release_connection();
       management->reset_raw_cleanup_lifetime();
       management->reset_diagnostic_observation();
       management->inactive_prime_allowed=false;

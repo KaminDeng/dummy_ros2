@@ -1363,6 +1363,54 @@ bool test_many_runs_and_recycled_late_page() {
   ::unlink(late_path);
   return rejected;
 }
+// 按GUI41原件重现：普通Stop可先于Fault，末Disable与完整flush仍可仅证明原owner已失能。
+bool test_autonomous_owner_disable_receipt() {
+ for(unsigned mode=0;mode<9;++mode) {
+  char path[]="/tmp/dummy-owner-disable-XXXXXX";const int fd=::mkstemp(path);
+  if(fd<0)return false;::close(fd);::unlink(path);
+  const auto trust=identity();dummy_ros_control::DeviceManagementChannel channel({});
+  FlushGate gate;RawEvidenceCollector collector(trust,&channel,wait_before_terminal_flush,&gate);
+  if(!collector.start(path))return false;
+  auto previous=genesis(trust,9,11);
+  for(unsigned seq=0;seq<8;++seq) {
+   auto item=page(9,seq,previous,false,seq+1);wire::DummyAttemptEvidenceV2 decoded;
+   if(wire::DummyAttemptEvidenceV2Codec::decode(item.raw.data(),item.raw.size(),&decoded)!=wire::CodecResult::kOk)return false;
+   item.category=seq<4?1U:seq<7?2U:3U;decoded.set_category(item.category);decoded.set_group_id(100+seq);
+   decoded.set_motion_epoch(seq<2?18U:seq<4?19U:seq==4?20U:21U);
+   if(seq==7) {decoded.set_first_failure_source(0x100a);decoded.set_first_failure_axis_mask(63);}
+   std::uint64_t q[6],take[6],sub[6],sent[6],abort[6]{};
+   for(unsigned axis=0;axis<6;++axis) {q[axis]=1000+seq*200;take[axis]=q[axis]+1;sub[axis]=q[axis]+2;sent[axis]=q[axis]+3;}
+   if(seq==7) {
+    if(mode==1)decoded.set_sent_mask(31);
+    if(mode==2)decoded.set_failed_mask(1);
+    if(mode==3)q[2]=0;
+    if(mode==4)sent[2]=q[2]+100001;
+    if(mode==5)abort[2]=q[2]+3;
+    if(mode==6)decoded.set_first_failure_source(0x1008);
+    if(mode==8)decoded.set_first_failure_axis_mask(2);
+   }
+   decoded.set_queued_at_us(q);decoded.set_taken_at_us(take);decoded.set_submitted_at_us(sub);decoded.set_sent_at_us(sent);decoded.set_abort_at_us(abort);
+   rewrite_page(item,decoded);if(!collector.offer_page(item,100+seq))return false;previous=item.chain_sha256;
+  }
+  auto terminal=page(9,8,previous,true,8);terminal.final_state=4;
+  wire::DummyAttemptEvidenceV2 decoded;
+  if(wire::DummyAttemptEvidenceV2Codec::decode(terminal.raw.data(),terminal.raw.size(),&decoded)!=wire::CodecResult::kOk)return false;
+  decoded.set_motion_epoch(18);decoded.set_final_state(4);decoded.set_release_committed(true);
+  decoded.set_first_failure_source(0x100a);decoded.set_first_failure_axis_mask(mode==8?2U:63U);rewrite_page(terminal,decoded);
+  if(!collector.offer_page(terminal,200))return false;
+  const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+  while(!gate.entered && std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  const bool not_published=gate.entered && channel.raw_evidence_terminal_flushed().run_id==0;
+  if(mode==7)channel.reset_worker_release_connection();
+  gate.release=true;collector.stop();::unlink(path);
+  const auto proof=channel.raw_evidence_terminal_flushed();
+  if(!not_published || collector.failure()!=RawEvidenceCollector::Failure::kNone || proof.run_id!=9 ||
+     proof.owner_retirement_disable_valid!=(mode==0 || mode==7 || mode==8) || proof.owner_retirement_motion_epoch!=21 ||
+     proof.connection_generation!=1 || proof.full_fault_groups_valid)return false;
+  if(mode==7 && proof.connection_generation==channel.worker_connection_generation_)return false;
+ }
+ return true;
+}
 }  // namespace
 
 /**
@@ -1372,6 +1420,7 @@ bool test_many_runs_and_recycled_late_page() {
  * @return 0 全部用例通过；1 第一个失败用例返回false。
  */
 int main() {
+  if(!test_autonomous_owner_disable_receipt()) {std::fprintf(stderr,"autonomous owner Disable proof failed\n");return 1;}
   if (!test_management_wire_records()) { std::fprintf(stderr, "management records failed\n"); return 1; }
   if (!test_management_offers_require_open_capture()) { std::fprintf(stderr, "management lifecycle failed\n"); return 1; }
   if (!test_management_wrong_ids_are_preserved()) { std::fprintf(stderr, "management wrong IDs failed\n"); return 1; }

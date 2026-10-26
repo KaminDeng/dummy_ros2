@@ -1,8 +1,52 @@
 # 手动面板的三种目标与独立ROS链
 
+## 自行启动面板（当前入口）
+
+从桌面终端打开 bash，按 [ROS 面板操作指南](ros-panel-beginner-guide.html) 加载 Jazzy、当前工作区与匹配的 SDK。该 HTML 包含完整启动、失能、关闭、进程查看和 MoveIt 单独退出命令，可以单独复制离线阅读。
+
+当前开发现场加载顺序为 `install_panel_guide/local_setup.bash`、`install_protocol/local_setup.bash`；使用 `manual_joint_panel.launch.py backend:=ros sdk_prefix:=... config:=...` 启动唯一面板。连接名称统一为“真机-USB/ROS”“真机-USB/Native”“仿真-本地”；启动保持只读，随后明确恢复使能。已有安装不用重复构建或烧录。同 boot 的有效参考可复用；REF 重启后是否需要双限位标定，以设备实际 reference 为准。
+
+2026-10-27 的自动测试回归已区分本地 DDS 缓存短暂超龄与真实设备异常：在已受理的同身份 ROS 轨迹中，暂时缓存失鲜不会被当作规划编辑；等待保持固定截止，不能提交新动作或用旧位置确认完成。C++ 源反馈、许可、碰撞及停止保护保持原边界。240 项相关软件回归通过，GUI53 已交人工长时验收；GUI51/52 的失败记录仍保留，不作为通过证据。
+
+以下旧轮次记录用于追溯，不代表当前面板的实时状态；使用步骤以上方指南为准。
+
 面板保留Python/Qt界面，下拉选项和连接状态统一为“真机-USB/Native”（`real`，既有USB Native进程）、“真机-USB/ROS”（`ros`，独立C++ ROS控制链）和“仿真-本地”（`simulator`，软件模型）。内部backend键仍为real/ros/simulator，显示名称不改变通信、许可或释放语义。选择ROS不会运行Native标定/运动/释放，也不使用Native stdout或Python raw decoder作实时反馈。三种目标的设备身份、参考、许可和旧规划不会互相继承。
 
 本轮已调整为SDK先行：先从Native真实行为提取公共参考/状态预算策略并安装SDK，再让ROS C++消费SDK公开常量，最后进行软件回归和实机验收。Status预算沿用Native真实1秒，默认与上限由SDK/C++约束；不继续先修ROS局部500ms规则。中央协议与REF不因此增设副本，Native CLI行为不改。公共化完成、软件测试和实机验收是分别证明的事项，不能相互代替。
+
+## 最新Stop桥接修复边界（待人工验收）
+
+GUI44交接前的两目标及释放是阶段证据，用户后续再次报告自动失能和`EVIDENCE_INCOMPLETE;RELEASE_UNCONFIRMED`，不能改写或被此前成功覆盖。新确认的缺口是底层已有Stop入口，但管理桥没有转发入口；证据释放又被正常观察/保持条件挡住，导致用户Stop只能等租约失能。
+
+ROS正补最窄严格转发：仅本连接代已COMMITTED的owner、新鲜诊断同owner及normal授权tuple一致时排队，worker二次核对后调用已有SafetyStop；不新写D10、不回填权限，不一致明确拒绝。随后新鲜设备已无控制权可作只读退休兜底，不代表原Stop成功。SDK仅共用无控制权观察纯规则，不能替代转发、请求成功或raw审计。软件定向验证后仍须用户人工验收新运行行为；不自动清故障、重新使能或标定。
+
+## 本轮运行态起点、故障退休与已清历史准入
+
+用户GUI41交还后的run9暴露运行态漏检：预验证已允许向内起点，Running仍严格套工作范围，J3首点179.45353124°在20ms后被CONTROL_UPDATE_REJECTED。ROS现让运行态与预验共享起点规则，仍限定manual、positions-only及既有goal tolerance带；名义范围、逐轴向内单调、进入工作区后不再退出，以及generation/epoch/seq/prime条件不变。原逐步说明中“两端都在working”只适用于默认profile，不能误套这一指定ROS起点例外。
+
+Native既有能力允许自身Motion root自主Fault时，以完整原链和末Disable SENT证明退休owner；ROS原来只认D10 Safety child，遗漏此形态。新ROS退休路径要求完整终链、最后全轴Disable的时间/掩码、同连接generation和新鲜匹配双Fault，保留Goal/Stop/Evidence失败，不放宽原full_fault_groups审计。真实Running定向case通过，控制三目标（31项Channel、9项collector）通过，最后coldbaseline CTest1/1通过；run9离线原件重放中旧fullgroups=false而新ownerproof=true，错run或permit非零仍拒绝。此为软件/离线验证，不改写旧故障或称现场故障已重演通过。
+
+既有Native仅ClearFault+SelectMode后，当前Idle可保留历史Motion/Safety/Release Fault终页；ROS旧source白名单误锁GUI42首次attach，未发Enable或任何管理请求。现对齐Native通用已清故障条件：冷tuple、boot/run/ref/chain固定，当前Idle且current reason0、无控制权、release成立、无lost等严格条件保留，首次zeroChain合法；历史mask不授予权限，不额外以旧mask阻断只读基线。历史失败页及source保留，不自动clear/enable/标定。
+
+维护报告`gui42-native-clear` COMPLETE/131帧/dropped0，无Motion、Grant、Enable或重采。GUI42失败原件仅22State和1Status、无management requests；GUI43由Root观察脚本提前占用报告目录造成启动退出，未连接硬件，非产品失败。GUI44最终ec6b9a1使用既有同boot/ref1危险侧重入17/18/19，无16重采或烧录。closed运动session `ros-session-i8427qe3`仅2条FJT，均accepted→terminal_success：Home实际约[−0.000984,0.02515,89.99395,…]°；双边界有效目标J2=−72.45°、J3=179.45°，最终实际J2=−72.367609°、J3=179.45521878°。SDK解码hashchain_errors为空，timeline before/after Begin均2、feedback245、pre-release hold2、post-release status1且COMPLETE。观察脚本以AT-SPI控件min/max当expected，没有对齐产品实际working clamp目标，导致24秒误超时；第三条目标根本未发，不记为第三条Goal失败。正常UI Stop于01:45:24发送、01:45:25确认RELEASED_IDLE，随后正常Reconnect+No交接。用户已开始人工操作，不能据交接前证据宣称当前仍已失能；本版边界回程及MoveIt最终复验由用户人工验收，不称本版五目标全过。旧GUI41五动作只属其历史版本。
+
+## GUI41新boot标定、五动作与只读交还
+
+用户后续真实测试发现J2实测89.4701055°略高于工作范围89.45°（仍在名义90°内），旧Python/C++错误将起点与目标工作区等同而拒绝。现仅ROS指定profile允许既有0.003rad带内、positions-only实测起点保留原值并向内单调；首点量化连续性、后续单调、终点工作范围及全程名义范围仍逐项核，不clamp起点、不降速，其他profile默认关闭。89.47°带外起点及量化差异已有真实case软件定向覆盖；本轮物理回来前实测89.4368°已在工作范围内，**未再次实机复现带外起点**。
+
+用户重启后旧Gate持有已删除的USB字符设备，而新设备路径已变。Runtime钉住启动时原char设备dev/ino/rdev，仅在自身PGID与严格设备消失/替换证据一致时退休旧链；原D10失败不改写为成功，也不把设备重启当成新boot物理Disable证明。
+
+GUI41正常生产UI在新boot8290386956477645553/ref0明确确认双限位，约18秒自动标定，于00:49:57取得新ref1及Ready。5条FJT均accepted→terminal_success，timeline均COMPLETE，J2边界rejectcount0；directHome及MoveIt工作Rest/Home随后实际完成。00:50:24主动Stop确认RELEASED_IDLE，00:50:28正常Reconnect到只读。closed运动session为`ros-session-ddl10fi0`，真实decode链错误为空、evidence_lost全false；活跃ReadOnly会话不计入closed审计。113项最新相关Python及C++profile/engine定向通过，仅相关消费者增量重链安装，无SDK/固件/Native变更，本新boot未用Native清故障。
+
+GUI41初轮观察脚本只接受coldstate2，实际coldstate1造成12秒超时，修正脚本后正常，非设备动作失败。观察事件沿用旧GUI40硬编码ref3，因此本轮Stop/Reconnect观察字段误写3；真实raw与NEW_DOUBLE_LIMIT_REFERENCE_READY均为ref1，以raw为准，原观察文件不改写。GUI40五动作当时通过及后续真实拒绝、释放失败继续保留历史。交还时为HOME只读失能，之后状态由用户操作决定。
+
+## GUI40边界回归与故障收尾：历史验证范围
+
+旧session的direct run494在J2界面89.45°目标发生真实拒绝：角度域先减0.55再转rad，比REF弧度表达式高1ULP，触发0x2006。随后D10已有发送与六轴SENT证据，旧Stop超时、Aborted和raw collector错误仍保留，不能洗成成功。设备反馈一直正常，6秒只读采样取得148条State和12条Status；短RPC观察窗未采到Status不是源反馈冻结。失能后重力越限的Safety child495/parent494产生0x1002，与首拒绝分开。
+
+ROS已统一内存范围表达并增加严格Fault释放收尾：可信身份、新鲜双Fault、原D10绑定及Safety自身Disable SENT/cleanup/releaseCommitted条件下，允许原owner有界退出；不使用父SENT冒充子SENT，不重建旧证据，不自动清故障、重新使能或标定。此故障退休路径以实际Status形状作软件验证，没有故意再制造限位故障作实机触发，也不宣称child完整raw链已审计通过。相关145项Python及7项C++定向通过，未刷REF、未改SDK或Native CLI。
+
+GUI40旧owner退休后，仅用既有维护探针ClearFault+SelectMode，无Grant、Enable或运动；随后全部动作走正常ROS面板：directHome、J2界面89.45°边界目标（rejectCount仍为2）、directHome、MoveIt工作Rest、MoveItHome，共5条FJT实际完成。默认60°/s、加速度4rad/s²未降低（界面速度最大63）；主动Stop取得RELEASED_IDLE，正常重连并No后ReadOnly/session0/ref3，同boot。原件位于`20261027/gui40-fault-recovery`，维护记录单列`20261027/gui40-clear`。观察脚本初轮spin选择/早点击两次FAILED保留原日志，但不是FJT异常；新raw审计结论独立补证，不预写全链通过。
 
 ## GUI39长轮实测：两轮正式完成
 

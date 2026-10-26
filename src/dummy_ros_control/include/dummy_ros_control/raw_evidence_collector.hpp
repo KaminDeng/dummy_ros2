@@ -324,6 +324,9 @@ class RawEvidenceCollector final {
   bool full_fault_groups_valid=false;
   std::array<std::array<std::uint8_t,32>,4> identity_hashes{};
   std::uint32_t terminal_group_count=0U;
+  bool owner_retirement_disable_valid=false;
+  std::uint32_t owner_retirement_motion_epoch=0U;
+  std::uint64_t connection_generation=0U;
 
     RawEvidenceFirstPageWritten first_page{};
   };
@@ -404,6 +407,12 @@ class RawEvidenceCollector final {
   /**
    * @brief 完整故障证明另lane：运动→停止→唯一disable组的身份/六轴SENT/设备µs时间顺序等，不能与普通取消Hold证明混同。
    */
+  // 独立记录最后全轴Disable原页；允许先普通Stop后Fault，不放宽旧相位审计。
+  bool owner_last_disable_valid_=false, owner_group_counts_valid_=true;
+  std::uint32_t owner_disable_motion_=0U;
+  std::uint16_t owner_disable_source_=0U;
+  std::uint8_t owner_disable_axis_mask_=0U;
+  std::uint64_t owner_connection_generation_=0U;
   bool fault_groups_valid_=true;
   std::uint8_t fault_group_phase_=0U;
   std::uint32_t fault_motion_epoch_=0U, fault_stop_epoch_=0U, fault_disable_count_=0U;

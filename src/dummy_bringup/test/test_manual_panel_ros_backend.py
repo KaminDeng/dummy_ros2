@@ -25,6 +25,33 @@ def test_release_queued_is_progress_and_only_cpp_confirms_release():
     assert backend.released is True
     assert events[-1][0] == 'released'
 
+@pytest.mark.parametrize('from_poll',[False,True])
+@pytest.mark.parametrize('success',[False,True])
+def test_cpp_readonly_retirement_closes_only_local_connection_without_claiming_disable(from_poll,success):
+    from manual_panel_ros_backend import RosBackend
+    class Transport:
+        def request(self,service,callback):self.callback=callback
+        def close(self):self.closed=True
+    transport=Transport();events=[];backend=RosBackend(transport,lambda *event:events.append(event))
+    backend.connect();backend.release()
+    if from_poll:
+        transport.callback(NS(success=False,message='RELEASE_QUEUED'));backend.poll()
+    transport.callback(NS(success=success,message='LOCAL_READONLY_RETIRED'))
+    assert backend.local_retired and backend.can_close
+    assert not backend.released and not backend.admitting and not backend.manual_ready
+    assert events[-1]==('retired','LOCAL_READONLY_RETIRED')
+    assert not any(k in ('released','completed') for k,v in events)
+    assert backend.close() and transport.closed
+
+def test_unsolicited_readonly_retirement_does_not_close_active_connection():
+    from manual_panel_ros_backend import RosBackend
+    class Transport:
+        def request(self,service,callback):self.callback=callback
+    t=Transport();events=[];b=RosBackend(t,lambda *event:events.append(event));b.connect();b.poll()
+    t.callback(NS(success=True,message='LOCAL_READONLY_RETIRED'))
+    assert not b.can_close and not b.local_retired and not b.released
+    assert events[-1][0]=='progress'
+
 def test_trigger_acceptance_does_not_complete_auto_task():
     from manual_panel_ros_backend import RosBackend
     class Transport:
@@ -744,26 +771,31 @@ def test_repeated_readonly_timeout_preserves_original_release_deadline(monkeypat
 
 
 @pytest.mark.parametrize('cleanup,released',[
-    (' cleanup=RELEASED_IDLE',True),('',False),
+    (' cleanup=RELEASED_IDLE',True),(' cleanup=RELEASED_FAULT',True),('',False),
     (' cleanup=UNCONFIRMED',False),(' cleanup=NOT_ACQUIRED',False)])
-def test_auto_failed_preserves_error_and_only_confirmed_release_allows_close(cleanup,released):
+@pytest.mark.parametrize('operation,prefix,service',[
+    ('auto','BASELINE_FAILED:','auto_calibrate_and_test'),
+    ('manual','MANUAL_CONTROL_FAILED:','prepare_manual_control')])
+def test_auto_failed_preserves_error_and_only_confirmed_release_allows_close(cleanup,released,operation,prefix,service):
     from manual_panel_ros_backend import RosBackend
-    failure='BASELINE_FAILED: 缺少绑定圆柱场景参数'+cleanup
+    failure=prefix+' 原任务故障'+cleanup
     class Transport:
         status_max_age_ms=1000
         def __init__(self):self.calls=[];self.closed=False
         def request(self,service,callback):
             self.calls.append(service)
-            callback(NS(success=service=='auto_calibrate_and_test',
-                message='BASELINE_ACCEPTED' if service=='auto_calibrate_and_test' else failure))
+            callback(NS(success=service in ('auto_calibrate_and_test','prepare_manual_control'),
+                message='BASELINE_ACCEPTED' if service in ('auto_calibrate_and_test','prepare_manual_control') else failure))
         def close(self):self.closed=True
     transport=Transport();events=[];backend=RosBackend(transport,lambda *event:events.append(event))
-    backend.connect();assert backend.request_calibration_and_test();backend.poll()
+    backend.connect()
+    request=backend.request_calibration_and_test if operation=='auto' else backend.request_prepare_manual_control
+    assert request();backend.poll()
     assert events[-1]==('failed',failure)
     assert backend.operation is None and not backend.admitting
     assert backend.released is released
     assert backend.close() is released and transport.closed is released
-    assert transport.calls==['auto_calibrate_and_test','baseline_status']
+    assert transport.calls==[service,'baseline_status' if operation=='auto' else 'manual_control_status']
 
 
 def test_first_goal_waits_for_cpp_ready_without_sending_or_resetting_deadline(monkeypatch):
@@ -802,6 +834,7 @@ def test_preflight_never_sends_on_owner_drift_stale_or_unready(failure,monkeypat
 
 @pytest.mark.parametrize('tag,confirmed',[
  ('EVIDENCE_INCOMPLETE;RELEASED_IDLE',True),
+ ('EVIDENCE_INCOMPLETE;RELEASED_FAULT',True),
  ('EVIDENCE_INCOMPLETE;RELEASE_UNCONFIRMED',False),
  ('EVIDENCE_INCOMPLETE;RELEASE_PENDING',False),
  ('prefix EVIDENCE_INCOMPLETE;RELEASED_IDLE',False)])
@@ -816,18 +849,29 @@ def test_release_compound_tag_requires_explicit_intent_and_exact_authority(tag,c
     assert not other.released and other.operation=='auto'
 
 
-def test_late_readonly_release_confirmation_unlocks_close_without_resending_d10(monkeypatch):
+@pytest.mark.parametrize('confirmed_tag', ['EVIDENCE_INCOMPLETE;RELEASED_IDLE',
+                                          'EVIDENCE_INCOMPLETE;RELEASED_FAULT'])
+def test_late_readonly_release_confirmation_unlocks_close_without_resending_d10(monkeypatch, confirmed_tag):
     import manual_panel_ros_backend as m
     clock=[1.];monkeypatch.setattr(m.time,'monotonic',lambda:clock[0])
     calls=[];events=[];reply=['RELEASE_PENDING']
     t=NS(request=lambda name,cb:(calls.append(name),cb(NS(success=False,message='RELEASE_QUEUED' if name=='disable_and_release' else reply[0]))),close=lambda:None)
     b=m.RosBackend(t,lambda *x:events.append(x));b.release();clock[0]=22.;b.poll()
     assert not b.released and any(x[0]=='failed'for x in events)
-    reply[0]='EVIDENCE_INCOMPLETE;RELEASED_IDLE'
+    reply[0]=confirmed_tag
     b.poll()
     assert b.released and b.close()
     assert calls.count('disable_and_release')==1 and calls[-1]=='bootstrap_status'
     assert any('deadline expired'in str(x)for x in events)
+
+
+def test_fault_release_retires_owner_without_restoring_motion_authority():
+    from manual_panel_ros_backend import RosBackend
+    events=[]
+    t=NS(request=lambda name,cb:cb(NS(success=True,message='RELEASE_QUEUED' if name=='disable_and_release' else 'RELEASED_FAULT')))
+    b=RosBackend(t,lambda *x:events.append(x));b.manual_ready=True;b.admitting=True;b.release();b.poll()
+    assert b.released and not b.manual_ready and not b.admitting
+    assert events[-1]==('released','RELEASED_FAULT')
 
 
 def test_confirmed_readonly_release_cancels_unsent_write_and_emits_once():
@@ -841,3 +885,211 @@ def test_confirmed_readonly_release_cancels_unsent_write_and_emits_once():
     assert calls==['bootstrap_status','bootstrap_status']
     callbacks.pop(0)(NS(success=True,message='RELEASED_IDLE'))
     assert sum(x[0]=='released' for x in events)==1
+
+
+@pytest.mark.parametrize('operation,prefix', [('manual', 'MANUAL_CONTROL_FAILED:'),
+                                           ('auto', 'BASELINE_FAILED:')])
+def test_cpp_failed_cleanup_late_readonly_release_retires_owner_once(operation, prefix):
+    from manual_panel_ros_backend import RosBackend
+    replies = [NS(success=False, message=prefix + ' 原故障 cleanup=UNCONFIRMED'),
+               NS(success=False, message='EVIDENCE_INCOMPLETE;RELEASE_PENDING'),
+               NS(success=False, message='EVIDENCE_INCOMPLETE;RELEASED_IDLE'),
+               NS(success=False, message='EVIDENCE_INCOMPLETE;RELEASED_IDLE')]
+    calls, events = [], []
+    transport = NS(request=lambda name, cb: (calls.append(name), cb(replies.pop(0))),
+                   close=lambda: calls.append('close'))
+    backend = RosBackend(transport, lambda *event: events.append(event))
+    backend.operation, backend.admitting, backend.manual_ready = operation, True, True
+    backend.poll()
+    assert backend.operation is None and not backend.admitting and not backend.manual_ready
+    assert not backend.released and events[-1][0] == 'failed'
+    backend.poll()
+    assert not backend.released
+    backend.poll()
+    backend.poll()
+    assert backend.released and backend.close()
+    assert sum(event[0] == 'released' for event in events) == 1
+    assert events[0] == ('failed', prefix + ' 原故障 cleanup=UNCONFIRMED')
+    assert 'disable_and_release' not in calls
+
+
+@pytest.mark.parametrize('cleanup', ['cleanup=NOT_ACQUIRED', '', 'cleanup=UNCONFIRMED suffix'])
+def test_unconfirmed_cleanup_intent_requires_exact_cpp_terminal_suffix(cleanup):
+    from manual_panel_ros_backend import RosBackend
+    replies = [NS(success=False, message='MANUAL_CONTROL_FAILED: 拒绝 ' + cleanup),
+               NS(success=False, message='EVIDENCE_INCOMPLETE;RELEASED_IDLE')]
+    events = []
+    backend = RosBackend(NS(request=lambda name, cb: cb(replies.pop(0))),
+                         lambda *event: events.append(event))
+    backend.operation = 'manual'
+    backend.poll()
+    backend.poll()
+    assert not backend.released and not any(event[0] == 'released' for event in events)
+
+
+def extension_transport(monkeypatch):
+    transport, trajectory, clock, calls, pending, events = renewal_transport(monkeypatch)
+    class Future:
+        def add_done_callback(self, callback): self.callback = callback
+        def result(self): return self.value
+        def cancel(self): self.cancelled = True
+    future = Future()
+    requests = []
+    transport.extension_type = NS(Request=lambda: NS())
+    transport.extension_client = NS(service_is_ready=lambda: True,
+        call_async=lambda request: (requests.append(request) or future))
+    transport.goal = NS(goal_id=NS(uuid=[2]*16), cancel_goal_async=lambda: calls.append('cancel'))
+    transport._submission = dict(stage='active', binding=((1,)*16, 201, 7, 8, 9, 10))
+    transport.latest_state.core_state = transport.latest_status.core_state = 5
+    return transport, trajectory, clock, calls, events, requests, future
+
+
+def test_extension_receipt_only_after_installed_and_input_is_copied(monkeypatch):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    assert transport.extend_trajectory(path, 1, 20000000, lambda *event: events.append(event))
+    assert not transport.extend_trajectory(path, 1, 20000000, lambda *event: events.append(event))
+    path.joint_names[0] = 'mutated'
+    assert requests[0].trajectory.joint_names == ['Joint1']
+    assert requests[0].goal_id.uuid == [2]*16 and requests[0].motion_epoch == 10
+    assert events == []
+    future.value = NS(accepted=True, version=2, phase_ns=40, trajectory_digest=[3]*32, reason='')
+    future.callback(future)
+    assert events == [('trajectory_extended', dict(version=2, phase_ns=40, trajectory_digest=[3]*32))]
+
+
+def test_real_ros_extension_receipt_can_be_recorded_as_json_without_cancel(monkeypatch):
+    import json
+    from rclpy.serialization import serialize_message, deserialize_message
+    from dummy_motion_interfaces.srv import ExtendJointTrajectory
+    transport,path,clock,calls,events,requests,future=extension_transport(monkeypatch)
+    def record(kind,value):
+        events.append((kind,json.loads(json.dumps(value))))
+    assert transport.extend_trajectory(path,0,20,record)
+    response=ExtendJointTrajectory.Response(accepted=True,version=1,phase_ns=60_000_000,
+                                           trajectory_digest=list(range(32)),reason='TAIL_INSTALLED')
+    future.value=deserialize_message(serialize_message(response),ExtendJointTrajectory.Response)
+    future.callback(future)
+    assert events==[('trajectory_extended',dict(version=1,phase_ns=60_000_000,
+                                              trajectory_digest=list(range(32))))]
+    assert calls==[]
+
+
+@pytest.mark.parametrize('retire', ['timeout', 'cancel', 'terminal', 'identity'])
+def test_extension_late_reply_cannot_confirm_retired_or_foreign_goal(monkeypatch, retire):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    assert transport.extend_trajectory(path, 1, 20, lambda *event: events.append(event))
+    if retire == 'timeout':
+        clock[0] += 2.
+        transport._poll_trajectory_retry()
+        assert calls == ['cancel'] and events[0][0] == 'failed'
+    elif retire == 'cancel': transport.cancel()
+    elif retire == 'terminal': transport._submission = None
+    else: transport.latest_state.session_id += 1
+    future.value = NS(accepted=True, version=2, phase_ns=40, trajectory_digest=[3]*32, reason='')
+    future.callback(future)
+    assert not any(event[0] == 'trajectory_extended' for event in events)
+
+
+def test_extension_rejection_preserves_response_without_accepted_event(monkeypatch):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    assert transport.extend_trajectory(path, 4, 20, lambda *event: events.append(event))
+    future.value = NS(accepted=False, version=5, phase_ns=40, trajectory_digest=[0]*32, reason='PREFIX_CHANGED')
+    future.callback(future)
+    assert events == [('trajectory_extension_rejected', dict(reason='PREFIX_CHANGED', version=5, phase_ns=40))]
+
+
+@pytest.mark.parametrize('invalid', ['stale', 'foreign', 'hold', 'no_permit'])
+def test_extension_requires_fresh_same_submission_running_identity(monkeypatch, invalid):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    if invalid == 'stale': clock[0] += .3
+    elif invalid == 'foreign':
+        transport.latest_state.session_id += 1
+        transport.latest_status.session_id += 1
+    elif invalid == 'hold': transport.latest_state.core_state = 4
+    else: transport.latest_status.permit_remaining_us = 0
+    assert not transport.extend_trajectory(path, 0, 20, lambda *event: events.append(event))
+    assert requests == []
+
+
+def test_extension_close_retires_future_and_late_reply_is_silent(monkeypatch):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    transport.node.destroy_timer = lambda _: None
+    transport.node.destroy_client = lambda _: None
+    transport.node.destroy_subscription = lambda _: None
+    transport.action.destroy = lambda: None
+    transport.retry_timer = transport.parameter_client = None
+    transport.clients = {}; transport.subscriptions = []
+    assert transport.extend_trajectory(path, 0, 20, lambda *event: events.append(event))
+    transport.close()
+    future.value = NS(accepted=True, version=1, phase_ns=40, trajectory_digest=[3]*32, reason='')
+    future.callback(future)
+    assert future.cancelled and events == []
+
+
+def test_backend_extension_is_only_thin_transport_forwarding():
+    from manual_panel_ros_backend import RosBackend
+    calls = []
+    transport = NS(status_max_age_ms=1000,
+        extend_trajectory=lambda *args: (calls.append(args) or True))
+    callback = lambda *event: None
+    backend = RosBackend(transport, callback)
+    path = NS(points=[])
+    assert not backend.extend_trajectory(path, 0, 20)
+    backend.connect()
+    assert backend.extend_trajectory(path, 0, 20)
+    assert calls == [(path, 0, 20, callback)]
+    backend.released = True
+    assert not backend.extend_trajectory(path, 1, 40)
+
+
+def test_extension_cached_reply_waits_for_fresh_dds_without_resetting_deadline(monkeypatch):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    assert transport.extend_trajectory(path, 0, 20, lambda *event: events.append(event))
+    deadline = transport._extension['deadline']
+    clock[0] += .3
+    future.value = NS(accepted=True, version=1, phase_ns=40, trajectory_digest=[3]*32, reason='')
+    future.callback(future)
+    assert events == [] and calls == [] and transport._extension['deadline'] == deadline
+    transport._poll_trajectory_retry()
+    assert events == [] and len(requests) == 1
+    transport.state_at = transport.status_at = clock[0]
+    transport._poll_trajectory_retry(); transport._poll_trajectory_retry(); future.callback(future)
+    assert len(events) == 1 and events[0][0] == 'trajectory_extended'
+    assert calls == [] and len(requests) == 1
+
+
+def test_extension_stale_cache_without_reply_waits_then_fresh_reply_confirms(monkeypatch):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    assert transport.extend_trajectory(path, 0, 20, lambda *event: events.append(event))
+    clock[0] += .3; transport._poll_trajectory_retry()
+    assert events == [] and calls == []
+    transport.state_at = transport.status_at = clock[0]
+    future.value = NS(accepted=True, version=1, phase_ns=40, trajectory_digest=[3]*32, reason='')
+    future.callback(future)
+    assert len(events) == 1 and events[0][0] == 'trajectory_extended'
+
+
+def test_extension_persistent_stale_uses_original_deadline_and_cancels_once(monkeypatch):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    assert transport.extend_trajectory(path, 0, 20, lambda *event: events.append(event))
+    clock[0] += .3; transport._poll_trajectory_retry()
+    assert events == []
+    future.value = NS(accepted=True, version=1, phase_ns=40, trajectory_digest=[3]*32, reason='')
+    future.callback(future)
+    clock[0] = 12.; transport._poll_trajectory_retry(); transport._poll_trajectory_retry()
+    transport.state_at = transport.status_at = clock[0]; future.callback(future)
+    assert calls == ['cancel'] and len(events) == 1 and events[0][0] == 'failed'
+    assert 'DEADLINE_EXPIRED' in events[0][1] and 'state_age_ms=' in events[0][1]
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize('change', ['identity', 'permission', 'uuid'])
+def test_extension_fresh_identity_or_permission_change_fails_immediately(monkeypatch, change):
+    transport, path, clock, calls, events, requests, future = extension_transport(monkeypatch)
+    assert transport.extend_trajectory(path, 0, 20, lambda *event: events.append(event))
+    if change == 'identity': transport.latest_state.session_id += 1
+    elif change == 'permission': transport.latest_status.real_motion_permitted = False
+    else: transport.goal.goal_id.uuid[0] += 1
+    transport._poll_trajectory_retry()
+    assert calls == ['cancel'] and len(events) == 1 and events[0][0] == 'failed'
+    assert ('UUID_CHANGED' if change == 'uuid' else 'IDENTITY_OR_PERMISSION_CHANGED') in events[0][1]

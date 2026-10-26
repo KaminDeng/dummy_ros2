@@ -77,6 +77,27 @@ def test_ros_reconnect_does_not_replace_owner_before_release():
     JointPanel.request_reconnect(panel)
     assert calls==['release']
 
+def test_pending_reconnect_rechecks_usb_enumeration_and_retires_old_connection_once(monkeypatch):
+    from manual_joint_panel import JointPanel
+    calls=[];clock=[1.];detached=[False]
+    monkeypatch.setattr('manual_joint_panel.time.monotonic',lambda:clock[0])
+    panel=NS(closing=False,ros_reconnect_pending=True,authorized=True,
+        refresh_ros_connection_controls=lambda:None,ros_started_at=0.,cfg={},
+        ros_runtime=NS(check_startup_timeout=lambda *_:None,
+            retire_disconnected_owner=lambda:calls.append('check') or detached[0]),
+        ros_backend=NS(released=False,transport=NS(control_graph_error=lambda:'等待设备',close=lambda:calls.append('close'))),
+        show_actual_description=lambda *_:None,status=NS(setText=lambda *_:None),
+        message=lambda *_:None,apply_backend_change=lambda:calls.append('rebuild'))
+    JointPanel.ros_tick(panel)
+    assert calls==['check'] and panel.ros_reconnect_pending
+    clock[0]+=1.;detached[0]=True
+    JointPanel.ros_tick(panel)
+    assert calls==['check','check','close','rebuild']
+    assert not panel.ros_reconnect_pending and not panel.authorized
+    assert not panel.ros_backend.released and panel.pending_backend=='ros'
+    JointPanel.ros_tick(panel)
+    assert calls==['check','check','close','rebuild']
+
 
 def test_ros_confirmed_reconnect_stops_only_owned_runtime_and_rebuilds_readonly():
     from manual_joint_panel import JointPanel
@@ -86,6 +107,39 @@ def test_ros_confirmed_reconnect_stops_only_owned_runtime_and_rebuilds_readonly(
         apply_backend_change=lambda:calls.append('rebuild'))
     JointPanel.request_reconnect(panel)
     assert calls==[('stop',True),'close','rebuild']
+    assert panel.pending_backend=='ros'
+
+def test_cpp_local_retirement_resumes_pending_reconnect_without_another_release():
+    from manual_joint_panel import JointPanel
+    from manual_panel_ros_backend import RosBackend
+    app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls=[]
+    class Transport:
+        def request(self,name,callback):calls.append(name);self.callback=callback
+        def close(self):calls.append('close')
+    t=Transport()
+    panel=NS(backend='ros',busy=True,ros_reconnect_pending=True,message=lambda *_:None,
+        ros_runtime=NS(process=object(),stop=lambda confirmed:calls.append(('stop',confirmed)) or True),
+        apply_backend_change=lambda:calls.append('rebuild'))
+    panel.request_reconnect=lambda:JointPanel.request_reconnect(panel)
+    b=RosBackend(t,lambda kind,value:JointPanel.ros_event(panel,kind,value));panel.ros_backend=b
+    b.connect();b.release();t.callback(NS(success=False,message='LOCAL_READONLY_RETIRED'))
+    app.processEvents()
+    assert calls==['disable_and_release',('stop',True),'close','rebuild']
+    assert not b.released and b.local_retired and not panel.busy
+
+
+def test_ros_detached_reconnect_retires_only_old_connection_without_claiming_release():
+    from manual_joint_panel import JointPanel
+    calls=[]
+    panel=NS(backend='ros', authorized=True,
+        ros_runtime=NS(process=object(),retire_disconnected_owner=lambda:calls.append('retire') or True),
+        ros_backend=NS(released=False,transport=NS(close=lambda:calls.append('close'))),
+        release=lambda *args:calls.append('release'),message=lambda *args:None,
+        apply_backend_change=lambda:calls.append('rebuild'))
+    JointPanel.request_reconnect(panel)
+    assert calls==['retire','close','rebuild']
+    assert not panel.authorized and not panel.ros_backend.released
     assert panel.pending_backend=='ros'
 
 

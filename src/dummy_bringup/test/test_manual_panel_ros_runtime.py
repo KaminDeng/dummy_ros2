@@ -167,3 +167,56 @@ def test_real_start_worker_confirmation_and_discovery_do_not_consume_startup_bud
     clock[0] += 31
     runtime.check_startup_timeout(clock[0] - panel.ros_started_at, 30)
     assert runtime.state == 'Error' and '启动超时' in runtime.error
+
+
+def test_owned_deleted_serial_can_retire_without_claiming_release(monkeypatch, tmp_path):
+    """仅匹配启动原设备的deleted FD可退休本组；不构造真实ROS/USB进程。"""
+    import os, stat
+    from types import SimpleNamespace as NS
+    from manual_panel_runtime import PanelRuntime
+    old=NS(st_mode=stat.S_IFCHR,st_dev=1,st_ino=10,st_rdev=100)
+    current=[old]; fds={Path('/proc/321/fd/7'):old}
+    original_stat=os.stat
+    monkeypatch.setattr(os,'stat',lambda path,*a,**k: current[0] if str(path)=='/dev/serial/by-id/owned' else fds[Path(path)] if Path(path) in fds else original_stat(path,*a,**k))
+    monkeypatch.setattr(os,'readlink',lambda path:'/dev/ttyACM2 (deleted)')
+    monkeypatch.setattr(Path,'iterdir',lambda path: iter(fds) if str(path)=='/proc/321/fd' else iter(()))
+    stopped=[]
+    process=NS(pid=321,wait=lambda timeout:None)
+    r=PanelRuntime(spawn=lambda argv:process,serial_endpoint='serial//dev/serial/by-id/owned#baudrate=115200',sysfs_root=tmp_path)
+    r._owns_group=True;r.start(['owned-launch']);r.error='原动作失败';r._owned_group_pids=lambda:[321]
+    r._owned_group_alive=lambda:False
+    monkeypatch.setattr(os,'killpg',lambda pgid,sig:stopped.append((pgid,sig)))
+    assert not r.retire_disconnected_owner() and not stopped
+    current[0]=NS(st_mode=stat.S_IFCHR,st_dev=1,st_ino=11,st_rdev=101)
+    driver=tmp_path/f'{os.major(old.st_rdev)}:{os.minor(old.st_rdev)}'
+    driver.mkdir()
+    assert not r.retire_disconnected_owner() and not stopped
+    driver.rmdir()
+    assert r.retire_disconnected_owner()
+    assert stopped==[(321,__import__('signal').SIGINT)]
+    assert r.state=='Disconnected' and r.error=='原动作失败'
+    assert not hasattr(r,'released')
+
+
+def test_detach_retirement_rejects_new_live_fd_unknown_endpoint_or_unproven_old_fd(monkeypatch, tmp_path):
+    import os, stat
+    from types import SimpleNamespace as NS
+    from manual_panel_runtime import PanelRuntime
+    old=NS(st_mode=stat.S_IFCHR,st_dev=1,st_ino=10,st_rdev=100)
+    new=NS(st_mode=stat.S_IFCHR,st_dev=1,st_ino=11,st_rdev=101)
+    current=[old];fds={Path('/proc/321/fd/7'):old};deleted=[True]
+    original_stat=os.stat
+    monkeypatch.setattr(os,'stat',lambda path,*a,**k:current[0] if str(path)=='/dev/serial/by-id/owned' else fds[Path(path)] if Path(path) in fds else original_stat(path,*a,**k))
+    monkeypatch.setattr(os,'readlink',lambda path:'/dev/ttyACM2'+(' (deleted)' if deleted[0] else ''))
+    monkeypatch.setattr(Path,'iterdir',lambda path:iter(fds))
+    r=PanelRuntime(spawn=lambda argv:NS(pid=321),serial_endpoint='serial//dev/serial/by-id/owned#baudrate=115200',sysfs_root=tmp_path)
+    r._owns_group=True;r.start(['owned-launch']);r._owned_group_pids=lambda:[321]
+    monkeypatch.setattr(os,'killpg',lambda *a:(_ for _ in ()).throw(AssertionError('不得退出未证实断开的owner')))
+    current[0]=new;fds[Path('/proc/321/fd/8')]=new
+    assert not r.retire_disconnected_owner()
+    del fds[Path('/proc/321/fd/8')];deleted[0]=False
+    assert not r.retire_disconnected_owner()
+    deleted[0]=True;fds[Path('/proc/321/fd/7')]=NS(st_mode=stat.S_IFCHR,st_dev=1,st_ino=99,st_rdev=100)
+    assert not r.retire_disconnected_owner()
+    unknown=PanelRuntime(spawn=lambda argv:NS(pid=321));unknown.start(['owned-launch'])
+    assert not unknown.retire_disconnected_owner()
