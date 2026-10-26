@@ -49,8 +49,9 @@ def require_unique_moveit(node):
         for name, namespace in set(node.get_node_names_and_namespaces()):
             try:
                 provided = {service for service, _ in node.get_service_names_and_types_by_node(name, namespace)}
-            except NodeNameNonExistentError as error:
-                raise MoveItDiscoveryPending('MoveIt发现图正在变化，请等待节点发现收敛') from error
+            except NodeNameNonExistentError:
+                # 无关临时观察节点可在两次图查询间退出；所需服务owner仍须下方完整核验。
+                continue
             for service in services:
                 if service in provided:
                     owners[service].append((name, namespace))
@@ -66,6 +67,12 @@ def require_unique_moveit(node):
         private_name = re.fullmatch(re.escape(owner[0])+r'_private_[0-9]+', scene_owner[0])
         if scene_owner != owner and not (scene_owner[1] == owner[1] and private_name):
             raise ValueError('MoveIt场景读取与规划服务不属于同一节点组')
+        # owner遍历期间也可能增减服务实例；返回前再次核验，不能靠节点名去重掩盖变化。
+        final_counts = tuple(node.count_services(name) for name in services)
+        if any(count != 1 for count in final_counts):
+            if all(count in (0, 1) for count in final_counts):
+                raise MoveItDiscoveryPending('MoveIt服务实例在发现期间改变，请等待收敛')
+            raise ValueError('MoveIt服务实例在发现期间重复，禁止规划')
         return owner, scene_owner
     except ValueError:
         raise

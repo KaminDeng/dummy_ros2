@@ -139,3 +139,31 @@ def test_owned_process_group_shutdown_waits_for_child_and_never_external(tmp_pat
             except ProcessLookupError: pass
             runtime.process.wait(timeout=3)
         external.terminate(); external.wait(timeout=3)
+
+
+def test_real_start_worker_confirmation_and_discovery_do_not_consume_startup_budget(monkeypatch):
+    import ast
+    from types import SimpleNamespace as NS
+    from manual_panel_runtime import PanelRuntime
+    source = Path(__file__).resolve().parents[1] / 'scripts/manual_joint_panel.py'
+    cls = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.ClassDef) and n.name == 'JointPanel')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'start_worker')
+    clock = [100.0]
+    def question(*args):
+        clock[0] += 45
+        return 0
+    def discovery():
+        clock[0] += 2
+    scope = dict(time=NS(monotonic=lambda: clock[0]), QtWidgets=NS(QMessageBox=NS(question=question, Yes=1, No=0)))
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])), str(source), 'exec'), scope)
+    runtime = PanelRuntime(spawn=lambda argv: object())
+    panel = NS(backend='ros', cfg={'ros_launch_command':['fake-launch']}, ros_runtime=runtime,
+        ros_backend=NS(transport=NS(assert_no_existing_owner=discovery), connect=lambda:None))
+    scope['start_worker'](panel)
+    assert runtime.state == 'Starting'
+    assert panel.ros_started_at == 147.0
+    runtime.check_startup_timeout(clock[0] - panel.ros_started_at, 30)
+    assert runtime.state == 'Starting'
+    clock[0] += 31
+    runtime.check_startup_timeout(clock[0] - panel.ros_started_at, 30)
+    assert runtime.state == 'Error' and '启动超时' in runtime.error

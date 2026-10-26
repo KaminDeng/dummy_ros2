@@ -164,6 +164,8 @@ class RosBackend:
                 self.released, self.admitting = True, False
                 self.callback('completed', message)
             elif self.operation == 'auto' and message.startswith('BASELINE_FAILED:'):
+                self.admitting = False
+                self.released = message.endswith('cleanup=RELEASED_IDLE')
                 self.operation = None
                 self.callback('failed', message)
             else:

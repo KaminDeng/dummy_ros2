@@ -144,6 +144,8 @@ class JointPanel(QtWidgets.QWidget):
     # real 使用 QProcess，simulator 使用本地 SimulatorWorker；本方法仅创建不启动。标准输出、错误和 finished 都进入同一面板处理流程，模拟来源在界面明确标识。
     # @return None；执行上述状态更新、界面或日志操作。
     def create_worker(self):
+        self.zero.setText('双限位标定 / 恢复控制' if self.backend == 'ros' else
+                          ('双限位标定 → Rest' if self.manual_limits_mode() else 'Home → Rest 标定'))
         if self.backend == 'ros':
             from manual_panel_ros_backend import RosBackend, RosTransport
             from manual_panel_runtime import PanelRuntime
@@ -459,6 +461,8 @@ class JointPanel(QtWidgets.QWidget):
                 if argv:
                     self.ros_backend.transport.assert_no_existing_owner()
                 self.ros_runtime.start(confirmed_ros_launch_argv(argv, confirmed) if argv else [])
+                # 启动预算只从子链实际启动计时，不计人工确认及只读owner预检耗时。
+                self.ros_started_at = time.monotonic()
             except (RuntimeError, OSError) as error:
                 self.ros_backend.admitting = False
                 self.ros_runtime.fail(str(error))
@@ -832,14 +836,19 @@ class JointPanel(QtWidgets.QWidget):
     # @return None；执行上述状态更新、界面或日志操作。
     def start_zero(self):
         if self.backend == 'ros':
+            if self.closing or self.busy or self.ros_backend.released or not self.ros_backend.admitting:
+                self.message('请等待当前操作结束，或重新连接后再恢复控制。')
+                return
             reuse = bool(self.calibration and self.fresh() and self.ros_status is not None and self.ros_status.session_id == 0)
             if not self.cfg.get('operator_confirmed_double_limits', False) and not reuse:
                 self.message('本次 ROS 连接未确认双限位；请重新启动面板并明确确认后再标定。')
                 return
-            prompt = ('复用本次 boot 已保留的绝对参考并受控返回 REST；不会重新采零。' if reuse else
-                      '确认设备处于人工双限位初始姿态；由 C++ 执行完整任务。')
-            if self.confirm_execution('自动标定与测试', prompt) == QtWidgets.QMessageBox.Yes:
-                self.ros_backend.request_calibration_and_test()
+            prompt = ('复用本次 boot 已保留的参考，由 C++ 恢复手动控制；不会重新采零。' if reuse else
+                      '确认设备处于人工双限位初始姿态；由 C++ 标定、退回 Rest 并准备手动控制。')
+            prompt += '\n此操作不运行自动验收测试；必要的限位退让由 C++ 完成。'
+            if (self.confirm_execution('标定 / 恢复手动控制', prompt) == QtWidgets.QMessageBox.Yes and
+                    not self.closing and not self.busy and self.fresh()):
+                self.ros_backend.request_prepare_manual_control()
             return
         if (not self.control_state_allowed() or not self.fresh() or self.busy or self.closing or self.pending_home or
                 self.worker.state() != QtCore.QProcess.Running or
@@ -1475,6 +1484,11 @@ class JointPanel(QtWidgets.QWidget):
             status.session_id==0 and not status.real_motion_permitted and status.permit_remaining_us==0))
         self.zero.setEnabled(status_fresh and not self.closing and not self.busy and self.ros_backend.admitting and not self.ros_backend.released)
         self.stop.setEnabled(not self.ros_backend.released)
+        # ROS同样刷新连接控件，不能继承Native忙期的disabled状态。
+        quiet = not self.closing and not self.busy and not self.helper_active()
+        self.reconnect.setEnabled(quiet)
+        parameter_busy = hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue)
+        self.backend_choice.setEnabled(quiet and self.connection_action is None and not parameter_busy)
         self.copy.setEnabled(self.fresh() and hasattr(self, 'actual_q'))
         if hasattr(self, 'motor_parameter_tab'):
             self.motor_parameter_tab.tick()

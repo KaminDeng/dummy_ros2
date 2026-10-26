@@ -723,3 +723,26 @@ def test_repeated_readonly_timeout_preserves_original_release_deadline(monkeypat
     assert not backend.released and backend._release_timeout_reported
     assert [x[0] for x in calls].count('disable_and_release')==1
     assert 'RELEASE_UNCONFIRMED' in events[-1][1]
+
+
+@pytest.mark.parametrize('cleanup,released',[
+    (' cleanup=RELEASED_IDLE',True),('',False),
+    (' cleanup=UNCONFIRMED',False),(' cleanup=NOT_ACQUIRED',False)])
+def test_auto_failed_preserves_error_and_only_confirmed_release_allows_close(cleanup,released):
+    from manual_panel_ros_backend import RosBackend
+    failure='BASELINE_FAILED: 缺少绑定圆柱场景参数'+cleanup
+    class Transport:
+        status_max_age_ms=1000
+        def __init__(self):self.calls=[];self.closed=False
+        def request(self,service,callback):
+            self.calls.append(service)
+            callback(NS(success=service=='auto_calibrate_and_test',
+                message='BASELINE_ACCEPTED' if service=='auto_calibrate_and_test' else failure))
+        def close(self):self.closed=True
+    transport=Transport();events=[];backend=RosBackend(transport,lambda *event:events.append(event))
+    backend.connect();assert backend.request_calibration_and_test();backend.poll()
+    assert events[-1]==('failed',failure)
+    assert backend.operation is None and not backend.admitting
+    assert backend.released is released
+    assert backend.close() is released and transport.closed is released
+    assert transport.calls==['auto_calibrate_and_test','baseline_status']

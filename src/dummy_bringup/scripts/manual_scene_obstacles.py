@@ -210,6 +210,7 @@ class ObstacleScene:
         self.status = '等待MoveIt确认保存的障碍物场景'
         self.error = None
         self.deadline = time.monotonic() + 20.
+        self.initial_sync_pending = True
         self.stop_deadline = None
         self.on_change = lambda: None
         try:
@@ -387,6 +388,11 @@ class ObstacleScene:
     # error为空时每tick先重核拓扑，scene_ready也不能跳过；已有error则持续闭锁，不因服务自行恢复就重用旧规划。
     def tick(self):
         if self.error: return
+        # 初次预算从实际消费场景状态开始，不计连接前人工确认的模态等待。
+        if getattr(self, 'initial_sync_pending', False):
+            self.initial_sync_pending = False
+            if self.future is None and not self.scene_ready and self.scene_revision == 0:
+                self.deadline = time.monotonic() + 20.
         if not self.validate_topology(): return
         now = time.monotonic()
         if self.wait_hold:

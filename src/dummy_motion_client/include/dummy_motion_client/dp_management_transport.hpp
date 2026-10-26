@@ -345,7 +345,8 @@ inline bool release_idle_transition_pending(const ReleaseTransitionObservation &
     value.state.reference_epoch == 0U;
   const bool retained_idle = expected_retained_reference != 0U &&
     value.original.reference_epoch == expected_retained_reference &&
-    value.status_core_state == 8U && value.state_core_state == 2U &&
+    (value.status_core_state == 7U || value.status_core_state == 8U) &&
+    value.state_core_state == 2U &&
     value.state.reference_epoch == expected_retained_reference;
   const auto fresh = [now](std::uint64_t received, std::uint64_t max_age) {
     return received != 0U && max_age != 0U &&

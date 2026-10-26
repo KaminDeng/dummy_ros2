@@ -415,6 +415,28 @@ int release_transition_tests() {
   }
 
 
+  // GUI30原件：Stopping7到保留参考Idle2，下一Status晚513175us，不能在500ms误失联。
+  retained.status_core_state = 7U;
+  retained.original = {1754154692906416797ULL, 3070061371527678249ULL, 2U, 155U};
+  retained.status = {retained.original.boot_epoch, retained.original.session_id, 2U, 156U};
+  retained.state = {retained.original.boot_epoch, 0U, 2U, 156U};
+  retained.original_management_epoch = 293U;
+  retained.status_management_epoch = retained.state_management_epoch = 294U;
+  actual.status_received_us = 278359239723ULL;
+  ObservationContinuity release_continuity(250000U, 2000000U, 500000U);
+  actual.state_received_us = actual.status_received_us;
+  release_continuity.evaluate(actual, actual.status_received_us, true, true);
+  for (std::uint64_t delta = 20000U; delta <= 513175U; delta += 20000U) {
+    const auto now = actual.status_received_us + delta;
+    actual.state_received_us = now;
+    const bool waiting = release_idle_transition_pending(retained, actual, now, 250000U, 1000000U, 2U);
+    if (!waiting && release_continuity.evaluate(actual, now, true, false) == ObservationContinuity::Result::kLost)
+      return 140;
+  }
+  actual.state_received_us = actual.status_received_us + 513175U;
+  if (!release_idle_transition_pending(retained, actual, actual.state_received_us, 250000U, 1000000U, 2U)) return 141;
+
+
   wire::DummyDeviceStatusV2 final_status;
   wire::DummyJointStateV2 final_state;
   final_status.set_boot_epoch(7U);

@@ -128,6 +128,17 @@ bool historical_released_idle_baseline(const Status &value,
       value.core_state() == 2U && value.reference_epoch() != 0U &&
       value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
       value.can_failed_mask() == 0U && value.failure_source() == 0x1064U;
+  // 已清除的位置限位Safety故障只允许建立只读基线，历史Fault终态保持不变。
+  const bool cleared_safety_position_limit =
+      context.manual_reference_mode &&
+      value.attempt_kind() ==
+          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_SAFETY &&
+      value.run_id() > 1U && value.parent_run_id() == value.run_id() - 1U &&
+      value.final_state() ==
+          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_FINAL_STATE_FAULT_LATCHED_AND_RELEASED &&
+      value.core_state() == 2U && value.reference_epoch() != 0U &&
+      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
+      value.can_failed_mask() == 0U && value.failure_source() == 0x1002U;
   const bool clean_idle =
       value.boot_epoch() != 0U && value.run_id() != 0U &&
       value.session_id() == 0U &&
@@ -149,7 +160,8 @@ bool historical_released_idle_baseline(const Status &value,
       std::equal(context.historical_chain.begin(),
                  context.historical_chain.end(),
                  std::begin(value.evidence_chain_sha256()));
-  return (released_attempt || cleared_known_motion_fault || cleared_release_timeout) &&
+  return (released_attempt || cleared_known_motion_fault || cleared_release_timeout ||
+          cleared_safety_position_limit) &&
          clean_idle && context.pages_written == 0U &&
          context.terminal_written_run_id == 0U &&
          (cold_start || same_historical_run);

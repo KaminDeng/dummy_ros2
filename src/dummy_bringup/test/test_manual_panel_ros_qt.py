@@ -41,6 +41,14 @@ def test_ros_panel_readonly_without_native(tmp_path, monkeypatch):
         assert panel.ros_runtime.state == 'Starting'
         panel.ros_status_received(NS(boot_epoch=1, reference_epoch=1))
         assert panel.ros_runtime.state == 'ReadOnly'
+        # Native忙期留下的按钮状态不能锁住已返回只读的ROS连接。
+        panel.reconnect.setEnabled(False)
+        panel.backend_choice.setEnabled(False)
+        panel.ros_tick()
+        assert panel.reconnect.isEnabled() and panel.backend_choice.isEnabled()
+        panel.busy = True
+        panel.ros_tick()
+        assert not panel.reconnect.isEnabled() and not panel.backend_choice.isEnabled()
     finally:
         panel.ros_backend.released = True
         panel.close(); panel.timer.stop(); node.destroy_node(); rclpy.shutdown()
@@ -172,3 +180,31 @@ def test_ros_actual_model_requires_cpp_ready_and_fresh_matched_feedback(tmp_path
     finally:
         panel.ros_backend.released=True
         panel.close();panel.timer.stop();node.destroy_node();rclpy.shutdown()
+
+
+def test_ros_reference_entry_prepares_manual_control_without_automatic_baseline():
+    from manual_joint_panel import JointPanel
+    for has_reference in (False, True):
+        calls = []
+        panel = NS(backend='ros', cfg={'operator_confirmed_double_limits': not has_reference},
+            calibration=(1, 2) if has_reference else None, fresh=lambda:True,
+            ros_status=NS(session_id=0), closing=False, busy=False,
+            confirm_execution=lambda *args:QtWidgets.QMessageBox.Yes,
+            message=lambda *args:None,
+            ros_backend=NS(released=False, admitting=True,
+                request_prepare_manual_control=lambda:calls.append('manual') or True,
+                request_calibration_and_test=lambda:calls.append('automatic') or True))
+        JointPanel.start_zero(panel)
+        assert calls == ['manual'], '标定入口不得自动执行验收运动或依赖圆柱场景'
+
+
+def test_ros_reference_entry_still_requires_confirmed_pose_without_reference():
+    from manual_joint_panel import JointPanel
+    calls = []
+    panel = NS(backend='ros', cfg={'operator_confirmed_double_limits':False},
+        calibration=None, fresh=lambda:True, ros_status=NS(session_id=0),
+        closing=False, busy=False, ros_backend=NS(released=False, admitting=True),
+        message=lambda text:calls.append(text),
+        confirm_execution=lambda *args:(_ for _ in ()).throw(AssertionError('不得提交')))
+    JointPanel.start_zero(panel)
+    assert len(calls) == 1 and '未确认双限位' in calls[0]

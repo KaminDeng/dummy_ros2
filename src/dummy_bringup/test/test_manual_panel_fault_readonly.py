@@ -74,6 +74,7 @@ def logic():
 # @return (仅逻辑的面板对象, scope)；所有命令/发布只记录到列表。
 def panel(tmp_path, core=9):
     cls, scope = logic(); p = object.__new__(cls)
+    p.backend = 'real'  # 与生产构造函数的默认Native后端一致。
     p.last_state = dict(boot_epoch=123, state_seq=10, reference_epoch=1, session_id=0,
                        core_state=core, position_valid_mask=63, velocity_valid_mask=63,
                        raw_position_valid_mask=63, can_rx_age_us=[0]*6,

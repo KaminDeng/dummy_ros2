@@ -340,3 +340,37 @@ def test_remove_uses_actual_world_names_not_persisted_tombstones(tmp_path):
     reloaded=m.ObstacleScene(p,path,{'base_link':(0.,0.)});sync(reloaded)
     assert not applied[-1].world.collision_objects
     assert reloaded.known_ids=={'fixture'} and world=={'external_fixture'}
+
+
+def test_initial_scene_budget_starts_at_first_tick_after_human_wait(tmp_path, monkeypatch):
+    clock = [100.]
+    monkeypatch.setattr(m.time, 'monotonic', lambda: clock[0])
+    p, calls = panel()
+    scene = m.ObstacleScene(p, tmp_path/'s.json', {'base_link':(0.,0.)})
+    assert not calls
+    clock[0] += 45.
+    scene.tick()
+    assert not scene.error and scene.future is not None and len(calls) == 1
+    clock[0] += 11.
+    scene.tick()
+    assert scene.error and '回执超时' in scene.error
+
+
+def test_initial_discovery_budget_is_not_restarted_by_later_ticks(tmp_path, monkeypatch):
+    clock = [100.]
+    monkeypatch.setattr(m.time, 'monotonic', lambda: clock[0])
+    p, calls = panel()
+    scene = m.ObstacleScene(p, tmp_path/'s.json', {'base_link':(0.,0.)})
+    scene.client.service_is_ready = lambda: False
+    clock[0] += 45.
+    scene.tick()
+    assert not scene.error and not calls
+    clock[0] += 19.
+    scene.tick()
+    assert not scene.error
+    clock[0] += 2.
+    scene.tick()
+    assert scene.error and '未就绪' in scene.error
+    original = scene.error
+    scene.tick()
+    assert scene.error == original and not calls

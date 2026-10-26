@@ -279,6 +279,53 @@ int test_released_idle_startup_baseline() {
     }
   }
   {
+    // GUI25原件：ClearFault后仅当前故障清零，历史Safety失败不能伪装成成功运动。
+    HistoricalIdleBaselineContext manual{};
+    manual.manual_reference_mode = true;
+    Status recovered;
+    recovered.set_boot_epoch(1754154692906416797ULL);
+    recovered.set_run_id(61);
+    recovered.set_parent_run_id(60);
+    recovered.set_attempt_kind(2);
+    recovered.set_final_state(4);
+    recovered.set_core_state(2);
+    recovered.set_reference_epoch(2);
+    recovered.set_release_committed(true);
+    recovered.set_cleanup_state(3);
+    recovered.set_failure_source(0x1002);
+    if (!historical_released_idle_baseline(recovered, manual)) return 410;
+    auto bench = manual;
+    bench.manual_reference_mode = false;
+    if (historical_released_idle_baseline(recovered, bench)) return 411;
+    for (unsigned i = 0; i < 13; ++i) {
+      auto bad = recovered;
+      switch (i) {
+      case 0: bad.set_first_failure_reason(0x1002); break;
+      case 1: bad.set_core_state(9); break;
+      case 2: bad.set_release_committed(false); break;
+      case 3: bad.set_failure_source(0x1003); break;
+      case 4: bad.set_parent_run_id(59); break;
+      case 5: bad.set_cleanup_state(2); break;
+      case 6: bad.set_can_failed_mask(1); break;
+      case 7: bad.set_evidence_lost(true); break;
+      case 8: bad.set_session_id(1); break;
+      case 9: bad.set_real_motion_permitted(true); break;
+      case 10: bad.set_permit_remaining_us(1); break;
+      case 11: bad.set_reference_epoch(0); break;
+      case 12: bad.set_final_state(2); break;
+      }
+      if (historical_released_idle_baseline(bad, manual)) return 412 + i;
+    }
+    manual.pages_written = 1;
+    if (historical_released_idle_baseline(recovered, manual)) return 425;
+    manual.pages_written = 0;
+    manual.terminal_written_run_id = 61;
+    if (historical_released_idle_baseline(recovered, manual)) return 426;
+    manual.terminal_written_run_id = 0;
+    manual.current_boot = 1;
+    if (historical_released_idle_baseline(recovered, manual)) return 427;
+  }
+  {
     HistoricalIdleBaselineContext manual{};
     manual.manual_reference_mode = true;
     Status retained;

@@ -312,3 +312,39 @@ def test_measured_motion_stops_even_if_panel_busy_flag_is_clear(tmp_path):
     graph.counts['/plan_kinematic_path'] = 2
     scene.tick()
     assert changes == ['invalidated', 'stop']
+
+
+def test_unrelated_observer_disappears_without_invalidating_ready_moveit():
+    from manual_moveit_planner import require_unique_moveit
+    from rclpy.node import NodeNameNonExistentError
+    graph = Graph()
+    original = graph.get_service_names_and_types_by_node
+    graph.owners[('temporary_tf_observer', '/')] = []
+    def query(name, namespace):
+        if name == 'temporary_tf_observer':
+            raise NodeNameNonExistentError('observer exited')
+        return original(name, namespace)
+    graph.get_service_names_and_types_by_node = query
+    assert require_unique_moveit(graph) == (('manual_move_group', '/'), ('manual_move_group', '/'))
+
+
+@pytest.mark.parametrize('count', [0, 2])
+def test_service_instance_change_during_owner_queries_is_rejected(count):
+    from manual_moveit_planner import require_unique_moveit
+    graph = Graph()
+    original = graph.get_service_names_and_types_by_node
+    def query(name, namespace):
+        result = original(name, namespace)
+        graph.counts[SERVICES[0]] = count
+        return result
+    graph.get_service_names_and_types_by_node = query
+    with pytest.raises(ValueError):
+        require_unique_moveit(graph)
+
+
+def test_unknown_node_query_error_remains_rejected():
+    from manual_moveit_planner import require_unique_moveit
+    graph = Graph()
+    graph.get_service_names_and_types_by_node = lambda *args: (_ for _ in ()).throw(RuntimeError('unknown graph failure'))
+    with pytest.raises(ValueError, match='来源查询失败'):
+        require_unique_moveit(graph)
