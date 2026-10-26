@@ -82,3 +82,26 @@ def test_direct_joint_path_preserves_limits_and_requested_dynamic_caps():
 def test_direct_joint_path_rejects_nonfinite_and_out_of_range_goals(bad):
     with pytest.raises(ValueError):
         execution.joint_goal_path([0.] * 6, [bad] * 6, [[-90., 90.]] * 6, 60., 4.)
+
+
+@pytest.mark.parametrize('automatic', [False, True])
+def test_ros_release_retires_ui_goals_before_authoritative_device_release(automatic):
+    calls=[]
+    tab=NS(auto_test=NS(active=automatic),executing=True)
+    def cancel(reason,stop=False):
+        assert not stop,'整链释放由ROS权威管理，界面不能另发竞争Cancel'
+        calls.append('retire');tab.executing=False
+    def abort(reason,stop=False,result=None):
+        assert not stop
+        assert result=='interrupted'
+        calls.append('abort_auto');tab.auto_test.active=False
+        cancel(reason,stop=False)
+    tab.cancel_execution=cancel;tab.auto_test.abort=abort
+    def release():
+        assert not tab.auto_test.active and not tab.executing
+        calls.append('release')
+    p=NS(backend='ros',moveit_tab=tab,ros_runtime=NS(begin_release=lambda:calls.append('begin_release')),
+         ros_backend=NS(release=release),busy=False,authorized=True)
+    JointPanel.release(p,'RELEASE')
+    assert calls[-1]=='release' and 'retire' in calls
+    assert p.busy and not p.authorized

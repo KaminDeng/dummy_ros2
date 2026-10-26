@@ -994,14 +994,17 @@ class JointPanel(QtWidgets.QWidget):
     # @param command STOP 或 RELEASE，由对应操作入口选择。
     # @return None；执行上述状态更新、界面或日志操作。
     def release(self, command):
+        if hasattr(self,'moveit_tab') and self.moveit_tab.auto_test.active:
+            self.moveit_tab.auto_test.abort('已请求停止或释放设备',stop=False,result='interrupted')
+        if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
+            self.moveit_tab.cancel_execution('已请求停止；剩余规划路径作废。')
         if self.backend == 'ros':
+            # 先撤销界面未来目标，设备停车/失能仍仅由ROS控制链处理。
+            self.authorized = False
+            self.busy = True
             self.ros_runtime.begin_release()
             self.ros_backend.release()
             return
-        if hasattr(self,'moveit_tab') and self.moveit_tab.auto_test.active:
-            self.moveit_tab.auto_test.abort('已请求停止或释放设备',stop=False)
-        if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
-            self.moveit_tab.cancel_execution('已请求停止；剩余规划路径作废。')
         self.cancel_hold_pending = False
         self.remember_readonly_handoff()
         self.authorized = False
