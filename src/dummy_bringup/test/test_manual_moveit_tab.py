@@ -223,6 +223,45 @@ class MoveItTabTests(unittest.TestCase):
         self.assertFalse(self.tab.executing)
         self.assertFalse(self.panel.busy)
 
+    def prepare_ros_inflight(self):
+        self.panel.backend='ros'
+        self.ros_cancels=[]
+        self.panel.ros_backend=NS(cancel=lambda:self.ros_cancels.append('cancel'))
+        self.tab.execution=NS(done=False,aborted=False,waiting=True,
+            identity=self.tab.execution_identity(),abort=lambda:None)
+        self.tab.segment_deadline=module.time.monotonic()+30.
+        self.panel.busy=True
+
+    def test_ros_inflight_complete_transition_waits_for_action_without_python_cancel(self):
+        self.prepare_ros_inflight()
+        self.panel.authorized=False
+        for core in (3,7,4):
+            self.panel.last_state.update(core_state=core,real_motion_permitted=False,permit_remaining_us=0)
+            self.tab.tick()
+            self.assertTrue(self.tab.executing)
+            self.assertEqual(self.ros_cancels,[])
+            self.assertTrue(self.panel.busy)
+        self.tab.path=(tuple(self.panel.actual_q),tuple(self.panel.actual_q))
+        self.tab.start=tuple(self.panel.actual_q)
+        self.tab.ros_event('completed',{'goal_uuid':'bound-goal'})
+        self.panel.actual_q[0]+=.02
+        self.tab.tick()
+        self.assertIsNone(self.tab.path)
+        self.assertIn('已确认整轨迹完成',self.tab.status.text())
+        self.assertFalse(self.tab.executing)
+        self.assertFalse(self.panel.busy)
+        self.assertEqual(self.ros_cancels,[])
+
+    def test_ros_inflight_identity_change_and_real_deadline_still_cancel(self):
+        for field in ('boot_epoch','reference_epoch','deadline'):
+            with self.subTest(field=field):
+                self.prepare_ros_inflight()
+                if field=='deadline': self.tab.segment_deadline=module.time.monotonic()-1.
+                else:self.panel.last_state[field]+=1
+                self.tab.tick()
+                self.assertFalse(self.tab.executing)
+                self.assertEqual(self.ros_cancels,['cancel'])
+
     def test_buttons_follow_freshness_and_service_readiness(self):
         self.tab.tick()
         self.assertTrue(self.tab.capture.isEnabled())

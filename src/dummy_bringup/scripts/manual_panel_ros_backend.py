@@ -192,6 +192,8 @@ class RosTransport:
         self.status_max_age_ms = None
         self.feedback_max_age_ms = None
         self.parameter_pending = False
+        self.parameter_generation = 0
+        self.parameter_future = None
         self.parameter_retry_at = 0.
         self.closed = False
         self.action_type = FollowJointTrajectory
@@ -236,28 +238,47 @@ class RosTransport:
             existing = [(name, self.node.count_services(name)) for name in CONTROL_SERVICES]
             existing += [(name, self.node.count_publishers(name)) for name in CONTROL_TOPICS]
             existing = [(name, count) for name, count in existing if count]
-            if existing:
-                self._startup_owner_conflict = '已有ROS控制链，拒绝创建或接管：' + ', '.join(name+'='+str(count) for name, count in existing)
-                raise RuntimeError(self._startup_owner_conflict)
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if existing:
+                    self._startup_owner_conflict = '已有ROS控制链，拒绝创建或接管：' + ', '.join(name+'='+str(count) for name, count in existing)
+                    raise RuntimeError(self._startup_owner_conflict)
+                # 只有本次固定截止时实际图已为空，才清除前次冲突；
+                # 单凭点击绝不解除冲突。
+                self._startup_owner_conflict = ''
                 return
-            # Graph discovery is handled by DDS; do not spin application callbacks
-            # or acquire USB merely to discover another owner.
-            time.sleep(.02)
+            # Jazzy rclpy公开服务和发布者计数，但没有公开的图事件等待接口。
+            # DDS发现独立于spin_once更新图；重连时不重入Qt或业务回调。
+            # 轮询只使用原0.5秒发现预算的剩余时间。
+            time.sleep(min(.02, remaining))
 
     def refresh_status_budget(self):
-        import time
-        if (self.closed or self.status_max_age_ms is not None or self.parameter_pending or
-                time.monotonic() < self.parameter_retry_at or not self.parameter_client.service_is_ready()):
+        now = time.monotonic()
+        if self.closed or self.status_max_age_ms is not None:
+            return
+        if self.parameter_pending:
+            if now < self.parameter_retry_at:
+                return
+            # 先退休旧世代，再取消Future；取消可能同步触发旧回调。
+            self.parameter_generation = getattr(self, 'parameter_generation', 0) + 1
+            self.parameter_pending = False
+            previous = getattr(self, 'parameter_future', None)
+            self.parameter_future = None
+            if previous is not None:
+                previous.cancel()
+        if now < self.parameter_retry_at or not self.parameter_client.service_is_ready():
             return
         self.parameter_pending = True
-        self.parameter_retry_at = time.monotonic() + 1.
+        self.parameter_retry_at = now + 1.
+        self.parameter_generation = getattr(self, 'parameter_generation', 0) + 1
+        generation = self.parameter_generation
         request = self.get_parameters_type.Request()
         request.names = ['status_max_age_ms', 'feedback_max_age_ms']
         def done(future):
-            self.parameter_pending = False
-            if self.closed:
+            if self.closed or generation != self.parameter_generation:
                 return
+            self.parameter_pending = False
+            self.parameter_future = None
             try:
                 values = future.result().values
                 if len(values) == 2 and all(v.type == self.parameter_integer_type and v.integer_value > 0 for v in values):
@@ -266,9 +287,11 @@ class RosTransport:
                 # 失败保持只读，不造Python默认预算；后续tick可重试。
                 pass
         try:
-            self.parameter_client.call_async(request).add_done_callback(done)
+            self.parameter_future = self.parameter_client.call_async(request)
+            self.parameter_future.add_done_callback(done)
         except Exception:
             self.parameter_pending = False
+            self.parameter_future = None
 
     def ready(self, service='bootstrap_status'):
         if self.control_graph_error():

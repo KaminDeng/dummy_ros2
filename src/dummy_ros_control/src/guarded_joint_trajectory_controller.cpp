@@ -109,7 +109,7 @@ TrajectoryDigest trajectory_digest(const trajectory_msgs::msg::JointTrajectory &
 /**
  * @brief 在实时控制拍处理prime或JTC轨迹并发布本地采样。
  * @param time ROS控制时刻，传基类和sink，不与设备时间直接相减。
- * @param period 控制拍时长。
+ * @param period 实际控制拍时长，仅用于完整丢拍拒绝；JTC轨迹相位使用配置的固定周期。
  * @return 基类结果或接口/轴数错误；只有OK且desired形状匹配才调用sink。
  */
 controller_interface::return_type GuardedJointTrajectoryController::update(
@@ -117,6 +117,21 @@ controller_interface::return_type GuardedJointTrajectoryController::update(
   /**
    * @brief prime存在时直接输出保持位置并读取actual，不推进JTC轨迹；无prime才调用基类update。该分支仍只写命令接口，不表示设备已到位。
    */
+  const auto nominal_ns=update_period_.nanoseconds();
+  const bool invalid_clock=update_clock_known_ &&
+      (time.get_clock_type()!=last_update_clock_type_ ||
+       time.nanoseconds()<=last_update_clock_ns_);
+  // 完整丢拍不得靠缩短轨迹相位或补发掩盖；返回原ERROR路径，停生产并撤身份。
+  if(timing_failed_ || nominal_ns<=0 || period.nanoseconds()<=0 ||
+     period.nanoseconds()>=2*nominal_ns || invalid_clock) {
+    timing_failed_=true;
+    set_update_sink(nullptr,nullptr);
+    clear_command_identity();
+    return controller_interface::return_type::ERROR;
+  }
+  update_clock_known_=true;
+  last_update_clock_ns_=time.nanoseconds();
+  last_update_clock_type_=time.get_clock_type();
   const auto prime=*prime_buffer_.readFromRT();
   auto result=controller_interface::return_type::OK;
   if(prime) {
@@ -127,7 +142,9 @@ controller_interface::return_type GuardedJointTrajectoryController::update(
       if(!joint_command_interface_[0][index].get().set_value((*prime)[index]))
         return controller_interface::return_type::ERROR;
     }
-  } else result = JointTrajectoryController::update(time, period);
+  // CM传入实际调度间隔，而固件按生产序号差×20ms验证导数。
+  // 复用JTC自身traj_time_推进，不把壁钟抖动注入固定生产相位。
+  } else result = JointTrajectoryController::update(time, update_period_);
   /**
    * @brief 奇数序号标记采样写入中，写六轴原子actual/desired后再发布偶数；execution_sample只读一次，不忙等。
    */
@@ -168,6 +185,13 @@ controller_interface::CallbackReturn GuardedJointTrajectoryController::on_config
  * @param previous_state 框架先前状态。
  * @return 基类deactivate结果；不是设备Stop确认。
  */
+controller_interface::CallbackReturn GuardedJointTrajectoryController::on_activate(
+    const rclcpp_lifecycle::State &previous_state) {
+  timing_failed_=false;
+  update_clock_known_=false;
+  return JointTrajectoryController::on_activate(previous_state);
+}
+
 controller_interface::CallbackReturn GuardedJointTrajectoryController::on_deactivate(
     const rclcpp_lifecycle::State &previous_state) {
   const bool owned_command_sink=update_sink_.load(std::memory_order_acquire)!=nullptr;

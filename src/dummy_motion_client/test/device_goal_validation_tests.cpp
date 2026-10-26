@@ -32,4 +32,22 @@ int main() {
   if(!validated_device_trajectory(goal,profile)) return 5;
   goal.trajectory.points[0].velocities={1e-4};
   if(validated_device_trajectory(goal,profile)) return 6;
+  // 默认零只关闭附加Host路径误差门，终点及动态校验仍存在。
+  goal.trajectory.points[0].velocities.clear();
+  profile.path_tolerance={0};
+  auto unconstrained=validated_device_trajectory(goal,profile);
+  if(!unconstrained || unconstrained->path_tolerance!=std::vector<double>{0})return 7;
+  tolerance.velocity=0;tolerance.position=.05;goal.path_tolerance={tolerance};
+  auto explicit_path=validated_device_trajectory(goal,profile);
+  if(!explicit_path || explicit_path->path_tolerance!=std::vector<double>{.05})return 8;
+  for(double invalid : {-1.,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
+    goal.path_tolerance[0].position=invalid;
+    if(validated_device_trajectory(goal,profile))return 9;
+  }
+  goal.path_tolerance[0].position=0;
+  if(!validated_device_trajectory(goal,profile))return 10;
+  profile.path_tolerance={.04};goal.path_tolerance[0].position=.05;
+  if(validated_device_trajectory(goal,profile))return 11;
+  profile.path_tolerance={-1};goal.path_tolerance.clear();
+  if(validated_device_trajectory(goal,profile))return 12;
 }

@@ -33,6 +33,9 @@ def test_ros_panel_readonly_without_native(tmp_path, monkeypatch):
         assert panel.publisher is None
         assert panel.decode is None
         assert panel.backend_choice.currentData() == 'ros'
+        assert panel.cfg['motion_speed_max_deg_s'] == panel.speed_input.maximum() == 63.
+        assert panel.cfg['motion_acceleration_max_rad_s2'] == panel.acceleration_input.maximum() == 4.
+        assert panel.speed_input.value() == 60. and panel.acceleration_input.value() == 4.
         assert 'auto_calibrate_and_test' not in panel.ros_backend.transport.requests
         assert not panel.motor_parameter_tab.allowed()
         assert panel.ros_runtime.state == 'Starting'
@@ -61,7 +64,7 @@ def test_ros_resume_only_sends_cpp_prepare_after_confirmation():
 def test_ros_reconnect_does_not_replace_owner_before_release():
     from manual_joint_panel import JointPanel
     calls=[]
-    panel=NS(backend='ros',ros_backend=NS(released=False),
+    panel=NS(backend='ros',ros_runtime=NS(process=object()),ros_backend=NS(released=False),
         release=lambda *args:calls.append('release'),message=lambda *args:None)
     JointPanel.request_reconnect(panel)
     assert calls==['release']
@@ -71,7 +74,7 @@ def test_ros_confirmed_reconnect_stops_only_owned_runtime_and_rebuilds_readonly(
     from manual_joint_panel import JointPanel
     calls=[]
     panel=NS(backend='ros', ros_backend=NS(released=True,close=lambda:calls.append('close') or True),
-        ros_runtime=NS(stop=lambda confirmed:calls.append(('stop',confirmed)) or True),
+        ros_runtime=NS(process=object(),stop=lambda confirmed:calls.append(('stop',confirmed)) or True),
         apply_backend_change=lambda:calls.append('rebuild'))
     JointPanel.request_reconnect(panel)
     assert calls==[('stop',True),'close','rebuild']
@@ -111,6 +114,61 @@ def test_status_buttons_wait_for_cpp_parameter_and_use_returned_budget(tmp_path,
         panel.ros_status_ns = time.monotonic_ns() - 800_000_000
         panel.ros_tick()
         assert not panel.resume.isEnabled() and not panel.zero.isEnabled()
+    finally:
+        panel.ros_backend.released=True
+        panel.close();panel.timer.stop();node.destroy_node();rclpy.shutdown()
+
+
+def test_explicit_reconnect_after_refused_start_never_releases_external_owner():
+    from manual_joint_panel import JointPanel
+    calls=[]
+    panel=NS(backend='ros',ros_runtime=NS(process=None),
+        ros_backend=NS(released=False,transport=NS(_startup_owner_conflict='existing owner',close=lambda:calls.append('close-local-clients'))),
+        release=lambda *_:calls.append('FORBIDDEN_D10'),apply_backend_change=lambda:calls.append('recheck-new-attempt'))
+    JointPanel.request_reconnect(panel)
+    assert calls==['close-local-clients','recheck-new-attempt']
+    assert panel.pending_backend=='ros'
+
+
+def test_ros_actual_model_requires_cpp_ready_and_fresh_matched_feedback(tmp_path, monkeypatch):
+    import time
+    import manual_panel_ros_backend
+    from manual_joint_panel import JointPanel
+    from dpsdk_interfaces.msg import DummyJointStateV2
+    class Transport:
+        def __init__(self, *args): self.status_max_age_ms=1000
+        def control_graph_error(self): return ''
+        def ready(self, *args): return False
+        def close(self): pass
+    monkeypatch.setattr(manual_panel_ros_backend,'RosTransport',Transport)
+    app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    config=json.loads((SCRIPTS.parent/'config/manual_joint_panel.json').read_text())
+    config.update(backend='ros',moveit_enabled=False,ros_launch_command=[])
+    config['description_xacro']=str(SCRIPTS.parents[1]/'dummy-ros2_description/urdf/dummy-ros2.xacro')
+    rclpy.init(args=[]);node=rclpy.create_node('readonly_model_visibility_test')
+    panel=JointPanel(config,tmp_path/'report',None,node)
+    try:
+        state=DummyJointStateV2();state.boot_epoch=1;state.reference_epoch=7;state.state_seq=1
+        state.position_valid_mask=63;state.position_rad=[0.]*6;state.can_rx_age_us=[0]*6
+        state.core_state=2
+        panel.ros_status_received(NS(boot_epoch=1,reference_epoch=7,session_id=0,core_state=2,
+            real_motion_permitted=False,permit_remaining_us=0))
+        panel.ros_state_received(state);panel.ros_tick()
+        assert panel.actual_q==[0.]*6 and not panel.description_visible
+        state.state_seq=2;state.session_id=9;state.core_state=4
+        panel.ros_status_received(NS(boot_epoch=1,reference_epoch=7,session_id=9,core_state=4,
+            real_motion_permitted=True,permit_remaining_us=1000000))
+        panel.ros_state_received(state);panel.ros_backend.manual_ready=True
+        panel.ros_event('manual_ready','MANUAL_CONTROL_READY');panel.ros_tick()
+        assert panel.description_visible and panel.publisher is None
+        panel.last_state_ns=time.monotonic_ns()-300_000_000;panel.ros_tick()
+        assert not panel.description_visible
+        # 自动基线没有manual_ready事件，但真实双Hold表明已通过Node控制器激活门。
+        panel.last_state_ns=time.monotonic_ns();panel.ros_backend.manual_ready=False
+        panel.ros_backend.operation='auto';panel.ros_tick()
+        assert panel.description_visible
+        panel.ros_status.reference_epoch=8;panel.ros_tick()
+        assert not panel.description_visible
     finally:
         panel.ros_backend.released=True
         panel.close();panel.timer.stop();node.destroy_node();rclpy.shutdown()

@@ -258,6 +258,20 @@ void ManualReferenceCoordinator::tick(std::uint64_t now) {
     if (snapshot_.reference_epoch == 0 || snapshot_.reference_kind != 1 ||
         !window_ready())
       return;
+    // Native普通RESUME复用原资格与当前实测姿态；只有危险侧才重走退让链。
+    // 余量沿用SDK策略和部署限位，不在ROS另定角度或重采绝对零点。
+    bool ordinary_resume = reuse_qualified_reference_;
+    for (unsigned axis = 0; axis < 6; ++axis) {
+      const double q = latest_position_[axis];
+      ordinary_resume = ordinary_resume && std::isfinite(q) &&
+          q >= options_.position_min[axis] && q <= options_.position_max[axis] &&
+          q >= options_.position_min[axis] + options_.working_margin_rad - options_.hold_tolerance_rad &&
+          q <= options_.position_max[axis] - options_.working_margin_rad + options_.hold_tolerance_rad;
+    }
+    if (ordinary_resume) {
+      issue(ManageOperation::kSetPermit, now);
+      return;
+    }
     if (!freeze_rest_plan()) {
       fail("MANUAL_REST_PLAN_INVALID");
       return;
@@ -296,6 +310,12 @@ bool ManualReferenceCoordinator::freeze_rest_plan() noexcept {
   policy.working_margin_rad = options_.working_margin_rad;
   policy.hold_tolerance_rad = options_.hold_tolerance_rad;
   policy.velocity_max = options_.rest_velocity_max;
+  // 已参考但不在普通工作区时，SDK只允许J2低侧/J3高侧的原受限重入。
+  Position projected{};
+  if (reuse_qualified_reference_ &&
+      !dummy_ref::host::manual_reference_limit_rest_reentry(
+          policy, latest_position_, &projected, &rest_target_))
+    return false;
   return dummy_ref::host::manual_reference_rest_target(policy, latest_position_,
                                                        &rest_target_) &&
          dummy_ref::host::manual_reference_rest_plan_duration_us(

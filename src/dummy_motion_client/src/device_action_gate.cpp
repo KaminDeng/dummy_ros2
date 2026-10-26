@@ -40,6 +40,31 @@
 #include <vector>
 
 namespace dummy_motion_client {
+// 只有确实接手过公开FJT目标的链才记录目标时间线释放事件。
+bool goal_timeline_release_required(bool has_goal_history) noexcept {
+  return has_goal_history;
+}
+
+// 本地路径容差仅在调用方显式指定或profile具有正默认时生效。
+// 零默认不豁免非有限反馈、终点误差或外层固件/身份/新鲜度门禁。
+struct ExecutionPositionCheck { bool path_valid=true, at_goal=true; };
+ExecutionPositionCheck check_execution_positions(
+    const dummy_ros_control::GuardedExecutionSample &sample,
+    const Trajectory &trajectory) noexcept {
+  ExecutionPositionCheck result;
+  for(std::size_t i=0;i<trajectory.joints.size();++i) {
+    const double error=std::abs(sample.actual[i]-sample.desired[i]);
+    if(!std::isfinite(error) ||
+       (trajectory.path_tolerance[i]>0 && error>trajectory.path_tolerance[i])) {
+      result.path_valid=false;result.at_goal=false;return result;
+    }
+    result.at_goal=result.at_goal &&
+        std::abs(sample.actual[i]-trajectory.points.back().positions[i])<=trajectory.goal_tolerance[i] &&
+        std::abs(sample.desired[i]-trajectory.points.back().positions[i])<=1e-9;
+  }
+  return result;
+}
+
 namespace wire=dp::iface;
 using Follow=control_msgs::action::FollowJointTrajectory;
 using GoalHandle=rclcpp_action::ServerGoalHandle<Follow>;
@@ -2010,7 +2035,9 @@ class DeviceActionGate final : public rclcpp::Node {
       status.management_epoch(),state.management_epoch(),
       status.core_state(),state.core_state(),
       release_stage_.load());
-    if (release_idle_transition_pending(transition,*observed,now,state_max_age_us_) &&
+    if (release_idle_transition_pending(transition, *observed, now, state_max_age_us_,
+            dummy_ref::host::kManualReferenceStatusMaxAgeUs,
+            manual_reference_mode_ ? manual_release_reference_ : 0U) &&
         !status.real_motion_permitted() && status.permit_remaining_us()==0U &&
         state.freshness_ticket()!=0U &&
         (state.raw_position_valid_mask() & parameters_.mask)==parameters_.mask) {
@@ -2347,7 +2374,8 @@ class DeviceActionGate final : public rclcpp::Node {
     /**
      * @brief 时间线Release事件还需双消息已释放Idle与Bootstrap确认request/op对；仅stage3字符串或发出D10不足以填Release证据。
      */
-    if (timeline_ && !readonly_release_confirmed_ &&
+    if (timeline_ && goal_timeline_release_required(timeline_has_goal_) &&
+        !readonly_release_confirmed_ &&
         release_stage_.load() == 3 && !timeline_release_recorded_ &&
         observed_release_idle(status, state)) {
       const auto receipt=bootstrap_ ? bootstrap_->confirmed_release() : std::nullopt;
@@ -2808,15 +2836,11 @@ class DeviceActionGate final : public rclcpp::Node {
       active_->publish_feedback(feedback);
     }
     const auto &trajectory=port_.trajectory;
-    bool terminal=true;
-    for(std::size_t i=0;i<trajectory.joints.size();++i) {
-      const double error=std::abs(sample->actual[i]-sample->desired[i]);
-      if(!std::isfinite(error) || error>trajectory.path_tolerance[i]) {
-        gate_->inner_result(port_.motion_generation,Terminal::kAborted,"PATH_TOLERANCE_VIOLATED",now); return;
-      }
-      terminal=terminal && std::abs(sample->actual[i]-trajectory.points.back().positions[i])<=trajectory.goal_tolerance[i] &&
-          std::abs(sample->desired[i]-trajectory.points.back().positions[i])<=1e-9;
+    const auto position_check=check_execution_positions(*sample,trajectory);
+    if(!position_check.path_valid) {
+      gate_->inner_result(port_.motion_generation,Terminal::kAborted,"PATH_TOLERANCE_VIOLATED",now); return;
     }
+    const bool terminal=position_check.at_goal;
     if(elapsed<trajectory.points.back().time) return;
     if(terminal) gate_->inner_result(port_.motion_generation,Terminal::kSucceeded,"",now);
     else if(elapsed>trajectory.points.back().time+trajectory.goal_time_tolerance+0.25)
@@ -2930,6 +2954,7 @@ class DeviceActionGate final : public rclcpp::Node {
         goal_run_id_=0U;
         timeline_terminal_started_us_=0U;
         if(timeline_) {
+          timeline_has_goal_=true;
           timeline_uuid_=port_.uuid;
           timeline_digest_=dummy_ros_control::trajectory_digest(active_->get_goal()->trajectory);
           timeline_goal_open_=true; timeline_after_=timeline_terminal_=timeline_hold_=false;
@@ -3320,6 +3345,7 @@ class DeviceActionGate final : public rclcpp::Node {
   /**
    * @brief 时间线open/AfterBegin/Terminal/Hold/Release分开，FaultCleanup独立闭合但保Aborted；有终态事件不表示writer已排空。
    */
+  bool timeline_has_goal_=false;
   bool timeline_goal_open_=false, timeline_after_=false, timeline_terminal_=false;
   bool timeline_goal_hold_confirmed_=false;
   bool cancel_refresh_diagnostic_logged_=false;

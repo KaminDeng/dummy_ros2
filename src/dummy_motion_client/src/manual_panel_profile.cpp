@@ -57,11 +57,12 @@ ManualPanelDeployment load_manual_panel_deployment(const std::string& root,const
  require(cfg["joints"].size()==6&&model_node["joints"].size()==6,"six axes required");
  require(cfg["motion_speed_max_deg_s"].as<double>()==63.0&&cfg["motion_acceleration_max_rad_s2"].as<double>()==4.0,"live dynamic policy mismatch");
  require(cfg["working_margin_deg"].as<double>()==0.55,"working margin mismatch");
+ // 与Native一致依赖REF按真实CAN SENT/反馈时间的连续跟踪监督；不额加未SENT本地期望的位置门。
  for(std::size_t i=0;i<6;++i){auto j=cfg["joints"][i],m=model_node["joints"][i];auto name="Joint"+std::to_string(i+1);require(j["name"].as<std::string>()==name&&m["name"].as<std::string>()==name,"joint order mismatch");
  out.direction[i]=j["direction"].as<double>();out.gear_ratio[i]=j["gear_ratio"].as<double>();require(out.direction[i]==m["direction"].as<double>()&&out.gear_ratio[i]==m["gear_ratio"].as<double>(),"transmission mismatch");
  auto lo=j["limits_deg"][0].as<double>(),hi=j["limits_deg"][1].as<double>();auto nlo=j["nominal_limits_deg"][0].as<double>(),nhi=j["nominal_limits_deg"][1].as<double>();
  require(nlo==m["legacy_limits_deg"][0].as<double>()&&nhi==m["legacy_limits_deg"][1].as<double>()&&std::abs(lo-nlo-0.55)<1e-10&&std::abs(nhi-hi-0.55)<1e-10,"motion bounds mismatch");
- p.joints.joints.push_back(name);p.joints.lower.push_back(lo*rad);p.joints.upper.push_back(hi*rad);p.joints.velocity.push_back(1.0995574287564276);p.joints.acceleration.push_back(4.0);p.joints.path_tolerance.push_back(0.05);p.joints.goal_tolerance.push_back(0.003);
+ p.joints.joints.push_back(name);p.joints.lower.push_back(lo*rad);p.joints.upper.push_back(hi*rad);p.joints.velocity.push_back(1.0995574287564276);p.joints.acceleration.push_back(4.0);p.joints.path_tolerance.push_back(0.0);p.joints.goal_tolerance.push_back(0.003);
  t.position_min[i]=m["model_limits_rad"][0].as<double>();t.position_max[i]=m["model_limits_rad"][1].as<double>();t.velocity_max[i]=1.0995574287564276;t.acceleration_max[i]=4.0;
  out.reference.position_min[i]=t.position_min[i];out.reference.position_max[i]=t.position_max[i];
  // 已钉住650策略：63deg/s与8.75 motor rev/s经实测传动比均与2deg/s取交集。

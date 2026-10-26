@@ -97,7 +97,7 @@ struct HistoricalIdleBaselineContext {
  * @param context 当前/历史boot-run、链及本地采集水位。
  * @return
  * bool；要求session/permit为零、已释放Idle且无evidence_lost；manual允许冻结的非零参考。
- * 清除REST超时后的失败ledger仅提供只读基线，不构成成功终态或运动授权。
+ * 显式清除已知故障后的失败ledger仅提供只读基线，不构成成功终态或运动授权。
  */
 template <typename Status>
 bool historical_released_idle_baseline(const Status &value,
@@ -107,20 +107,16 @@ bool historical_released_idle_baseline(const Status &value,
        value.final_state() == 2U) ||
       (value.attempt_kind() == 3U && value.run_id() > 1U &&
        value.parent_run_id() == value.run_id()-1U && value.final_state() == 8U);
-  // ClearFault只清当前适配器故障，故意保留旧失败ledger；不能要求它伪装成功终态。
-  const bool cleared_rest_timeout =
+  // 显式ClearFault只清当前故障，保留Fault4/source；严格已释放形状只提供只读基线。
+  // 已知REST超时、首样本超时及导数拒绝共享同一形状，未知原因仍拒绝。
+  const bool cleared_known_motion_fault =
       context.manual_reference_mode && value.attempt_kind() == 1U &&
       value.parent_run_id() == 0U && value.final_state() == 4U &&
       value.core_state() == 2U && value.reference_epoch() != 0U &&
       value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
-      value.can_failed_mask() == 0U && value.failure_source() == 0x1067U;
-  // 首样本超时已由显式ClearFault清除；历史Fault4/source仍保留，只承认已释放只读基线。
-  const bool cleared_first_sample_timeout =
-      context.manual_reference_mode && value.attempt_kind() == 1U &&
-      value.parent_run_id() == 0U && value.final_state() == 4U &&
-      value.core_state() == 2U && value.reference_epoch() != 0U &&
-      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
-      value.can_failed_mask() == 0U && value.failure_source() == 0x1024U;
+      value.can_failed_mask() == 0U &&
+      (value.failure_source() == 0x1067U || value.failure_source() == 0x1024U ||
+       value.failure_source() == 0x1008U);
   // 已知失能超时的Release失败账本在ClearFault后仍保持Fault终态，不能伪装为成功释放。
   const bool cleared_release_timeout =
       context.manual_reference_mode &&
@@ -153,8 +149,7 @@ bool historical_released_idle_baseline(const Status &value,
       std::equal(context.historical_chain.begin(),
                  context.historical_chain.end(),
                  std::begin(value.evidence_chain_sha256()));
-  return (released_attempt || cleared_rest_timeout ||
-          cleared_first_sample_timeout || cleared_release_timeout) &&
+  return (released_attempt || cleared_known_motion_fault || cleared_release_timeout) &&
          clean_idle && context.pages_written == 0U &&
          context.terminal_written_run_id == 0U &&
          (cold_start || same_historical_run);

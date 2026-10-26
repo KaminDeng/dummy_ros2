@@ -763,6 +763,11 @@ class MoveItTab(QtWidgets.QWidget):
             self.record('ROS_GOAL_ACCEPTED', details=value if isinstance(value, dict) else str(value))
         elif kind == 'completed':
             self.execution = None
+            # 正式Action终态退休旧起点路径，不让下一拍把成功覆写成未发送。
+            self.path = self.continuous_path = self.noop_goal = None
+            self.play_index = None
+            self.play.setEnabled(False)
+            self.execute.setEnabled(False)
             self.panel.busy = False
             self.record('PATH_COMPLETED', backend='ros', result=str(value))
             self.status.setText('公开 ROS Action 已确认整轨迹完成。')
@@ -1076,9 +1081,18 @@ class MoveItTab(QtWidgets.QWidget):
                 self.record('PREVIEW_COMPLETED')
                 self.status.setText('预览完成；实物未运动。需要运动时单独点击“执行规划路径”并确认。')
         if self.executing:
-            if (not self.panel.fresh() or not self.panel.authorized or
-                    not self.panel.control_state_allowed((2, 3, 4, 5, 6)) or
-                    self.execution_identity() != self.execution.identity):
+            # ROS已提交整条公开Action；许可消费、Complete与停车由C++拥有。
+            # Python镜像暂失authorized/core过渡不能生成第二次Cancel。
+            # 仍绑定新鲜boot/ref和原Action截止；Native保留原授权/会话门禁。
+            if self.panel.backend == 'ros':
+                identity = self.execution_identity()
+                invalid = (identity is None or
+                           identity[:2] != self.execution.identity[:2])
+            else:
+                invalid = (not self.panel.fresh() or not self.panel.authorized or
+                           not self.panel.control_state_allowed((2, 3, 4, 5, 6)) or
+                           self.execution_identity() != self.execution.identity)
+            if invalid:
                 self.cancel_execution('设备反馈、授权或生命周期不再允许控制。', stop=True)
             elif time.monotonic() > self.segment_deadline:
                 submitted = self.execution.waiting

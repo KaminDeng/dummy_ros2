@@ -345,17 +345,19 @@ def test_real_rclpy_uuid_rejection_receipt_ready_and_same_trajectory():
     from control_msgs.action import FollowJointTrajectory
     from trajectory_msgs.msg import JointTrajectory,JointTrajectoryPoint
     from std_srvs.srv import Trigger
+    from rcl_interfaces.srv import GetParameters
+    from rcl_interfaces.msg import ParameterValue,ParameterType
+    from controller_manager_msgs.srv import ListControllers
     from rclpy.action import ActionServer,GoalResponse
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.context import Context
-    from manual_panel_ros_backend import RosTransport
+    from manual_panel_ros_backend import RosTransport,CONTROL_SERVICES,CONTROL_TOPICS
     context=Context();rclpy.init(context=context,domain_id=214)
     server=rclpy.create_node('synthetic_manual_retry_peer',context=context)
     client=rclpy.create_node('synthetic_manual_retry_client',context=context)
     executor=SingleThreadedExecutor(context=context);executor.add_node(server);executor.add_node(client)
     received=[];attempt_uuids=[];events=[];renew_polls=[]
     transport=RosTransport(client,lambda value:None,lambda value:None)
-    transport.status_max_age_ms=731;transport.feedback_max_age_ms=251
     from unique_identifier_msgs.msg import UUID
     transport.uuid_type=lambda **kwargs:attempt_uuids.append(bytes(kwargs['uuid']).hex()) or UUID(**kwargs)
     def goal(request):
@@ -369,8 +371,22 @@ def test_real_rclpy_uuid_rejection_receipt_ready_and_same_trajectory():
         response.success=True;response.message='RENEWAL_PENDING:'+attempt_uuids[0];return response
     def ready(request,response):
         renew_polls.append(True);response.success=True;response.message='ENABLED_HOLD';return response
+    def unused_control(request,response):
+        raise AssertionError('续租窄重试场景不应调用标定、释放或控制器管理')
+    def parameters(request,response):
+        budgets={'status_max_age_ms':731,'feedback_max_age_ms':251}
+        response.values=[ParameterValue(type=ParameterType.PARAMETER_INTEGER,
+                                        integer_value=budgets[name]) for name in request.names]
+        return response
     services=[server.create_service(Trigger,'/device_action_gate/last_goal_rejection',receipt),
-              server.create_service(Trigger,'/device_action_gate/bootstrap_status',ready)]
+              server.create_service(Trigger,'/device_action_gate/bootstrap_status',ready),
+              server.create_service(GetParameters,'/manual_ros_baseline/get_parameters',parameters),
+              server.create_service(ListControllers,'/controller_manager/list_controllers',unused_control)]
+    # 注册真实DDS服务与下方typed发布者，满足当前唯一控制owner守卫；不伪造计数。
+    services.extend(server.create_service(Trigger,name,unused_control) for name in CONTROL_SERVICES
+                    if name not in ('/device_action_gate/bootstrap_status',
+                                    '/manual_ros_baseline/get_parameters',
+                                    '/controller_manager/list_controllers'))
     status_pub=server.create_publisher(msg.DummyDeviceStatusV2,'/device_action_gate/device_status',10)
     state_pub=server.create_publisher(msg.DummyJointStateV2,'/device_action_gate/device_state',10)
     status=msg.DummyDeviceStatusV2();state=msg.DummyJointStateV2()
@@ -385,8 +401,12 @@ def test_real_rclpy_uuid_rejection_receipt_ready_and_same_trajectory():
     try:
         until=time.monotonic()+5
         while time.monotonic()<until and (not transport.action.server_is_ready() or transport._fresh_retry_binding() is None):
+            transport.refresh_status_budget()
             executor.spin_once(timeout_sec=.02)
         assert transport._fresh_retry_binding() is not None and transport.action.server_is_ready()
+        assert all(client.count_services(name)==1 for name in CONTROL_SERVICES)
+        assert all(client.count_publishers(name)==1 for name in CONTROL_TOPICS)
+        assert transport.status_max_age_ms==731 and transport.feedback_max_age_ms==251
         trajectory=JointTrajectory();trajectory.joint_names=['Joint1']
         point=JointTrajectoryPoint();point.positions=[.001];point.time_from_start.sec=1;trajectory.points=[point]
         assert transport.submit_trajectory(trajectory,lambda *event:events.append(event))
@@ -549,3 +569,55 @@ def test_duplicate_control_graph_blocks_management_and_fjt_without_wire_requests
     assert isinstance(events[-1], RuntimeError)
     assert not transport.submit_trajectory(NS(), lambda *event:events.append(event))
     assert events[-1][0] == 'failed' and '重复实例' in events[-1][1]
+
+
+def test_owner_preflight_waits_for_departing_graph_without_reentrant_callbacks(monkeypatch):
+    import manual_panel_ros_backend as module
+    clock = [0.0]; counts = [1]
+    def wait(seconds): clock[0] += seconds; counts[0] = 0
+    monkeypatch.setattr(module.time, 'monotonic', lambda:clock[0])
+    monkeypatch.setattr(module.time, 'sleep', wait)
+    transport = object.__new__(module.RosTransport)
+    transport.node = NS(count_services=lambda _:counts[0],count_publishers=lambda _:counts[0])
+    transport._startup_owner_conflict = 'previous explicit attempt failed'
+    transport.assert_no_existing_owner(timeout=.1)
+    assert clock[0] >= .1 and not transport._startup_owner_conflict
+    counts[0] = 1
+    monkeypatch.setattr(module.time, 'sleep', lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    start = clock[0]
+    with pytest.raises(RuntimeError,match='已有ROS控制链'):
+        transport.assert_no_existing_owner(timeout=.1)
+    assert .1 <= clock[0]-start < .13
+    assert transport.control_graph_error()
+    counts[0] = 0
+    transport.assert_no_existing_owner(timeout=.1)
+    assert not transport._startup_owner_conflict
+
+
+def test_lost_parameter_reply_retries_and_ignores_old_generation(monkeypatch):
+    import manual_panel_ros_backend as module
+    clock=[10.0];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    class Future:
+        cancelled=False
+        def add_done_callback(self,callback):self.callback=callback
+        def cancel(self):self.cancelled=True
+        def result(self):return NS(values=[NS(type=2,integer_value=1000),NS(type=2,integer_value=250)])
+    futures=[]
+    def send(request):
+        future=Future();futures.append(future);return future
+    transport=object.__new__(module.RosTransport)
+    transport.parameter_client=NS(service_is_ready=lambda:True,call_async=send)
+    transport.get_parameters_type=NS(Request=lambda:NS());transport.parameter_integer_type=2
+    transport.closed=False;transport.status_max_age_ms=None;transport.feedback_max_age_ms=None
+    transport.parameter_pending=False;transport.parameter_retry_at=0.
+    transport.refresh_status_budget()
+    clock[0]=10.999;transport.refresh_status_budget();assert len(futures)==1
+    clock[0]=11.;transport.refresh_status_budget()
+    assert len(futures)==2 and futures[0].cancelled
+    futures[0].callback(futures[0])
+    assert transport.parameter_pending and transport.status_max_age_ms is None
+    futures[1].callback(futures[1])
+    assert not transport.parameter_pending
+    assert (transport.status_max_age_ms,transport.feedback_max_age_ms)==(1000,250)
+    transport.closed=True;futures[0].callback(futures[0])
+    assert transport.status_max_age_ms==1000

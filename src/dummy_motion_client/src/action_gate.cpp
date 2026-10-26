@@ -49,13 +49,15 @@ bool finite(const std::vector<double> &values) {
  * @brief 校验用户容差形状和最大值，零值后续映射到profile默认。
  * @param values 可为空的用户容差向量。
  * @param limits 同轴序profile容差上限。
- * @return 空向量或有限非负且不宽于上限时true；并非零值意味着零误差要求。
+ * @param allow_unspecified_limit 路径默认0仅不设置附加Host上限，显式正值仍有效。
+ * @return 空向量或有限非负且满足已有非零上限时true；零值不是零误差要求。
  */
-bool tolerance(const std::vector<double> &values, const std::vector<double> &limits) {
+bool tolerance(const std::vector<double> &values, const std::vector<double> &limits,
+               bool allow_unspecified_limit = false) {
   if (values.empty()) return true;
   if (values.size()!=limits.size() || !finite(values)) return false;
   for (std::size_t i=0;i<values.size();++i)
-    if (values[i]<0 || values[i]>limits[i]) return false;
+    if (values[i]<0 || ((!allow_unspecified_limit || limits[i]>0) && values[i]>limits[i])) return false;
   return true;
 }
 }
@@ -95,7 +97,7 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
       (!input.goal_tolerance.empty() && input.goal_tolerance.size()!=count)) return {};
   if (!input.path_tolerance.empty()) output.path_tolerance=reorder(input.path_tolerance);
   if (!input.goal_tolerance.empty()) output.goal_tolerance=reorder(input.goal_tolerance);
-  if (!tolerance(output.path_tolerance,profile.path_tolerance) ||
+  if (!tolerance(output.path_tolerance,profile.path_tolerance,true) ||
       !tolerance(output.goal_tolerance,profile.goal_tolerance)) return {};
   if (output.path_tolerance.empty()) output.path_tolerance=profile.path_tolerance;
   if (output.goal_tolerance.empty()) output.goal_tolerance=profile.goal_tolerance;
@@ -117,7 +119,7 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
     if (!point.accelerations.empty()) point.accelerations=reorder(point.accelerations);
     for (std::size_t i=0;i<count;++i) {
       if (profile.lower[i]>profile.upper[i] || profile.velocity[i]<=0 || profile.acceleration[i]<=0 ||
-          profile.path_tolerance[i]<=0 || profile.goal_tolerance[i]<=0 ||
+          profile.path_tolerance[i]<0 || profile.goal_tolerance[i]<=0 ||
           point.positions[i]<profile.lower[i] || point.positions[i]>profile.upper[i] ||
           (!point.velocities.empty() && std::abs(point.velocities[i])>profile.velocity[i]) ||
           (!point.accelerations.empty() && std::abs(point.accelerations[i])>profile.acceleration[i])) return {};

@@ -378,6 +378,43 @@ int release_transition_tests() {
   if (!release_idle_transition_pending(delayed_idle, observation, 1500000U, 250000U))
     return 63;  // Coherent Disabling must not rebase the release-start epoch.
 
+  // GUI17真实顺序：D10后8ms Disabling，12ms Idle State，519ms才到Idle Status。
+  ReleaseTransitionObservation retained{};
+  retained.release_stage = 2;
+  retained.original = {1754154692906416797ULL, 3979306397436071622ULL, 1U, 60U};
+  retained.status = {retained.original.boot_epoch, retained.original.session_id, 1U, 61U};
+  retained.state = {retained.original.boot_epoch, 0U, 1U, 61U};
+  retained.original_management_epoch = 117U;
+  retained.status_management_epoch = retained.state_management_epoch = 118U;
+  retained.status_core_state = 8U;
+  retained.state_core_state = 2U;
+  DeviceObservation actual;
+  actual.status_received_us = 258776428906ULL;
+  const std::uint64_t at = actual.status_received_us + 510799U;
+  actual.state_received_us = at - 10000U;
+  if (!release_idle_transition_pending(retained, actual, at, 250000U, 1000000U, 1U)) return 120;
+  if (release_idle_transition_pending(retained, actual, at, 250000U)) return 121;
+  for (unsigned i = 0; i < 12; ++i) {
+    auto bad = retained;
+    auto sample = actual;
+    switch (i) {
+    case 0: sample.status_received_us = at - 1000001U; break;
+    case 1: sample.state_received_us = at - 250001U; break;
+    case 2: ++bad.state.boot_epoch; break;
+    case 3: ++bad.state.reference_epoch; break;
+    case 4: bad.state.session_id = 9U; break;
+    case 5: ++bad.state_management_epoch; break;
+    case 6: bad.state_core_state = 9U; break;
+    case 7: ++bad.status.session_id; break;
+    case 8: ++bad.status.reference_epoch; break;
+    case 9: ++bad.state.motion_epoch; break;
+    case 10: bad.release_stage = 4; break;
+    case 11: bad.status_core_state = 9U; break;
+    }
+    if (release_idle_transition_pending(bad, sample, at, 250000U, 1000000U, 1U)) return 122+i;
+  }
+
+
   wire::DummyDeviceStatusV2 final_status;
   wire::DummyJointStateV2 final_state;
   final_status.set_boot_epoch(7U);

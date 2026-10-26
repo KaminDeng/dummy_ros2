@@ -14,6 +14,8 @@ int main(int argc,char** argv) {
  auto p=load_manual_panel_deployment(argv[1],argv[2],argv[3]);
  assert(!p.profile.bench_only && !p.profile.software_only_development);
  assert(p.profile_id==201 && p.joint_mask==63);
+ for(double tolerance:p.profile.joints.path_tolerance)assert(tolerance==0);
+ for(double tolerance:p.profile.joints.goal_tolerance)assert(tolerance==.003);
  assert(p.transport.control_period_us==20000 && p.transport.state_publish_period_us==20000);
  assert(p.reference.max_feedback_age_us==p.transport.max_state_age_us);
  assert(p.transport.position_min[0]==-3.2 && p.transport.velocity_max[0]>1.09);

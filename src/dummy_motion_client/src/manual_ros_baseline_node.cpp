@@ -8,6 +8,7 @@
 #include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <controller_manager_msgs/srv/set_hardware_component_state.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <csignal>
 #include <dpsdk_interfaces/msg/dummy_device_status_v2.hpp>
 #include <dpsdk_interfaces/msg/dummy_joint_state_v2.hpp>
@@ -40,6 +41,7 @@ using Apply = moveit_msgs::srv::ApplyPlanningScene;
 using Validity = moveit_msgs::srv::GetStateValidity;
 using Hardware = controller_manager_msgs::srv::SetHardwareComponentState;
 using Switch = controller_manager_msgs::srv::SwitchController;
+using Controllers = controller_manager_msgs::srv::ListControllers;
 using GoalHandle = rclcpp_action::ClientGoalHandle<Fjt>;
 // 标准Action客户端只暴露本次原随机UUID；协议和请求仍由rclcpp_action处理。
 class ReceiptActionClient final : public rclcpp_action::Client<Fjt> {
@@ -128,6 +130,7 @@ public:
         "/controller_manager/set_hardware_component_state");
     controllers_ =
         create_client<Switch>("/controller_manager/switch_controller");
+    controller_list_ = create_client<Controllers>("/controller_manager/list_controllers");
     for (const auto &name :
          {"calibrate_manual_reference", "manual_reference_status",
           "enable_hold", "bootstrap_status", "disable_and_release", "last_goal_rejection"})
@@ -240,7 +243,7 @@ private:
             (boot_ == state_.boot_epoch && device_ == state_.device_id));
   }
   bool moving_ready() const {
-    return fresh() && state_.position_valid_mask == 63 &&
+    return controllers_active_ && fresh() && state_.position_valid_mask == 63 &&
            state_.velocity_valid_mask == 63 && state_.session_id &&
            state_.profile_id == status_.profile_id &&
            state_.session_id == status_.session_id && state_.reference_epoch &&
@@ -284,6 +287,8 @@ private:
     const auto started_at = steady_us();
     if (!flow_.start(started_at))
       return false;
+    controllers_active_ = false;
+    pending_controller_activation_.clear();
     task_started_us_ = started_at;
     manual_mode_ = manual;
     step_started_ = steady_us();
@@ -582,18 +587,47 @@ private:
           ++substep_;
       });
     } else if (substep_ == 1) {
+      request<Controllers>(controller_list_, std::make_shared<Controllers::Request>(),
+                           [this](const auto &response) {
+        std::vector<std::string> inactive;
+        for (const auto &name : {"joint_state_broadcaster", "arm_controller"}) {
+          unsigned matches = 0;
+          std::string state;
+          for (const auto &controller : response.controller) {
+            if (controller.name == name) { ++matches; state = controller.state; }
+          }
+          // 等spawner配置完成；原flow/step绝对截止不因轮询延期。
+          if (matches != 1 || (state != "inactive" && state != "active")) return;
+          if (state == "inactive") inactive.emplace_back(name);
+        }
+        pending_controller_activation_ = std::move(inactive);
+        ++substep_;
+      });
+    } else if (substep_ == 2) {
+      if (pending_controller_activation_.empty()) { ++substep_; return; }
       auto req = std::make_shared<Switch::Request>();
-      req->activate_controllers = {"joint_state_broadcaster", "arm_controller"};
-      req->strictness = Switch::Request::BEST_EFFORT;
-      req->activate_asap = true;
+      // 已active者不重复激活；所有尚inactive者在同一次STRICT事务中激活。
+      req->activate_controllers = pending_controller_activation_;
+      req->strictness = Switch::Request::STRICT;
+      req->activate_asap = false;
       req->timeout.sec = 10;
       request<Switch>(controllers_, req, [this](const auto &response) {
-        if (!response.ok)
-          fail("控制器激活失败: " + response.message);
-        else
-          ++substep_;
+        if (!response.ok) fail("控制器严格激活失败: " + response.message);
+        else ++substep_;
       });
-    } else if (substep_ == 2)
+    } else if (substep_ == 3) {
+      request<Controllers>(controller_list_, std::make_shared<Controllers::Request>(),
+                           [this](const auto &response) {
+        for (const auto &name : {"joint_state_broadcaster", "arm_controller"}) {
+          unsigned matches = 0;
+          for (const auto &controller : response.controller)
+            if (controller.name == name && controller.state == "active") ++matches;
+          if (matches != 1) return;
+        }
+        controllers_active_ = true;
+        ++substep_;
+      });
+    } else if (substep_ == 4)
       trigger("enable_hold", [this](const auto &response) {
         if (!response.success)
           fail("保持未受理: " + response.message);
@@ -1620,6 +1654,9 @@ private:
   std::map<std::string, rclcpp::Client<Trigger>::SharedPtr> services_;
   rclcpp::Client<Hardware>::SharedPtr hardware_;
   rclcpp::Client<Switch>::SharedPtr controllers_;
+  rclcpp::Client<Controllers>::SharedPtr controller_list_;
+  bool controllers_active_ = false;
+  std::vector<std::string> pending_controller_activation_;
   rclcpp::Client<Plan>::SharedPtr plan_;
   rclcpp::Client<Scene>::SharedPtr scene_;
   rclcpp::Client<Apply>::SharedPtr apply_;

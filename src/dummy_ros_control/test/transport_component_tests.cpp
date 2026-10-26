@@ -135,7 +135,7 @@ int test_released_idle_startup_baseline() {
         return 383;
     }
   }
-  for (const auto known_source : {0x1067U, 0x1024U}) {
+  for (const auto known_source : {0x1067U, 0x1024U, 0x1008U}) {
     HistoricalIdleBaselineContext manual{};
     manual.manual_reference_mode = true;
     Status recovered;
@@ -151,6 +151,10 @@ int test_released_idle_startup_baseline() {
     if (known_source==0x1024U) {
       recovered.set_boot_epoch(17820284845494219766ULL);
       recovered.set_run_id(99U); // panel-interface-02当前已Clear的历史Fault4。
+    }
+    if (known_source == 0x1008U) {
+      recovered.set_boot_epoch(1754154692906416797ULL);
+      recovered.set_run_id(15U); // GUI HOME已显式清除导数拒绝，历史失败仍保留。
     }
     if (!historical_released_idle_baseline(recovered, manual))
       return 360;

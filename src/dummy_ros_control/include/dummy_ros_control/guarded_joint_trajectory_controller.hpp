@@ -61,6 +61,8 @@ class GuardedJointTrajectoryController
    * @param previous_state 框架先前状态。
    * @return 基类deactivate结果；不是设备Stop确认。
    */
+  controller_interface::CallbackReturn on_activate(
+      const rclcpp_lifecycle::State &previous_state) override;
   controller_interface::CallbackReturn on_deactivate(
       const rclcpp_lifecycle::State &previous_state) override;
 
@@ -113,6 +115,10 @@ class GuardedJointTrajectoryController
   /**
    * @brief 登记mutex仅用于非实时register/submit/clear；update不获取此锁。
    */
+  // 采样相位固定20ms；真实回调时钟仅用于倒退和完整丢拍检查。
+  bool timing_failed_=false, update_clock_known_=false;
+  std::int64_t last_update_clock_ns_=0;
+  rcl_clock_type_t last_update_clock_type_=RCL_ROS_TIME;
   std::mutex gate_mutex_;
   GoalRegistrationGate gate_;
   std::atomic<UpdateSink> update_sink_{nullptr};

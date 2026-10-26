@@ -34,6 +34,7 @@ void dynamic_rest_case(int kind) {
   ConfirmedManualStart confirm{1,1,digest,false,true};
   std::uint64_t now=100000;std::uint32_t seq=1;
   Position position=long_path?options.manual_limit_position:options.rest_position;
+  if(kind==0)position[1]-=0.004; // 真正贴近危险侧的短退让，非普通工作区。
   if(kind==2)position[2]=120*rad; // 仅J2退让，J3在有效域保持120度。
   if(kind==3) {position[1]=-40*rad;position[2]=120*rad;}
   const double initial_j3=position[2];
@@ -42,6 +43,12 @@ void dynamic_rest_case(int kind) {
   auto step=[&] {now+=20000;++seq;boot.observe(snap,now);manual.observe(snap,position,seq,now);boot.tick(now);manual.tick(now);};
   snap.control_mode=1;++snap.management_epoch;step();
   snap.session_id=3;++snap.management_epoch;step();
+  if(kind==3) {
+    while(client.sent.back().operation()!=5 && manual.active())step();
+    assert(client.sent.back().operation()==5);
+    for(const auto& request:client.sent)assert(request.operation()!=16 && request.operation()!=17);
+    return;
+  }
   while(client.sent.back().operation()!=17 && manual.active())step();
   assert(client.sent.back().operation()==17);
   ++snap.motion_epoch;++snap.management_epoch;step();const auto anchor=now;
@@ -153,13 +160,19 @@ int main() {
 
 
   // 同boot已资格参考只能显式复用；复用绝不能重采16或积累raw窗口。
-  for (int reuse_case : {0,1,2,3}) {
+  for (int reuse_case : {0,1,2,3,4,5,6}) {
     ManualClient reuse_client;
     BootstrapCoordinator reuse_boot(reuse_client,identity,digest,1000000);
     ManualReferenceOptions reuse_options=options;
     reuse_options.stationary_window_us=10;reuse_options.minimum_samples=2;
     reuse_options.max_feedback_age_us=100000;
     reuse_options.manual_limit_position.fill(1.0);
+    reuse_options.position_min[1]=0;reuse_options.rest_position[1]=0.2;
+    if(reuse_case==4) {
+      reuse_options.position_min.fill(-3.14159265358979323846);
+      reuse_options.position_max.fill(3.14159265358979323846);
+      reuse_options.position_min[1]=-73*3.14159265358979323846/180.;
+    }
     ManualReferenceCoordinator reuse(reuse_boot,reuse_options);
     BootstrapSnapshot retained{};retained.boot_epoch=1;retained.profile_id=1;
     retained.raw_ready=true;retained.motion_supported=true;retained.configured_mask=63;
@@ -177,6 +190,8 @@ int main() {
       at+=10000;++seq;reuse_boot.observe(retained,at);
       Position calibrated{};
       calibrated.fill(0.2);
+      if(reuse_case==4) {calibrated[1]=0;calibrated[2]=1.5707963267948966;}
+      if(reuse_case==5)calibrated[0]=101;
       if(raw)reuse.observe_raw(retained,{},seq,at);else reuse.observe(retained,calibrated,seq,at);
       reuse_boot.tick(at);reuse.tick(at);
     };
@@ -204,7 +219,25 @@ int main() {
     observed(true);observed(true);assert(reuse_client.requests==2);
     observed();reuse.observe(retained,{},seq,at+1);reuse.tick(at+1);
     assert(reuse_client.requests==2);observed();
+    if(reuse_case==4) {
+      // Home保留参考：普通工作区直接许可，不重新退让、采零或伪造Enable完成。
+      assert(reuse_client.sent.back().operation()==5);
+      retained.real_motion_permitted=true;retained.permit_remaining_us=1000000;
+      ++retained.management_epoch;observed();
+      assert(reuse.phase()==ManualReferencePhase::kReady && reuse.authorization());
+      for(const auto& request:reuse_client.sent)assert(request.operation()!=16 && request.operation()!=17 && request.operation()!=18 && request.operation()!=19);
+      continue;
+    }
+    if(reuse_case==5) {
+      assert(reuse.phase()==ManualReferencePhase::kFault);
+      assert(reuse_client.requests==2);continue;
+    }
     assert(reuse_client.sent.back().operation()==17);
+    if(reuse_case==6) {
+      reuse.tick(at+reuse_options.max_feedback_age_us+1);
+      assert(reuse.phase()==ManualReferencePhase::kFault);
+      for(const auto& request:reuse_client.sent)assert(request.operation()!=5);continue;
+    }
     retained.motion_epoch=1;++retained.management_epoch;observed();
     for(int i=0;i<5;++i)observed();
     assert(reuse_client.sent.back().operation()==18);
@@ -218,7 +251,7 @@ int main() {
     for(const auto& request:reuse_client.sent)assert(request.operation()!=16 && request.operation()!=3);
   }
   // 显式标记不放宽session/reference kind/双Idle/permit门槛。
-  for(int bad=0;bad<7;++bad) {
+  for(int bad=0;bad<10;++bad) {
     ManualClient c;BootstrapCoordinator b(c,identity,digest,1000000);
     ManualReferenceCoordinator m(b,options);
     BootstrapSnapshot r{};r.boot_epoch=1;r.profile_id=1;r.raw_ready=true;
@@ -232,6 +265,9 @@ int main() {
     if(bad==4)r.state_core_state=4;
     if(bad==5)r.real_motion_permitted=true;
     if(bad==6)r.permit_remaining_us=1;
+    if(bad==7)r.boot_epoch=2;
+    if(bad==8)r.raw_ready=false;
+    if(bad==9)r.configured_mask=31;
     assert(!m.start(ok,r,100));assert(c.requests==0);
   }
 }

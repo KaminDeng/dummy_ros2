@@ -295,6 +295,14 @@ class JointPanel(QtWidgets.QWidget):
     # @return None；执行上述状态更新、界面或日志操作。
     def request_reconnect(self):
         if self.backend == 'ros':
+            if (self.ros_runtime.process is None and
+                    getattr(self.ros_backend.transport, '_startup_owner_conflict', '')):
+                # 被拒绝的启动从未拥有设备链；明确重试发现，
+                # 不向无关的既有拥有者发送D10。
+                self.ros_backend.transport.close()
+                self.pending_backend = 'ros'
+                self.apply_backend_change()
+                return
             if not self.ros_backend.released:
                 self.release('RELEASE')
                 self.message('先等待 C++ 确认失能释放，再次点击重连；重连不自动恢复运动。')
@@ -1408,13 +1416,13 @@ class JointPanel(QtWidgets.QWidget):
             self.actual_q = list(state.position_rad)
             for label, value in zip(self.feedback_labels, state.position_rad):
                 label.setText(f'{math.degrees(value):.3f}°')
-            self.show_actual_description(True)
 
     def ros_tick(self):
         now = time.monotonic()
         self.ros_runtime.check_startup_timeout(now - self.ros_started_at, float(self.cfg.get('ros_startup_timeout_s', 30)))
         graph_error = self.ros_backend.transport.control_graph_error()
         if graph_error:
+            self.show_actual_description(False)
             self.authorized = False
             self.status.setText(graph_error + '；禁止控制请求，未接管其他进程。')
             return
@@ -1435,6 +1443,17 @@ class JointPanel(QtWidgets.QWidget):
                             0 <= status_age_ns <= status_budget_ms * 1_000_000)
         matched = bool(state and status and all(state[key] == getattr(status, key, None)
                        for key in ('boot_epoch', 'reference_epoch', 'session_id')))
+        # ROS只读态没有JSB关节TF；数值反馈不能单独让完整URDF可见。
+        # manual_ready或自动流程真实双Hold/Run均已通过C++控制器激活确认。
+        manual_model_ready = (self.ros_backend.manual_ready and
+            self.ros_runtime.state == 'Active' and not self.ros_backend.released)
+        auto_model_ready = bool(self.ros_backend.operation == 'auto' and state and status and
+            state['core_state'] in (4, 5) and status.core_state in (4, 5))
+        positions = state.get('position_rad', ()) if state else ()
+        self.show_actual_description(bool(matched and self.fresh() and status_fresh and
+            state['position_valid_mask'] == 63 and state['reference_epoch'] != 0 and
+            state['session_id'] != 0 and len(positions) == 6 and
+            all(math.isfinite(q) for q in positions) and (manual_model_ready or auto_model_ready)))
         # 仅镜像权威快照用于UI准入；不申请或推导设备许可。
         self.authorized = bool(matched and self.fresh() and
             status_fresh and

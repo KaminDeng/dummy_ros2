@@ -107,7 +107,7 @@ bool two_stream_handshake() {
   auth.identity.set_expected_profile_id(1); auth.identity.set_configured_mask(1);
   if (!gate.enable(auth,100)) return false;
   wire::DummyManageV2Response receipt; receipt.set_schema_major(2); receipt.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  receipt.set_request_id(1);
+  receipt.set_request_id(transport.requests.front().request_id());
   receipt.set_boot_epoch(7); receipt.set_session_id(9);
   receipt.set_profile_id(1); receipt.set_receipt(1); receipt.set_operation_id(101);
   receipt.set_transaction_phase(1);
@@ -130,6 +130,7 @@ bool two_stream_handshake() {
   transport.respond(receipt); gate.tick(103); if (gate.ready()) return false;
   state.set_state_seq(2); state.set_committed_producer_seq(1);
   state.set_core_state(4); state.set_hold_ready(true);
+  state.set_can_submitted_mask(1); state.set_can_sent_mask(1);
   state.set_freshness_ticket(55);
   if(!observe() || !gate.ready() || observe()) return false;
   const Trajectory motion{{"Joint1"},{{{0.0},{},{},1.0}},{},{},0};

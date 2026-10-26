@@ -18,7 +18,7 @@ from dpsdk_interfaces.msg import DummyDeviceStatusV2, DummyJointStateV2
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 from rclpy.executors import SingleThreadedExecutor
-from controller_manager_msgs.srv import SetHardwareComponentState, SwitchController
+from controller_manager_msgs.srv import SetHardwareComponentState, SwitchController, ListControllers
 from moveit_msgs.srv import GetMotionPlan, GetPlanningScene, ApplyPlanningScene, GetStateValidity
 
 rclpy.init()
@@ -233,6 +233,11 @@ if planning_mode:
         response.ok = True
         return response
 
+    def list_controllers(_request, response):
+        from controller_manager_msgs.msg import ControllerState
+        response.controller = [ControllerState(name=name, state="active") for name in ("joint_state_broadcaster", "arm_controller")]
+        return response
+
     def enable_hold(_request, response):
         global held
         held = True
@@ -345,6 +350,7 @@ if planning_mode:
     services.extend([
         node.create_service(SetHardwareComponentState, "/controller_manager/set_hardware_component_state", accept_hardware),
         node.create_service(SwitchController, "/controller_manager/switch_controller", accept_controllers),
+        node.create_service(ListControllers, "/controller_manager/list_controllers", list_controllers),
         node.create_service(Trigger, "/device_action_gate/enable_hold", enable_hold),
         planning_peers[0].create_service(GetMotionPlan, "/plan_kinematic_path", reject_plan),
         scene_peer.create_service(GetPlanningScene, "/get_planning_scene", read_scene),

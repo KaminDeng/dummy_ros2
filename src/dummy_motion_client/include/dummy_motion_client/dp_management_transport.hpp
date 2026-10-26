@@ -330,28 +330,45 @@ bool retained_reference_released_idle_observation(
  * @param observation 原接收时间快照。
  * @param now 宿主µs。
  * @param state_max_age_us State接收年龄预算µs。
- * @return bool；同boot，epoch恰原值+1，State owner/reference归零，双接收年龄满足。
+ * @param status_max_age_us Status独立接收年龄预算µs。
+ * @param expected_retained_reference 仅显式manual非零参考启用Disabling→Idle保留参考等待。
+ * @return bool；同boot/绑定owner，双epoch恰原值+1，State owner归零，双接收年龄满足。
  */
 inline bool release_idle_transition_pending(const ReleaseTransitionObservation &value,
                                             const DeviceObservation &observation,
                                             std::uint64_t now,
-                                            std::uint64_t state_max_age_us) noexcept {
+                                            std::uint64_t state_max_age_us,
+                                            std::uint64_t status_max_age_us = 1000000U,
+                                            std::uint32_t expected_retained_reference = 0U) noexcept {
+  const bool legacy_idle = expected_retained_reference == 0U &&
+    value.status_core_state == 7U && value.state_core_state == 1U &&
+    value.state.reference_epoch == 0U;
+  const bool retained_idle = expected_retained_reference != 0U &&
+    value.original.reference_epoch == expected_retained_reference &&
+    value.status_core_state == 8U && value.state_core_state == 2U &&
+    value.state.reference_epoch == expected_retained_reference;
+  const auto fresh = [now](std::uint64_t received, std::uint64_t max_age) {
+    return received != 0U && max_age != 0U &&
+      (now <= received || now - received <= max_age);
+  };
+  // 仅等待已绑定D10的有限跨topic过渡，不确认释放或授予控制。
   return value.release_stage==2 && value.original.boot_epoch!=0U &&
     value.original.session_id!=0U && value.original.reference_epoch!=0U &&
     value.status.boot_epoch==value.original.boot_epoch &&
     value.status.session_id==value.original.session_id &&
     value.status.reference_epoch==value.original.reference_epoch &&
-    value.status_core_state==7U && value.state_core_state==1U &&
-    value.state.boot_epoch==value.original.boot_epoch &&
-    value.state.session_id==0U && value.state.reference_epoch==0U &&
+    (legacy_idle || retained_idle) &&
+    value.state.boot_epoch==value.original.boot_epoch && value.state.session_id==0U &&
     value.original.motion_epoch!=UINT32_MAX &&
     value.status.motion_epoch==value.original.motion_epoch+1U &&
     value.state.motion_epoch==value.status.motion_epoch &&
     value.original_management_epoch!=UINT32_MAX &&
     value.status_management_epoch==value.original_management_epoch+1U &&
     value.status_management_epoch==value.state_management_epoch &&
-    observation_is_fresh(observation,now,state_max_age_us);
+    fresh(observation.state_received_us, state_max_age_us) &&
+    fresh(observation.status_received_us, status_max_age_us);
 }
+
 /**
  * @brief 核故障标志与最小State授权四元组的允许前进量。
  * 不检查profile/ID/hash、源时钟或+1是否合法管理因果；这些必须由调用方补足，不能只靠epoch数值授权。

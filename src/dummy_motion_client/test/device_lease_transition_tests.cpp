@@ -10,6 +10,8 @@
 #include "action_test_support.hpp"
 
 #include <cassert>
+#include <filesystem>
+#include <unistd.h>
 
 /**
  * @brief 仅记Enable请求且始终无回执的管理端。
@@ -325,6 +327,50 @@ void manual_permit_restore_requires_closed_previous_goal() {
 }
 
 int main() {
+  {
+    // GUI13同拍本地期望比实测领先0.0524rad；默认不能据此声称真实SENT跟踪失败。
+    dummy_motion_client::Trajectory trajectory{{"Joint3"},{{{1.570795},{},{},1.54}},{0},{.003},0};
+    dummy_ros_control::GuardedExecutionSample sample{};
+    sample.actual[0]=2.79930633;sample.desired[0]=2.746888436;
+    auto check=dummy_motion_client::check_execution_positions(sample,trajectory);
+    assert(check.path_valid && !check.at_goal);
+    trajectory.path_tolerance[0]=.05;
+    check=dummy_motion_client::check_execution_positions(sample,trajectory);
+    assert(!check.path_valid && !check.at_goal);
+    trajectory.path_tolerance[0]=0;
+    sample.desired[0]=trajectory.points.back().positions[0];
+    sample.actual[0]=sample.desired[0]+.0031;
+    check=dummy_motion_client::check_execution_positions(sample,trajectory);
+    assert(check.path_valid && !check.at_goal);
+    sample.actual[0]=sample.desired[0];
+    check=dummy_motion_client::check_execution_positions(sample,trajectory);
+    assert(check.path_valid && check.at_goal);
+    sample.actual[0]=std::numeric_limits<double>::quiet_NaN();
+    assert(!dummy_motion_client::check_execution_positions(sample,trajectory).path_valid);
+    sample.actual[0]=sample.desired[0];sample.desired[0]=std::numeric_limits<double>::infinity();
+    assert(!dummy_motion_client::check_execution_positions(sample,trajectory).path_valid);
+  }
+
+  {
+    // GUI8：准备与只读规划没有创建FJT目标；即使已有真实D10回执和双Idle，
+    // 也不得伪造目标时间线释放行。
+    const auto path = std::filesystem::temp_directory_path() /
+        ("prepare-only-release-" + std::to_string(::getpid()) + ".csv");
+    std::filesystem::remove(path);
+    dummy_motion_client::GoalTimeline timeline(path.string());
+    dummy_motion_client::TimelineEvent released{};
+    released.kind = dummy_motion_client::TimelineEvent::Kind::kRelease;
+    released.release_request_id=101U; released.release_operation_id=13U;
+    if (dummy_motion_client::goal_timeline_release_required(false))
+      timeline.record(released);
+    assert(!timeline.failed());
+    assert(dummy_motion_client::goal_timeline_release_required(true));
+    // 存在目标历史时仍走原严格时间线验证；伪造或乱序释放绝不接受。
+    assert(!timeline.record(released));
+    assert(timeline.failed());
+    timeline.close(); std::filesystem::remove(path);
+  }
+
   manual_permit_restore_requires_closed_previous_goal();
   {
     using namespace dummy_motion_client;
