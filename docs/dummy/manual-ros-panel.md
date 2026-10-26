@@ -4,7 +4,21 @@
 
 本轮已调整为SDK先行：先从Native真实行为提取公共参考/状态预算策略并安装SDK，再让ROS C++消费SDK公开常量，最后进行软件回归和实机验收。Status预算沿用Native真实1秒，默认与上限由SDK/C++约束；不继续先修ROS局部500ms规则。中央协议与REF不因此增设副本，Native CLI行为不改。公共化完成、软件测试和实机验收是分别证明的事项，不能相互代替。
 
-## 最终GUI24交还：正常确认、真实Hold及失能有效参考
+## 当前使用入口与最终验证边界
+
+ROS按钮“双限位标定 / 恢复控制”只准备手动控制，不启动自动验收。ref0须按真实双限位确认建立参考；同boot已有参考则核实后复用。正常确认耗时不计入实际子链启动或首次场景同步预算。规划仍须六服务唯一同场景及有效实测起点，完整路径成功后再执行；已消耗的路径需要重新规划。停止以C++权威RELEASED_IDLE及新鲜设备状态为准，不能仅看硬件Idle或按钮状态。
+
+最近修复均保留原安全门：只读历史准入仅接受已明确清故障的Safety2/0x1002严格形状，不消除历史Fault或授予许可；启动30秒与初次场景20秒从实际开始使用时计时，不把人工确认等待算作子链故障，也不重开真实超时；无关观察节点退出不再锁死场景，六服务唯一同组owner与未知异常拒绝仍完整。
+
+释放还区分真实硬件与Host确认：GUI30五轨迹到位及D10原件成功，但当时Host RELEASE_UNCONFIRMED保留为失败；已补manual保留参考的Stopping7/Disabling8→Idle2有限等待，不放宽原新鲜度/身份/截止。GUI31实际TF18links/6states齐全、C++/UI释放通过但无新轨迹。GUI26的启动假超时、GUI28/29驱动边界与GUI30失败详情保留在Bug台账及原报告，不作为成功验收覆盖。最终GUI32已在普通生产窗口完成两条路径、立即Stop、C++/UI释放确认和正常重连，具体证据见下列当前验收摘要。
+
+### 当前验收摘要
+
+GUI30正常生产Qt的45.008秒人工确认等待、连续五轨迹实际到位均通过，但该轮软件释放失败保持原结论。最终GUI32补齐两条完整公开FJT与独立到位（jointRest 0.048719°、末端页namedHome 0.077467°），Active TF18links/6states齐全，观察节点退出不再误锁场景；立即Stop后硬件与C++/UI均确认释放，真实7→2跨流512ms正常等待，随后正常No重连并独立确认fresh双Idle/ref2/session0/permit0。
+
+交还前已有有效ref2，无需重新采零；先在正常确认框恢复手动控制，再分别规划和执行，已消费路径需重新规划。保持默认60°/s、4rad/s²，不以此宣称驱动独立失能读回或正式资源资格。报告gui32-verified-handoff/final-evidence.json和handoff-completion.json保留关联证据；驱动AT-SPI短超时已单列，不能把驱动的FAILED当成实际重连失败，也不掩盖GUI30旧Host释放失败。
+
+## 历史GUI24交还：当时正常确认、Hold及失能有效参考
 
 GUI22交还后用户报告“使能无反应”，不能只凭此前无运动Stop/重连成功认定后续确认交互也通过。现场XQueryKeymap仅显示Escape（keycode9）held=True；无ROS、无hook的纯标准Qt QMessageBox实际收到KeyPress16777216并clicked No，约20–75ms自动关闭。AA_DontUseNativeDialogs不改变此行为。执行xdotool keyup Escape后，同样标准确认框保持5.05秒，直到诊断Timer主动reject。该证据定位到当时的输入状态及Qt行为，不推断Esc按下状态的来源，也不是ROS管理服务或设备拒绝的证据。
 
