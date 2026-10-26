@@ -31,6 +31,8 @@ Thumbs.db
 
 # ROS 本地配置、录包及运行日志；合同 JSON/YAML 和媒体资源保留可见。
 /.ros/
+# 面板与实机验证生成的原始反馈、目标时间线和本地报告。
+/dummy_reports/
 rosbag2_*/
 *.bag
 *.bag.active

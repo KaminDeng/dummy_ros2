@@ -16,6 +16,14 @@ if [[ -z "$DPSDK_ROOT" || ! -f "$DPSDK_ROOT/tools/ros2/zenbedded.repos" ]]; then
 fi
 export DPSDK_ROOT
 cd "$workspace_root"
+: "${DPSDK_HOST_SDK_PREFIX:?请明确指定既有ROS PIC SDK安装前缀}"
+/usr/bin/python3 scripts/assemble_sdk_ros_interfaces.py \
+  --sdk-prefix "$DPSDK_HOST_SDK_PREFIX" \
+  --protocol-tools "${DPSDK_PROTOCOL_TOOLS:-$DPSDK_ROOT/libraries/dp_protocol/tools}" \
+  --output build_protocol/interfaces/dpsdk_interfaces
+colcon --log-base log_protocol build --base-paths build_protocol/interfaces \
+  --build-base build_protocol --install-base install_protocol --packages-select dpsdk_interfaces
+source install_protocol/local_setup.bash
 # 从canonical scene.yaml重新生成empty.sdf；应修改场景输入或模板来维护生成内容。
 /usr/bin/python3 src/dummy_bringup/scripts/generate_world.py \
   --scene src/dummy_bringup/config/scene.yaml \
@@ -23,4 +31,6 @@ cd "$workspace_root"
 # 固定系统Python以匹配ROS系统包，使用build/install/log_dummy；其余构建参数原样转发。
 # 该脚本不主动清除历史underlay，调用前需要准备正确ROS和SDK依赖环境。
 colcon --log-base log_dummy build --build-base build_dummy --install-base install_dummy \
-  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 "$@"
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 \
+  -DDPSDK_HOST_SDK_PREFIX="$DPSDK_HOST_SDK_PREFIX" \
+  -DDPSDKHostSDK_DIR="$DPSDK_HOST_SDK_PREFIX/lib/cmake/DPSDKHostSDK" "$@"

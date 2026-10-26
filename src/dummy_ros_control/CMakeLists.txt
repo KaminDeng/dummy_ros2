@@ -23,7 +23,7 @@ get_filename_component(ROS_WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." AB
 get_target_property(DUMMY_WIRE_INCLUDE dp_protocol::selected INTERFACE_INCLUDE_DIRECTORIES)
 add_library(dummy_dp_comm INTERFACE)
 target_link_libraries(dummy_dp_comm INTERFACE
-  DPSDKHostSDK::dp_comm DPSDKHostSDK::dummy_protocol rt pthread m dl)
+  DPSDKHostSDK::dp_comm DPSDKHostSDK::dummy_protocol DPSDKHostSDK::dummy_manual_reference rt pthread m dl)
 if(BUILD_TESTING AND NOT IS_DIRECTORY "${DPSDK_ROOT}/applications/dummy_ref_control")
   message(FATAL_ERROR "BUILD_TESTING的真实Core回归须显式DPSDK_ROOT；安装消费请用BUILD_TESTING=OFF")
 endif()
@@ -228,6 +228,34 @@ if(BUILD_TESTING)
   add_test(NAME transport_historical_idle_baseline_tests
     COMMAND transport_component_tests historical_idle_baseline)
   set_tests_properties(transport_historical_idle_baseline_tests PROPERTIES LABELS "component_only;offline")
+  add_test(NAME transport_manual_historical_idle_tests COMMAND transport_component_tests manual_historical_idle)
+  add_test(NAME transport_manual_retained_release_tests COMMAND transport_component_tests manual_retained_release)
+  add_test(NAME transport_manual_fault_diagnostic_tests COMMAND transport_component_tests manual_fault_diagnostic)
+  foreach(released_child_case IN ITEMS 1 2 3 4 5 6)
+    add_test(NAME transport_released_child_${released_child_case}_tests
+      COMMAND transport_component_tests released_child ${released_child_case})
+    set_tests_properties(transport_released_child_${released_child_case}_tests
+      PROPERTIES TIMEOUT 10 LABELS "component_only;synthetic_peer")
+  endforeach()
+  add_test(NAME transport_manual_recovered_idle_tests COMMAND transport_component_tests manual_recovered_idle)
+  set_tests_properties(transport_manual_recovered_idle_tests PROPERTIES TIMEOUT 10 LABELS "component_only;offline")
+  add_test(NAME transport_manual_recovered_release_idle_tests
+    COMMAND transport_component_tests manual_recovered_release_idle)
+  set_tests_properties(transport_manual_recovered_release_idle_tests PROPERTIES TIMEOUT 10 LABELS "component_only;offline")
+  foreach(release_recovered_case IN ITEMS current_reason fault source not_sent reference_drift not_committed other_kind)
+    add_test(NAME transport_manual_recovered_release_idle_${release_recovered_case}_tests
+      COMMAND transport_component_tests manual_recovered_release_idle ${release_recovered_case})
+    set_tests_properties(transport_manual_recovered_release_idle_${release_recovered_case}_tests
+      PROPERTIES TIMEOUT 10 LABELS "component_only;offline")
+  endforeach()
+  foreach(recovered_case IN ITEMS current_reason fault source not_sent reference_drift)
+    add_test(NAME transport_manual_recovered_idle_${recovered_case}_tests
+      COMMAND transport_component_tests manual_recovered_idle ${recovered_case})
+    set_tests_properties(transport_manual_recovered_idle_${recovered_case}_tests
+      PROPERTIES TIMEOUT 10 LABELS "component_only;offline")
+  endforeach()
+  set_tests_properties(transport_manual_historical_idle_tests transport_manual_retained_release_tests transport_manual_fault_diagnostic_tests
+    PROPERTIES TIMEOUT 10 LABELS "component_only;offline")
   add_test(NAME transport_six_axis_component_tests COMMAND transport_component_tests six_axis)
   # 票据更新/陈旧/身份变化与释放停用路径分开注册，防止仅凭收到新包就重新授予控制。
   add_test(NAME transport_ticket_refresh_tests COMMAND transport_component_tests six_axis ticket_refresh)
@@ -436,6 +464,8 @@ if(BUILD_TESTING)
   target_link_libraries(real_peer_state_probe dummy_guarded_zenbedded_system)
   add_executable(production_transport_tests test/production_transport_tests.cpp)
   target_link_libraries(production_transport_tests dummy_guarded_zenbedded_system)
+  add_test(NAME transport_stop_timeout_parameters
+    COMMAND production_transport_tests stop_timeout_parameters)
   # 安装锁测试在私有副本检查缺包、错Codec/ABI、通信归档/日志归档与公开载荷篡改。
   add_test(NAME sdk_input_lock_tests COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/installed_sdk_inputs_tests.py"

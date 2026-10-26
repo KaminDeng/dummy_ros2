@@ -22,6 +22,10 @@ find_package(trajectory_msgs REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(controller_manager REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(dpsdk_interfaces REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
+find_package(moveit_msgs REQUIRED)
+find_package(shape_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 # 协议/Policy/通信 ABI 由 control 导出的同一安装 SDK 递归提供。
 set(DPSDK_ROOT "$ENV{DPSDK_ROOT}" CACHE PATH "离线源码模型回归所用DPSDK根")
@@ -32,8 +36,9 @@ get_target_property(DUMMY_WIRE_INCLUDE dp_protocol::selected INTERFACE_INCLUDE_D
 # PUBLIC C++17/公开头/协议及加密依赖传给消费者；跨包公开头的control接口亦必须PUBLIC。
 # BUILD_INTERFACE用于源码构建，INSTALL_INTERFACE用于安装后的消费者。
 add_library(dummy_device_action STATIC
-  src/action_gate.cpp src/bench_permit.cpp src/bootstrap_coordinator.cpp src/management_client.cpp)
-target_link_libraries(dummy_device_action PUBLIC OpenSSL::Crypto DPSDKHostSDK::dummy_protocol
+  src/action_gate.cpp src/bench_permit.cpp src/bootstrap_coordinator.cpp src/management_client.cpp
+  src/manual_reference_coordinator.cpp)
+target_link_libraries(dummy_device_action PUBLIC OpenSSL::Crypto DPSDKHostSDK::dummy_protocol DPSDKHostSDK::dummy_manual_reference
   dummy_ros_control::dummy_goal_registration_gate)
 target_compile_features(dummy_device_action PUBLIC cxx_std_17)
 target_include_directories(dummy_device_action PUBLIC
@@ -47,7 +52,7 @@ add_executable(native_action_gate src/native_action_gate.cpp)
 add_library(dummy_dp_management STATIC src/dp_management_transport.cpp)
 target_link_libraries(dummy_dp_management PUBLIC dummy_device_action dummy_ros_control::dummy_dp_comm
   dummy_ros_control::dummy_guarded_zenbedded_system)
-add_library(dummy_device_profile STATIC src/device_profile.cpp)
+add_library(dummy_device_profile STATIC src/device_profile.cpp src/manual_panel_profile.cpp)
 target_link_libraries(dummy_device_profile PUBLIC dummy_device_action PRIVATE yaml-cpp OpenSSL::Crypto)
 target_compile_definitions(dummy_device_profile PRIVATE
   DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256="${DPSDKHostSDK_ROBOT_MANIFEST_SHA256}")
@@ -65,18 +70,63 @@ target_compile_features(native_action_gate PRIVATE cxx_std_17)
 ament_target_dependencies(native_action_gate control_msgs rclcpp rclcpp_action)
 # 设备Action节点链接管理传输、目标校验、profile、controller/command channel与timeline。
 # ament_target_dependencies提供ROS编译/链接依赖；安装到lib/包名以供ros2 run查找。
+add_library(dummy_panel_feedback STATIC src/panel_feedback.cpp)
+target_link_libraries(dummy_panel_feedback PUBLIC dummy_dp_management)
+ament_target_dependencies(dummy_panel_feedback PUBLIC dpsdk_interfaces)
 add_executable(device_action_gate src/device_action_gate.cpp)
-target_link_libraries(device_action_gate dummy_dp_management dummy_native_goal_validation dummy_device_profile
+target_link_libraries(device_action_gate dummy_panel_feedback dummy_dp_management dummy_native_goal_validation dummy_device_profile
   dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
   dummy_goal_timeline)
 ament_target_dependencies(device_action_gate controller_manager control_msgs rclcpp rclcpp_action
-  controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
+  controller_interface joint_trajectory_controller trajectory_msgs std_srvs dpsdk_interfaces)
 install(TARGETS device_action_gate DESTINATION lib/${PROJECT_NAME})
 install(TARGETS native_action_gate DESTINATION lib/${PROJECT_NAME})
+add_library(dummy_manual_ros_baseline STATIC src/manual_ros_baseline.cpp)
+target_compile_features(dummy_manual_ros_baseline PUBLIC cxx_std_17)
+target_include_directories(dummy_manual_ros_baseline PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
+add_executable(manual_ros_baseline_node src/manual_ros_baseline_node.cpp)
+target_link_libraries(manual_ros_baseline_node dummy_manual_ros_baseline OpenSSL::Crypto DPSDKHostSDK::dummy_manual_reference
+  dummy_ros_control::dummy_guarded_joint_trajectory_controller)
+ament_target_dependencies(manual_ros_baseline_node rclcpp rclcpp_action std_srvs control_msgs
+  trajectory_msgs controller_manager_msgs moveit_msgs shape_msgs dpsdk_interfaces
+  joint_trajectory_controller controller_interface dummy_ros_control)
+install(TARGETS manual_ros_baseline_node DESTINATION lib/${PROJECT_NAME})
+add_executable(manual_ros_recovery_node src/manual_ros_recovery_node.cpp)
+target_link_libraries(manual_ros_recovery_node dummy_dp_management dummy_device_profile)
+ament_target_dependencies(manual_ros_recovery_node rclcpp)
+install(TARGETS manual_ros_recovery_node DESTINATION lib/${PROJECT_NAME})
 # @par 测试装配
 # 仅BUILD_TESTING时创建下列target/CTest。component_only/offline是测试分类，
 # 不自动证明所有分支已执行；-UNDEBUG只对显式列出的target恢复assert，不能泛化到全部target。
 if(BUILD_TESTING)
+  add_executable(manual_ros_recovery_tests test/manual_ros_recovery_tests.cpp)
+  target_link_libraries(manual_ros_recovery_tests dummy_device_action)
+  target_compile_options(manual_ros_recovery_tests PRIVATE -UNDEBUG)
+  add_test(NAME manual_ros_recovery_tests COMMAND manual_ros_recovery_tests)
+  add_executable(panel_feedback_tests test/panel_feedback_tests.cpp)
+  target_link_libraries(panel_feedback_tests dummy_panel_feedback)
+  ament_target_dependencies(panel_feedback_tests dpsdk_interfaces)
+  target_compile_options(panel_feedback_tests PRIVATE -UNDEBUG)
+  add_test(NAME panel_feedback_tests COMMAND panel_feedback_tests)
+  add_executable(manual_panel_profile_tests test/manual_panel_profile_tests.cpp)
+  target_link_libraries(manual_panel_profile_tests dummy_device_profile)
+  target_compile_options(manual_panel_profile_tests PRIVATE -UNDEBUG)
+  add_test(NAME manual_panel_profile_requires_external_pin COMMAND manual_panel_profile_tests)
+  # 真实部署由执行者显式提供，离线默认只注册由环境指定的固定部署。
+  if(DEFINED ENV{DUMMY_MANUAL_DEPLOYMENT_ROOT} AND DEFINED ENV{DUMMY_MANUAL_DEPLOYMENT_SHA256})
+    add_test(NAME manual_panel_profile_tests COMMAND manual_panel_profile_tests
+      "$ENV{DUMMY_MANUAL_DEPLOYMENT_ROOT}" "$ENV{DUMMY_MANUAL_DEPLOYMENT_SHA256}"
+      "${DPSDKHostSDK_ROBOT_BUNDLE_DIR}")
+  endif()
+  add_executable(manual_reference_coordinator_tests test/manual_reference_coordinator_tests.cpp)
+  target_link_libraries(manual_reference_coordinator_tests dummy_device_action)
+  target_compile_options(manual_reference_coordinator_tests PRIVATE -UNDEBUG)
+  add_test(NAME manual_reference_coordinator_tests COMMAND manual_reference_coordinator_tests)
+  add_executable(manual_ros_baseline_tests test/manual_ros_baseline_tests.cpp)
+  target_link_libraries(manual_ros_baseline_tests dummy_manual_ros_baseline)
+  target_compile_options(manual_ros_baseline_tests PRIVATE -UNDEBUG)
+  add_test(NAME manual_ros_baseline_tests COMMAND manual_ros_baseline_tests)
 # 预算与故障收尾组件均使用当前安装SDK。
   add_executable(limited_goal_budget_tests test/limited_goal_budget_tests.cpp)
   target_include_directories(limited_goal_budget_tests PRIVATE include)
@@ -114,6 +164,20 @@ if(BUILD_TESTING)
   add_executable(device_profile_tests test/device_profile_tests.cpp)
   target_link_libraries(device_profile_tests dummy_device_profile)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  foreach(mode IN ITEMS denied stale shutdown unconfirmed retained wrongref status_cadence status_qualification_cadence state_stale_status_live can_stale status_stale calibration_motion release_retry release_unavailable planning_duplicate_nodes planning_duplicate_servers planning_private_scene planning_unrelated_scene planning_bad_private_suffix planning_wrong_scene_namespace renewal_retry renewal_wrong_uuid renewal_no_receipt renewal_owner_drift renewal_pending consumed_permit consumed_permit_denied consumed_owner_drift scene_normalized scene_equivalent_local scene_wrong_pose scene_wrong_dimensions scene_wrong_frame scene_wrong_orientation scene_full_positive_origin scene_full_negative_origin scene_unrelated_plan_error scene_restore_plan_failure scene_clear_plan_failure scene_blocked_plan_success)
+    add_test(NAME manual_ros_baseline_e2e_${mode} COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/manual_ros_baseline_e2e_tests.py"
+      "$<TARGET_FILE:manual_ros_baseline_node>" ${mode})
+    set_tests_properties(manual_ros_baseline_e2e_${mode} PROPERTIES TIMEOUT 35
+      LABELS "component_only;synthetic_peer;ros_baseline")
+  endforeach()
+  foreach(mode IN ITEMS external stale shutdown timeout)
+    add_test(NAME manual_ros_control_e2e_${mode} COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/manual_ros_control_e2e_tests.py"
+      "$<TARGET_FILE:manual_ros_baseline_node>" ${mode})
+    set_tests_properties(manual_ros_control_e2e_${mode} PROPERTIES TIMEOUT 35
+      LABELS "component_only;synthetic_peer;ros_manual_control")
+  endforeach()
   # 仅检查正式镜像身份；不得据此授予DeviceProfile运行/运动权限。
 # 正式bundle的身份完整性正例不授予DeviceProfile运动权；镜像测试核源码合同的规范副本。
   add_executable(protocol_release_identity_tests test/protocol_release_identity_tests.cpp)
@@ -235,6 +299,10 @@ if(BUILD_TESTING)
   target_link_libraries(dp_management_transport_tests dummy_dp_management)
   ament_target_dependencies(dp_management_transport_tests hardware_interface)
   add_test(NAME dp_management_transport_tests COMMAND dp_management_transport_tests)
+  add_test(NAME dp_management_attempt_evidence_tests COMMAND dp_management_transport_tests attempt_evidence)
+  add_test(NAME dp_management_attempt_evidence_overflow_tests COMMAND dp_management_transport_tests attempt_evidence_overflow)
+  set_tests_properties(dp_management_attempt_evidence_tests dp_management_attempt_evidence_overflow_tests
+    PROPERTIES TIMEOUT 25 LABELS "component_only;synthetic_peer")
   add_test(NAME observation_continuity_tests COMMAND dp_management_transport_tests continuity)
   set_tests_properties(observation_continuity_tests PROPERTIES LABELS "component_only;offline")
   add_test(NAME dp_management_raw_first_page_tests
@@ -330,7 +398,7 @@ if(BUILD_TESTING)
   target_link_libraries(update_generation_tests dummy_ros_control::dummy_command_channel)
   add_test(NAME update_generation_tests COMMAND update_generation_tests)
   add_executable(direct_hold_handoff_tests test/direct_hold_handoff_tests.cpp)
-  target_link_libraries(direct_hold_handoff_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+  target_link_libraries(direct_hold_handoff_tests dummy_panel_feedback dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
     dummy_goal_timeline)
   ament_target_dependencies(direct_hold_handoff_tests controller_manager control_msgs rclcpp rclcpp_action
@@ -341,7 +409,7 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:direct_hold_handoff_tests>")
   set_tests_properties(gate_control_slow_stderr PROPERTIES TIMEOUT 45 LABELS "component_only;offline")
   add_executable(device_lease_transition_tests test/device_lease_transition_tests.cpp)
-  target_link_libraries(device_lease_transition_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+  target_link_libraries(device_lease_transition_tests dummy_panel_feedback dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel
     dummy_goal_timeline)
   ament_target_dependencies(device_lease_transition_tests controller_manager control_msgs rclcpp rclcpp_action
@@ -349,7 +417,7 @@ if(BUILD_TESTING)
   add_test(NAME device_lease_transition_tests COMMAND device_lease_transition_tests)
 # 完成阶段的排队续租：正例、完整身份错配、ACK/过期、撤销状态等分别注册mode；-UNDEBUG保留必要断言推进。
   add_executable(queued_renew_completion_tests test/queued_renew_completion_tests.cpp)
-  target_link_libraries(queued_renew_completion_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+  target_link_libraries(queued_renew_completion_tests dummy_panel_feedback dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
   ament_target_dependencies(queued_renew_completion_tests controller_manager control_msgs rclcpp rclcpp_action
     controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
@@ -360,7 +428,7 @@ if(BUILD_TESTING)
 
 # 取消阶段仅对仍可撤回的排队续租操作检查身份/授权/期限；不能把这些模式泛称已撤回在途请求。
   add_executable(queued_renew_cancel_tests test/queued_renew_cancel_tests.cpp)
-  target_link_libraries(queued_renew_cancel_tests dummy_dp_management dummy_native_goal_validation dummy_device_profile
+  target_link_libraries(queued_renew_cancel_tests dummy_panel_feedback dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
   ament_target_dependencies(queued_renew_cancel_tests controller_manager control_msgs rclcpp rclcpp_action
     controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
@@ -372,7 +440,7 @@ if(BUILD_TESTING)
 
 # 真正inflight续租取消另设目标及15s上限，覆盖错误身份、失败续租、失效、取消/中止和guard变化。
   add_executable(inflight_renew_cancel_tests test/inflight_renew_cancel_tests.cpp)
-  target_link_libraries(inflight_renew_cancel_tests dummy_device_action dummy_dp_management dummy_native_goal_validation dummy_device_profile
+  target_link_libraries(inflight_renew_cancel_tests dummy_panel_feedback dummy_device_action dummy_dp_management dummy_native_goal_validation dummy_device_profile
     dummy_ros_control::dummy_guarded_joint_trajectory_controller dummy_ros_control::dummy_command_channel dummy_goal_timeline)
   ament_target_dependencies(inflight_renew_cancel_tests controller_manager control_msgs rclcpp rclcpp_action
     controller_interface joint_trajectory_controller trajectory_msgs std_srvs)
@@ -411,10 +479,10 @@ endif()
 # export_dummy_device_action导出target及接口依赖，ament_package生成包索引；候选目录存在不表示运动资格。
 install(DIRECTORY include/ DESTINATION include)
 # 现行机器人业务包由显式SDK前缀提供；ROS不保留独立wire镜像。
-install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_management dummy_device_profile
+install(TARGETS dummy_device_action dummy_native_goal_validation dummy_dp_management dummy_device_profile dummy_panel_feedback
   dummy_goal_timeline EXPORT export_dummy_device_action ARCHIVE DESTINATION lib)
 ament_export_targets(export_dummy_device_action)
-ament_export_dependencies(dummy_ros_control control_msgs yaml-cpp OpenSSL DPSDKHostSDK DpProtocol)
+ament_export_dependencies(dummy_ros_control control_msgs dpsdk_interfaces yaml-cpp OpenSSL DPSDKHostSDK DpProtocol)
 install(FILES LICENSE DESTINATION share/${PROJECT_NAME})
 
 ament_package()

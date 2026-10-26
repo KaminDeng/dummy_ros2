@@ -204,6 +204,25 @@ void goal_rejection_receipt_is_typed_and_bounded() {
   const std::string expected="RENEWAL_PENDING:00112233445566778899aabbccddeeff";
   AdmissionPrerequisites prerequisites{true,true,true,true,true,true};
   assert(prerequisites.ready());
+  assert(prerequisites.diagnostic_bits() == 0x3fU);
+  // run10真实时序：Hold确认后18.615ms续租预约，随后3.148ms目标被拒；六项前置始终完备。
+  std::atomic<int> management{0};
+  std::atomic<bool> busy{false}, reserved{false};
+  const auto hold_confirmed =
+      start + std::chrono::microseconds(235989521468ULL);
+  const auto renew_sent = hold_confirmed + std::chrono::microseconds(18615U);
+  const auto rejected = renew_sent + std::chrono::microseconds(3148U);
+  assert(queue_lease_renewal(management, busy, reserved, false));
+  assert(prerequisites.ready() && reserved.load());
+  receipt.record(first, GoalRejectionReason::kNotReady, reserved.load(),
+                 prerequisites.ready(), 0, false, false, rejected);
+  assert(receipt.message(rejected) == expected);
+  auto missing_begin = prerequisites;
+  missing_begin.transport_begin_ready = false;
+  assert(missing_begin.diagnostic_bits() == 0x1fU);
+  receipt.record(first, GoalRejectionReason::kNotReady, true,
+                 missing_begin.ready(), 0, false, false, rejected);
+  assert(!receipt.message(rejected));
   const auto deny=[&prerequisites](auto member) {
     auto missing=prerequisites;
     missing.*member=false;
@@ -280,7 +299,211 @@ void authorization_loss_blocks_admission_without_replaying_a_goal() {
  * requested permit须正且不超过已验证profile最大值（例60s/650s），不是允许任意申请长租约。
  * RUN续租只占自己busy；失败清理不能清掉目标占用。显式LEASE_RENEWED只在操作完成且Hold时消费一次；自动续租不伪装显式用户确认。
  */
+void manual_permit_restore_requires_closed_previous_goal() {
+  using namespace dummy_motion_client;
+  ManualPermitRestoreInputs input{true, true, true, true, true,
+                                  true, true, true, 12U,  0U};
+  assert(input.ready());
+  auto deny = [&](auto member) {
+    auto bad = input;
+    bad.*member = false;
+    assert(!bad.ready());
+  };
+  deny(&ManualPermitRestoreInputs::task_ready);
+  deny(&ManualPermitRestoreInputs::enabled);
+  deny(&ManualPermitRestoreInputs::no_goal);
+  deny(&ManualPermitRestoreInputs::management_idle);
+  deny(&ManualPermitRestoreInputs::fresh_bound_hold);
+  deny(&ManualPermitRestoreInputs::permit_consumed);
+  deny(&ManualPermitRestoreInputs::previous_goal_sealed);
+  deny(&ManualPermitRestoreInputs::remaining_budget);
+  input.last_restored_epoch = 12U;
+  assert(!input.ready());
+  input.last_restored_epoch = 0U;
+  input.motion_epoch = 0U;
+  assert(!input.ready());
+}
+
 int main() {
+  manual_permit_restore_requires_closed_previous_goal();
+  {
+    using namespace dummy_motion_client;
+    struct RaceClient final : ManagementClient {
+      std::vector<ManageRequest> requests;
+      bool committed = false;
+      std::uint64_t submit(const ManageRequest &request,
+                           std::uint64_t) override {
+        requests.push_back(request);
+        return requests.size();
+      }
+      std::optional<ManageReply> poll(std::uint64_t id) override {
+        if (!committed)
+          return {};
+        ManageReply reply;
+        reply.request_id = id;
+        reply.operation_id = id;
+        reply.transaction_phase = 3;
+        reply.result_valid = true;
+        reply.succeeded = true;
+        reply.release_committed = requests.back().operation() == 10;
+        return reply;
+      }
+    } client;
+    ManageRequest identity;
+    identity.set_expected_session_id(7);
+    std::array<std::uint8_t, 32> digest{};
+    digest[0] = 1;
+    BootstrapCoordinator bootstrap(client, identity, digest, 1000000);
+    BootstrapSnapshot snapshot;
+    snapshot.boot_epoch = 1;
+    snapshot.session_id = 7;
+    snapshot.reference_epoch = 1;
+    snapshot.core_state = 2;
+    snapshot.state_core_state = 2;
+    snapshot.profile_id = 1;
+    snapshot.configured_mask = 63;
+    snapshot.raw_ready = true;
+    snapshot.motion_supported = true;
+    snapshot.freshness_ticket = 1;
+    snapshot.management_epoch = 1;
+    assert(bootstrap.start_operation(
+        snapshot, ManageOperation::kBeginQualification, 100, false, true));
+    ManualReleaseIntent intent;
+    assert(intent.begin(snapshot, 101));
+    assert(bootstrap.management_operation_pending());
+    assert(intent.decision(snapshot, 102, bootstrap.release_slot_available(),
+                           true, false) == ManualReleaseDecision::kWait);
+    assert(client.requests.size() == 1); // 17未终结时不能抢D10槽。
+    client.committed = true;
+    bootstrap.tick(103);
+    assert(intent.decision(snapshot, 104, bootstrap.release_slot_available(),
+                           true, false) == ManualReleaseDecision::kWait);
+    snapshot.management_epoch = 2;
+    snapshot.motion_epoch = 2;
+    bootstrap.observe(snapshot, 105);
+    bootstrap.tick(105);
+    assert(intent.decision(snapshot, 106, bootstrap.release_slot_available(),
+                           true, false) == ManualReleaseDecision::kSubmit);
+    assert(bootstrap.start_release(snapshot, 106, true, 1));
+    assert(client.requests.size() == 2 &&
+           client.requests.back().operation() == 10);
+    bootstrap.tick(107);
+    snapshot.session_id = 0;
+    bootstrap.observe(snapshot, 108);
+    assert(bootstrap.released());
+  }
+  {
+    using namespace dummy_motion_client;
+    ManualReleaseIntent intent;
+    BootstrapSnapshot original;
+    original.boot_epoch = 1;
+    original.session_id = 7;
+    original.reference_epoch = 1;
+    intent.begin(original, 100);
+    // 逐拍：17仍在途，释放保存意图；终态但新鲜State未到也不能提交。
+    assert(intent.decision(original, 101, false, true, false) ==
+           ManualReleaseDecision::kWait);
+    assert(intent.decision(original, 102, true, false, false) ==
+           ManualReleaseDecision::kWait);
+    auto advanced = original;
+    advanced.motion_epoch = 2;
+    advanced.management_epoch = 3;
+    assert(intent.decision(advanced, 103, true, true, false) ==
+           ManualReleaseDecision::kSubmit);
+    assert(intent.decision(advanced, 5000100, true, true, false) ==
+           ManualReleaseDecision::kUnconfirmed);
+    intent.begin(original, 100);
+    assert(intent.decision(advanced, 104, false, true, true) ==
+           ManualReleaseDecision::kUnconfirmed);
+    auto foreign = advanced;
+    foreign.session_id = 8;
+    assert(intent.decision(foreign, 104, true, true, false) ==
+           ManualReleaseDecision::kUnconfirmed);
+  }
+  {
+    dummy_motion_client::wire::DummyDeviceStatusV2 status;
+    dummy_motion_client::wire::DummyJointStateV2 state;
+    status.set_boot_epoch(1);
+    state.set_boot_epoch(1);
+    status.set_core_state(1);
+    state.set_core_state(1);
+    assert(
+        dummy_motion_client::readonly_released_idle_observation(status, state));
+    assert(
+        dummy_motion_client::readonly_release_samples_fresh(100, 101, 102, 10));
+    assert(!dummy_motion_client::readonly_release_samples_fresh(100, 101, 120,
+                                                                10));
+    assert(
+        !dummy_motion_client::readonly_release_samples_fresh(0, 101, 102, 10));
+    // Status按共享1s规则，State仍严格250ms；500ms资格状态周期不能造成释放误拒。
+    for (const auto status_age : {500000ULL, 520000ULL, 540000ULL, 1000000ULL})
+      assert(dummy_motion_client::readonly_release_samples_fresh(
+          2000000 - status_age, 1990000, 2000000, 250000));
+    assert(!dummy_motion_client::readonly_release_samples_fresh(
+        999999, 1990000, 2000000, 250000));
+    assert(!dummy_motion_client::readonly_release_samples_fresh(
+        1500000, 1749999, 2000000, 250000));
+    assert(!dummy_motion_client::readonly_release_samples_fresh(
+        2000001, 1990000, 2000000, 250000));
+    assert(!dummy_motion_client::readonly_release_samples_fresh(
+        1500000, 2000001, 2000000, 250000));
+    status.set_session_id(3);
+    assert(!dummy_motion_client::readonly_released_idle_observation(status,
+                                                                    state));
+    status.set_session_id(0);
+    status.set_reference_epoch(2);
+    state.set_reference_epoch(2);
+    status.set_core_state(2);
+    state.set_core_state(2);
+    assert(
+        dummy_motion_client::readonly_released_idle_observation(status, state));
+    status.set_reference_kind(1);
+    status.set_release_committed(true);
+    state.set_position_valid_mask(63);
+    assert(
+        dummy_motion_client::retained_manual_reference_reusable(status, state));
+    status.set_release_committed(false);
+    assert(!dummy_motion_client::retained_manual_reference_reusable(status,
+                                                                    state));
+    status.set_release_committed(true);
+    status.set_real_motion_permitted(true);
+    assert(!dummy_motion_client::retained_manual_reference_reusable(status,
+                                                                    state));
+    status.set_real_motion_permitted(false);
+    state.set_position_valid_mask(0);
+    assert(!dummy_motion_client::retained_manual_reference_reusable(status,
+                                                                    state));
+    state.set_position_valid_mask(63);
+    state.set_reference_epoch(3);
+    assert(!dummy_motion_client::retained_manual_reference_reusable(status,
+                                                                    state));
+    assert(!dummy_motion_client::readonly_released_idle_observation(status,
+                                                                    state));
+  }
+  {
+    dummy_motion_client::ReleaseAvailability manual;
+    manual.manual_mode = true;
+    manual.manual_session_owned = true;
+    manual.manual_quiet = true;
+    manual.status_fresh = true;
+    manual.management_epoch_matches = true;
+    manual.functional_development_basis = true;
+    manual.bootstrap_ready = true;
+    manual.transport_ready = true;
+    assert(dummy_motion_client::release_operation_available(manual));
+    manual.management_request_pending = true;
+    assert(!dummy_motion_client::release_operation_available(manual));
+    manual.management_request_pending = false;
+    manual.manual_session_owned = false;
+    assert(!dummy_motion_client::release_operation_available(manual));
+    assert(dummy_motion_client::manual_coordinator_tick_required(
+        true, dummy_motion_client::ManualReferencePhase::kCaptureAbsolute));
+    assert(dummy_motion_client::manual_coordinator_tick_required(
+        true, dummy_motion_client::ManualReferencePhase::kRestQualification));
+    assert(!dummy_motion_client::manual_coordinator_tick_required(
+        false, dummy_motion_client::ManualReferencePhase::kReadOnly));
+  }
+
   using namespace dummy_motion_client;
   DeviceProfile short_candidate{};
   short_candidate.motion_permit_max_us=60000000U;

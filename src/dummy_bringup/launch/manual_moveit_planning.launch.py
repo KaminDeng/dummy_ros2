@@ -97,5 +97,5 @@ def build_nodes(context):
 # @return LaunchDescription：声明参数和延迟求值的启动动作；构造描述本身不等于节点已运行。
 def generate_launch_description():
     return LaunchDescription([DeclareLaunchArgument('config', default_value=''),
-                              DeclareLaunchArgument('backend', default_value='real', choices=['real', 'simulator']),
+                              DeclareLaunchArgument('backend', default_value='real', choices=['real', 'ros', 'simulator']),
                               OpaqueFunction(function=build_nodes)])

@@ -499,5 +499,185 @@ int main() {
   ++wrong_boot.boot_epoch;
   changed.observe(wrong_boot,101U);
   assert(changed.phase()==BootstrapPhase::kFault);
+  // 绝对参考不能用旧的相对Capture替代，且无显式确认不得提交。
+  Client absolute_client;
+  BootstrapCoordinator absolute(absolute_client, identity, compiled_policy,
+                                1000000U);
+  assert(!absolute.start_operation(holding, static_cast<ManageOperation>(16U),
+                                   100U));
+  assert(absolute.start_operation(holding, static_cast<ManageOperation>(17U),
+                                  100U));
+  absolute_client.queued = true;
+  absolute.tick(101U);
+  assert(!absolute.operation_complete());
+  Client strict_client;
+  BootstrapCoordinator strict(strict_client, identity, compiled_policy,
+                              1000000U);
+  assert(strict.start_operation(holding, static_cast<ManageOperation>(16U),
+                                100U, true));
+  strict_client.wrong_request_id = true;
+  strict.tick(101U);
+  assert(strict.phase() == BootstrapPhase::kFault);
+  Client strict_water_client;
+  BootstrapCoordinator strict_water(strict_water_client, identity,
+                                    compiled_policy, 1000000U);
+  assert(strict_water.start_operation(
+      holding, static_cast<ManageOperation>(16U), 100U, true));
+  strict_water.tick(101U);
+  assert(!strict_water.operation_complete());
+  auto advanced = holding;
+  ++advanced.management_epoch;
+  strict_water.observe(advanced, 102U);
+  strict_water.tick(102U);
+  assert(strict_water.operation_complete());
+  // manual释放保留同boot绝对参考，且未Enable的Idle也可清理会话。
+  {
+    Client retained_client;
+    retained_client.release_committed = true;
+    BootstrapCoordinator retained(retained_client, identity, compiled_policy,
+                                  1000000U);
+    auto referenced_idle = holding;
+    referenced_idle.core_state = wire_value(WireCoreState::kIdle);
+    referenced_idle.state_core_state = wire_value(WireCoreState::kIdle);
+    assert(!retained.start_release(referenced_idle, 100U));
+    assert(retained.start_release(referenced_idle, 100U, true,
+                                  referenced_idle.reference_epoch));
+    retained.tick(101U);
+    assert(!retained.released());
+    auto retained_idle = referenced_idle;
+    retained_idle.session_id = 0;
+    retained_idle.real_motion_permitted = false;
+    retained_idle.permit_remaining_us = 0;
+    retained.observe(retained_idle, 102U);
+    assert(retained.released());
+    auto lost_reference = retained_idle;
+    lost_reference.reference_epoch = 0;
+    retained.observe(lost_reference, 103U);
+    assert(!retained.released());
+    assert(retained.phase() == BootstrapPhase::kFault);
+  }
+  {
+    Client early_client;
+    early_client.release_committed = true;
+    BootstrapCoordinator early(early_client, identity, compiled_policy,
+                               1000000U);
+    auto unreferenced = holding;
+    unreferenced.reference_epoch = 0;
+    unreferenced.reference_kind = 0;
+    unreferenced.real_motion_permitted = false;
+    unreferenced.permit_remaining_us = 0;
+    unreferenced.core_state = 1;
+    unreferenced.state_core_state = 1;
+    assert(early.start_release(unreferenced, 100U, true));
+    assert(!early.start_release(unreferenced, 101U, true));
+    early.tick(102U);
+    unreferenced.session_id = 0;
+    early.observe(unreferenced, 103U);
+    assert(early.released());
+    Client zero_owner_client;
+    BootstrapCoordinator zero_owner(zero_owner_client, identity,
+                                    compiled_policy, 1000000U);
+    assert(!zero_owner.start_release(unreferenced, 100U, true));
+    assert(zero_owner_client.requests.empty());
+  }
+  {
+    Client unqualified_client;
+    unqualified_client.release_committed = true;
+    BootstrapCoordinator unqualified(unqualified_client, identity,
+                                     compiled_policy, 1000000U);
+    auto after16 = holding;
+    after16.core_state = 2;
+    after16.state_core_state = 2;
+    assert(unqualified.start_release(after16, 100U, true, 0U));
+    unqualified.tick(101U);
+    assert(!unqualified.released());
+    unqualified.observe(after16, 102U);
+    assert(unqualified.phase() != BootstrapPhase::kFault);
+    auto cleared = after16;
+    cleared.session_id = 0;
+    cleared.reference_epoch = 0;
+    cleared.real_motion_permitted = false;
+    cleared.permit_remaining_us = 0;
+    cleared.core_state = 1;
+    cleared.state_core_state = 1;
+    unqualified.observe(cleared, 103U);
+    assert(unqualified.released());
+  }
+  {
+    Client rejected_client;
+    rejected_client.reject = true;
+    BootstrapCoordinator rejected(rejected_client, identity, compiled_policy,
+                                  1000000U);
+    assert(rejected.start_operation(
+        holding, ManageOperation::kBeginQualification, 100U, false, true));
+    rejected.tick(101U);
+    assert(rejected.phase() == BootstrapPhase::kFault);
+    assert(rejected.release_slot_available());
+    rejected_client.reject = false;
+    rejected_client.release_committed = true;
+    assert(rejected.start_release(holding, 102U, true, 0U));
+    Client unknown_client;
+    unknown_client.pending = true;
+    BootstrapCoordinator unknown(unknown_client, identity, compiled_policy,
+                                 1000000U);
+    assert(unknown.start_operation(
+        holding, ManageOperation::kBeginQualification, 100U, false, true));
+    unknown.invalidate("UNKNOWN_INFLIGHT");
+    assert(!unknown.release_slot_available());
+    assert(!unknown.start_release(holding, 102U, true, 0U));
+  }
+  {
+    Client bounded_client;
+    BootstrapCoordinator bounded(bounded_client, identity, compiled_policy,
+                                 1000000U);
+    assert(bounded.begin_manual_permit_window(holding.boot_epoch, 100U));
+    assert(!bounded.begin_manual_permit_window(holding.boot_epoch, 200U));
+    assert(bounded.manual_permit_remaining_us(99U) == 0U);
+    assert(bounded.manual_permit_remaining_us(100100U) == 900000U);
+    auto current = holding;
+    current.real_motion_permitted = false;
+    current.permit_remaining_us = 0;
+    assert(
+        bounded.start_operation(current, ManageOperation::kSetPermit, 100100U));
+    assert(bounded_client.requests.back().permit_remaining_us() == 900000U);
+    bounded.tick(100101U);
+    assert(!bounded.operation_complete());
+    ++current.management_epoch;
+    current.real_motion_permitted = true;
+    current.permit_remaining_us = 899000U;
+    bounded.observe(current, 100102U);
+    bounded.tick(100102U);
+    assert(bounded.operation_complete() && bounded.authorization());
+    assert(bounded.start_renew_lease(current, 30000000U, 200100U));
+    bounded.tick(200101U);
+    assert(bounded.manual_permit_remaining_us(500100U) == 500000U);
+    current.real_motion_permitted = false;
+    current.permit_remaining_us = 0;
+    assert(
+        bounded.start_operation(current, ManageOperation::kSetPermit, 500100U));
+    assert(bounded_client.requests.back().permit_remaining_us() == 500000U);
+    bounded_client.prepared_success = true;
+    bounded.tick(500101U);
+    assert(bounded.phase() == BootstrapPhase::kFault &&
+           bounded.manual_permit_remaining_us(500102U) == 0U);
+    Client expired_client;
+    BootstrapCoordinator expired(expired_client, identity, compiled_policy,
+                                 1000000U);
+    assert(!expired.begin_manual_permit_window(holding.boot_epoch,
+                                               UINT64_MAX - 10U));
+    assert(expired.begin_manual_permit_window(holding.boot_epoch, 100U));
+    assert(!expired.start_operation(holding, ManageOperation::kSetPermit,
+                                    1000100U));
+    assert(expired_client.requests.empty());
+    Client pending_client;
+    pending_client.pending = true;
+    BootstrapCoordinator pending_permit(pending_client, identity,
+                                        compiled_policy, 10000000U);
+    assert(pending_permit.begin_manual_permit_window(holding.boot_epoch, 100U));
+    assert(pending_permit.start_operation(holding, ManageOperation::kSetPermit,
+                                          200U));
+    pending_permit.tick(2000200U);
+    assert(pending_permit.phase() == BootstrapPhase::kFault);
+  }
   return 0;
 }

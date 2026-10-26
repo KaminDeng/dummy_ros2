@@ -17,6 +17,10 @@
   <depend>rclcpp_action</depend>
   <depend>controller_manager</depend>
   <depend>std_srvs</depend>
+  <depend>dpsdk_interfaces</depend>
+  <depend>controller_manager_msgs</depend>
+  <depend>moveit_msgs</depend>
+  <depend>shape_msgs</depend>
   <!-- 接入受控硬件/管理/controller链路，不直接暴露内部JTC作为公共入口。 -->
   <depend>dummy_ros_control</depend>
   <depend>controller_interface</depend>

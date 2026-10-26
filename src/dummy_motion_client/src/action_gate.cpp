@@ -137,13 +137,16 @@ std::optional<Trajectory> validate_trajectory(const Trajectory &input, const Joi
     std::vector<double> previous_velocity;
     if (measured_start) {
       previous_position.assign(measured_start->begin(),measured_start->begin()+count);
+      // 实际Hold的命令速度为零；首槽也须证明从Hold到首点的加速度。
+      previous_velocity.assign(count,0.0);
+      previous_duration=output.points.front().time;
       for (std::size_t i=0;i<count;++i)
         if (!std::isfinite(previous_position[i]) || previous_position[i]<profile.lower[i] ||
             previous_position[i]>profile.upper[i]) return {};
     }
     /**
      * @brief 有实测起点时从t=0到第0点也须有正时长且起点在profile内；无起点时以第0点为已知锚。
-     * 相邻段加速度按速度差/两段较短时长检查，第一段没有虚构的前一段速度。
+     * 相邻段加速度按速度差/两段较短时长检查；实测Hold入口首段从已知静止命令速度0开始。
      */
     const std::size_t first_segment=measured_start ? 0 : 1;
     if (!measured_start) {
@@ -186,6 +189,11 @@ ActionGate::ActionGate(ManagementClient &client, ActionPort &port, JointProfile 
  * @note 仅Complete和无错误的正常用户Cancel可等待占槽续租；不是任意Busy请求都可延期。
  */
 bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t existing_deadline) {
+  if (operation==ManageOperation::kBegin && !valid_begin_trajectory(trajectory_,now)) {
+    // Begin尚未提交：不发Stop/Cancel、不撤现有Hold，不制造新的设备事务。
+    terminal_=Terminal::kAborted; request_=0; deadline_=0; hold_drain_pending_=false;
+    return false;
+  }
   auto request=authorization_.identity; request.set_expected_motion_epoch(epoch_);
   request.set_operation(static_cast<std::uint16_t>(operation));
   if (operation==ManageOperation::kComplete) {
@@ -271,9 +279,30 @@ bool ActionGate::renew_permit(const Authorization &authorization) {
  * @param now 宿主µs，排空与随后Begin共用同一截止。
  * @return 本地受理时true；设备Running和内部轨迹启动均尚需后继握手。
  */
+bool ActionGate::valid_begin_trajectory(const Trajectory &trajectory,std::uint64_t now) {
+  const bool position_only=std::all_of(trajectory.points.begin(),trajectory.points.end(),[](const auto &point) {
+    return point.velocities.empty() && point.accelerations.empty();
+  });
+  if (!position_only) return true;
+  // 上层transport另核源序号/CAN年龄；本层仍不准以旧Hold位置启动新的纯位置路径。
+  if (!hold_state_observed_us_ || now<hold_state_observed_us_ ||
+      now-hold_state_observed_us_>250000U ||
+      hold_submitted_mask_!=authorization_.identity.configured_mask() ||
+      hold_sent_mask_!=authorization_.identity.configured_mask()) {
+    error_="FRESH_HOLD_START_REQUIRED";
+    return false;
+  }
+  if (!validate_trajectory(trajectory,profile_,&measured_hold_q_)) {
+    error_="TRAJECTORY_LIMIT_VIOLATION";
+    return false;
+  }
+  return true;
+}
 bool ActionGate::submit(const Trajectory &trajectory,std::uint64_t now) {
   if (!ready() || !authorization_.session || !authorization_.reference || !authorization_.permit) return false;
-  const auto validated=validate_trajectory(trajectory,profile_); if (!validated) return false;
+  const auto validated=validate_trajectory(trajectory,profile_);
+  if (!validated) { error_="TRAJECTORY_LIMIT_VIOLATION"; return false; }
+  if (!valid_begin_trajectory(*validated,now)) return false;
   trajectory_=*validated; terminal_=Terminal::kNone; error_.clear(); frozen_=false; frozen_seq_=0;
   /**
    * @brief 端口不提供冻结时直接提交Begin；支持冻结则保存宿主代/线序号，等待worker处理水位和新State的提交/SENT水位。
@@ -396,6 +425,7 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
     hold_submitted_mask_=state.can_submitted_mask();
     hold_sent_mask_=state.can_sent_mask();
     hold_state_observed_us_=now;
+    std::copy(std::begin(state.position_rad()),std::end(state.position_rad()),measured_hold_q_.begin());
     if (hold_drain_pending_) drain_state_fresh_=true;
   }
   if (hold_drain_pending_ && state.core_state()==wire_value(WireCoreState::kFault)) {

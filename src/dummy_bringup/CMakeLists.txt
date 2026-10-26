@@ -15,6 +15,11 @@ get_filename_component(_dummy_protocol_release "${_dummy_protocol_include}" DIRE
 if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(manual_ros_control_launch test/test_manual_ros_control_launch.py)
+  foreach(test_name IN ITEMS manual_panel_ros_backend manual_panel_ros_runtime manual_panel_ros_qt manual_panel_ros_execution)
+    ament_add_pytest_test(${test_name} test/test_${test_name}.py
+      ENV QT_QPA_PLATFORM=offscreen)
+  endforeach()
 # 部署/安装/启动参数回归核对固定配置入口与包共享布局，防止从任意构建目录回退。
   ament_add_pytest_test(manual_panel_deployment_config test/test_manual_panel_deployment_config.py)
   ament_add_pytest_test(manual_panel_runtime_config test/test_manual_panel_runtime_config.py)
@@ -66,6 +71,8 @@ install(DIRECTORY "${_dummy_protocol_release}/"
 # 配置/部署工具只处理明确本机产物；手动面板独占Native通信，MoveIt/场景/探针通过既定ROS或面板接口协作。
 install(PROGRAMS
   scripts/manual_panel_config.py
+  scripts/manual_panel_ros_backend.py
+  scripts/manual_panel_runtime.py
   scripts/deploy_manual_panel.py
   scripts/render_manual_panel_config.py
   scripts/manual_joint_panel.py

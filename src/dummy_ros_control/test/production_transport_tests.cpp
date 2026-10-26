@@ -2,7 +2,7 @@
  * @file production_transport_tests.cpp
  * @brief 以外部指定peer验证生产transport的未授权负向路径。
  *
- * 运行需要argv[1]端点，configure会启动生产通信worker；本轮只静态维护，不运行peer/真机。
+ * argv[1]端点模式由configure启动生产worker；stop_timeout_parameters仅检查参数，不打开设备。
  * 收到State/Status不等于被准入为可执行反馈；最终检查没有发布控制命令。Stop发送计数也不等于设备Idle确认、release committed或物理停止。
  */
 #include <chrono>
@@ -45,6 +45,27 @@ int main(int argc, char **argv) {
       {"velocity_max_rad_s", "1,1,1,1,1,1"}, {"acceleration_max_rad_s", "1,1,1,1,1,1"},
       {"control_period_us", "10000"}, {"state_publish_period_us", "10000"}};
   if (!parse_transport_parameters(valid, 1U, &parameters)) return 1;
+  if (std::string(argv[1]) == "stop_timeout_parameters") {
+    auto configured = valid;
+    for (const auto timeout : {"0", "300000"}) {
+      configured["stop_confirmation_timeout_us"] = timeout;
+      if (!parse_transport_parameters(configured, 1U, &parameters) ||
+          parameters.stop_confirmation_timeout_us != std::stoull(timeout)) return 21;
+    }
+    for (const auto timeout : {"-1", "0garbage", "1000001", ""}) {
+      configured["stop_confirmation_timeout_us"] = timeout;
+      if (parse_transport_parameters(configured, 1U, &parameters)) return 22;
+    }
+    configured=valid;configured["configured_mask"]="63";configured["manual_reference_mode"]="true";
+    if(!parse_transport_parameters(configured,6U,&parameters) || !parameters.manual_reference_mode)return 23;
+    configured["manual_reference_mode"]="false";
+    if(!parse_transport_parameters(configured,6U,&parameters) || parameters.manual_reference_mode)return 24;
+    configured["manual_reference_mode"]="1";
+    if(parse_transport_parameters(configured,6U,&parameters))return 25;
+    configured=valid;configured["manual_reference_mode"]="true";
+    if(parse_transport_parameters(configured,1U,&parameters))return 26;
+    return 0;
+  }
   if (parse_transport_parameters(valid, 6U, &parameters)) return 2;
   auto invalid = valid;
   invalid.erase("endpoint");

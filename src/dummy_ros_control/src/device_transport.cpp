@@ -336,7 +336,10 @@ bool parse_transport_parameters(
   const auto stop_timeout = values.find("stop_confirmation_timeout_us");
   if (stop_timeout != values.end()) {
     std::uint32_t timeout_us = 0U;
-    if (!parse_number(stop_timeout->second, &timeout_us) || timeout_us > 1000000U)
+    // 显式0与省略一致：使用max_state_age_us作为停止确认总预算。
+    if ((stop_timeout->second != "0" &&
+         !parse_number(stop_timeout->second, &timeout_us)) ||
+        timeout_us > 1000000U)
       return false;
     parsed.stop_confirmation_timeout_us = timeout_us;
   }
@@ -350,6 +353,14 @@ bool parse_transport_parameters(
         budget_us > parsed.max_state_age_us ||
         budget_us < parsed.state_publish_period_us * 2U) return false;
     parsed.heartbeat_stop_budget_us = budget_us;
+  }
+  const auto manual_mode = values.find("manual_reference_mode");
+  if (manual_mode != values.end()) {
+    if (manual_mode->second != "true" && manual_mode->second != "false")
+      return false;
+    parsed.manual_reference_mode = manual_mode->second == "true";
+    if (parsed.manual_reference_mode && joint_count != 6U)
+      return false;
   }
   const auto raw_evidence_path = values.find("raw_evidence_path");
   if (raw_evidence_path != values.end()) {
@@ -435,6 +446,7 @@ struct DeviceTransport::Impl {
   std::uint64_t last_status_run_id = 0U;
   std::uint64_t historical_run_boot = 0U, historical_run_id = 0U;
   std::array<std::uint8_t, 32> historical_chain{};
+  std::uint32_t historical_reference_epoch = 0U;
   /**
    * @brief offset=宿主接收µs−设备生产µs，可带符号；minimum偏移估计传输排队额外年龄，初锚还限制长期校正漂移，禁止直接比较不同epoch。
    */
@@ -579,6 +591,7 @@ struct DeviceTransport::Impl {
     bool idle_confirmed = false;
     bool sent = false;
     std::uint64_t sent_us = 0U, operation_id = 0U, run_id = 0U;
+    std::uint32_t released_reference_epoch = 0U;
   } gate_release;
   /**
    * @brief 早到Idle State隔离单槽，绑定本次request_id和原接收时刻；不提前写权威状态，COMMITTED后按原年龄重放。
@@ -760,12 +773,16 @@ struct DeviceTransport::Impl {
   bool bind_evidence_status(const Status &value) noexcept {
     if (value.evidence_lost()) return false;
     if (value.run_id() == 0U) return true;
-    if (historical_released_idle_baseline(value, {boot, historical_run_boot,
-            historical_run_id, last_status_run_id, raw_evidence.pages_written(),
-            raw_evidence.terminal_written_run_id(), historical_chain})) {
+    if (historical_released_idle_baseline(
+            value,
+            {boot, historical_run_boot, historical_run_id, last_status_run_id,
+             raw_evidence.pages_written(),
+             raw_evidence.terminal_written_run_id(), historical_chain,
+             parameters.manual_reference_mode, historical_reference_epoch})) {
       if (historical_run_id == 0U) {
         historical_run_boot = value.boot_epoch();
         historical_run_id = value.run_id();
+        historical_reference_epoch = value.reference_epoch();
         std::copy(std::begin(value.evidence_chain_sha256()),
                   std::end(value.evidence_chain_sha256()), historical_chain.begin());
       }
@@ -773,9 +790,44 @@ struct DeviceTransport::Impl {
     }
     if (value.boot_epoch() == historical_run_boot &&
         value.run_id() == historical_run_id) return false;
-    return evidence_bindings.observe({value.run_id(), value.boot_epoch(), value.session_id(),
-        value.parent_run_id(), value.attempt_kind()},
-        raw_evidence.terminal_written_run_id()) && raw_evidence.expect_run(value.run_id());
+    std::uint64_t evidence_owner = value.session_id();
+    // Disable可能在两个Status之间完成。仅新Release证据子链继承已绑定父owner；session0绝不恢复控制授权。
+    if (parameters.manual_reference_mode && evidence_owner == 0U &&
+        find_evidence_binding(value.run_id()) == nullptr) {
+      const auto *parent = find_evidence_binding(value.parent_run_id());
+      const bool released_child =
+          parent != nullptr && parent->session_id != 0U &&
+          parent->boot_epoch == status.boot_epoch() &&
+          value.boot_epoch() == status.boot_epoch() && parent->run_id == status.run_id() &&
+          parent->session_id == status.session_id() &&
+          parent->run_id != UINT64_MAX &&
+          value.run_id() == parent->run_id + 1U &&
+          value.attempt_kind() ==
+              DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_RELEASE &&
+          value.final_state() ==
+              DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_FINAL_STATE_RELEASED &&
+          value.core_state() == 2U && value.reference_epoch() != 0U &&
+          value.reference_epoch() == status.reference_epoch() &&
+          status.motion_epoch() != UINT32_MAX &&
+          value.motion_epoch() == status.motion_epoch() + 1U &&
+          status.management_epoch() != UINT32_MAX &&
+          value.management_epoch() == status.management_epoch() + 1U &&
+          value.profile_id() == status.profile_id() &&
+          value.configured_mask() == status.configured_mask() &&
+          value.release_committed() && value.cleanup_state() == 3U &&
+          value.first_failure_reason() == 0U && value.can_failed_mask() == 0U &&
+          !value.real_motion_permitted() && value.permit_remaining_us() == 0U &&
+          std::any_of(std::begin(value.evidence_chain_sha256()),
+                      std::end(value.evidence_chain_sha256()),
+                      [](auto b) { return b != 0U; });
+      if (released_child)
+        evidence_owner = parent->session_id;
+    }
+    return evidence_bindings.observe({value.run_id(), value.boot_epoch(),
+                                      evidence_owner, value.parent_run_id(),
+                                      value.attempt_kind()},
+                                     raw_evidence.terminal_written_run_id()) &&
+           raw_evidence.expect_run(value.run_id());
   }
 
   /**
@@ -818,14 +870,21 @@ struct DeviceTransport::Impl {
    */
   bool recoverable_raw_idle_gap() const noexcept {
     return boot != 0U && status.boot_epoch() == boot && has_sequence &&
-        last_state_boot == boot && last_observation_raw_idle &&
-        (status.core_state() == 1U || status.core_state() == 2U) &&
-        status.session_id() == 0U && status.reference_epoch() == 0U &&
-        status.motion_epoch() == 0U && authorized_motion_epoch == 0U &&
-        !ever_authorized_this_boot && !command_published_this_boot &&
-        !system.commands_active() && !command_stream.has_in_flight() &&
-        !group_sent_ack.pending() && !stop_latched &&
-        !stop_confirmation_pending.load(std::memory_order_acquire);
+           last_state_boot == boot && last_observation_raw_idle &&
+           (status.core_state() == 1U || status.core_state() == 2U) &&
+           status.session_id() == 0U &&
+           ((status.reference_epoch() == 0U && status.motion_epoch() == 0U &&
+             authorized_motion_epoch == 0U && !ever_authorized_this_boot) ||
+            (parameters.manual_reference_mode && historical_run_boot == boot &&
+             historical_run_id != 0U && historical_reference_epoch != 0U &&
+             status.reference_epoch() == historical_reference_epoch &&
+             status.run_id() == historical_run_id &&
+             status.release_committed() && !status.real_motion_permitted() &&
+             status.permit_remaining_us() == 0U)) &&
+           !command_published_this_boot && !system.commands_active() &&
+           !command_stream.has_in_flight() && !group_sent_ack.pending() &&
+           !stop_latched &&
+           !stop_confirmation_pending.load(std::memory_order_acquire);
   }
 
   /**
@@ -834,24 +893,38 @@ struct DeviceTransport::Impl {
    * @param message 同boot且session/reference归零的State。
    * @return bool；要求Status为同释放transaction/op/run、motion与management恰expected+1，无剩余许可。
    */
+  bool released_reference_shape(std::uint16_t core,
+                                std::uint32_t reference) const noexcept {
+    return (core == 1U && reference == 0U) ||
+           (parameters.manual_reference_mode &&
+            gate_release.reference_epoch != 0U && core == 2U &&
+            reference == gate_release.reference_epoch);
+  }
+
   bool stopping_release_idle_candidate(const State &message) const noexcept {
-    return gate_release.sent && gate_release.request_id!=0U &&
-        gate_release.session_id!=0U && gate_release.reference_epoch!=0U &&
-        gate_release.expected_motion_epoch!=UINT32_MAX &&
-        gate_release.expected_management_epoch!=UINT32_MAX &&
-        boot==gate_release.boot_epoch && status.boot_epoch()==boot &&
-        status.core_state()==kWireStopping && status.transaction_phase()==2U &&
-        status.operation_id()!=0U && status.run_id()!=0U &&
-        status.session_id()==gate_release.session_id &&
-        status.reference_epoch()==gate_release.reference_epoch &&
-        status.motion_epoch()==gate_release.expected_motion_epoch+1U &&
-        status.management_epoch()==gate_release.expected_management_epoch+1U &&
-        !status.real_motion_permitted() && status.permit_remaining_us()==0U &&
-        message.boot_epoch()==boot && message.core_state()==1U &&
-        message.session_id()==0U && message.reference_epoch()==0U &&
-        message.motion_epoch()==status.motion_epoch() &&
-        message.management_epoch()==status.management_epoch() &&
-        message.operation_id()==status.operation_id() && message.transaction_phase()==3U;
+    return gate_release.sent && gate_release.request_id != 0U &&
+           gate_release.session_id != 0U &&
+           gate_release.reference_epoch != 0U &&
+           gate_release.expected_motion_epoch != UINT32_MAX &&
+           gate_release.expected_management_epoch != UINT32_MAX &&
+           boot == gate_release.boot_epoch && status.boot_epoch() == boot &&
+           status.core_state() == kWireStopping &&
+           status.transaction_phase() == 2U && status.operation_id() != 0U &&
+           status.run_id() != 0U &&
+           status.session_id() == gate_release.session_id &&
+           status.reference_epoch() == gate_release.reference_epoch &&
+           status.motion_epoch() == gate_release.expected_motion_epoch + 1U &&
+           status.management_epoch() ==
+               gate_release.expected_management_epoch + 1U &&
+           !status.real_motion_permitted() &&
+           status.permit_remaining_us() == 0U && message.boot_epoch() == boot &&
+           released_reference_shape(message.core_state(),
+                                    message.reference_epoch()) &&
+           message.session_id() == 0U &&
+           message.motion_epoch() == status.motion_epoch() &&
+           message.management_epoch() == status.management_epoch() &&
+           message.operation_id() == status.operation_id() &&
+           message.transaction_phase() == 3U;
   }
 
   /**
@@ -861,18 +934,23 @@ struct DeviceTransport::Impl {
    * @return bool；受Disabling或已COMMITTED的Stopping分支严格限定。
    */
   bool provisional_release_idle(const State &message) const noexcept {
-    const bool disabling = gate_release.request_id != 0U && boot == gate_release.boot_epoch &&
+    const bool disabling =
+        gate_release.request_id != 0U && boot == gate_release.boot_epoch &&
         status.boot_epoch() == boot && status.core_state() == kWireDisabling &&
         status.session_id() == gate_release.session_id &&
         status.reference_epoch() == gate_release.reference_epoch &&
-        sequence_at_or_after(status.motion_epoch(), gate_release.expected_motion_epoch) &&
-        sequence_at_or_after(status.management_epoch(), gate_release.expected_management_epoch) &&
+        sequence_at_or_after(status.motion_epoch(),
+                             gate_release.expected_motion_epoch) &&
+        sequence_at_or_after(status.management_epoch(),
+                             gate_release.expected_management_epoch) &&
         (!gate_release.committed ||
          (status.motion_epoch() == gate_release.motion_epoch &&
           status.management_epoch() == gate_release.management_epoch)) &&
         !status.real_motion_permitted() && status.permit_remaining_us() == 0U &&
-        message.boot_epoch() == boot && message.core_state() == 1U &&
-        message.session_id() == 0U && message.reference_epoch() == 0U &&
+        message.boot_epoch() == boot &&
+        released_reference_shape(message.core_state(),
+                                 message.reference_epoch()) &&
+        message.session_id() == 0U &&
         message.motion_epoch() == status.motion_epoch() &&
         message.management_epoch() == status.management_epoch();
     // 已匹配本次COMMITTED时，由同operation的新鲜State延续观察；旧过渡Status只作tuple证人。
@@ -896,13 +974,25 @@ struct DeviceTransport::Impl {
                                   bool provisional_release = false) const noexcept {
     if ((message.core_state() != 1U && message.core_state() != 2U) ||
         (!provisional_release && status.core_state() != message.core_state()) ||
-        message.position_valid_mask() != 0U ||
-        (message.raw_position_valid_mask() & parameters.configured_mask) != parameters.configured_mask ||
-        !sequence_at_or_after(message.management_epoch(), status.management_epoch()) ||
+        (message.position_valid_mask() != 0U &&
+         !(parameters.manual_reference_mode && message.core_state() == 2U &&
+           message.reference_epoch() == status.reference_epoch() &&
+           !status.real_motion_permitted() &&
+           status.permit_remaining_us() == 0U &&
+           (message.position_valid_mask() & parameters.configured_mask) ==
+               parameters.configured_mask &&
+           std::all_of(std::begin(message.position_rad()),
+                       std::end(message.position_rad()),
+                       [](double q) { return std::isfinite(q); }))) ||
+        (message.raw_position_valid_mask() & parameters.configured_mask) !=
+            parameters.configured_mask ||
+        !sequence_at_or_after(message.management_epoch(),
+                              status.management_epoch()) ||
         (has_sequence && !sequence_newer(message.state_seq(), last_sequence)) ||
         message.produced_at_us() < expected.request_started_at_us ||
         message.produced_at_us() > expected.now_us ||
-        expected.now_us - message.produced_at_us() > expected.max_age_us) return false;
+        expected.now_us - message.produced_at_us() > expected.max_age_us)
+      return false;
     for (std::size_t axis = 0U; axis < parameters.position_min.size(); ++axis)
       if ((parameters.configured_mask & (1U << axis)) != 0U &&
           !std::isfinite(message.raw_motor_position_rev()[axis])) return false;
@@ -917,22 +1007,24 @@ struct DeviceTransport::Impl {
    */
   bool confirmed_gate_released_idle(std::uint64_t now) const noexcept {
     return gate_release.committed && boot == gate_release.boot_epoch &&
-        bootstrap_ready && last_observation_raw_idle &&
-        last_state_boot == boot && last_state_session == 0U &&
-        last_state_reference == 0U &&
-        last_state_motion == gate_release.motion_epoch &&
-        last_state_management_epoch == gate_release.management_epoch &&
-        status.boot_epoch() == boot && status.core_state() == 1U &&
-        status.session_id() == 0U && status.reference_epoch() == 0U &&
-        status.motion_epoch() == gate_release.motion_epoch &&
-        status.management_epoch() == gate_release.management_epoch &&
-        status.release_committed() && !status.real_motion_permitted() &&
-        status.permit_remaining_us() == 0U &&
-        last_received_us != 0U && now >= last_received_us &&
-        now - last_received_us <= parameters.max_state_age_us &&
-        last_status_received_us != 0U && now >= last_status_received_us &&
-        now - last_status_received_us <= parameters.max_state_age_us &&
-        !stop_confirmation_pending.load(std::memory_order_acquire);
+           bootstrap_ready && last_observation_raw_idle &&
+           last_state_boot == boot && last_state_session == 0U &&
+           last_state_reference == status.reference_epoch() &&
+           last_state_motion == gate_release.motion_epoch &&
+           last_state_management_epoch == gate_release.management_epoch &&
+           status.boot_epoch() == boot &&
+           released_reference_shape(status.core_state(),
+                                    status.reference_epoch()) &&
+           status.session_id() == 0U &&
+           status.motion_epoch() == gate_release.motion_epoch &&
+           status.management_epoch() == gate_release.management_epoch &&
+           status.release_committed() && !status.real_motion_permitted() &&
+           status.permit_remaining_us() == 0U && last_received_us != 0U &&
+           now >= last_received_us &&
+           now - last_received_us <= parameters.max_state_age_us &&
+           last_status_received_us != 0U && now >= last_status_received_us &&
+           now - last_status_received_us <= parameters.max_state_age_us &&
+           !stop_confirmation_pending.load(std::memory_order_acquire);
   }
 
   /**
@@ -941,19 +1033,23 @@ struct DeviceTransport::Impl {
    * @return bool；保留完整身份/许可/状态条件，但不重复年龄检查。
    */
   bool released_idle_latched() const noexcept {
-    return gate_release.idle_confirmed && gate_release.committed && !stop_latched &&
-        !stop_confirmation_pending.load(std::memory_order_acquire) &&
-        boot == gate_release.boot_epoch && last_observation_raw_idle &&
-        last_state_boot == boot && last_state_session == 0U &&
-        last_state_reference == 0U &&
-        last_state_motion == gate_release.motion_epoch &&
-        last_state_management_epoch == gate_release.management_epoch &&
-        status.boot_epoch() == boot && status.core_state() == 1U &&
-        status.session_id() == 0U && status.reference_epoch() == 0U &&
-        status.motion_epoch() == gate_release.motion_epoch &&
-        status.management_epoch() == gate_release.management_epoch &&
-        status.release_committed() && !status.real_motion_permitted() &&
-        status.permit_remaining_us() == 0U;
+    return gate_release.idle_confirmed && gate_release.committed &&
+           status.reference_epoch() == gate_release.released_reference_epoch &&
+           !stop_latched &&
+           !stop_confirmation_pending.load(std::memory_order_acquire) &&
+           boot == gate_release.boot_epoch && last_observation_raw_idle &&
+           last_state_boot == boot && last_state_session == 0U &&
+           last_state_reference == status.reference_epoch() &&
+           last_state_motion == gate_release.motion_epoch &&
+           last_state_management_epoch == gate_release.management_epoch &&
+           status.boot_epoch() == boot &&
+           released_reference_shape(status.core_state(),
+                                    status.reference_epoch()) &&
+           status.session_id() == 0U &&
+           status.motion_epoch() == gate_release.motion_epoch &&
+           status.management_epoch() == gate_release.management_epoch &&
+           status.release_committed() && !status.real_motion_permitted() &&
+           status.permit_remaining_us() == 0U;
   }
 
   /**
@@ -977,22 +1073,32 @@ struct DeviceTransport::Impl {
         request.expected_session_id() != gate_release.session_id ||
         request.expected_reference_epoch() != gate_release.reference_epoch ||
         request.expected_motion_epoch() != gate_release.expected_motion_epoch ||
-        request.expected_management_epoch() != gate_release.expected_management_epoch ||
+        request.expected_management_epoch() !=
+            gate_release.expected_management_epoch ||
         response.request_id() != request.request_id() ||
         response.boot_epoch() != gate_release.boot_epoch ||
         !((response.session_id() == gate_release.session_id &&
            response.reference_epoch() == gate_release.reference_epoch) ||
-          (response.session_id() == 0U && response.reference_epoch() == 0U)) ||
-        !sequence_at_or_after(response.motion_epoch(), gate_release.expected_motion_epoch) ||
-        !sequence_at_or_after(response.management_epoch(), gate_release.expected_management_epoch) ||
-        response.schema_major() != 2U || response.schema_minor() != dummy_ref::protocol::kSchemaMinor ||
+          (response.session_id() == 0U &&
+           (response.reference_epoch() == 0U ||
+            (parameters.manual_reference_mode &&
+             response.reference_epoch() == gate_release.reference_epoch)))) ||
+        !sequence_at_or_after(response.motion_epoch(),
+                              gate_release.expected_motion_epoch) ||
+        !sequence_at_or_after(response.management_epoch(),
+                              gate_release.expected_management_epoch) ||
+        response.schema_major() != 2U ||
+        response.schema_minor() != dummy_ref::protocol::kSchemaMinor ||
         response.profile_id() != parameters.profile_id ||
         response.receipt() != 1U || response.transaction_phase() != 3U ||
         response.result_code() != 0U || response.operation_id() == 0U ||
         !response.release_committed() || response.motion_complete() ||
-        !std::equal(parameters.device_id.begin(), parameters.device_id.end(), response.device_id()) ||
-        !std::equal(parameters.client_instance_id.begin(), parameters.client_instance_id.end(),
-                    response.client_instance_id())) return;
+        !std::equal(parameters.device_id.begin(), parameters.device_id.end(),
+                    response.device_id()) ||
+        !std::equal(parameters.client_instance_id.begin(),
+                    parameters.client_instance_id.end(),
+                    response.client_instance_id()))
+      return;
     gate_release.motion_epoch = response.motion_epoch();
     gate_release.management_epoch = response.management_epoch();
     gate_release.operation_id=response.operation_id();
@@ -1346,22 +1452,41 @@ struct DeviceTransport::Impl {
    * @return bool；要求当前D10根的boot/run/expected+1 epoch、根尝试已释放终态、五hash和非零链一致。
    */
   bool worker_idle_status_candidate(const Status& v) const noexcept {
-    return stop_confirmation_pending.load() && gate_release.sent && !gate_release.committed &&
-      gate_release.request_id && gate_release.run_id && matches_status(v) &&
-      v.boot_epoch()==gate_release.boot_epoch && v.core_state()==1U && v.session_id()==0U && v.reference_epoch()==0U &&
-      gate_release.expected_motion_epoch!=UINT32_MAX && gate_release.expected_management_epoch!=UINT32_MAX &&
-      gate_release.expected_motion_epoch!=UINT32_MAX && gate_release.expected_management_epoch!=UINT32_MAX &&
-      v.motion_epoch()==gate_release.expected_motion_epoch+1U && v.management_epoch()==gate_release.expected_management_epoch+1U &&
-      v.operation_id()!=0U && v.transaction_phase()==3U && v.run_id()==gate_release.run_id && v.attempt_id()==v.run_id() &&
-      v.attempt_kind()==1U && v.parent_run_id()==0U && v.final_state()==2U && v.release_committed() &&
-      !v.evidence_lost() && !v.motion_complete() && !v.real_motion_permitted() && v.permit_remaining_us()==0U &&
-      v.first_failure_reason()==0U && v.failure_source()==0U && v.failure_axis_mask()==0U &&
-      std::equal(parameters.contract_hash.begin(),parameters.contract_hash.end(),v.contract_sha256()) &&
-      std::equal(parameters.model_hash.begin(),parameters.model_hash.end(),v.model_sha256()) &&
-      std::equal(parameters.profile_hash.begin(),parameters.profile_hash.end(),v.profile_sha256()) &&
-      std::equal(parameters.firmware_hash.begin(),parameters.firmware_hash.end(),v.firmware_sha256()) &&
-      std::equal(parameters.policy_hash.begin(),parameters.policy_hash.end(),v.compiled_policy_sha256()) &&
-      std::any_of(std::begin(v.evidence_chain_sha256()),std::end(v.evidence_chain_sha256()),[](auto c){return c!=0U;});
+    return stop_confirmation_pending.load() && gate_release.sent &&
+           !gate_release.committed && gate_release.request_id &&
+           gate_release.run_id && matches_status(v) &&
+           v.boot_epoch() == gate_release.boot_epoch &&
+           released_reference_shape(v.core_state(), v.reference_epoch()) &&
+           v.session_id() == 0U &&
+           gate_release.expected_motion_epoch != UINT32_MAX &&
+           gate_release.expected_management_epoch != UINT32_MAX &&
+           gate_release.expected_motion_epoch != UINT32_MAX &&
+           gate_release.expected_management_epoch != UINT32_MAX &&
+           v.motion_epoch() == gate_release.expected_motion_epoch + 1U &&
+           v.management_epoch() ==
+               gate_release.expected_management_epoch + 1U &&
+           v.operation_id() != 0U && v.transaction_phase() == 3U &&
+           v.run_id() == gate_release.run_id && v.attempt_id() == v.run_id() &&
+           v.attempt_kind() == 1U && v.parent_run_id() == 0U &&
+           v.final_state() == 2U && v.release_committed() &&
+           !v.evidence_lost() && !v.motion_complete() &&
+           !v.real_motion_permitted() && v.permit_remaining_us() == 0U &&
+           v.first_failure_reason() == 0U && v.failure_source() == 0U &&
+           v.failure_axis_mask() == 0U &&
+           std::equal(parameters.contract_hash.begin(),
+                      parameters.contract_hash.end(), v.contract_sha256()) &&
+           std::equal(parameters.model_hash.begin(),
+                      parameters.model_hash.end(), v.model_sha256()) &&
+           std::equal(parameters.profile_hash.begin(),
+                      parameters.profile_hash.end(), v.profile_sha256()) &&
+           std::equal(parameters.firmware_hash.begin(),
+                      parameters.firmware_hash.end(), v.firmware_sha256()) &&
+           std::equal(parameters.policy_hash.begin(),
+                      parameters.policy_hash.end(),
+                      v.compiled_policy_sha256()) &&
+           std::any_of(std::begin(v.evidence_chain_sha256()),
+                       std::end(v.evidence_chain_sha256()),
+                       [](auto c) { return c != 0U; });
   }
   /**
    * @brief 识别本次worker Stop的早到原始Idle State候选。
@@ -1370,15 +1495,30 @@ struct DeviceTransport::Impl {
    * @return bool；需新源时间/序号、expected+1 epoch、phase3和完整有限raw rev，position_valid=0。
    */
   bool worker_idle_state_candidate(const State& v) const noexcept {
-    return stop_confirmation_pending.load() && gate_release.sent && !gate_release.committed &&
-      gate_release.request_id && matches_state(v) && v.boot_epoch()==gate_release.boot_epoch &&
-      v.core_state()==1U && v.session_id()==0U && v.reference_epoch()==0U &&
-      gate_release.expected_motion_epoch!=UINT32_MAX && gate_release.expected_management_epoch!=UINT32_MAX &&
-      v.motion_epoch()==gate_release.expected_motion_epoch+1U && v.management_epoch()==gate_release.expected_management_epoch+1U &&
-      v.operation_id()!=0U && v.transaction_phase()==3U && v.first_failure_reason()==0U &&
-      has_sequence && v.produced_at_us()>last_produced_us && sequence_newer(v.state_seq(),last_sequence) &&
-      v.position_valid_mask()==0U && (v.raw_position_valid_mask()&parameters.configured_mask)==parameters.configured_mask &&
-      std::all_of(std::begin(v.raw_motor_position_rev()),std::end(v.raw_motor_position_rev()),[](double q){return std::isfinite(q);});
+    return stop_confirmation_pending.load() && gate_release.sent &&
+           !gate_release.committed && gate_release.request_id &&
+           matches_state(v) && v.boot_epoch() == gate_release.boot_epoch &&
+           released_reference_shape(v.core_state(), v.reference_epoch()) &&
+           v.session_id() == 0U &&
+           gate_release.expected_motion_epoch != UINT32_MAX &&
+           gate_release.expected_management_epoch != UINT32_MAX &&
+           v.motion_epoch() == gate_release.expected_motion_epoch + 1U &&
+           v.management_epoch() ==
+               gate_release.expected_management_epoch + 1U &&
+           v.operation_id() != 0U && v.transaction_phase() == 3U &&
+           v.first_failure_reason() == 0U && has_sequence &&
+           v.produced_at_us() > last_produced_us &&
+           sequence_newer(v.state_seq(), last_sequence) &&
+           (v.position_valid_mask() == 0U ||
+            (parameters.manual_reference_mode &&
+             v.reference_epoch() == gate_release.reference_epoch &&
+             (v.position_valid_mask() & parameters.configured_mask) ==
+                 parameters.configured_mask)) &&
+           (v.raw_position_valid_mask() & parameters.configured_mask) ==
+               parameters.configured_mask &&
+           std::all_of(std::begin(v.raw_motor_position_rev()),
+                       std::end(v.raw_motor_position_rev()),
+                       [](double q) { return std::isfinite(q); });
   }
   /**
    * @brief 从dp_comm借用Status复制值并按需把原字节入collector。
@@ -1391,6 +1531,7 @@ struct DeviceTransport::Impl {
     const auto received_anchor_us=transport_steady_now_us();
     Status value;
     if (borrowed.copy_to(&value) != dp::comm::Result::kOk) return;
+    (void)self.management->publish_diagnostic_status(value, received_anchor_us);
     if (!self.parameters.raw_evidence_path.empty()) {
       std::array<std::uint8_t, wire::DummyDeviceStatusV2Codec::kEncodedSize> raw{};
       if (wire::DummyDeviceStatusV2Codec::encode(value, raw.data(), raw.size()) != wire::CodecResult::kOk ||
@@ -1454,8 +1595,10 @@ struct DeviceTransport::Impl {
       if (value.management_epoch() == self.status.management_epoch()) {
         const bool same_owner_reference = value.session_id() == self.status.session_id() &&
             value.reference_epoch() == self.status.reference_epoch();
-        const bool released_idle = value.session_id() == 0U &&
-            value.reference_epoch() == 0U && value.core_state() == 1U &&
+        const bool released_idle =
+            value.session_id() == 0U &&
+            self.released_reference_shape(value.core_state(),
+                                          value.reference_epoch()) &&
             value.release_committed() && !value.real_motion_permitted() &&
             value.permit_remaining_us() == 0U;
         if ((!same_owner_reference && !released_idle) ||
@@ -1477,6 +1620,7 @@ struct DeviceTransport::Impl {
       self.historical_run_boot = 0U;
       self.historical_run_id = 0U;
       self.historical_chain.fill(0U);
+      self.historical_reference_epoch = 0U;
     }
     /**
      * @brief 只有已发Complete两秒窗口内、同session/reference且motion恰+1的EnablingHold/Hold能解释预期后继；其他epoch变化退役旧控制/时钟水位。
@@ -1565,10 +1709,13 @@ struct DeviceTransport::Impl {
           return;
         }
         if (value.session_id() != pending.session_id) {
-          const bool released_idle = value.session_id() == 0U &&
-              value.reference_epoch() == 0U && value.core_state() == 1U &&
+          const bool released_idle =
+              value.session_id() == 0U &&
+              self.released_reference_shape(value.core_state(),
+                                            value.reference_epoch()) &&
               value.final_state() == 2U && value.release_committed() &&
-              !value.real_motion_permitted() && value.permit_remaining_us() == 0U;
+              !value.real_motion_permitted() &&
+              value.permit_remaining_us() == 0U;
           if (!released_idle) {
             self.raw_evidence.reject_invalid();
             self.failed = true;
@@ -1741,6 +1888,7 @@ struct DeviceTransport::Impl {
       self.diagnostics.reject(DiagnosticReason::kStateRejected,{},identities.second,now,"decode");
       return;
     }
+    (void)self.management->publish_diagnostic_state(value, now);
     if (!self.parameters.raw_evidence_path.empty()) {
       std::array<std::uint8_t, wire::DummyJointStateV2Codec::kEncodedSize> raw{};
       if (wire::DummyJointStateV2Codec::encode(value, raw.data(), raw.size()) != wire::CodecResult::kOk ||
@@ -1913,6 +2061,16 @@ struct DeviceTransport::Impl {
       ++self.rejected_states;
       if ((value.position_valid_mask() & self.parameters.configured_mask) != self.parameters.configured_mask)
         self.system.invalidate_transport_state();
+      return;
+    }
+    // Validation above has bound the fresh State to the current boot/profile and
+    // Status session/reference/motion/management identity. Native retains the same
+    // producer high-water mark across management transitions; a new ROS process
+    // must not restart below the device's admitted/committed sequence.
+    if (!advance_control_sequence_floor(std::max(value.admitted_producer_seq(),
+                                               value.committed_producer_seq()))) {
+      ++self.rejected_states;
+      self.invalidate();
       return;
     }
     if (raw_idle) self.system.invalidate_transport_state();
@@ -2340,8 +2498,11 @@ struct DeviceTransport::Impl {
                           bool released_identity = false) const noexcept {
     const bool same_owner = response.session_id() == original.expected_session_id() &&
         response.reference_epoch() == original.expected_reference_epoch();
-    const bool released_owner = released_identity && response.session_id() == 0U &&
-        response.reference_epoch() == 0U;
+    const bool released_owner =
+        released_identity && response.session_id() == 0U &&
+        (response.reference_epoch() == 0U ||
+         (parameters.manual_reference_mode &&
+          response.reference_epoch() == original.expected_reference_epoch()));
     return original.operation() == kWireDisableAndRelease &&
         (sent.operation() == kWireDisableAndRelease ||
          (sent.operation() == kWireGetOperation &&
@@ -3004,7 +3165,11 @@ struct DeviceTransport::Impl {
           /**
            * @brief 此处的1秒是RPC句柄等待时间，不是停止总预算。显式0 correlation/idempotency保证本地Busy可分类为未发的短准入拒绝；有handle后不再走这类重试。
            */
-          auto sent=management_client.async_request(decoded,management_reply,active_management.get(),dp::comm::Duration::from_milliseconds(1000),0U,0U);
+          auto sent = management_client.async_request(
+              decoded, management_reply, active_management.get(),
+              dp::comm::Duration::from_milliseconds(1000),
+              management_rpc_correlation_id(decoded),
+              management_rpc_idempotency_key(decoded));
           if(sent.has_value()) {
             capture_sent_request(*active_management);
             if(valid_complete) observe_sent_complete(decoded);
@@ -3065,8 +3230,11 @@ struct DeviceTransport::Impl {
                   !command_stream.has_in_flight() && !command_stream.has_pending() &&
                   (!complete_admission_retry ||
                    complete_admission_retry->ready(transport_steady_now_us()))) {
-          auto sent=management_client.async_request(request,management_reply,
-              active_management.get(),dp::comm::Duration::from_milliseconds(1000),0U,0U);
+          auto sent = management_client.async_request(
+              request, management_reply, active_management.get(),
+              dp::comm::Duration::from_milliseconds(1000),
+              management_rpc_correlation_id(request),
+              management_rpc_idempotency_key(request));
           if(sent.has_value()) {
             capture_sent_request(*active_management);
             pending_complete.dispatched=true;
@@ -3172,7 +3340,10 @@ struct DeviceTransport::Impl {
           } else {
             stop_original=decoded;
             auto sent = management_client.async_request(
-                decoded, management_reply, active_management.get(), dp::comm::Duration::from_milliseconds(1000),0U,0U);
+                decoded, management_reply, active_management.get(),
+                dp::comm::Duration::from_milliseconds(1000),
+                management_rpc_correlation_id(decoded),
+                management_rpc_idempotency_key(decoded));
             if (sent.has_value()) {
               capture_sent_request(*active_management);
               management_handle.emplace(std::move(sent).take_value());
@@ -3270,7 +3441,11 @@ struct DeviceTransport::Impl {
             if(!active_management || wire::DummyManageV2RequestCodec::decode(active_management->request.data(),active_management->request.size(),&stop_original)!=wire::CodecResult::kOk)
               fail_stop("Cancel-to-Disable current tuple unavailable");
             else {
-              auto sent=management_client.async_request(stop_original,management_reply,active_management.get(),dp::comm::Duration::from_milliseconds(1000),0U,0U);
+              auto sent = management_client.async_request(
+                  stop_original, management_reply, active_management.get(),
+                  dp::comm::Duration::from_milliseconds(1000),
+                  management_rpc_correlation_id(stop_original),
+                  management_rpc_idempotency_key(stop_original));
               pending_stop=active_management;
               if(sent.has_value()) {capture_sent_request(*active_management);management_handle.emplace(std::move(sent).take_value());++stop_requests_sent;}
               else if(ManagementAdmissionRetry::retryable(sent.result(),true)) {
@@ -3294,8 +3469,11 @@ struct DeviceTransport::Impl {
       }
       if(stop_confirmation_pending.load(std::memory_order_acquire) && pending_stop &&
          stop_admission_retry && stop_admission_retry->ready(transport_steady_now_us())) {
-        auto sent=management_client.async_request(stop_original,management_reply,
-            pending_stop.get(),dp::comm::Duration::from_milliseconds(1000),0U,0U);
+        auto sent = management_client.async_request(
+            stop_original, management_reply, pending_stop.get(),
+            dp::comm::Duration::from_milliseconds(1000),
+            management_rpc_correlation_id(stop_original),
+            management_rpc_idempotency_key(stop_original));
         if(sent.has_value()) {
           capture_sent_request(*pending_stop);
           management_handle.emplace(std::move(sent).take_value());
@@ -3325,8 +3503,11 @@ struct DeviceTransport::Impl {
               stop_query->request.size(),&query)!=wire::CodecResult::kOk) {
           fail_stop("Stop QueryResult decode failed");
         } else {
-          auto sent=management_client.async_request(query,management_reply,
-              stop_query.get(),dp::comm::Duration::from_milliseconds(1000),0U,0U);
+          auto sent = management_client.async_request(
+              query, management_reply, stop_query.get(),
+              dp::comm::Duration::from_milliseconds(1000),
+              management_rpc_correlation_id(query),
+              management_rpc_idempotency_key(query));
           if(sent.has_value()) {
             capture_sent_request(*stop_query);
             active_management=stop_query;
@@ -3360,8 +3541,11 @@ struct DeviceTransport::Impl {
           admission_retry_request.reset(); admission_retry_state.reset();
           continue;
         }
-        auto sent=management_client.async_request(request,management_reply,
-            active_management.get(),dp::comm::Duration::from_milliseconds(1000),0U,0U);
+        auto sent = management_client.async_request(
+            request, management_reply, active_management.get(),
+            dp::comm::Duration::from_milliseconds(1000),
+            management_rpc_correlation_id(request),
+            management_rpc_idempotency_key(request));
         if(sent.has_value()) {
           capture_sent_request(*active_management);
           if(request.operation()==8U) observe_sent_complete(request);
@@ -3446,9 +3630,15 @@ struct DeviceTransport::Impl {
           management_handle.reset();
           next_stop_query_us = saturating_state_deadline(transport_steady_now_us(),
               parameters.control_period_us);
-        } else if (response.result_code() == 0U && response.transaction_phase() == 3U &&
-                   response.operation_id() != 0U && response.release_committed() &&
-                   response.session_id() == 0U && response.reference_epoch() == 0U) {
+        } else if (response.result_code() == 0U &&
+                   response.transaction_phase() == 3U &&
+                   response.operation_id() != 0U &&
+                   response.release_committed() &&
+                   response.session_id() == 0U &&
+                   (response.reference_epoch() == 0U ||
+                    (parameters.manual_reference_mode &&
+                     response.reference_epoch() ==
+                         stop_original.expected_reference_epoch()))) {
           authorized_motion_epoch = response.motion_epoch();
           authorized_management_epoch = response.management_epoch();
           stop_idle_observed = false;
@@ -3496,29 +3686,39 @@ struct DeviceTransport::Impl {
 
           stop_query.reset();
           management_handle.reset();
-        } else fail_stop("Stop QueryResult failed or malformed");
+        } else
+          fail_stop("Stop QueryResult failed or malformed");
       }
       const auto stop_now = transport_steady_now_us();
       /**
        * @brief 最终停止成功为合取：Query已COMMITTED+非零operation、Status/State双fresh原始Idle、同motion/management、无owner/reference/permit且release_committed，并仍在固定deadline内。缓存例外也需已完成同事务重验证。
        */
-      const bool fresh_released_idle = stop_terminal && stop_idle_observed &&
-          stop_terminal_at_us != 0U && stop_operation_id != 0U &&
+      const bool fresh_released_idle =
+          stop_terminal && stop_idle_observed && stop_terminal_at_us != 0U &&
+          stop_operation_id != 0U &&
           status.boot_epoch() == stop_original.expected_boot_epoch() &&
-          status.core_state() == 1U && status.session_id() == 0U &&
-          status.reference_epoch() == 0U && status.release_committed() &&
-          !status.real_motion_permitted() && status.permit_remaining_us() == 0U &&
+          released_reference_shape(status.core_state(),
+                                   status.reference_epoch()) &&
+          status.session_id() == 0U && status.release_committed() &&
+          !status.real_motion_permitted() &&
+          status.permit_remaining_us() == 0U &&
           status.motion_epoch() == authorized_motion_epoch &&
           status.management_epoch() == authorized_management_epoch &&
           status.operation_id() == stop_operation_id &&
           status.transaction_phase() == 3U &&
           last_state_boot == status.boot_epoch() && last_state_session == 0U &&
-          last_state_reference == 0U && last_state_motion == status.motion_epoch() &&
+          last_state_reference == status.reference_epoch() &&
+          last_state_motion == status.motion_epoch() &&
           last_state_management_epoch == status.management_epoch() &&
           last_observation_raw_idle &&
-          (stop_candidate_revalidated && gate_release.request_id==stop_original.request_id() && gate_release.committed && gate_release.operation_id==stop_operation_id
-            ? last_received_us>=gate_release.sent_us && last_status_received_us>=gate_release.sent_us
-            : last_received_us>=stop_terminal_at_us && last_status_received_us>=stop_terminal_at_us) &&
+          (stop_candidate_revalidated &&
+                   gate_release.request_id == stop_original.request_id() &&
+                   gate_release.committed &&
+                   gate_release.operation_id == stop_operation_id
+               ? last_received_us >= gate_release.sent_us &&
+                     last_status_received_us >= gate_release.sent_us
+               : last_received_us >= stop_terminal_at_us &&
+                     last_status_received_us >= stop_terminal_at_us) &&
           stop_now >= last_received_us &&
           stop_now - last_received_us <= parameters.max_state_age_us &&
           stop_now >= last_status_received_us &&
@@ -3575,8 +3775,11 @@ struct DeviceTransport::Impl {
                   stop_query->request.size(), &query) != wire::CodecResult::kOk)
             fail_stop("Stop QueryResult decode failed");
           else {
-            auto sent = management_client.async_request(query, management_reply,
-                stop_query.get(), dp::comm::Duration::from_milliseconds(1000),0U,0U);
+            auto sent = management_client.async_request(
+                query, management_reply, stop_query.get(),
+                dp::comm::Duration::from_milliseconds(1000),
+                management_rpc_correlation_id(query),
+                management_rpc_idempotency_key(query));
             if (sent.has_value()) {
               capture_sent_request(*stop_query);
               active_management = stop_query;
@@ -3607,8 +3810,11 @@ struct DeviceTransport::Impl {
         diagnostic_detail("device transport spin result=%u\n",static_cast<unsigned>(spun));
         return false;
       }
-      if (!gate_release.idle_confirmed && confirmed_gate_released_idle(transport_steady_now_us()))
+      if (!gate_release.idle_confirmed &&
+          confirmed_gate_released_idle(transport_steady_now_us())) {
+        gate_release.released_reference_epoch = status.reference_epoch();
         gate_release.idle_confirmed = true;
+      }
       dp::comm::LinkEvent event;
       /**
        * @brief 链路不Ready立即invalidate旧控制和命令意图；外层连接循环可重建Context，但不会沿用旧会话目标自动续跑。
@@ -3789,7 +3995,9 @@ struct DeviceTransport::Impl {
        * @brief 离开连接后首先关闭对外ready并推进cleanup生命周期，writer尚在排空的旧State/Status不能给新连接重新发布“可用”原始观测。
        */
       ready = false;
-      management->ready=false;management->reset_raw_cleanup_lifetime();
+      management->ready = false;
+      management->reset_raw_cleanup_lifetime();
+      management->reset_diagnostic_observation();
       management->inactive_prime_allowed=false;
       {
         std::lock_guard<std::mutex> lock(management->mutex);

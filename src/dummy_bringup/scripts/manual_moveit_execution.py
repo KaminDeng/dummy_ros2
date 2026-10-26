@@ -152,3 +152,24 @@ class SegmentedExecution:
     # @return 无；通过实例状态或界面产生作用。
     def abort(self):
         self.aborted = True
+
+
+def ros_trajectory(path, names):
+    """完整传递已检查的定周期折线；空导数明确选择 JTC 线性插值。
+
+    首点位于真实首个命令周期，保留全部位置与空导数，不虚构t=0瞬时跳变。
+    不添加未检查的三次/五次插值。动态准入和最终完成仍由公开 C++ gate 判定。
+    """
+    from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+    points = checked_points(path.points)
+    if len(names) != 6 or len(set(names)) != 6 or not math.isfinite(path.period) or path.period <= 0:
+        raise ValueError('ROS轨迹关节名或周期无效')
+    message = JointTrajectory()
+    message.joint_names = list(names)
+    for index, positions in enumerate(points):
+        point = JointTrajectoryPoint()
+        point.positions = list(positions)
+        timestamp = round((index + 1) * path.period * 1_000_000_000)
+        point.time_from_start.sec, point.time_from_start.nanosec = divmod(timestamp, 1_000_000_000)
+        message.points.append(point)
+    return message

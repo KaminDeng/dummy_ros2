@@ -286,6 +286,17 @@ class ObstacleScene:
     # @param event Native 事件标识。
     # @param parts 解析得到的事件键值字典，boot 为十六进制文本。
     # @return None；执行上述状态更新、界面或日志操作。
+    def ros_event(self, kind, value):
+        """仅公开Action取消终态建立屏障水位；后续仍须独立新鲜Hold。"""
+        if not self.wait_hold or kind != 'canceled' or not isinstance(value, dict) or value.get('status') != 5:
+            return
+        state = self.panel.last_state
+        if state is None:
+            return
+        identity = tuple(state[key] for key in ('boot_epoch', 'reference_epoch', 'session_id'))
+        if identity == self.stop_identity and state['state_seq'] >= self.stop_state_seq:
+            self.hold_marker = (identity, state['state_seq'], state['motion_epoch'])
+
     def native_event(self, event, parts):
         if self.wait_hold and event == 'MOVE_CANCELED_HOLD':
             try:

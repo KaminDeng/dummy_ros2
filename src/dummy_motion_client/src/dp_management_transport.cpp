@@ -7,20 +7,22 @@
  * 句柄返回/ready/响应复制均不等于设备COMMITTED、运动授权或CAN SENT。
  */
 #include "dummy_motion_client/dp_management_transport.hpp"
-#include "dummy_ros_control/diagnostic_scope.hpp"
-#include "dummy_ros_control/diagnostic_json.hpp"
 #include "dp_comm/dp_comm.hpp"
 #include "dummy_ref/wire_contract.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
+#include "dummy_ros_control/device_transport.hpp"
+#include "dummy_ros_control/diagnostic_json.hpp"
+#include "dummy_ros_control/diagnostic_scope.hpp"
 #include "dummy_ros_control/management_admission_retry.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <mutex>
-#include <thread>
 #include <stdexcept>
+#include <thread>
 namespace dummy_motion_client {
 /**
  * @brief 生成wire codec别名；Service使用定长raw管理服务，避免把ROS消息结构体内存当载荷。
@@ -276,6 +278,8 @@ struct DpManagementTransport::Impl {
    * @brief 独立模式最近通过schema/device/profile/mask过滤的字节及Host接收锚，无完整源时钟/权限验证。
    */
   DeviceObservation observation;
+  std::deque<RawAttemptEvidence> attempt_evidence;
+  std::atomic<bool> evidence_overflow{false};
   /**
    * @brief 独立worker RPC响应回调，只编码复制字节，不解释设备result/phase。
    * @param result dp_comm本次RPC结果。
@@ -315,6 +319,34 @@ struct DpManagementTransport::Impl {
     if constexpr(IsState) { self.observation.state=std::move(bytes); self.observation.state_received_us=management_now_us(); }
     else { self.observation.status=std::move(bytes); self.observation.status_received_us=management_now_us(); }
   }
+  /** @brief
+   * 原页仅在固定设备路由上做schema/codec守卫；原身份、序号/链及SENT由调用方独立验收。
+   */
+  static void receive_evidence(
+      dp::comm::BorrowedMessage<wire::DummyAttemptEvidenceV2> borrowed,
+      void *context) {
+    const auto received_us = management_now_us();
+    wire::DummyAttemptEvidenceV2 page;
+    if (borrowed.copy_to(&page) != dp::comm::Result::kOk ||
+        page.schema_major() != 2U ||
+        page.schema_minor() != dummy_ref::protocol::kSchemaMinor)
+      return;
+    RawAttemptEvidence sample;
+    sample.received_us = received_us;
+    sample.bytes.resize(wire::DummyAttemptEvidenceV2Codec::kEncodedSize);
+    if (wire::DummyAttemptEvidenceV2Codec::encode(page, sample.bytes.data(),
+                                                  sample.bytes.size()) !=
+        wire::CodecResult::kOk)
+      return;
+    auto &self = *static_cast<Impl *>(context);
+    std::lock_guard<std::mutex> lock(self.mutex);
+    if (self.evidence_overflow.load(std::memory_order_acquire) ||
+        self.attempt_evidence.size() >= 16U) {
+      self.evidence_overflow = true;
+      return;
+    }
+    self.attempt_evidence.push_back(std::move(sample));
+  }
   /**
    * @brief 独立worker建立StaticOnly Context、管理client和State/Status订阅，串行处理单槽。
    * 2ms是spin_some的空闲等待预算，不是回调总耗时上界。退出后connected/running清零并将未处理queued标failed；std异常在本线程同步stderr。
@@ -322,7 +354,10 @@ struct DpManagementTransport::Impl {
   void run() noexcept {
     std::shared_ptr<Pending> active;
     try {
-      dp::comm::StaticStorage storage({1,0,2,0,8,DP_PROTOCOL_PRODUCT_POSIX_DUMMY_REF_ROS_SDK_RUNTIME_MESSAGE_BYTES,96,0,1,1,1});
+      dp::comm::StaticStorage storage(
+          {1, 0, 3, 0, 8,
+           DP_PROTOCOL_PRODUCT_POSIX_DUMMY_REF_ROS_SDK_RUNTIME_MESSAGE_BYTES,
+           96, 0, 1, 1, 1});
       const dp::comm::TransportConfig config{"client",parameters.endpoint.c_str(),"","device_action_gate"};
       auto initialized=dp::comm::Context::init(storage,{dp::comm::MemoryMode::kStaticOnly,&config,nullptr});
       if(!initialized.has_value()) throw std::runtime_error("dp_comm init");
@@ -339,9 +374,17 @@ struct DpManagementTransport::Impl {
           receive<wire::DummyJointStateV2,wire::DummyJointStateV2Codec,true>,this);
       auto statuses=node.create_subscription<wire::DummyDeviceStatusV2>((route+DP_PROTOCOL_TOPIC_DUMMY_STATUS_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_STATUS, DUMMY_ROS_SDK),
           receive<wire::DummyDeviceStatusV2,wire::DummyDeviceStatusV2Codec,false>,this);
-      if(!created.has_value() || !states.has_value() || !statuses.has_value()) throw std::runtime_error("dp_comm entities");
+      auto evidences = node.create_subscription<wire::DummyAttemptEvidenceV2>(
+          (route + DP_PROTOCOL_TOPIC_DUMMY_ATTEMPT_EVIDENCE_ENDPOINT).c_str(),
+          DUMMY_REF_SELECTED_QOS(DUMMY_ATTEMPT_EVIDENCE, DUMMY_ROS_SDK),
+          receive_evidence, this);
+      if (!created.has_value() || !states.has_value() ||
+          !statuses.has_value() || !evidences.has_value())
+        throw std::runtime_error("dp_comm entities");
       auto client=std::move(created).take_value(); auto state=std::move(states).take_value();
-      auto status=std::move(statuses).take_value(); dp::comm::StaticExecutor executor;
+      auto status = std::move(statuses).take_value();
+      auto evidence = std::move(evidences).take_value();
+      dp::comm::StaticExecutor executor;
       if(executor.add_node(node)!=dp::comm::Result::kOk || node.activate()!=dp::comm::Result::kOk)
         throw std::runtime_error("dp_comm activation");
       // Native handle is destroyed before client, node, context and storage, always on this worker.
@@ -359,7 +402,12 @@ struct DpManagementTransport::Impl {
            * @brief 新单槽取出后替换旧本地等待句柄，active继续持有回调context；不声称远端旧mutation因此撤回。
            */
           native.reset(); active=std::move(next);
-          auto request=client.async_request(active->request,reply,active.get(),dp::comm::Duration::from_milliseconds(1000));
+          auto request = client.async_request(
+              active->request, reply, active.get(),
+              dp::comm::Duration::from_milliseconds(1000),
+              dummy_ros_control::management_rpc_correlation_id(active->request),
+              dummy_ros_control::management_rpc_idempotency_key(
+                  active->request));
           if(!request.has_value()) active->failed=true;
           else native.emplace(std::move(request).take_value());
         }
@@ -535,6 +583,21 @@ RawTerminalIdentity DpManagementTransport::raw_terminal_flushed() const noexcept
  * @return 独立模式/无channel为空；可信State接收锚非零才置raw_cleanup_producer_valid。
  * @note 此lane不恢复正常admission、session/参考/permit或运动资格。
  */
+DeviceObservation
+DpManagementTransport::diagnostic_observation() const noexcept {
+  if (impl_->connection != Connection::kDeviceWorker)
+    return {};
+  const auto channel = impl_->shared_channel();
+  if (!channel)
+    return {};
+  const auto value = channel->diagnostic_observation();
+  DeviceObservation out;
+  out.state.assign(value.state.begin(), value.state.end());
+  out.status.assign(value.status.begin(), value.status.end());
+  out.state_received_us = value.state_received_us;
+  out.status_received_us = value.status_received_us;
+  return out;
+}
 DeviceObservation DpManagementTransport::raw_cleanup_observation() const noexcept {
   if(impl_->connection!=Connection::kDeviceWorker)return {};
   const auto channel=impl_->shared_channel();if(!channel)return {};
@@ -623,5 +686,21 @@ std::optional<DeviceObservation> DpManagementTransport::observe() {
   std::unique_lock<std::mutex> lock(impl_->mutex,std::try_to_lock);
   if(!lock) return impl_->last_observation;
   impl_->last_observation=impl_->observation; return impl_->last_observation;
+}
+std::optional<RawAttemptEvidence>
+DpManagementTransport::take_attempt_evidence() {
+  if (impl_->connection != Connection::kStandaloneWorker || !impl_->connected ||
+      !impl_->running)
+    return std::nullopt;
+  std::unique_lock<std::mutex> lock(impl_->mutex, std::try_to_lock);
+  if (!lock || impl_->attempt_evidence.empty())
+    return std::nullopt;
+  auto result = std::move(impl_->attempt_evidence.front());
+  impl_->attempt_evidence.pop_front();
+  return result;
+}
+bool DpManagementTransport::attempt_evidence_overflowed() const noexcept {
+  return impl_->connection == Connection::kStandaloneWorker &&
+         impl_->evidence_overflow.load(std::memory_order_acquire);
 }
 }  // namespace dummy_motion_client

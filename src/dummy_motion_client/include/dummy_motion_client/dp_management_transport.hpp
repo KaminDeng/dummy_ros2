@@ -30,6 +30,12 @@ struct DeviceObservation {
                 rejected_ack_sequence=0;
   bool raw_cleanup_producer_valid=false;
 };
+/** @brief
+ * 独立worker收到的原页codec字节及原Host接收微秒，不含身份/验链/释放裁决。 */
+struct RawAttemptEvidence {
+  std::vector<std::uint8_t> bytes;
+  std::uint64_t received_us = 0U;
+};
 /**
  * @brief 已真实写出/flush终页的尝试身份与链/组证明。terminal_received_us是原宿主接收µs，非机械动作耗时；四类identity_hashes按契约/模型/profile/固件顺序。
  */
@@ -298,6 +304,26 @@ bool released_idle_status_confirmed(const Status &status, const State &state) no
     status.permit_remaining_us()==0U;
 }
 /**
+ * @brief manual释放保留同boot绝对参考的双Idle形状。
+ * 非零expected_reference须由释放前已确认参考固定；新鲜度、部署身份、D10根/COMMITTED
+ * 与全轴CAN SENT仍由外层独立核对，不能单用本谓词宣称失能。
+ */
+template <typename Status, typename State>
+bool retained_reference_released_idle_observation(
+    const Status &status, const State &state,
+    std::uint32_t expected_reference) noexcept {
+  return expected_reference != 0U && status.boot_epoch() != 0U &&
+         status.boot_epoch() == state.boot_epoch() &&
+         status.motion_epoch() == state.motion_epoch() &&
+         status.management_epoch() == state.management_epoch() &&
+         status.core_state() == 2U && state.core_state() == 2U &&
+         status.session_id() == 0U && state.session_id() == 0U &&
+         status.reference_epoch() == expected_reference &&
+         state.reference_epoch() == expected_reference &&
+         status.release_committed() && !status.real_motion_permitted() &&
+         status.permit_remaining_us() == 0U;
+}
+/**
  * @brief 只容许明确释放stage2时的Status Stopping/State Idle乱序过渡。
  * 不放宽任意身份错配；原epoch为UINT32_MAX拒绝，避免溢出。仅允许继续等待同事务，不宣称COMMITTED或可再次运动。
  * @param value 包含原session/reference及双当前身份的值。
@@ -380,6 +406,14 @@ class DpManagementTransport final : public ManagementTransport {
    * @return 独立connected或共享channel.ready；不检查session/参考/许可。
    */
   bool ready() const noexcept;
+  /** @brief
+   * 非阻塞取独立worker原页FIFO首项；共享模式、未连接、空或锁忙返回nullopt。
+   * 固定设备路由仅限定来源；该wire没有boot/session/device字段，调用方必须绑定原Status/原链验收。
+   * 队列容量16，溢出后拒收后续页并锁存失败；不会接入normal/rawcollector或授予权限。
+   */
+  std::optional<RawAttemptEvidence> take_attempt_evidence();
+  /** @brief 独立原页队列是否曾溢出；sticky诊断，不能以取空队列清除此失败。 */
+  bool attempt_evidence_overflowed() const noexcept;
   /**
    * @brief 从当前注册channel格式化固定宿主诊断。
    * 非控制读取接口：会分配/格式化；注册表只try一次，不通过control侧cached_channel更新锁。不是设备wire或实际传输证据。
@@ -418,6 +452,8 @@ class DpManagementTransport final : public ManagementTransport {
    * @return DeviceObservation值；只在共享模式可用，默认空不可当有效状态。
    */
   DeviceObservation raw_cleanup_observation() const noexcept;
+  // 仅供panel诊断发布，不得作为控制、释放或writer证据。
+  DeviceObservation diagnostic_observation() const noexcept;
   /**
    * @brief 读取共享collector首非终原页的writer回执。
    * @return 值或默认空；需要按完整run/motion及proof标志组合核对。

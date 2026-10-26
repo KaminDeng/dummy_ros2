@@ -8,6 +8,7 @@ import time
 import hashlib
 import json
 import random
+from functools import wraps
 from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
@@ -18,6 +19,27 @@ from manual_moveit_execution import SegmentedExecution, collision_samples, execu
 from manual_moveit_continuous import prepare_path, write_path, trajectory_velocities
 from manual_moveit_target import target_markers
 from manual_moveit_autotest import AutoTestSession
+
+
+def planner_request_slot(method):
+    """Keep graph/request failures inside the Qt event boundary, without motion."""
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        try:
+            # Qt clicked(bool) may pass its checked argument through the wrapper;
+            # preserve the original no-argument slot contract.
+            return method(self) if method.__code__.co_argcount == 1 else method(self, *args, **kwargs)
+        except (ValueError, RuntimeError) as error:
+            if self.pending:
+                self.pending[1].cancel()
+                self.pending = None
+            self.preview_timer.stop()
+            self.invalidate()
+            self.set_target_failed(True)
+            self.status.setText(str(error) + '；未发送运动，请修复规划服务后重试。')
+            if hasattr(self.panel, 'message'):
+                self.panel.message(self.status.text())
+    return guarded
 
 
 ##
@@ -51,7 +73,7 @@ class MoveItTab(QtWidgets.QWidget):
         self.random_attempts = 0
         self.path = None
         self.continuous_path = None
-        self.continuous_enabled = panel.cfg.get('moveit_continuous_execution', True)
+        self.continuous_enabled = panel.cfg.get('backend') == 'ros' or panel.cfg.get('moveit_continuous_execution', True)
         self.path_file = None
         self.noop_goal = None
         self.identity = None
@@ -313,6 +335,7 @@ class MoveItTab(QtWidgets.QWidget):
     # @brief 在当前新鲜姿态附近开始只规划的随机目标生成。
     # 要求场景确认、无执行/忙/请求且 FK/规划/有效性服务就绪；清旧路径后最多搜索八个候选。失败标红目标并说明未执行，不自动尝试设备运动。
     # @return None；执行上述状态更新、界面或日志操作。
+    @planner_request_slot
     def start_random_pose(self):
         if not self.scene_ready():return
         if self.executing or self.panel.busy or self.pending or not self.panel.fresh() or not hasattr(self.panel,'actual_q'):
@@ -581,6 +604,7 @@ class MoveItTab(QtWidgets.QWidget):
     # @brief 从新鲜实测关节状态请求 FK 以填入当前末端位姿。
     # 自动测试、有 pending 或无 actual_q 时拒绝；作废旧规划并停止防抖后请求 FK。只填目标，不采零、不发送运动。
     # @return None；执行上述状态更新、界面或日志操作。
+    @planner_request_slot
     def capture_actual(self):
         if self.auto_test.active or not self.panel.fresh() or self.pending or not hasattr(self.panel, 'actual_q'):
             return
@@ -593,6 +617,7 @@ class MoveItTab(QtWidgets.QWidget):
     # @brief 从输入 XYZ/RPY 与实测起点发起 IK→规划流程。
     # 先取消旧 revision 的 pending；无新鲜反馈或服务未就绪时每 100 ms 等待重试，保留输入。空闲才 invalidate 并保存实际起点，经所选偏好求 IK；没有自动运动提交。
     # @return None；执行上述状态更新、界面或日志操作。
+    @planner_request_slot
     def start_plan(self):
         if self.auto_test.active:return
         self.preview_timer.stop()
@@ -620,6 +645,7 @@ class MoveItTab(QtWidgets.QWidget):
     # 将目标虚影更新为该姿态，同时请求预设目标 FK 填末端框和关节路径规划；两条响应分别绑定 revision。执行仍须后续碰撞检查和明确确认。
     # @param degrees 明确六轴目标 °，不会按 IK 重新选择等效圈数。
     # @return None；执行上述状态更新、界面或日志操作。
+    @planner_request_slot
     def start_joint_plan(self, degrees):
         if self.auto_test.active or not self.panel.fresh() or self.pending or self.executing or not hasattr(self.panel, 'actual_q'):
             return
@@ -689,7 +715,19 @@ class MoveItTab(QtWidgets.QWidget):
                         speed_deg_s=speed, acceleration_rad_s2=acceleration,
                         continuous=self.continuous_enabled,
                         segment_timeout_s=self.segment_timeout_s)
-            self.advance_execution()
+            if self.panel.backend == 'ros':
+                from manual_moveit_execution import ros_trajectory
+                trajectory = ros_trajectory(self.continuous_path, self.planner.names)
+                validate_trajectory(trajectory, self.planner.names, self.panel.limits)
+                self.execution.waiting = True
+                self.segment_deadline = time.monotonic() + self.continuous_path.duration + 30.
+                self.record('ROS_TRAJECTORY_SUBMITTED', points=self.continuous_path.points,
+                            duration_s=self.continuous_path.duration,
+                            sha256=hashlib.sha256(json.dumps(self.continuous_path.points).encode()).hexdigest())
+                if not self.panel.ros_backend.submit_trajectory(trajectory):
+                    raise ValueError('ROS完整轨迹未提交')
+            else:
+                self.advance_execution()
         except ValueError as error:
             self.cancel_execution(str(error), stop=False)
 
@@ -708,12 +746,28 @@ class MoveItTab(QtWidgets.QWidget):
             self.execution.abort()
         self.execution = None
         self.completed_marker = self.started_motion = None
-        self.panel.busy = False
+        self.panel.busy = bool(was_active and stop and self.panel.backend == 'ros')
         self.status.setText(reason)
         if was_active:
             self.record('EXECUTION_ABORTED', reason=reason)
         if was_active and stop:
-            self.panel.release('STOP')
+            if self.panel.backend == 'ros':
+                self.panel.ros_backend.cancel()
+            else:
+                self.panel.release('STOP')
+
+    def ros_event(self, kind, value):
+        if not self.executing:
+            return
+        if kind == 'accepted':
+            self.record('ROS_GOAL_ACCEPTED', details=value if isinstance(value, dict) else str(value))
+        elif kind == 'completed':
+            self.execution = None
+            self.panel.busy = False
+            self.record('PATH_COMPLETED', backend='ros', result=str(value))
+            self.status.setText('公开 ROS Action 已确认整轨迹完成。')
+        elif kind in ('failed', 'canceled'):
+            self.cancel_execution('ROS Action：' + str(value), stop=False)
 
     ##
     # @brief 把设备事件绑定身份并记录开始/完成水位或拒绝。
@@ -856,9 +910,20 @@ class MoveItTab(QtWidgets.QWidget):
         if self.preset_fk and self.preset_fk[0].done():
             future, revision = self.preset_fk
             self.preset_fk = None
-            response = future.result()
-            if revision == self.revision and response and response.error_code.val == 1 and response.pose_stamped:
-                self.fill_pose(response.pose_stamped[0].pose)
+            try:
+                response = future.result()
+                if revision == self.revision and response and response.error_code.val == 1 and response.pose_stamped:
+                    self.fill_pose(response.pose_stamped[0].pose)
+            except (ValueError, RuntimeError) as error:
+                if self.pending:
+                    self.pending[1].cancel()
+                    self.pending = None
+                self.preview_timer.stop()
+                self.invalidate()
+                self.set_target_failed(True)
+                self.status.setText(str(error) + '；未发送运动，请修复规划服务后重试。')
+                if hasattr(self.panel, 'message'):
+                    self.panel.message(self.status.text())
         if (self.path or self.noop_goal is not None) and feedback_identity != self.identity:
             retry = feedback_identity is None and observed_identity == self.identity and not self.executing
             self.invalidate()
@@ -1019,7 +1084,7 @@ class MoveItTab(QtWidgets.QWidget):
                 submitted = self.execution.waiting
                 self.cancel_execution('运动段等待超时，停止路径。' if submitted else
                                       '原静止条件未在2秒内满足，已取消待执行请求；保持当前使能。', stop=submitted)
-            elif self.completed_marker or not self.execution.waiting:
+            elif self.panel.backend != 'ros' and (self.completed_marker or not self.execution.waiting):
                 self.advance_execution()
             if self.executing:
                 self.panel.busy = True

@@ -66,4 +66,6 @@ void controller_update_sink(const double *positions, std::size_t count,
  */
 std::optional<CommandGenerationRecord> consume_control_update(
     std::uint64_t last_generation) noexcept;
+// Reserve device-observed admitted/committed sequence numbers, never an ACK.
+bool advance_control_sequence_floor(std::uint32_t floor) noexcept;
 }  // namespace dummy_ros_control

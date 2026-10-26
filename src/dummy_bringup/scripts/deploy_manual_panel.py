@@ -38,8 +38,13 @@ def resources():
 # @param firmware 明确选定的固件二进制路径；只打包，不烧写。
 # @param identity 包含 contract_sha256、model_sha256、profile_sha256 的 JSON 文件路径。
 # @param description 供渲染器严格解析的机器人 xacro 路径。
+# @param endpoint 可选的显式端点值；覆盖独立--endpoint参数后再固定配置摘要，不探测设备。
 # @return Path：current/panel-config.json，指向通过离线配置校验的 release。
-def deploy(native, firmware, identity, description):
+def deploy(native, firmware, identity, description, endpoint=None):
+    if endpoint is not None and (not isinstance(endpoint,str) or not endpoint or
+                                 endpoint.startswith('-') or
+                                 any(c.isspace() or c == '\0' for c in endpoint)):
+        raise ValueError('endpoint必须是非空端点值，不能使用选项格式或空白')
     native=Path(native).resolve(strict=True);firmware=Path(firmware).resolve(strict=True)
     if not os.access(native,os.X_OK):
         raise ValueError('Native不是可执行文件')
@@ -63,7 +68,8 @@ def deploy(native, firmware, identity, description):
                     raise ValueError('请明确选择DPSDK_PROTOCOL_RELEASE或DPSDK_HOST_SDK_PREFIX')
                 selected=str(Path(prefix)/'lib/cmake/DpProtocol')
             bundled_protocol=Path(selected)
-        shutil.copytree(bundled_protocol,release/'ros/scripts/dummy/protocol')
+        shutil.copytree(bundled_protocol,release/'ros/scripts/dummy/protocol',
+                        ignore=shutil.ignore_patterns('__pycache__','*.py[co]'))
         if not (release/'ros/scripts/dummy/protocol/include/dp_protocol_layout_reader.py').is_file():
             raise ValueError('所选安装发布缺少公共布局读取器')
         binding={key:ids[key] for key in ('contract_sha256','model_sha256','profile_sha256')}
@@ -72,6 +78,14 @@ def deploy(native, firmware, identity, description):
             binding[role+'_sha256']=hashlib.sha256((release/filename).read_bytes()).hexdigest()
         binding['decoder_directory']=str(release/'ros/scripts/dummy')
         config=render_config(json.loads(template.read_text()),binding,Path(description))
+        if endpoint is not None:
+            args=config['native_arguments']
+            if args.count('--endpoint') != 1 or args.index('--endpoint')+1 >= len(args):
+                raise ValueError('模板endpoint仅支持唯一的--endpoint独立参数和值')
+            index=args.index('--endpoint')+1
+            if args[index].startswith('--'):
+                raise ValueError('模板endpoint缺少独立参数值')
+            args[index]=endpoint
         config['deployment_manifest']='deployment.json'
         config_path=release/'panel-config.json';config_path.write_text(json.dumps(config,ensure_ascii=False,indent=2)+'\n')
         ##
@@ -101,9 +115,10 @@ def main():
     for name in ('native','firmware','identity'):
         parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--description-xacro',type=Path)
+    parser.add_argument('--endpoint',help='显式覆盖模板端点值；不连接或探测串口')
     args=parser.parse_args()
     try:
-        output=deploy(args.native,args.firmware,args.identity,args.description_xacro or installed_description())
+        output=deploy(args.native,args.firmware,args.identity,args.description_xacro or installed_description(),endpoint=args.endpoint)
     except (OSError,ValueError,KeyError) as error:
         parser.exit(2,'部署失败：'+str(error)+'\n')
     print('已部署：'+str(output))

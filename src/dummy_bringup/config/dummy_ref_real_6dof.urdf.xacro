@@ -27,13 +27,14 @@
   <xacro:arg name="velocity_max_rad_s" default=""/>
   <xacro:arg name="acceleration_max_rad_s" default=""/>
   <!-- 控制/状态周期、State最大年龄、心跳停止预算和停止确认预算均用µs。
-       stop_confirmation_timeout_us虽默认字符串0，但此模板会显式输出该参数，当前transport的parse_number拒绝显式0；
-       不能将这里的0默认值声称为已经打通的下游回退路径，实际入口须传可接受的非零预算。 -->
+       stop_confirmation_timeout_us=0显式选择transport的有界默认停止确认预算；
+       正数则使用指定预算，负数、后缀及超范围值仍拒绝。 -->
   <xacro:arg name="control_period_us" default=""/>
   <xacro:arg name="state_publish_period_us" default=""/>
   <xacro:arg name="max_state_age_us" default=""/>
   <xacro:arg name="heartbeat_stop_budget_us" default=""/>
   <xacro:arg name="stop_confirmation_timeout_us" default="0"/>
+  <xacro:arg name="manual_reference_mode" default="false"/>
   <!-- 可选原始证据输出路径；空字符串时不生成该hardware参数，不等于故障/收尾已被证实。 -->
   <xacro:arg name="raw_evidence_path" default=""/>
 
@@ -66,6 +67,7 @@
       <xacro:required_param key="max_state_age_us" value="$(arg max_state_age_us)"/>
       <xacro:required_param key="heartbeat_stop_budget_us" value="$(arg heartbeat_stop_budget_us)"/>
       <param name="stop_confirmation_timeout_us">$(arg stop_confirmation_timeout_us)</param>
+      <param name="manual_reference_mode">$(arg manual_reference_mode)</param>
       <xacro:if value="${bool(xacro.arg('raw_evidence_path'))}">
         <param name="raw_evidence_path">$(arg raw_evidence_path)</param>
       </xacro:if>

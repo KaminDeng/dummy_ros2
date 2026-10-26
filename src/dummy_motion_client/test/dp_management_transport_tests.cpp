@@ -5,22 +5,23 @@
  * 部分模式是纯内存，默认serial模式会fork SIL peer并启动PTY转发线程，tcp模式会创建本机TCP端点/子进程；它们不是实物USB/CAN，但仍有实际OS与通信副作用。
  * raw_first_page只核内存快照一致性，不能推导真实raw文件落盘/设备终态。所有超时为Host单调时间；人工观测年龄参数单位µs。
  */
-#include "dummy_motion_client/dp_management_transport.hpp"
-#include "dummy_ros_control/device_management_channel.hpp"
-#include "dummy_ros_control/guarded_zenbedded_system.hpp"
 #include "dp_comm/dp_comm.hpp"
+#include "dummy_motion_client/dp_management_transport.hpp"
 #include "dummy_ref/wire_contract.hpp"
+#include "dummy_ros_control/device_management_channel.hpp"
+#include "dummy_ros_control/device_transport.hpp"
+#include "dummy_ros_control/guarded_zenbedded_system.hpp"
 #include <atomic>
-#include <chrono>
 #include <cerrno>
+#include <chrono>
 #include <fcntl.h>
 #include <iostream>
 #include <memory>
 #include <poll.h>
 #include <pty.h>
 #include <signal.h>
-#include <thread>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 using namespace dummy_motion_client;
 namespace wire = dp::iface;
@@ -29,6 +30,7 @@ using Service = dp::protocol::services::DummyManageV2;
 namespace {
 using Clock = std::chrono::steady_clock;
 std::atomic<unsigned> reply_calls{0};
+unsigned evidence_test_mode = 0;
 
 /**
  * @brief 向子进程同步管道写单字节标记。
@@ -486,8 +488,15 @@ int raw_first_page_snapshot_tests() {
  * RequestInfo不参与本fixture业务判断。
  * @return kOk；此人为响应不等于生产事务实现。
  */
-dp::comm::Result reply(const Service::Request &request, Service::Response *output,
-           const dp::comm::RequestInfo &, void *context) {
+dp::comm::Result reply(const Service::Request &request,
+                       Service::Response *output,
+                       const dp::comm::RequestInfo &info, void *context) {
+  // 真SDK服务回调核wire显式键传播；不据此声称跨进程缓存清除或实际管理完成。
+  if (info.correlation_id !=
+          dummy_ros_control::management_rpc_correlation_id(request) ||
+      info.idempotency_key !=
+          dummy_ros_control::management_rpc_idempotency_key(request))
+    return dp::comm::Result::kInvalidArgument;
   reply_calls.fetch_add(1, std::memory_order_relaxed);
   Service::Response response;
   response.set_schema_major(2); response.set_schema_minor(dummy_ref::protocol::kSchemaMinor); response.set_request_id(request.request_id());
@@ -510,7 +519,10 @@ dp::comm::Result reply(const Service::Request &request, Service::Response *outpu
  * @return 初始化/spin/同步失败非零；普通成功peer持续运行至父RAII终止。
  */
 int peer(const std::string &endpoint, int signal_fd, bool expect_rejection) {
-  dp::comm::StaticStorage storage({1,0,0,0,8,wire::DummyDeviceStatusV2Codec::kEncodedSize,96,1,0,0,1});
+  dp::comm::StaticStorage storage(
+      {1, 1, 0, 0, 8,
+       DP_PROTOCOL_PRODUCT_POSIX_DUMMY_REF_ROS_SDK_RUNTIME_MESSAGE_BYTES, 96, 1,
+       0, 0, 1});
   dp::comm::TransportConfig config{"peer","",endpoint.c_str(),"management_test"};
   auto init=dp::comm::Context::init(storage,{dp::comm::MemoryMode::kStaticOnly,&config,nullptr});
   if (!init.has_value()) return 10;
@@ -522,11 +534,47 @@ int peer(const std::string &endpoint, int signal_fd, bool expect_rejection) {
   auto result=node.create_service<Service>("manage_v2",reply,expect_rejection ? nullptr : &signal_fd);
   if(!result.has_value()) return 12;
   auto service=std::move(result).take_value();
+  auto made_evidence = node.create_publisher<wire::DummyAttemptEvidenceV2>(
+      "attempt_evidence_v2", {});
+  if (!made_evidence.has_value())
+    return 14;
+  auto evidence = std::move(made_evidence).take_value();
+  unsigned published_evidence = 0;
   dp::comm::StaticExecutor executor;
   if (executor.add_node(node) != dp::comm::Result::kOk || node.activate() != dp::comm::Result::kOk ||
       !signal_peer(signal_fd, 'R')) return 13;
   for (;;) {
     executor.spin_some(dp::comm::Duration::from_milliseconds(2));
+    if (evidence_test_mode && reply_calls.load() &&
+        published_evidence < (evidence_test_mode == 2 ? 22U : 5U)) {
+      wire::DummyAttemptEvidenceV2 page;
+      page.set_schema_major(2);
+      page.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
+      if (published_evidence == 0)
+        page.set_schema_major(3);
+      if (published_evidence == 1)
+        page.set_schema_minor(0);
+      page.set_run_id(59);
+      page.set_attempt_id(59);
+      page.set_attempt_kind(1);
+      page.set_category(3);
+      page.set_group_id(100U + published_evidence);
+      page.set_group_count(1);
+      page.set_final(1);
+      page.set_evidence_seq(published_evidence >= 2 ? published_evidence - 2
+                                                    : 0);
+      page.set_expected_mask(63);
+      page.set_sent_mask(63);
+      const auto published = evidence.publish(page);
+      if (published_evidence < 2U && published != dp::comm::Result::kOk)
+        std::cerr << "evidence publisher schema guard result="
+                  << static_cast<unsigned>(published) << '\n';
+      if (published == dp::comm::Result::kOk || published_evidence < 2U) {
+        ++published_evidence;
+        if (published_evidence == (evidence_test_mode == 2 ? 22U : 5U))
+          signal_peer(signal_fd, 'E');
+      }
+    }
     if (expect_rejection && (context.transport_drop_stats().protocol > 0 ||
                              reply_calls.load(std::memory_order_relaxed) > 0)) {
       const bool fail_closed = context.transport_drop_stats().protocol > 0 &&
@@ -634,6 +682,45 @@ int serial_roundtrip() {
   const dp::comm::TransportConfig second_config{"client",bridge.right_endpoint().c_str(),"","second_context"};
   const auto second=dp::comm::Context::init(second_storage,{dp::comm::MemoryMode::kStaticOnly,&second_config,nullptr});
   if(second.result()!=dp::comm::Result::kBusy) return 8;
+  if (evidence_test_mode) {
+    if (!read_peer_signal(signal_reader.fd, 'E', 3000))
+      return 80;
+    const auto until = Clock::now() + std::chrono::seconds(2);
+    if (evidence_test_mode == 2) {
+      while (!transport.attempt_evidence_overflowed() && Clock::now() < until)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      if (!transport.attempt_evidence_overflowed())
+        return 81;
+    }
+    unsigned count = 0;
+    while (Clock::now() < until &&
+           count < (evidence_test_mode == 2 ? 16U : 3U)) {
+      auto sample = transport.take_attempt_evidence();
+      if (!sample) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        continue;
+      }
+      wire::DummyAttemptEvidenceV2 page;
+      if (!sample->received_us ||
+          wire::DummyAttemptEvidenceV2Codec::decode(
+              sample->bytes.data(), sample->bytes.size(), &page) !=
+              wire::CodecResult::kOk ||
+          page.schema_major() != 2 ||
+          page.schema_minor() != dummy_ref::protocol::kSchemaMinor ||
+          page.run_id() != 59 || page.evidence_seq() != count)
+        return 82;
+      ++count;
+    }
+    if (count != (evidence_test_mode == 2 ? 16U : 3U) ||
+        transport.take_attempt_evidence() ||
+        (evidence_test_mode == 1 && transport.attempt_evidence_overflowed()))
+      return 83;
+    transport.stop();
+    if (transport.take_attempt_evidence())
+      return 84;
+    bridge.stop();
+    return 0;
+  }
   // Destroying an outstanding facade cancels on the worker, never on a caller thread.
   handle=transport.send(bytes); if (!handle) return 35;
   handle.reset();
@@ -650,6 +737,11 @@ int serial_roundtrip() {
  * raw_first_page、continuity、release_transition是内存模式；tcp会fork并开本机端口；无参数运行serial_roundtrip，未知模式返回40。
  */
 int main(int argc, char **argv) {
+  if (argc == 2 && (std::string(argv[1]) == "attempt_evidence" ||
+                    std::string(argv[1]) == "attempt_evidence_overflow")) {
+    evidence_test_mode = std::string(argv[1]) == "attempt_evidence" ? 1 : 2;
+    return serial_roundtrip();
+  }
   if (argc == 2 && std::string(argv[1]) == "raw_first_page")
     return raw_first_page_snapshot_tests();
   if (argc == 2 && std::string(argv[1]) == "continuity") return observation_continuity_tests();

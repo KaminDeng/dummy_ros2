@@ -57,6 +57,28 @@ BootstrapCoordinator::BootstrapCoordinator(
  * @param now_us 原始宿主提交µs。
  * @return 非零request提交成功为true；0转Fault/BOOTSTRAP_TRANSPORT。
  */
+bool BootstrapCoordinator::begin_manual_permit_window(
+    std::uint64_t boot, std::uint64_t issued_at_us) noexcept {
+  if (manual_permit_window_ || boot == 0U || issued_at_us == 0U ||
+      permit_remaining_us_ == 0U ||
+      issued_at_us > UINT64_MAX - permit_remaining_us_)
+    return false;
+  manual_permit_window_ = true;
+  manual_permit_boot_ = boot;
+  manual_permit_issued_at_us_ = issued_at_us;
+  manual_permit_deadline_us_ = issued_at_us + permit_remaining_us_;
+  return true;
+}
+std::uint64_t BootstrapCoordinator::manual_permit_remaining_us(
+    std::uint64_t now_us) const noexcept {
+  if (!manual_permit_window_ || manual_permit_closed_ ||
+      phase_ == BootstrapPhase::kFault ||
+      now_us < manual_permit_issued_at_us_ ||
+      now_us >= manual_permit_deadline_us_)
+    return 0U;
+  return manual_permit_deadline_us_ - now_us;
+}
+
 bool BootstrapCoordinator::issue(ManageOperation operation, std::uint64_t now_us) {
   auto request = identity_;
   request.set_operation(wire_value(operation));
@@ -79,9 +101,30 @@ bool BootstrapCoordinator::issue(ManageOperation operation, std::uint64_t now_us
     std::uint8_t digest[32]{};
     std::copy(compiled_policy_digest_.begin(), compiled_policy_digest_.end(), digest);
     request.set_compiled_policy_sha256(digest);
-    request.set_permit_remaining_us(permit_remaining_us_);
+    const auto remaining = manual_permit_window_
+                               ? manual_permit_remaining_us(now_us)
+                               : permit_remaining_us_;
+    if (manual_permit_window_ &&
+        (remaining == 0U || snapshot_.boot_epoch != manual_permit_boot_ ||
+         (manual_permit_reference_ != 0U &&
+          snapshot_.reference_epoch != manual_permit_reference_))) {
+      manual_permit_closed_ = true;
+      phase_ = BootstrapPhase::kFault;
+      error_ = "MANUAL_PERMIT_WINDOW_CLOSED";
+      return false;
+    }
+    if (manual_permit_window_) {
+      manual_permit_reference_ = snapshot_.reference_epoch;
+      strict_evidence_ = true;
+      manual_permit_request_deadline_us_ =
+          now_us > UINT64_MAX - 2000000U ? UINT64_MAX : now_us + 2000000U;
+    }
+    request.set_permit_remaining_us(remaining);
     request.set_operator_confirmed(true);
   }
+  if (operation == ManageOperation::kConfirmManualHome ||
+      operation == ManageOperation::kValidateRest)
+    request.set_operator_confirmed(operator_confirmed_);
   issued_management_epoch_ = snapshot_.management_epoch;
   if (operation == ManageOperation::kSetPermit) {
     /**
@@ -120,6 +163,7 @@ bool BootstrapCoordinator::start(const BootstrapSnapshot &snapshot, std::uint64_
   snapshot_ = snapshot;
   confirmed_release_.reset();
   automatic_ = true;
+  strict_evidence_ = false;
   error_.clear();
   phase_ = BootstrapPhase::kSelectMode;
   return issue(ManageOperation::kSelectMode, now_us);
@@ -133,8 +177,11 @@ bool BootstrapCoordinator::start(const BootstrapSnapshot &snapshot, std::uint64_
  * @param now_us 宿主µs。
  * @return bool；受理后等待结果，成功停OperationComplete。
  */
-bool BootstrapCoordinator::start_operation(
-    const BootstrapSnapshot &snapshot, ManageOperation operation, std::uint64_t now_us) {
+bool BootstrapCoordinator::start_operation(const BootstrapSnapshot &snapshot,
+                                           ManageOperation operation,
+                                           std::uint64_t now_us,
+                                           bool operator_confirmed,
+                                           bool strict_evidence) {
   if ((phase_ != BootstrapPhase::kIdle && phase_ != BootstrapPhase::kOperationComplete &&
        !(phase_ == BootstrapPhase::kReady && operation == ManageOperation::kSetPermit)) ||
       snapshot.boot_epoch == 0U || snapshot.profile_id == 0U ||
@@ -145,12 +192,38 @@ bool BootstrapCoordinator::start_operation(
        snapshot.session_id != identity_.expected_session_id()) ||
       (operation == ManageOperation::kSetPermit &&
        (snapshot.session_id != identity_.expected_session_id() || snapshot.reference_epoch == 0U))) return false;
+  const bool manual =
+      wire_value(operation) >= 16U && wire_value(operation) <= 19U;
+  if (manual && (snapshot.session_id != identity_.expected_session_id() ||
+                 ((operation == ManageOperation::kConfirmManualHome ||
+                   operation == ManageOperation::kValidateRest) &&
+                  !operator_confirmed)))
+    return false;
+  strict_evidence_ = strict_evidence;
+  operator_confirmed_ = operator_confirmed;
+  manual_committed_ = false;
+  manual_policy_denied_ = false;
   switch (operation) {
-    case ManageOperation::kSelectMode: phase_ = BootstrapPhase::kSelectMode; break;
-    case ManageOperation::kGrantSession: phase_ = BootstrapPhase::kGrantSession; break;
-    case ManageOperation::kCaptureReference: phase_ = BootstrapPhase::kCaptureReference; break;
-    case ManageOperation::kSetPermit: phase_ = BootstrapPhase::kSetPermit; break;
-    default: return false;
+  case ManageOperation::kConfirmManualHome:
+  case ManageOperation::kBeginQualification:
+  case ManageOperation::kValidateRest:
+  case ManageOperation::kCompleteQualification:
+    phase_ = BootstrapPhase::kManualOperation;
+    break;
+  case ManageOperation::kSelectMode:
+    phase_ = BootstrapPhase::kSelectMode;
+    break;
+  case ManageOperation::kGrantSession:
+    phase_ = BootstrapPhase::kGrantSession;
+    break;
+  case ManageOperation::kCaptureReference:
+    phase_ = BootstrapPhase::kCaptureReference;
+    break;
+  case ManageOperation::kSetPermit:
+    phase_ = BootstrapPhase::kSetPermit;
+    break;
+  default:
+    return false;
   }
   snapshot_ = snapshot;
   if (operation == ManageOperation::kSelectMode || operation == ManageOperation::kGrantSession)
@@ -196,6 +269,7 @@ bool BootstrapCoordinator::start_renew_lease(
   renewing_reference_epoch_ = snapshot.reference_epoch;
   requested_lease_us_ = requested_lease_us;
   automatic_ = false;
+  strict_evidence_ = false;
   last_operation_ = ManageOperation::kRenewLease;
   error_.clear();
   phase_ = BootstrapPhase::kRenewLease;
@@ -235,25 +309,53 @@ bool BootstrapCoordinator::renewal_due(std::uint64_t now_us,
  * @param now_us 宿主µs，能安全加5秒。
  * @return bool；建立ReleasePending和原deadline后提交D10。
  */
-bool BootstrapCoordinator::start_release(const BootstrapSnapshot &snapshot,
-                                         std::uint64_t now_us) {
+bool BootstrapCoordinator::start_release(
+    const BootstrapSnapshot &snapshot, std::uint64_t now_us,
+    bool manual_reference_release,
+    std::optional<std::uint32_t> expected_retained_reference) {
+  if (expected_retained_reference &&
+      (!manual_reference_release ||
+       (*expected_retained_reference != 0U &&
+        *expected_retained_reference != snapshot.reference_epoch)))
+    return false;
+  const bool double_hold =
+      snapshot.core_state == wire_value(WireCoreState::kHold) &&
+      snapshot.state_core_state == wire_value(WireCoreState::kHold);
+  const auto idle_core = snapshot.reference_epoch == 0U
+                             ? WireCoreState::kUnreferencedIdle
+                             : WireCoreState::kIdle;
+  const bool manual_idle = manual_reference_release &&
+                           snapshot.core_state == wire_value(idle_core) &&
+                           snapshot.state_core_state == wire_value(idle_core);
   if ((phase_ != BootstrapPhase::kIdle && phase_ != BootstrapPhase::kReady &&
-       phase_ != BootstrapPhase::kOperationComplete) ||
+       phase_ != BootstrapPhase::kOperationComplete &&
+       !(manual_reference_release && phase_ == BootstrapPhase::kFault &&
+         terminal_failure_observed_)) ||
       (phase_ != BootstrapPhase::kIdle && !same_binding(snapshot, snapshot_)) ||
-      snapshot.boot_epoch == 0U || snapshot.session_id != identity_.expected_session_id() ||
+      snapshot.boot_epoch == 0U ||
+      snapshot.session_id != identity_.expected_session_id() ||
       snapshot.profile_id == 0U || snapshot.configured_mask == 0U ||
-      snapshot.freshness_ticket == 0U || !snapshot.raw_ready || !snapshot.motion_supported ||
-      snapshot.core_state != wire_value(WireCoreState::kHold) ||
-      snapshot.state_core_state != wire_value(WireCoreState::kHold) ||
-      now_us > UINT64_MAX - 5000000U) return false;
+      snapshot.freshness_ticket == 0U || !snapshot.raw_ready ||
+      !snapshot.motion_supported || (!double_hold && !manual_idle) ||
+      now_us > UINT64_MAX - 5000000U)
+    return false;
   snapshot_ = snapshot;
+  if (manual_permit_window_)
+    manual_permit_closed_ = true;
   confirmed_release_.reset();
   automatic_ = false;
+  terminal_failure_observed_ = false;
+  strict_evidence_ = false;
   last_operation_ = ManageOperation::kDisableAndRelease;
   error_.clear();
   /**
    * @brief 本次释放总deadline固定在这里；Query链、早状态等待和管理结果都共享，后续不重启5秒。
    */
+  manual_reference_release_ = manual_reference_release;
+  release_reference_epoch_ =
+      manual_reference_release
+          ? expected_retained_reference.value_or(snapshot.reference_epoch)
+          : 0U;
   release_deadline_us_ = now_us + 5000000U;
   phase_ = BootstrapPhase::kReleasePending;
   return issue(ManageOperation::kDisableAndRelease, now_us);
@@ -265,10 +367,15 @@ bool BootstrapCoordinator::start_release(const BootstrapSnapshot &snapshot,
  * @return bool；两core都UnreferencedIdle且实际许可为false/剩余0。
  */
 bool BootstrapCoordinator::release_idle() const noexcept {
-  return snapshot_.session_id == 0U && snapshot_.reference_epoch == 0U &&
-      snapshot_.core_state == wire_value(WireCoreState::kUnreferencedIdle) &&
-      snapshot_.state_core_state == wire_value(WireCoreState::kUnreferencedIdle) &&
-      !snapshot_.real_motion_permitted && snapshot_.permit_remaining_us == 0U;
+  const auto idle_core = release_reference_epoch_ == 0U
+                             ? WireCoreState::kUnreferencedIdle
+                             : WireCoreState::kIdle;
+  return snapshot_.session_id == 0U &&
+         snapshot_.reference_epoch == release_reference_epoch_ &&
+         snapshot_.core_state == wire_value(idle_core) &&
+         snapshot_.state_core_state == wire_value(idle_core) &&
+         !snapshot_.real_motion_permitted &&
+         snapshot_.permit_remaining_us == 0U;
 }
 
 /**
@@ -333,16 +440,30 @@ void BootstrapCoordinator::observe(const BootstrapSnapshot &snapshot, std::uint6
    * @brief 基础hash/boot/profile绑定不变后再核session、配置mask及释放形状；失败清释放凭据，不能继承旧成功证据到新设备。
    */
   if (!same_binding(snapshot, snapshot_) ||
-      (snapshot_.session_id != 0U && snapshot.session_id != snapshot_.session_id &&
+      (snapshot_.session_id != 0U &&
+       snapshot.session_id != snapshot_.session_id &&
        !(releasing && snapshot.session_id == 0U)) ||
       snapshot.configured_mask != snapshot_.configured_mask ||
-      (releasing && snapshot.reference_epoch != snapshot_.reference_epoch &&
-       snapshot.reference_epoch != 0U) ||
+      (releasing &&
+       (manual_reference_release_
+            ? (release_reference_epoch_ != 0U
+                   ? snapshot.reference_epoch != release_reference_epoch_
+                   : (snapshot.reference_epoch != snapshot_.reference_epoch &&
+                      snapshot.reference_epoch != 0U))
+            : (snapshot.reference_epoch != snapshot_.reference_epoch &&
+               snapshot.reference_epoch != 0U))) ||
       (phase_ == BootstrapPhase::kReleased &&
-       (snapshot.session_id != 0U || snapshot.reference_epoch != 0U ||
-        snapshot.core_state != wire_value(WireCoreState::kUnreferencedIdle) ||
-        snapshot.state_core_state != wire_value(WireCoreState::kUnreferencedIdle) ||
-        snapshot.real_motion_permitted || snapshot.permit_remaining_us != 0U))) {
+       (snapshot.session_id != 0U ||
+        snapshot.reference_epoch != release_reference_epoch_ ||
+        snapshot.core_state != wire_value(release_reference_epoch_ == 0U
+                                              ? WireCoreState::kUnreferencedIdle
+                                              : WireCoreState::kIdle) ||
+        snapshot.state_core_state !=
+            wire_value(release_reference_epoch_ == 0U
+                           ? WireCoreState::kUnreferencedIdle
+                           : WireCoreState::kIdle) ||
+        snapshot.real_motion_permitted ||
+        snapshot.permit_remaining_us != 0U))) {
     phase_ = BootstrapPhase::kFault;
     error_ = "IDENTITY_CHANGED";
     confirmed_release_.reset();
@@ -362,6 +483,9 @@ void BootstrapCoordinator::observe(const BootstrapSnapshot &snapshot, std::uint6
 void BootstrapCoordinator::invalidate(const char *reason) noexcept {
   if (phase_ == BootstrapPhase::kIdle || phase_ == BootstrapPhase::kFault) return;
   phase_ = BootstrapPhase::kFault;
+  if (manual_permit_window_)
+    manual_permit_closed_ = true;
+  terminal_failure_observed_ = false;
   error_ = reason;
   confirmed_release_.reset();
   request_id_ = 0U;
@@ -417,6 +541,12 @@ void BootstrapCoordinator::advance(std::uint64_t now_us) {
  * @param now_us 宿主steady µs。
  */
 void BootstrapCoordinator::tick(std::uint64_t now_us) {
+  if (manual_permit_window_ && phase_ == BootstrapPhase::kSetPermit &&
+      (now_us >= manual_permit_request_deadline_us_ ||
+       manual_permit_remaining_us(now_us) == 0U)) {
+    invalidate("MANUAL_PERMIT_UNCONFIRMED");
+    return;
+  }
   /**
    * @brief 即使phase已Ready，进入保证租期的最后5秒仍会先Fault；不能因Ready分支提早return而漏掉续租未确认监督。
    */
@@ -445,6 +575,13 @@ void BootstrapCoordinator::tick(std::uint64_t now_us) {
    * @brief 上一管理成功已清request但实际快照可能尚未满足下一步；继续advance检查原issued水位，不凭空再提交同一mutation。
    */
   if (request_id_ == 0U) {
+    if ((strict_evidence_ || phase_ == BootstrapPhase::kManualOperation) &&
+        manual_committed_ &&
+        snapshot_.management_epoch > issued_management_epoch_ &&
+        (phase_ != BootstrapPhase::kSetPermit || precondition_for_next())) {
+      phase_ = BootstrapPhase::kOperationComplete;
+      return;
+    }
     advance(now_us);
     return;
   }
@@ -500,7 +637,38 @@ if(auto* journal=dummy_ros_control::current_host_diagnostics) {
       request_id_ = 0U;
       return;
     }
+    if ((strict_evidence_ || phase_ == BootstrapPhase::kManualOperation) &&
+        (reply->result_valid || reply->rejected)) {
+      if (reply->request_id != request_id_ || reply->operation_id == 0U) {
+        invalidate("MANUAL_ROOT_EVIDENCE_MISSING");
+        return;
+      }
+      const bool denied =
+          (last_operation_ == ManageOperation::kValidateRest ||
+           last_operation_ == ManageOperation::kCompleteQualification) &&
+          reply->transaction_phase ==
+              wire_value(WireTransactionPhase::kFailed) &&
+          reply->result_code ==
+              DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_RESULT_CODE_POLICY_DENIED;
+      if (denied) {
+        request_id_ = 0U;
+        manual_policy_denied_ = true;
+        phase_ = BootstrapPhase::kOperationComplete;
+        return;
+      }
+      if (reply->succeeded &&
+          (reply->transaction_phase !=
+               wire_value(WireTransactionPhase::kCommitted) ||
+           reply->result_code != wire_value(WireResult::kOk))) {
+        invalidate("MANUAL_COMMIT_EVIDENCE_MISSING");
+        return;
+      }
+    }
     if (reply->rejected || (reply->result_valid && !reply->succeeded)) {
+      terminal_failure_observed_ =
+          reply->request_id == request_id_ && reply->operation_id != 0U &&
+          reply->result_valid &&
+          reply->transaction_phase == wire_value(WireTransactionPhase::kFailed);
       const auto failed_phase = phase_;
       phase_ = BootstrapPhase::kFault;
       confirmed_release_.reset();
@@ -547,6 +715,13 @@ if(auto* journal=dummy_ros_control::current_host_diagnostics) {
         return;
       }
       request_id_ = 0U;
+      if (strict_evidence_ || phase_ == BootstrapPhase::kManualOperation) {
+        manual_committed_ = true;
+        if (snapshot_.management_epoch > issued_management_epoch_ &&
+            (phase_ != BootstrapPhase::kSetPermit || precondition_for_next()))
+          phase_ = BootstrapPhase::kOperationComplete;
+        return;
+      }
       /**
        * @brief 单步调用在OperationComplete停住；自动链才advance，且仍需snapshot前置水位。
        */

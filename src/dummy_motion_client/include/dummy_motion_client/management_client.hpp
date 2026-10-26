@@ -5,6 +5,7 @@
  */
 #pragma once
 #include <array>
+#include "dp_protocol_constants.h"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -27,6 +28,10 @@ enum class ManageOperation : std::uint16_t {
   kGetStatus=0, kSelectMode=1, kGrantSession=2, kCaptureReference=3,
   kClearReference=4, kSetPermit=5, kEnable=6, kBegin=7, kComplete=8,
   kCancel=9, kDisableAndRelease=10, kClearFault=11, kQuery=12,
+  kConfirmManualHome=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_CONFIRM_MANUAL_HOME,
+  kBeginQualification=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_BEGIN_QUALIFICATION,
+  kValidateRest=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_VALIDATE_REST,
+  kCompleteQualification=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_COMPLETE_QUALIFICATION,
   kRenewLease=20
 };
 /**

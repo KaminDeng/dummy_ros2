@@ -13,6 +13,13 @@
  * 与cancel_status_bad_flags组合覆盖终态、摘要及failure字段矛盾，不能把模式名当设备事实。
  */
 static bool cancel_status_terminal7_variant=false;
+static bool manual_history_mode = false;
+static bool manual_release_mode = false;
+static bool manual_fault_diagnostic_mode = false;
+static bool manual_recovered_idle_mode = false;
+static unsigned manual_recovered_idle_fault = 0U;
+static bool manual_recovered_release_mode = false;
+static unsigned released_child_case = 0U;
 
 /**
  * @brief 取消Status负例编号：1..4改final为4/5/6/9，5改链、6清链，7/8/9设置failure source/axis/reason。
@@ -83,6 +90,230 @@ using namespace dummy_ros_control;
  * 非零历史链在当前采集还没有页时可保留；已落页、已绑定current_boot或历史run/链不匹配都不能当作无害启动基线。
  */
 int test_released_idle_startup_baseline() {
+  {
+    Management::Request first;
+    first.set_request_id(0x1234567800000042ULL);
+    first.set_request_seq(0x90000001U);
+    first.set_operation(1);
+    std::uint8_t client[16]{1};
+    first.set_client_instance_id(client);
+    auto second = first;
+    second.set_request_id(first.request_id() + 1);
+    second.set_request_seq(first.request_seq() + 1);
+    client[0] = 2;
+    second.set_client_instance_id(client);
+    auto query = first;
+    query.set_request_id(first.request_id() + 2);
+    query.set_request_seq(first.request_seq() + 2);
+    query.set_operation(12);
+    query.set_queried_operation_id(first.request_id());
+    if (management_rpc_correlation_id(first) != first.request_seq() ||
+        management_rpc_idempotency_key(first) !=
+            (std::uint32_t(first.request_id()) ^ (1U << 16U)))
+      return 380;
+    if (management_rpc_correlation_id(first) ==
+            management_rpc_correlation_id(second) ||
+        management_rpc_idempotency_key(first) ==
+            management_rpc_idempotency_key(second) ||
+        management_rpc_correlation_id(first) ==
+            management_rpc_correlation_id(query) ||
+        management_rpc_idempotency_key(first) ==
+            management_rpc_idempotency_key(query))
+      return 381;
+    const auto retry = first;
+    if (management_rpc_correlation_id(first) !=
+            management_rpc_correlation_id(retry) ||
+        management_rpc_idempotency_key(first) !=
+            management_rpc_idempotency_key(retry))
+      return 382;
+    for (unsigned i = 0; i < 3; ++i) {
+      Management::Request zero;
+      zero.set_operation(i ? 1 : 0);
+      zero.set_request_id(i == 1 ? 0x10000ULL : i == 2 ? 0x100010000ULL : 0ULL);
+      if (!management_rpc_correlation_id(zero) ||
+          !management_rpc_idempotency_key(zero))
+        return 383;
+    }
+  }
+  for (const auto known_source : {0x1067U, 0x1024U}) {
+    HistoricalIdleBaselineContext manual{};
+    manual.manual_reference_mode = true;
+    Status recovered;
+    recovered.set_boot_epoch(7);
+    recovered.set_run_id(57);
+    recovered.set_attempt_kind(1);
+    recovered.set_final_state(4);
+    recovered.set_core_state(2);
+    recovered.set_reference_epoch(1);
+    recovered.set_release_committed(true);
+    recovered.set_cleanup_state(3);
+    recovered.set_failure_source(known_source);
+    if (known_source==0x1024U) {
+      recovered.set_boot_epoch(17820284845494219766ULL);
+      recovered.set_run_id(99U); // panel-interface-02当前已Clear的历史Fault4。
+    }
+    if (!historical_released_idle_baseline(recovered, manual))
+      return 360;
+    auto bench = manual;
+    bench.manual_reference_mode = false;
+    if (historical_released_idle_baseline(recovered, bench))
+      return 361;
+    for (unsigned i = 0; i < 14; ++i) {
+      auto bad = recovered;
+      switch (i) {
+      case 0:
+        bad.set_first_failure_reason(0x1067);
+        break;
+      case 1:
+        bad.set_core_state(9);
+        break;
+      case 2:
+        bad.set_failure_source(0x1068);
+        break;
+      case 3:
+        bad.set_cleanup_state(2);
+        break;
+      case 4:
+        bad.set_can_failed_mask(1);
+        break;
+      case 5:
+        bad.set_session_id(8);
+        break;
+      case 6:
+        bad.set_reference_epoch(0);
+        break;
+      case 7:
+        bad.set_parent_run_id(56);
+        break;
+      case 8:
+        bad.set_release_committed(false);
+        break;
+      case 9: bad.set_evidence_lost(true); break;
+      case 10: bad.set_real_motion_permitted(true); break;
+      case 11: bad.set_permit_remaining_us(1U); break;
+      case 12: bad.set_attempt_kind(2U); break;
+      case 13: bad.set_boot_epoch(0U); break;
+      }
+      if (historical_released_idle_baseline(bad, manual))
+        return 362 + i;
+    }
+    manual.current_boot = recovered.boot_epoch();
+    manual.historical_run_boot = recovered.boot_epoch();
+    manual.historical_run_id = recovered.run_id();
+    manual.historical_reference_epoch = 1;
+    if (!historical_released_idle_baseline(recovered, manual))
+      return 371;
+    auto changed = recovered;
+    changed.set_reference_epoch(2);
+    if (historical_released_idle_baseline(changed, manual))
+      return 372;
+    manual.pages_written = 1;
+    if (historical_released_idle_baseline(recovered, manual))
+      return 373;
+    manual.pages_written=0;
+    manual.terminal_written_run_id=recovered.run_id();
+    if(historical_released_idle_baseline(recovered,manual)) return 390;
+    manual.terminal_written_run_id=0;
+    changed=recovered; changed.set_boot_epoch(recovered.boot_epoch()+1);
+    if(historical_released_idle_baseline(changed,manual)) return 391;
+    changed=recovered; changed.set_run_id(recovered.run_id()+1);
+    if(historical_released_idle_baseline(changed,manual)) return 392;
+    manual.historical_chain[0]=1;
+    if(historical_released_idle_baseline(recovered,manual)) return 393;
+
+  }
+  {
+    HistoricalIdleBaselineContext manual{};
+    manual.manual_reference_mode = true;
+    Status recovered;
+    recovered.set_boot_epoch(7);
+    recovered.set_run_id(59);
+    recovered.set_parent_run_id(58);
+    recovered.set_attempt_kind(3);
+    recovered.set_final_state(4);
+    recovered.set_core_state(2);
+    recovered.set_reference_epoch(1);
+    recovered.set_release_committed(true);
+    recovered.set_cleanup_state(3);
+    recovered.set_failure_source(0x1064);
+    if (!historical_released_idle_baseline(recovered, manual))
+      return 390;
+    auto bench = manual;
+    bench.manual_reference_mode = false;
+    if (historical_released_idle_baseline(recovered, bench))
+      return 391;
+    for (unsigned i = 0; i < 8; ++i) {
+      auto bad = recovered;
+      switch (i) {
+      case 0:
+        bad.set_first_failure_reason(0x1064);
+        break;
+      case 1:
+        bad.set_core_state(9);
+        break;
+      case 2:
+        bad.set_release_committed(false);
+        break;
+      case 3:
+        bad.set_failure_source(0x1067);
+        break;
+      case 4:
+        bad.set_attempt_kind(2);
+        break;
+      case 5:
+        bad.set_parent_run_id(57);
+        break;
+      case 6:
+        bad.set_cleanup_state(2);
+        break;
+      case 7:
+        bad.set_can_failed_mask(1);
+        break;
+      }
+      if (historical_released_idle_baseline(bad, manual))
+        return 392 + i;
+    }
+  }
+  {
+    HistoricalIdleBaselineContext manual{};
+    manual.manual_reference_mode = true;
+    Status retained;
+    retained.set_boot_epoch(7);
+    retained.set_run_id(113);
+    retained.set_attempt_kind(1);
+    retained.set_final_state(2);
+    retained.set_core_state(2);
+    retained.set_reference_epoch(1);
+    retained.set_release_committed(true);
+    if (!historical_released_idle_baseline(retained, manual))
+      return 350;
+    auto bench = manual;
+    bench.manual_reference_mode = false;
+    if (historical_released_idle_baseline(retained, bench))
+      return 351;
+    auto bad = retained;
+    bad.set_session_id(8);
+    if (historical_released_idle_baseline(bad, manual))
+      return 352;
+    bad = retained;
+    bad.set_release_committed(false);
+    if (historical_released_idle_baseline(bad, manual))
+      return 353;
+    manual.current_boot = 7;
+    manual.historical_run_boot = 7;
+    manual.historical_run_id = 113;
+    manual.historical_reference_epoch = 1;
+    if (!historical_released_idle_baseline(retained, manual))
+      return 354;
+    bad = retained;
+    bad.set_reference_epoch(2);
+    if (historical_released_idle_baseline(bad, manual))
+      return 355;
+    manual.pages_written = 1;
+    if (historical_released_idle_baseline(retained, manual))
+      return 356;
+  }
+
   /**
    * @brief context全部为零表示新采集尚未建立当前boot/run证据。
    * 随后逐项赋值pages_written、historical_run_*、terminal_written_run_id验证“历史基线例外”不会覆盖本次已有证据。
@@ -1025,6 +1256,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     capture_path = path;
     parameters.raw_evidence_path = capture_path;
   }
+  parameters.manual_reference_mode =
+      manual_history_mode || manual_release_mode ||
+      manual_fault_diagnostic_mode || manual_recovered_idle_mode ||
+      released_child_case != 0U;
   GuardedZenbeddedSystem system;
   DeviceTransport transport(system, parameters);
   if (!transport.start() || !wait_for([&] { return transport.statistics().ready; })) return 11;
@@ -1082,6 +1317,47 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
     valid.state.set_raw_motor_position_rev(idle_raw);
   }
+  if (inactive_prime_mode) {
+    valid.state.set_committed_producer_seq(44U);
+    valid.state.set_admitted_producer_seq(44U);
+  }
+  if (manual_history_mode || manual_fault_diagnostic_mode ||
+      manual_recovered_idle_mode) {
+    valid.status.set_reference_epoch(1);
+    valid.state.set_reference_epoch(1);
+    valid.status.set_motion_epoch(113);
+    valid.state.set_motion_epoch(113);
+    valid.status.set_management_epoch(173);
+    valid.state.set_management_epoch(173);
+    valid.status.set_core_state(2);
+    valid.state.set_core_state(2);
+    valid.state.set_position_valid_mask(parameters.configured_mask);
+    valid.status.set_run_id(113);
+    valid.status.set_attempt_kind(1);
+    valid.status.set_final_state(manual_fault_diagnostic_mode ? 4 : 2);
+    valid.status.set_release_committed(true);
+    if (manual_fault_diagnostic_mode) {
+      valid.status.set_core_state(9);
+      valid.state.set_core_state(9);
+    }
+    if (manual_recovered_idle_mode) {
+      valid.status.set_final_state(4);
+      valid.status.set_cleanup_state(3);
+      valid.status.set_failure_source(manual_recovered_release_mode ? 0x1064
+                                                                    : 0x1067);
+      if (manual_recovered_release_mode) {
+        valid.status.set_attempt_kind(3);
+        valid.status.set_parent_run_id(112);
+      }
+    }
+  }
+  if (released_child_case) {
+    valid.status.set_core_state(2);
+    valid.state.set_core_state(2);
+    valid.status.set_management_epoch(1);
+    valid.state.set_management_epoch(1);
+    valid.state.set_raw_position_valid_mask(63);
+  }
   valid.status.set_capabilities(kPositionOnlyCapability);
   valid.status.set_control_period_us(parameters.control_period_us);
   valid.status.set_state_publish_period_us(parameters.state_publish_period_us);
@@ -1129,6 +1405,19 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * 返回pipe是否恰好写满一个宿主对象；这只确认刺激交给peer，不表示wire发布成功或Host已接纳。
    */
   auto send = [&](Stimulus stimulus) {
+    if (manual_release_mode) {
+      if (stimulus.status.core_state() == 1U &&
+          stimulus.status.session_id() == 0U) {
+        stimulus.status.set_core_state(2);
+        stimulus.status.set_reference_epoch(9);
+      }
+      if (stimulus.state.core_state() == 1U &&
+          stimulus.state.session_id() == 0U) {
+        stimulus.state.set_core_state(2);
+        stimulus.state.set_reference_epoch(9);
+        stimulus.state.set_position_valid_mask(parameters.configured_mask);
+      }
+    }
     if (stimulus.state.produced_at_us() == 0U)
       stimulus.state.set_produced_at_us(device_now_us());
     if (ticket_mode == 0U && stimulus.send_state)
@@ -1164,10 +1453,212 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   /**
    * @brief 先只发State而无Status绑定；必须计拒绝且copy_state仍不可用，防止单条State自建授权。
    */
+  if (released_child_case) {
+    if (!wait_for([&] {
+          send(valid);
+          std::lock_guard<std::mutex> lock(channel->mutex);
+          return channel->observation.state_received_us != 0U;
+        }))
+      return 870;
+    auto released = valid;
+    released.status.set_session_id(0);
+    released.state.set_session_id(0);
+    released.status.set_run_id(valid.status.run_id() + 1);
+    released.status.set_parent_run_id(valid.status.run_id());
+    released.status.set_attempt_kind(3);
+    released.status.set_motion_epoch(11);
+    released.state.set_motion_epoch(11);
+    released.status.set_management_epoch(2);
+    released.state.set_management_epoch(2);
+    released.status.set_final_state(8);
+    released.status.set_release_committed(true);
+    released.status.set_cleanup_state(3);
+    released.state.set_state_seq(2);
+    std::uint8_t chain[32]{1};
+    released.status.set_evidence_chain_sha256(chain);
+    if (released_child_case == 2U)
+      released.status.set_parent_run_id(99);
+    if (released_child_case == 3U)
+      released.status.set_release_committed(false);
+    if (released_child_case == 4U) {
+      released.status.set_reference_epoch(10);
+      released.state.set_reference_epoch(10);
+    }
+    if (released_child_case == 5U) {
+      released.status.set_motion_epoch(12);
+      released.state.set_motion_epoch(12);
+    }
+    if (released_child_case == 6U) {
+      released.status.set_management_epoch(3);
+      released.state.set_management_epoch(3);
+    }
+    if (released_child_case == 1U) {
+      if (!wait_for([&] {
+            send(released);
+            std::lock_guard<std::mutex> lock(channel->mutex);
+            Status observed;
+            State observed_state;
+            return wire::DummyDeviceStatusV2Codec::decode(
+                       channel->observation.status.data(),
+                       channel->observation.status.size(),
+                       &observed) == wire::CodecResult::kOk &&
+                   wire::DummyJointStateV2Codec::decode(
+                       channel->observation.state.data(),
+                       channel->observation.state.size(),
+                       &observed_state) == wire::CodecResult::kOk &&
+                   observed.session_id() == 0U &&
+                   observed.run_id() == released.status.run_id() &&
+                   observed_state.session_id() == 0U;
+          }))
+        return 871;
+      if (transport.statistics().raw_evidence_failure != 0U ||
+          system.copy_state(&snapshot))
+        return 872;
+    } else {
+      if (!wait_for([&] {
+            send(released);
+            return transport.statistics().raw_evidence_failure != 0U;
+          }))
+        return 873;
+      std::lock_guard<std::mutex> lock(channel->mutex);
+      Status observed;
+      if (wire::DummyDeviceStatusV2Codec::decode(
+              channel->observation.status.data(),
+              channel->observation.status.size(),
+              &observed) != wire::CodecResult::kOk ||
+          observed.session_id() != 8U)
+        return 874;
+    }
+    transport.stop();
+    return 0;
+  }
+  if (manual_fault_diagnostic_mode) {
+    auto status_only = valid;
+    status_only.send_state = false;
+    if (!wait_for([&] {
+          send(status_only);
+          return channel->diagnostic_observation().status_received_us != 0U;
+        }))
+      return 850;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto state_only = valid;
+    state_only.send_status = false;
+    if (!send(state_only) || !wait_for([&] {
+          return channel->diagnostic_observation().state_received_us != 0U;
+        }))
+      return 850;
+    auto diagnostic = channel->diagnostic_observation();
+    Status observed_status;
+    State observed_state;
+    if (wire::DummyDeviceStatusV2Codec::decode(
+            diagnostic.status.data(), diagnostic.status.size(),
+            &observed_status) != wire::CodecResult::kOk ||
+        wire::DummyJointStateV2Codec::decode(
+            diagnostic.state.data(), diagnostic.state.size(),
+            &observed_state) != wire::CodecResult::kOk ||
+        observed_status.core_state() != 9U ||
+        observed_state.core_state() != 9U ||
+        observed_state.reference_epoch() != 1U ||
+        observed_state.position_valid_mask() != 63U ||
+        system.copy_state(&snapshot) ||
+        channel->observation.state_received_us != 0U ||
+        channel->raw_cleanup_observation().state_received_us != 0U)
+      return 851;
+    const auto source_stamp = diagnostic.state_received_us;
+    auto repeated = valid;
+    repeated.send_status = false;
+    if (!send(repeated))
+      return 852;
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    if (channel->diagnostic_observation().state_received_us != source_stamp)
+      return 853;
+    auto next = valid;
+    next.send_status = false;
+    next.state.set_state_seq(valid.state.state_seq() + 1U);
+    if (!send(next) || !wait_for([&] {
+          return channel->diagnostic_observation().state_received_us >
+                 source_stamp;
+        }))
+      return 854;
+    diagnostic = channel->diagnostic_observation();
+    auto wrong = valid;
+    wrong.send_state = false;
+    std::uint8_t hash[32]{99};
+    wrong.status.set_model_sha256(hash);
+    if (!send(wrong))
+      return 855;
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    if (channel->diagnostic_observation().status_received_us !=
+        diagnostic.status_received_us)
+      return 856;
+    transport.stop();
+    return 0;
+  }
   auto unbound = valid;
   unbound.send_status = false;
   if (!wait_for([&] { send(unbound); return transport.statistics().rejected_states != 0U; }) ||
       system.copy_state(&snapshot)) return 48;
+  if (manual_recovered_idle_mode && manual_recovered_idle_fault) {
+    auto bad = valid;
+    if (manual_recovered_idle_fault == 1U)
+      bad.status.set_first_failure_reason(0x1067);
+    if (manual_recovered_idle_fault == 2U) {
+      bad.status.set_core_state(9);
+      bad.state.set_core_state(9);
+    }
+    if (manual_recovered_idle_fault == 3U)
+      bad.status.set_failure_source(0x1068);
+    if (manual_recovered_idle_fault == 4U)
+      bad.status.set_cleanup_state(2);
+    if (manual_recovered_idle_fault == 6U)
+      bad.status.set_release_committed(false);
+    if (manual_recovered_idle_fault == 7U)
+      bad.status.set_attempt_kind(2);
+    if (manual_recovered_idle_fault == 5U) {
+      if (!wait_for([&] {
+            send(valid);
+            std::lock_guard<std::mutex> lock(channel->mutex);
+            return channel->observation.state_received_us != 0U;
+          }))
+        return 860;
+      bad.status.set_reference_epoch(2);
+      bad.state.set_reference_epoch(2);
+      bad.state.set_state_seq(2);
+    }
+    const auto rejected_before = transport.statistics().rejected_states;
+    if (!wait_for([&] {
+          send(bad);
+          const auto stats = transport.statistics();
+          return manual_recovered_idle_fault == 5U
+                     ? stats.rejected_states > rejected_before
+                     : stats.raw_evidence_failure != 0U;
+        }))
+      return 861;
+    {
+      std::lock_guard<std::mutex> lock(channel->mutex);
+      if (manual_recovered_idle_fault != 5U &&
+          channel->observation.state_received_us != 0U)
+        return 862;
+      if (manual_recovered_idle_fault == 5U) {
+        State state;
+        Status status;
+        if (wire::DummyJointStateV2Codec::decode(
+                channel->observation.state.data(),
+                channel->observation.state.size(),
+                &state) != wire::CodecResult::kOk ||
+            wire::DummyDeviceStatusV2Codec::decode(
+                channel->observation.status.data(),
+                channel->observation.status.size(),
+                &status) != wire::CodecResult::kOk ||
+            state.reference_epoch() != 1U || status.reference_epoch() != 1U)
+          return 865;
+      }
+    }
+    if (system.copy_state(&snapshot))
+      return 863;
+    transport.stop();
+    return 0;
+  }
   if (release_deactivate_mode==4U && source_cancel_coordination) { valid.status.set_run_id(9U); valid.status.set_attempt_id(9U); valid.status.set_attempt_kind(1U); }
   /**
    * @brief 显式释放/生命周期子场景的独立入口，完成后直接return不跑后续普通运动流程。
@@ -3929,6 +4420,21 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * 核实际peer收到的wire producer/motion，再stop清身份；不证明正式生命周期之外任意目标可获准。
    */
   if (inactive_prime_mode) {
+    for (unsigned fault = 0U; fault < 3U; ++fault) {
+      auto invalid_floor = valid;
+      invalid_floor.send_status = false;
+      invalid_floor.state.set_state_seq(++stable_sequence);
+      invalid_floor.state.set_committed_producer_seq(5000U);
+      invalid_floor.state.set_admitted_producer_seq(5000U);
+      if (fault == 0U) invalid_floor.state.set_boot_epoch(999U);
+      if (fault == 1U) invalid_floor.state.set_motion_epoch(999U);
+      if (fault == 2U) invalid_floor.state.set_produced_at_us(1U);
+      if (!send_rejected_state(invalid_floor)) return 160;
+    }
+    valid.state.set_state_seq(++stable_sequence);
+    valid.state.set_produced_at_us(0U);
+    if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
+        snapshot.envelope.state_seq == stable_sequence; })) return 159;
     channel->inactive_prime_allowed.store(true);
     set_command_identity({valid.status.boot_epoch(), valid.status.session_id(),
         valid.status.reference_epoch(), valid.status.motion_epoch(), 9007199254740997ULL});
@@ -3937,7 +4443,25 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     Command prime_command;
     const bool valid_prime = sent && ::read(input, &prime_command, sizeof(prime_command)) == sizeof(prime_command) &&
         prime_command.producer_seq() == wire_producer_sequence(prime_generation) &&
+        prime_command.producer_seq() == 45U &&
         prime_command.motion_epoch() == valid.status.motion_epoch();
+    if (!valid_prime) { const auto stats=transport.statistics(); std::fprintf(stderr,"reject=%llu published=%llu invalid=%llu ready=%d\n",(unsigned long long)stats.rejected_commands,(unsigned long long)stats.commands_published,(unsigned long long)stats.invalidations,stats.ready); std::fprintf(stderr,"highwater prime sent=%d generation=%llu wire=%u motion=%u expected_motion=%u\n",sent,static_cast<unsigned long long>(prime_generation),prime_command.producer_seq(),prime_command.motion_epoch(),valid.status.motion_epoch()); return 154; }
+    const auto before_old_ack = transport.statistics().group_sent_ack_misses;
+    valid.send_status = false;
+    valid.state.set_state_seq(++stable_sequence);
+    valid.state.set_produced_at_us(0U);
+    if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
+        snapshot.envelope.state_seq == stable_sequence; })) return 155;
+    const auto old_ack_misses = transport.statistics().group_sent_ack_misses;
+    if (old_ack_misses <= before_old_ack) return 156; // retained44 is not ACK45
+    valid.state.set_committed_producer_seq(prime_command.producer_seq());
+    valid.state.set_admitted_producer_seq(prime_command.producer_seq());
+    valid.state.set_can_sent_mask(63U);
+    valid.state.set_state_seq(++stable_sequence);
+    if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
+        snapshot.envelope.state_seq == stable_sequence; })) return 157;
+    if (transport.statistics().group_sent_ack_misses != old_ack_misses ||
+        transport.statistics().group_sent_ack_timeouts != 0U) return 158;
     transport.stop();
     clear_command_identity();
     return valid_prime ? 0 : 154;
@@ -4994,6 +5518,66 @@ int main(int argc, char **argv) {
   if (argc == 2 && std::strcmp(argv[1], "peer_state_queue_full_once") == 0) {
     inject_peer_state_queue_full_once = true;
     return run_component_case(true, false, false);
+  }
+  if (argc == 2 && std::strcmp(argv[1], "manual_fault_diagnostic") == 0) {
+    manual_fault_diagnostic_mode = true;
+    return run_component_case(true, false, false, false, false, false, false,
+                              true, false, true);
+  }
+  if (argc == 2 && std::strcmp(argv[1], "manual_retained_release") == 0) {
+    manual_release_mode = true;
+    return run_component_case(true, false, false, false, false, false, false,
+                              false, false, false, false, false, false, 0U, 0U,
+                              8U);
+  }
+  if (argc == 2 && std::strcmp(argv[1], "manual_historical_idle") == 0) {
+    manual_history_mode = true;
+    return run_component_case(true, false, false, false, false, false, false,
+                              true, false, true);
+  }
+  if (argc == 3 && std::strcmp(argv[1], "released_child") == 0) {
+    released_child_case =
+        static_cast<unsigned>(std::strtoul(argv[2], nullptr, 10));
+    if (released_child_case < 1U || released_child_case > 6U)
+      return 875;
+    return run_component_case(true, false, false, false, false, false, false,
+                              false, false, true);
+  }
+  if (argc >= 2 && std::strcmp(argv[1], "manual_recovered_release_idle") == 0) {
+    manual_recovered_release_mode = true;
+    manual_recovered_idle_mode = true;
+    if (argc == 3) {
+      const char *faults[]{"current_reason", "fault",           "source",
+                           "not_sent",       "reference_drift", "not_committed",
+                           "other_kind"};
+      bool found = false;
+      for (unsigned i = 0; i < 7; ++i)
+        if (std::strcmp(argv[2], faults[i]) == 0) {
+          manual_recovered_idle_fault = i + 1;
+          found = true;
+        }
+      if (!found)
+        return 864;
+    }
+    return run_component_case(true, false, false, false, false, false, false,
+                              true, false, true);
+  }
+  if (argc == 2 && std::strcmp(argv[1], "manual_recovered_idle") == 0) {
+    manual_recovered_idle_mode = true;
+    return run_component_case(true, false, false, false, false, false, false,
+                              true, false, true);
+  }
+  if (argc == 3 && std::strcmp(argv[1], "manual_recovered_idle") == 0) {
+    const char *faults[]{"current_reason", "fault", "source", "not_sent",
+                         "reference_drift"};
+    for (unsigned i = 0; i < 5; ++i)
+      if (std::strcmp(argv[2], faults[i]) == 0) {
+        manual_recovered_idle_mode = true;
+        manual_recovered_idle_fault = i + 1;
+        return run_component_case(true, false, false, false, false, false,
+                                  false, true, false, true);
+      }
+    return 864;
   }
   if (argc == 2 && std::strcmp(argv[1], "historical_idle_baseline") == 0)
     return test_released_idle_startup_baseline();

@@ -68,5 +68,12 @@ int main() {
   if (dummy_ros_control::publish_control_update(hold.data(), hold.size(), 6, nullptr) == 0U) return 13;
   const auto old_record = dummy_ros_control::consume_control_update(old_record_generation - 1U);
   if (old_record && old_record->identity.motion_epoch == old_identity.motion_epoch) return 14;
+  if (!dummy_ros_control::advance_control_sequence_floor(100U)) return 15;
+  const auto above = dummy_ros_control::publish_control_update(hold.data(), hold.size(), 7, nullptr);
+  if (above != 101U) return 16;
+  if (!dummy_ros_control::advance_control_sequence_floor(44U)) return 17;
+  if (dummy_ros_control::publish_control_update(hold.data(), hold.size(), 8, nullptr) != 102U) return 18;
+  if (dummy_ros_control::advance_control_sequence_floor(UINT32_MAX)) return 19;
+  if (dummy_ros_control::publish_control_update(hold.data(), hold.size(), 9, nullptr) != 0U) return 20;
   return 0;
 }

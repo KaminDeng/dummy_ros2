@@ -1,16 +1,20 @@
 ##
 # @file manual_joint_panel.launch.py
 # @brief 为手动面板启动一致模型的测量显示、独立目标虚影和可选只规划服务。
-# 真机控制仍由面板内唯一 Native worker 管理；launch 创建界面和显示节点不会自动标定、使能或授权电机。backend=simulator 使用软件模型，backend=real 要求固定部署配置；两个后端不互相继承设备身份。
+# real由Native拥有通信，ros由GUI管理唯一C++控制链；普通启动默认只读。simulator使用软件模型，三个后端不互相继承设备授权。
 """六轴实机交互面板与RViz；单USB owner；目标虚影使用独立topic/TF，不驱动实物。"""
 from datetime import datetime
 import importlib.util
+import hashlib
+import json
+import tempfile
+import yaml
 from pathlib import Path
 from ament_index_python.packages import get_package_prefix, get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, EnvironmentVariable
 from launch_ros.actions import Node
 import xacro
 
@@ -38,7 +42,48 @@ def build_nodes(context):
     helper = _config_helpers()
     config_path = helper.resolve_config_path(LaunchConfiguration('config').perform(context),
                                              backend, bringup / 'config/manual_joint_panel.json')
-    config = helper.load_panel_config(config_path, backend)
+    planning_config_path = config_path
+    sdk_arg = context.launch_configurations.get('sdk_prefix', '')
+    # 公共显示/规划由父launch持有；配置从任一初始目标都可切换ROS。
+    if backend == 'ros' or sdk_arg:
+        sdk = str(Path(sdk_arg).resolve(strict=True))
+        deployment_config = (config_path if backend != 'simulator' else
+                             helper.resolve_config_path('', 'ros', bringup / 'config/manual_joint_panel.json'))
+        root = Path(deployment_config).resolve(strict=True).parent
+        pin = hashlib.sha256((root / 'deployment.json').read_bytes()).hexdigest()
+        launch_module_path = bringup / 'launch/manual_ros_control.launch.py'
+        spec = importlib.util.spec_from_file_location('manual_ros_control_launch', launch_module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _, cfg, _, _, _ = module.read_bound_deployment(root, pin, sdk)
+        if backend == 'simulator':
+            # 模拟显示仍使用调用方选定的模型；连接ROS时再用固定部署的身份。
+            simulated = helper.load_panel_config(config_path, 'simulator')
+            cfg.update(description_xacro=simulated['description_xacro'])
+        generated = Path(tempfile.mkdtemp(prefix='dummy-manual-panel-ros-'))
+        controllers = generated / 'controllers.yaml'
+        controllers.write_text(yaml.safe_dump(module.controller_parameters()))
+        report = str(Path(LaunchConfiguration('report').perform(context)).resolve())
+        Path(report).parent.mkdir(parents=True, exist_ok=True)
+        cfg.update(sdk_prefix=sdk, ros_controller_config=str(controllers),
+                   deployment_source_config=str(Path(deployment_config).resolve(strict=True)),
+                   operator_confirmed_double_limits=LaunchConfiguration('operator_confirmed_double_limits', default='false').perform(context) == 'true',
+                   auto_calibrate_and_test=LaunchConfiguration('auto_calibrate_and_test', default='false').perform(context) == 'true',
+                   ros_launch_command=['ros2', 'launch', 'dummy_bringup', 'manual_ros_control.launch.py',
+                     'deployment_root:='+str(root), 'deployment_sha256:='+pin, 'sdk_prefix:='+sdk,
+                     'auto_calibrate_and_test:=false', 'initial_pose:=manual_limits', 'reuse_display_planning:=true',
+                     'operator_confirmed_double_limits:='+LaunchConfiguration('operator_confirmed_double_limits', default='false').perform(context),
+                     'report_path:='+report+'-baseline.log', 'raw_evidence_path:='+report+'-raw.jsonl',
+                     'goal_timeline_path:='+report+'-timeline.jsonl',
+                     'cylinder_pose:='+LaunchConfiguration('cylinder_pose').perform(context),
+                     'cylinder_dimensions:='+LaunchConfiguration('cylinder_dimensions').perform(context)])
+        config_path = generated / 'panel-config.json'
+        config_path.write_text(json.dumps(cfg))
+    if backend == 'real' and config_path != planning_config_path:
+        config = helper.load_panel_config(planning_config_path, 'real')
+        config.update(cfg)
+    else:
+        config = helper.load_panel_config(config_path, backend)
     # 安装目录的ament_python data副本可能落后；三个显示端使用同一明确源文件。
     model_path = str(Path(config['description_xacro']).resolve(strict=True))
     urdf = xacro.process_file(model_path).toxml()
@@ -55,12 +100,10 @@ def build_nodes(context):
                                '仅使用关节面板可传 moveit:=false') from exc
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(bringup / 'launch/manual_moveit_planning.launch.py')),
-            launch_arguments={'config': str(config_path), 'backend': backend}.items()))
+            launch_arguments={'config': str(config_path if backend == 'ros' else planning_config_path), 'backend': backend}.items()))
+    actions.append(Node(package='robot_state_publisher', executable='robot_state_publisher',
+                        parameters=[{'robot_description': urdf}]))
     return actions + [
-        Node(package='robot_state_publisher', executable='robot_state_publisher',
-             ##
-             # 实际描述由面板测量关节话题驱动；独立 target_preview 命名空间与 frame_prefix 仅显示未执行目标，不覆盖实际 TF。
-             parameters=[{'robot_description': urdf}]),
         Node(package='robot_state_publisher', executable='robot_state_publisher',
              namespace='target_preview', name='target_robot_state_publisher',
              parameters=[{'robot_description': urdf, 'frame_prefix': 'target_preview/'}],
@@ -76,7 +119,9 @@ def build_nodes(context):
         # 面板进程接收同一配置和模型路径；报告记录、只读连接、授权和设备完成确认均在面板/Native 状态机中处理。
         Node(package='dummy_bringup', executable='manual_joint_panel.py',
              arguments=['--config', str(config_path), '--report', LaunchConfiguration('report'),
-                        '--description-xacro', model_path, '--backend', LaunchConfiguration('backend')] + (['--moveit'] if moveit_arg == 'true' else []), output='screen'),
+                        '--description-xacro', model_path, '--backend', LaunchConfiguration('backend')] + (['--moveit'] if moveit_arg == 'true' else []) +
+                       (['--auto-calibrate-and-test'] if LaunchConfiguration('auto_calibrate_and_test', default='false').perform(context) == 'true' else []) +
+                       ['--initial-pose', LaunchConfiguration('initial_pose')], output='screen'),
     ]
 
 
@@ -89,7 +134,13 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('config', default_value='', description='留空使用固定部署配置；模拟器可使用包内模板'),
         DeclareLaunchArgument('report', default_value=report),
-        DeclareLaunchArgument('backend', default_value='real', choices=['real', 'simulator'], description='真机或纯软件模拟器'),
+        DeclareLaunchArgument('backend', default_value='real', choices=['real', 'ros', 'simulator'], description='真机或纯软件模拟器'),
         DeclareLaunchArgument('moveit', default_value='true', description='启用末端规划页及仅规划MoveIt服务'),
+        DeclareLaunchArgument('sdk_prefix', default_value=EnvironmentVariable('DPSDK_HOST_SDK_PREFIX', default_value=''), description='ROS后端明确绑定的既有SDK安装前缀'),
+        DeclareLaunchArgument('auto_calibrate_and_test', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('initial_pose', default_value='manual_limits', choices=['manual_limits']),
+        DeclareLaunchArgument('operator_confirmed_double_limits', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('cylinder_pose', default_value='[]'),
+        DeclareLaunchArgument('cylinder_dimensions', default_value='[]'),
         OpaqueFunction(function=build_nodes),
     ])

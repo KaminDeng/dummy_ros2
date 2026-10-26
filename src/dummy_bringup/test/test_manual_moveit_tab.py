@@ -110,6 +110,7 @@ class Panel(QtWidgets.QWidget):
         self.last_state = {'boot_epoch': 7, 'reference_epoch': 2, 'session_id': 9,
                            'velocity_valid_mask': 63, 'estimated_velocity_rad_s': [0]*6,
                            'motion_epoch': 10, 'state_seq': 100}
+        self.backend = 'real'  # This fixture exercises the existing Native path.
         self.authorized, self.calibration, self.busy = True, {'valid': True}, False
         self.commands, self.releases = [], []
         self.report_dir = tempfile.TemporaryDirectory()
@@ -194,6 +195,34 @@ class MoveItTabTests(unittest.TestCase):
     ##
     # @brief fresh控制捕获按钮，IK不可用不妨碍只读捕获；旧独立plan_button不存在，未验证路径不能播放。
     # @return None；以assert/unittest断言报告结果，失败抛异常。
+    def test_duplicate_graph_requests_leave_window_alive_without_motion(self):
+        for method, request, args in (
+                ('capture_actual', 'request_fk', ()),
+                ('start_plan', 'request_ik', ()),
+                ('start_joint_plan', 'request_fk', ([0.0] * 6,)),
+                ('start_joint_plan', 'request_plan', ([0.0] * 6,))):
+            with self.subTest(method=method, request=request):
+                with patch.object(self.tab.planner, request, side_effect=ValueError('MoveIt服务必须各有一个实例 duplicate graph')):
+                    getattr(self.tab, method)(*args)
+                self.assertIsNone(self.tab.pending)
+                self.assertIsNone(self.tab.preset_fk)
+                self.assertFalse(self.tab.executing)
+                self.assertIn('duplicate graph', self.tab.status.text())
+                self.assertFalse(self.tab.preview_timer.isActive())
+                self.assertFalse(self.tab.collision_timer.isActive())
+                self.assertFalse(self.panel.busy)
+
+    def test_preset_fk_future_graph_error_stays_inside_timer(self):
+        future = Future()
+        future.set_exception(ValueError('duplicate graph async FK'))
+        self.tab.preset_fk = (future, self.tab.revision)
+        self.tab.tick()
+        self.assertIsNone(self.tab.pending)
+        self.assertIsNone(self.tab.preset_fk)
+        self.assertIn('duplicate graph async FK', self.tab.status.text())
+        self.assertFalse(self.tab.executing)
+        self.assertFalse(self.panel.busy)
+
     def test_buttons_follow_freshness_and_service_readiness(self):
         self.tab.tick()
         self.assertTrue(self.tab.capture.isEnabled())

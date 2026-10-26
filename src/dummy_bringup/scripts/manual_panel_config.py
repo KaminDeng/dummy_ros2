@@ -36,7 +36,7 @@ def installed_description():
 # @param template_path 模拟模式默认使用的模板路径。
 # @return Path：显式配置、模拟模板或固定 current/panel-config.json。
 def resolve_config_path(config_argument, backend, template_path):
-    if backend not in ('real', 'simulator'):
+    if backend not in ('real', 'ros', 'simulator'):
         raise ValueError('未知连接目标')
     if config_argument:
         return Path(config_argument).expanduser()
@@ -76,6 +76,16 @@ def load_panel_config(config_path, backend, description_xacro=''):
         decoder = Path(config.get('decoder_directory', ''))/'join_real_6dof_evidence.py'
         if not native.is_file() or not os.access(native, os.X_OK) or not decoder.is_file():
             raise ValueError('真机部署缺少可执行Native或解码器，请重新部署')
+    elif backend == 'ros':
+        # ROS 固定部署与控制器文件独立于 USB Native/decoder。
+        for key in ('sdk_prefix', 'ros_controller_config'):
+            value = config.get(key)
+            if not value or not Path(value).exists():
+                raise ValueError('ROS 部署缺少有效路径：' + key)
+        command = config.get('ros_launch_command', [])
+        if not isinstance(command, list) or any(not isinstance(arg, str) for arg in command):
+            raise ValueError('ros_launch_command 必须为 argv 列表')
+        config.pop('deployment_required', None)
     elif backend == 'simulator':
         config.pop('deployment_required', None)
     else:

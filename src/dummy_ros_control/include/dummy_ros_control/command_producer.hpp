@@ -14,7 +14,7 @@
 namespace dummy_ros_control {
 
 // Wire serial arithmetic is modulo 2^32. Zero is reserved by the device CAN
-// scheduler; the worker drops that one generation at wrap and resumes at one.
+// scheduler. CommandProducer refuses exhaustion rather than reusing a wire sequence.
 /**
  * @brief 投影宿主控制代数到模2^32线序号。
  * @param generation 宿主64位递增代号。
@@ -51,6 +51,15 @@ struct CommandGenerationRecord {
  */
 class CommandProducer {
  public:
+  // Only accepted fresh device observations may advance this allocation floor.
+  // This reserves numbers; it neither publishes a command nor manufactures an ACK.
+  bool advance_generation_floor(std::uint32_t floor) noexcept {
+    auto current = next_generation_.load(std::memory_order_relaxed);
+    while (current < floor && !next_generation_.compare_exchange_weak(
+        current, floor, std::memory_order_relaxed)) {}
+    return floor != UINT32_MAX && current < UINT32_MAX;
+  }
+
   /**
    * @brief 写入身份和目标并最后发布完整代号。
    * @param identity 本次命令身份值。
@@ -61,7 +70,14 @@ class CommandProducer {
   std::uint64_t record_update(const CommandIdentity &identity,
                               const std::array<double, 6> &position,
                               std::uint64_t authority_generation = 0U) noexcept {
-    const auto generation = next_generation_.fetch_add(1, std::memory_order_relaxed) + 1;
+    auto previous = next_generation_.load(std::memory_order_relaxed);
+    // No reserved zero or sequence reuse after exhaustion in this process.
+    for (unsigned attempt = 0; ; ++attempt) {
+      if (previous >= UINT32_MAX || attempt == 3U) return 0U;
+      if (next_generation_.compare_exchange_weak(previous, previous + 1U,
+          std::memory_order_relaxed)) break;
+    }
+    const auto generation = previous + 1U;
     auto &slot = slots_[generation % slots_.size()];
     slot.ready.store(0, std::memory_order_relaxed);
     slot.boot.store(identity.boot, std::memory_order_relaxed);

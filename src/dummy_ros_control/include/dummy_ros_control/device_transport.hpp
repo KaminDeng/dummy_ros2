@@ -4,6 +4,8 @@
  * ROS实时read/write不直接创建Context/节点或做网络I/O；DeviceTransport私有worker拥有dp_comm上下文和执行器。源设备produced_at_us与宿主steady_us分域，worker先校正队列年龄再向硬件提供有截止的状态；重连不续用旧命令意图。
  */
 #pragma once
+#include "dp_protocol_constants.h"
+#include "dummy_ref/manual_reference_policy.hpp"
 #include "dummy_ros_control/diagnostic_journal.hpp"
 
 #include <algorithm>
@@ -20,6 +22,23 @@
 namespace dummy_ros_control {
 class GuardedZenbeddedSystem;
 struct DeviceManagementChannel;
+
+/** @brief
+ * 管理RPC显式键与wire请求绑定；同wire重试保持键，避免重连时复用SDK自动计数缓存。
+ */
+template <typename Request>
+std::uint32_t management_rpc_correlation_id(const Request &request) noexcept {
+  return dummy_ref::host::management_rpc_correlation_id(request);
+}
+/** @brief SDK纯策略转发；保留Native
+ * Query特例及稳定零值回退，不触发SDK自动分配。 */
+template <typename Request>
+std::uint32_t management_rpc_idempotency_key(const Request &request) noexcept {
+  return dummy_ref::host::management_rpc_idempotency_key(
+      request,
+      request.operation() ==
+          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_GET_OPERATION);
+}
 
 /**
  * @brief 传输配置值：身份是16/32字节定长数组，位置rad、速度rad/s、加速度rad/s²，所有*_us为µs；raw路径仅诊断采集，不授予运动。
@@ -54,6 +73,7 @@ struct TransportParameters {
   std::array<double, 6> acceleration_max{};
   std::uint64_t control_period_us = 0U;
   std::string raw_evidence_path;
+  bool manual_reference_mode = false;
 };
 
 /**
@@ -65,14 +85,19 @@ struct HistoricalIdleBaselineContext {
                 last_status_run_id = 0U, pages_written = 0U,
                 terminal_written_run_id = 0U;
   std::array<std::uint8_t, 32> historical_chain{};
+  bool manual_reference_mode = false;
+  std::uint32_t historical_reference_epoch = 0U;
 };
 
 /**
  * @brief 仅在无本次证据写入且历史释放链相符时识别冷Idle基线。
- * 接纳范围限已释放根尝试或紧邻的释放子尝试；只能作为读取基线，不能复用历史运动授权。
+ * 接纳已释放根/释放子尝试；manual模式另允许当前已清除的REST超时根或已知失能超时Release故障历史。
+ * 历史失败仍是失败，仅作为读取基线，不能复用历史运动授权。
  * @param value 提供状态访问器的设备Status对象。
  * @param context 当前/历史boot-run、链及本地采集水位。
- * @return bool；要求无session/reference/permit、Idle、release_committed且无evidence_lost。
+ * @return
+ * bool；要求session/permit为零、已释放Idle且无evidence_lost；manual允许冻结的非零参考。
+ * 清除REST超时后的失败ledger仅提供只读基线，不构成成功终态或运动授权。
  */
 template <typename Status>
 bool historical_released_idle_baseline(const Status &value,
@@ -82,22 +107,57 @@ bool historical_released_idle_baseline(const Status &value,
        value.final_state() == 2U) ||
       (value.attempt_kind() == 3U && value.run_id() > 1U &&
        value.parent_run_id() == value.run_id()-1U && value.final_state() == 8U);
-  const bool clean_idle = value.boot_epoch() != 0U && value.run_id() != 0U &&
-      value.session_id() == 0U && value.reference_epoch() == 0U &&
-      value.core_state() == 1U && value.release_committed() &&
-      !value.real_motion_permitted() && value.permit_remaining_us() == 0U &&
-      !value.evidence_lost();
+  // ClearFault只清当前适配器故障，故意保留旧失败ledger；不能要求它伪装成功终态。
+  const bool cleared_rest_timeout =
+      context.manual_reference_mode && value.attempt_kind() == 1U &&
+      value.parent_run_id() == 0U && value.final_state() == 4U &&
+      value.core_state() == 2U && value.reference_epoch() != 0U &&
+      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
+      value.can_failed_mask() == 0U && value.failure_source() == 0x1067U;
+  // 首样本超时已由显式ClearFault清除；历史Fault4/source仍保留，只承认已释放只读基线。
+  const bool cleared_first_sample_timeout =
+      context.manual_reference_mode && value.attempt_kind() == 1U &&
+      value.parent_run_id() == 0U && value.final_state() == 4U &&
+      value.core_state() == 2U && value.reference_epoch() != 0U &&
+      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
+      value.can_failed_mask() == 0U && value.failure_source() == 0x1024U;
+  // 已知失能超时的Release失败账本在ClearFault后仍保持Fault终态，不能伪装为成功释放。
+  const bool cleared_release_timeout =
+      context.manual_reference_mode &&
+      value.attempt_kind() ==
+          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_RELEASE &&
+      value.run_id() > 1U && value.parent_run_id() == value.run_id() - 1U &&
+      value.final_state() ==
+          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_FINAL_STATE_FAULT_LATCHED_AND_RELEASED &&
+      value.core_state() == 2U && value.reference_epoch() != 0U &&
+      value.cleanup_state() == 3U && value.first_failure_reason() == 0U &&
+      value.can_failed_mask() == 0U && value.failure_source() == 0x1064U;
+  const bool clean_idle =
+      value.boot_epoch() != 0U && value.run_id() != 0U &&
+      value.session_id() == 0U &&
+      ((value.reference_epoch() == 0U && value.core_state() == 1U) ||
+       (context.manual_reference_mode && value.reference_epoch() != 0U &&
+        value.core_state() == 2U)) &&
+      value.release_committed() && !value.real_motion_permitted() &&
+      value.permit_remaining_us() == 0U && !value.evidence_lost();
   const bool cold_start = context.current_boot == 0U &&
       context.historical_run_boot == 0U && context.historical_run_id == 0U &&
       context.last_status_run_id == 0U &&
       context.pages_written == 0U && context.terminal_written_run_id == 0U;
-  const bool same_historical_run = context.historical_run_id != 0U &&
+  const bool same_historical_run =
+      context.historical_run_id != 0U &&
       context.historical_run_boot == value.boot_epoch() &&
       context.historical_run_id == value.run_id() &&
-      std::equal(context.historical_chain.begin(), context.historical_chain.end(),
+      (!context.manual_reference_mode ||
+       context.historical_reference_epoch == value.reference_epoch()) &&
+      std::equal(context.historical_chain.begin(),
+                 context.historical_chain.end(),
                  std::begin(value.evidence_chain_sha256()));
-  return released_attempt && clean_idle && context.pages_written == 0U &&
-      context.terminal_written_run_id == 0U && (cold_start || same_historical_run);
+  return (released_attempt || cleared_rest_timeout ||
+          cleared_first_sample_timeout || cleared_release_timeout) &&
+         clean_idle && context.pages_written == 0U &&
+         context.terminal_written_run_id == 0U &&
+         (cold_start || same_historical_run);
 }
 
 // 当前v2 Status携带策略摘要、逐轴限额与控制/发布周期；bootstrap会将这些证据

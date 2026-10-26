@@ -18,6 +18,14 @@
 int main() {
   using namespace dummy_ros_control;
   GuardedZenbeddedSystem system;
+  // 未标定时controller-manager可轮询inactive硬件，但不能激活运动。
+  if(system.read(rclcpp::Time(),rclcpp::Duration::from_seconds(0.01))!=hardware_interface::return_type::OK ||
+     system.on_activate(rclcpp_lifecycle::State())!=hardware_interface::CallbackReturn::FAILURE) return 7;
+  JointStateSnapshot raw_only;
+  raw_only.envelope={7,1,1,100,63,0,0};
+  const StateExpectation raw_expected{7,1,0,false,63,90,110,20};
+  if(system.ingest_state(raw_only,raw_expected) ||
+     system.on_activate(rclcpp_lifecycle::State())!=hardware_interface::CallbackReturn::FAILURE) return 8;
   JointStateSnapshot snapshot;
   snapshot.envelope={7,1,1,100,1,1,1}; snapshot.position[0]=0.25;
   const StateExpectation expectation{7,1,0,true,1,90,110,20};

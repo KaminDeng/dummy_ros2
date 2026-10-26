@@ -71,7 +71,7 @@ def test_application_hold_renews_once_in_due_window_without_restoring_permit():
         "gate_=std::make_unique<ActionGate>", 1)[0]
     observation = source.split("bool read_observation", 1)[1].split("void bootstrap_tick", 1)[0]
 
-    assert "device_profile_.functional_development_basis ? 30000000U : 0U" in constructor
+    assert "(device_profile_.functional_development_basis || manual_reference_mode_) ? 30000000U : 0U" in constructor
     assert "bootstrap_->renewal_due(now,requested_lease_us_)" in observation
     assert "gate_->permit_refresh_allowed()" in observation
     assert "reserve_lease_renewal()" in observation

@@ -16,9 +16,19 @@ namespace dummy_motion_client {
  * @brief 宿主bootstrap阶段，不是设备core_state。OperationComplete是单步结束；ReleasePending/ReleaseAwaitIdle/Released区分管理结果与实际释放观测。
  */
 enum class BootstrapPhase {
-  kIdle, kSelectMode, kGrantSession, kCaptureReference, kSetPermit,
-  kRenewLease, kOperationComplete, kReady, kFault,
-  kReleasePending, kReleaseAwaitIdle, kReleased
+  kIdle,
+  kSelectMode,
+  kGrantSession,
+  kCaptureReference,
+  kSetPermit,
+  kManualOperation,
+  kRenewLease,
+  kOperationComplete,
+  kReady,
+  kFault,
+  kReleasePending,
+  kReleaseAwaitIdle,
+  kReleased
 };
 
 /**
@@ -96,8 +106,10 @@ class BootstrapCoordinator {
    * @param now_us 宿主µs。
    * @return bool；成功进入对应等待阶段，完成后停OperationComplete。
    */
-  bool start_operation(const BootstrapSnapshot &snapshot, ManageOperation operation,
-                       std::uint64_t now_us);
+  bool start_operation(const BootstrapSnapshot &snapshot,
+                       ManageOperation operation, std::uint64_t now_us,
+                       bool operator_confirmed = false,
+                       bool strict_evidence = false);
   /**
    * @brief 在同设备/参考/尝试上显式续session租期。
    * 保存Running run/reference/motion以拒绝续租期间切换；本操作不重设参考、不发新轨迹、不刷新motion permit。
@@ -119,13 +131,27 @@ class BootstrapCoordinator {
    */
   bool renewal_due(std::uint64_t now_us, std::uint64_t requested_lease_us) const noexcept;
   /**
-   * @brief 只在Status/State都Hold时发起失能释放。
+   * @brief
+   * 默认仅双Hold释放；显式manual模式另允许同参考双Idle或无参考双UnreferencedIdle。
    * 需Idle/Ready/OperationComplete且身份未漂移；不是一条立即释放成功的同步调用。
    * @param snapshot 本session的可信双Hold快照。
    * @param now_us 宿主µs，须可安全加5秒。
+   * @param manual_reference_release
+   * 允许尚未Enable的双Idle清理，默认false沿用bench模式。
+   * @param expected_retained_reference
+   * manual模式显式0表示未资格清参考，非零固定已资格参考；nullopt兼容保留释放前参考。
    * @return bool；成功建立固定5秒总释放截止并提交D10。
    */
-  bool start_release(const BootstrapSnapshot &snapshot, std::uint64_t now_us);
+  /** @brief
+   * 用户manual任务仅签发一次Host绝对permit窗口；不因Renew/Complete重开。 */
+  bool begin_manual_permit_window(std::uint64_t boot,
+                                  std::uint64_t issued_at_us) noexcept;
+  /** @brief 已扣原签发年龄的剩余预算；失效/释放/Fault/到期均为0。 */
+  std::uint64_t manual_permit_remaining_us(std::uint64_t now_us) const noexcept;
+  bool start_release(
+      const BootstrapSnapshot &snapshot, std::uint64_t now_us,
+      bool manual_reference_release = false,
+      std::optional<std::uint32_t> expected_retained_reference = std::nullopt);
   /**
    * @brief 更新可信快照并监督身份、RUN续租和释放Idle。
    * 绑定hash/boot/profile、session及mask漂移转Fault；Release允许明确归零身份，Released后又出现owner/permit也失效。ReleaseAwaitIdle收到双无参考Idle才转Released；此层不自行计算State原始生产时钟。
@@ -180,6 +206,20 @@ class BootstrapCoordinator {
    * @brief 查询管理释放成功且实际双Idle已观察。
    * @return bool；成立依赖外层快照新鲜/一致性保证。
    */
+  bool management_operation_pending() const noexcept {
+    return phase_ == BootstrapPhase::kSelectMode ||
+           phase_ == BootstrapPhase::kGrantSession ||
+           phase_ == BootstrapPhase::kCaptureReference ||
+           phase_ == BootstrapPhase::kSetPermit ||
+           phase_ == BootstrapPhase::kManualOperation ||
+           phase_ == BootstrapPhase::kRenewLease;
+  }
+  bool release_slot_available() const noexcept {
+    return phase_ == BootstrapPhase::kIdle ||
+           phase_ == BootstrapPhase::kReady ||
+           phase_ == BootstrapPhase::kOperationComplete ||
+           (phase_ == BootstrapPhase::kFault && terminal_failure_observed_);
+  }
   bool released() const noexcept { return phase_ == BootstrapPhase::kReleased; }
   /**
    * @brief 读取匹配成功COMMITTED释放的ID对。
@@ -235,6 +275,10 @@ class BootstrapCoordinator {
   ManageRequest identity_{};
   std::array<std::uint8_t, 32> compiled_policy_digest_{};
   std::uint64_t permit_remaining_us_ = 0;
+  bool manual_permit_window_ = false, manual_permit_closed_ = false;
+  std::uint64_t manual_permit_deadline_us_ = 0, manual_permit_issued_at_us_ = 0,
+                manual_permit_boot_ = 0, manual_permit_request_deadline_us_ = 0;
+  std::uint32_t manual_permit_reference_ = 0;
   std::uint64_t configured_session_lease_us_ = 0;
   std::uint64_t requested_lease_us_ = 0;
   /**
@@ -254,6 +298,9 @@ class BootstrapCoordinator {
    * @brief 固定5秒释放总截止；snapshot不含接收时间，因此新鲜性必须由调用者提供。
    */
   std::uint64_t release_deadline_us_ = 0;
+  bool terminal_failure_observed_ = false;
+  bool manual_reference_release_ = false;
+  std::uint32_t release_reference_epoch_ = 0;
   BootstrapSnapshot snapshot_{};
   BootstrapPhase phase_ = BootstrapPhase::kIdle;
   std::uint64_t request_id_ = 0;
@@ -265,5 +312,12 @@ class BootstrapCoordinator {
   std::string error_;
   ManageOperation last_operation_ = ManageOperation::kSelectMode;
   bool automatic_ = true;
+  bool operator_confirmed_ = false;
+  bool strict_evidence_ = false;
+  bool manual_committed_ = false;
+  bool manual_policy_denied_ = false;
+
+public:
+  bool manual_policy_denied() const noexcept { return manual_policy_denied_; }
 };
 }  // namespace dummy_motion_client

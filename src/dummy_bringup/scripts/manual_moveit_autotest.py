@@ -142,6 +142,10 @@ class AutoTestSession:
     # @return bool：测试成功进入活动状态为 True；忙、拒绝确认或初始准备失败为 False。
     def start(self, seconds):
         t = self.tab
+        if getattr(t.panel, 'backend', None) == 'ros':
+            accepted = t.panel.ros_backend.request_calibration_and_test()
+            self._status('C++ 自动任务已请求；等待权威流程结果' if accepted else 'C++ 自动任务未受理', '#1d4ed8')
+            return accepted
         if self.active or t.executing or t.pending or t.panel.busy or not t.request_ready():return False
         if not math.isfinite(seconds) or not .1 <= seconds <= 86400.:raise ValueError('测试时长必须在0.1秒至24小时之间')
         chain = hasattr(t,'auto_continuous') and t.auto_continuous.isChecked()

@@ -270,6 +270,8 @@ class ActionGate {
    */
   const std::string &error() const { return error_; }
  private:
+  // 纯位置轨迹必须先由当前fresh实际Hold起点证明首槽/整段动态界限。
+  bool valid_begin_trajectory(const Trajectory &, std::uint64_t now);
   /**
    * @brief 核对延期Cancel根仍恰等当前完整授权身份。
    * @return bool；不产生新管理权限或更新时间。
@@ -361,7 +363,7 @@ class ActionGate {
   std::uint32_t hold_committed_seq_=0;
   std::uint32_t drained_committed_seq_=0;
   std::uint8_t hold_submitted_mask_=0, hold_sent_mask_=0;
-  Position last_q_{}, prime_q_{}, frozen_q_{};
+  Position last_q_{}, prime_q_{}, frozen_q_{}, measured_hold_q_{};
   /**
    * @brief sampled表示真实update发生；frozen阻断后继采样；cancel_terminal区分正常取消与异常；排空状态须同时具worker和State证据。
    */

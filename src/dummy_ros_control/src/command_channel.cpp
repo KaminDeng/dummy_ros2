@@ -28,6 +28,10 @@ std::atomic<std::uint64_t> ticket{0};
 std::atomic<std::uint64_t> invalidated_generation{0};
 }  // namespace
 
+bool advance_control_sequence_floor(std::uint32_t floor) noexcept {
+  return producer.advance_generation_floor(floor);
+}
+
 /**
  * @brief 发布或刷新当前控制授权身份。
  * 同一授权只更新ticket；身份变化递增authority世代。此接口含writer mutex，不能泛称所有命令通道操作均无锁。

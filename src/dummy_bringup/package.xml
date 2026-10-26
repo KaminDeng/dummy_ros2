@@ -9,6 +9,11 @@
   <depend>dpsdk_host_sdk</depend><!-- 模型与公共协议读取器绑定同一安装SDK。 -->
   <exec_depend>ament_index_python</exec_depend><!-- 运行时通过 ament 索引定位显式安装区资源，不依赖源码工作目录。 -->
   <exec_depend>builtin_interfaces</exec_depend><!-- Duration 等基础时间消息供规划和轨迹请求使用；时间字段的秒/纳秒单位由消息定义。 -->
+  <exec_depend>dpsdk_interfaces</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>dummy_ros_control</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
   <exec_depend>control_msgs</exec_depend><!-- 轨迹 action 消息支持公开门控及探针；依赖消息类型不表示已发送或接受目标。 -->
   <exec_depend>controller_manager_msgs</exec_depend><!-- 控制器/硬件组件查询消息用于观察生命周期；创建或查询组件不等于激活。 -->
   <exec_depend>dummy_moveit_config</exec_depend><!-- 提供 OMPL、语义模型及 Gazebo/MoveIt 启动配置；手动面板可通过开关关闭规划页。 -->
@@ -25,6 +30,7 @@
   <exec_depend>rviz2</exec_depend><!-- 用于反馈模型、目标虚影和场景显示，不直接授予电机控制。 -->
   <exec_depend>robot_state_publisher</exec_depend><!-- 从关节状态生成 TF；手动面板对测量与 target_preview 使用独立话题和 frame_prefix。 -->
   <exec_depend>dummy-ros2_description</exec_depend><!-- 提供安装的机械臂描述默认入口；明确部署模型可覆盖该路径，不能静默混用模型身份。 -->
+  <exec_depend>rcl_interfaces</exec_depend><!-- 标准参数读取，仅镜像C++公布的SDK状态预算。 -->
   <exec_depend>rclpy</exec_depend><!-- Python ROS 节点和异步服务/action 客户端；面板用有界 spin 驱动响应以保持 UI 可用。 -->
   <exec_depend>rosgraph_msgs</exec_depend><!-- Clock 消息供 Gazebo 探针观察仿真时间；宿主单调超时与仿真时钟暂停需分开处理。 -->
   <exec_depend>sensor_msgs</exec_depend><!-- JointState 用于实际/目标关节发布；两类话题不能互相替代。 -->

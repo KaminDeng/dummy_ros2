@@ -7,6 +7,7 @@
 #include <array>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include "dummy_ros_control/wire_types.hpp"
@@ -81,6 +82,75 @@ struct DeviceManagementChannel {
   explicit DeviceManagementChannel(TransportParameters value)
       : parameters(std::move(value)),
         raw_evidence_capture_enabled(!parameters.raw_evidence_path.empty()) {}
+  // 独立UI诊断lane：不写normal observation、不生成writer/cleanup证明。
+  bool publish_diagnostic_status(const dummy_wire::DummyDeviceStatusV2& value,std::uint64_t received) noexcept {
+    if(!ready.load(std::memory_order_acquire) || received==0U || value.boot_epoch()==0U ||
+       value.schema_major()!=2U || value.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
+       value.profile_id()!=parameters.profile_id || value.configured_mask()!=parameters.configured_mask ||
+       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),value.device_id()) ||
+       !std::equal(parameters.contract_hash.begin(),parameters.contract_hash.end(),value.contract_sha256()) ||
+       !std::equal(parameters.model_hash.begin(),parameters.model_hash.end(),value.model_sha256()) ||
+       !std::equal(parameters.profile_hash.begin(),parameters.profile_hash.end(),value.profile_sha256()) ||
+       !std::equal(parameters.firmware_hash.begin(),parameters.firmware_hash.end(),value.firmware_sha256()) ||
+       !std::equal(parameters.policy_hash.begin(),parameters.policy_hash.end(),value.compiled_policy_sha256()))return false;
+    std::array<std::uint8_t,dummy_wire::DummyDeviceStatusV2Codec::kEncodedSize> raw{};
+    if(dummy_wire::DummyDeviceStatusV2Codec::encode(value,raw.data(),raw.size())!=dummy_wire::CodecResult::kOk)return false;
+    std::lock_guard<std::mutex> lock(diagnostic_observation_mutex_);
+    if(!ready.load(std::memory_order_acquire) || received<diagnostic_observation_.status_received_us)return false;
+    for(std::size_t i=0;i<diagnostic_retired_count_;++i)if(diagnostic_retired_boots_[i]==value.boot_epoch())return false;
+    if(diagnostic_status_.boot_epoch()!=0U && diagnostic_status_.boot_epoch()!=value.boot_epoch()) {
+      if(diagnostic_retired_count_==diagnostic_retired_boots_.size())return false;
+      diagnostic_retired_boots_[diagnostic_retired_count_++]=diagnostic_status_.boot_epoch();
+      diagnostic_observation_={};diagnostic_clock_={};diagnostic_anchor_received_=0U;
+    } else if(diagnostic_status_.boot_epoch()!=0U &&
+       (static_cast<std::int32_t>(value.management_epoch()-diagnostic_status_.management_epoch())<0 ||
+        static_cast<std::int32_t>(value.motion_epoch()-diagnostic_status_.motion_epoch())<0))return false;
+    if(value.session_id()!=diagnostic_status_.session_id() || value.reference_epoch()!=diagnostic_status_.reference_epoch() ||
+       value.motion_epoch()!=diagnostic_status_.motion_epoch() || value.management_epoch()!=diagnostic_status_.management_epoch() ||
+       value.core_state()!=diagnostic_status_.core_state())diagnostic_observation_.state_received_us=0U;
+    diagnostic_observation_.status=raw;
+    diagnostic_status_=value;diagnostic_observation_.status_received_us=received;return true;
+  }
+  bool publish_diagnostic_state(const dummy_wire::DummyJointStateV2& value,std::uint64_t received) noexcept {
+    if(!ready.load(std::memory_order_acquire) || received==0U || value.produced_at_us()==0U || value.state_seq()==0U ||
+       received>static_cast<std::uint64_t>(INT64_MAX) || value.produced_at_us()>static_cast<std::uint64_t>(INT64_MAX) ||
+       value.schema_major()!=2U || value.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
+       value.profile_id()!=parameters.profile_id || value.configured_mask()!=parameters.configured_mask ||
+       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),value.device_id()))return false;
+    for(std::size_t axis=0;axis<6;++axis) {
+      if((value.position_valid_mask()&(1U<<axis)) && !std::isfinite(value.position_rad()[axis]))return false;
+      if((value.raw_position_valid_mask()&(1U<<axis)) && !std::isfinite(value.raw_motor_position_rev()[axis]))return false;
+    }
+    std::array<std::uint8_t,dummy_wire::DummyJointStateV2Codec::kEncodedSize> raw{};
+    if(dummy_wire::DummyJointStateV2Codec::encode(value,raw.data(),raw.size())!=dummy_wire::CodecResult::kOk)return false;
+    std::lock_guard<std::mutex> lock(diagnostic_observation_mutex_);
+    if(!ready.load(std::memory_order_acquire) || diagnostic_observation_.status_received_us==0U ||
+       received<diagnostic_observation_.status_received_us ||
+       received-diagnostic_observation_.status_received_us>parameters.max_state_age_us ||
+       value.boot_epoch()!=diagnostic_status_.boot_epoch() || value.session_id()!=diagnostic_status_.session_id() ||
+       value.reference_epoch()!=diagnostic_status_.reference_epoch() || value.motion_epoch()!=diagnostic_status_.motion_epoch() ||
+       value.management_epoch()!=diagnostic_status_.management_epoch() || value.core_state()!=diagnostic_status_.core_state())return false;
+    const auto offset=static_cast<std::int64_t>(received)-static_cast<std::int64_t>(value.produced_at_us());
+    auto next_clock=diagnostic_clock_;
+    if(diagnostic_anchor_received_!=0U && !raw_fault_producer_sample_valid(received,value.produced_at_us(),value.state_seq(),true,
+       diagnostic_clock_.last_sequence,diagnostic_clock_.last_produced,diagnostic_minimum_offset_,
+       diagnostic_anchor_offset_,diagnostic_anchor_received_,next_clock,parameters.max_state_age_us))return false;
+    diagnostic_observation_.state=raw;
+    if(diagnostic_anchor_received_==0U) {
+      diagnostic_anchor_received_=received;diagnostic_anchor_offset_=diagnostic_minimum_offset_=offset;
+    } else diagnostic_minimum_offset_=std::min(diagnostic_minimum_offset_,offset);
+    diagnostic_clock_={value.state_seq(),value.produced_at_us(),received};
+    diagnostic_observation_.state_received_us=received;return true;
+  }
+  void reset_diagnostic_observation() noexcept {
+    std::lock_guard<std::mutex> lock(diagnostic_observation_mutex_);
+    diagnostic_observation_={};diagnostic_status_={};diagnostic_clock_={};
+    diagnostic_anchor_received_=0U;diagnostic_retired_count_=0U;
+  }
+  DeviceManagementObservation diagnostic_observation() const noexcept {
+    std::lock_guard<std::mutex> lock(diagnostic_observation_mutex_);
+    return ready.load(std::memory_order_acquire)?diagnostic_observation_:DeviceManagementObservation{};
+  }
   /**
    * @brief 按32位串行序观察已用管理序号，忽略0和旧值。
    * 获取sequence mutex；同请求序号空间由gate与worker共享，避免各自从1重复分配。
@@ -194,6 +264,14 @@ struct DeviceManagementChannel {
   /**
    * @brief 冻结配置用于注册表身份匹配；普通mutex保护单槽事务组合。ready与inactive_prime_allowed等原子只给局部可见性，不代替会话校验。
    */
+  mutable std::mutex diagnostic_observation_mutex_;
+  DeviceManagementObservation diagnostic_observation_{};
+  dummy_wire::DummyDeviceStatusV2 diagnostic_status_{};
+  RawFaultProducerClock diagnostic_clock_{};
+  std::uint64_t diagnostic_anchor_received_=0U;
+  std::int64_t diagnostic_anchor_offset_=0,diagnostic_minimum_offset_=0;
+  std::array<std::uint64_t,4> diagnostic_retired_boots_{};
+  std::size_t diagnostic_retired_count_=0;
   const TransportParameters parameters;
   std::mutex mutex;
   std::atomic<bool> ready{false};

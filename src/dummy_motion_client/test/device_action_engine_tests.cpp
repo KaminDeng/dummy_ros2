@@ -468,7 +468,90 @@ void hold_drain_accepts_wrap_but_rejects_old_commit() {
  * 最终producer_seq17冻结后晚到18不能前移终点；Complete只在ACK17后发送。Succeeded不会直接ready，必须新permit。
  * 覆盖Cancel发送/回执/超时失败、poll异常、旧generation回调及轨迹速度/加速度/时间/容差验证；轨迹验证不是碰撞检查。
  */
+
+/** panel-interface-01原24点整路径：零时长首点不能先Begin才发现；shift20ms保留所有位置且不填v/a。 */
+void positions_only_real_command_entry_before_begin() {
+  namespace wire=dp::iface;
+  const std::vector<std::vector<double>> positions{
+    {-3.681404088114222e-05, -1.0471299231335476, 2.895613308401128, 7.117693326211072e-05, 0.0001227184630308513, 6.381360072118324e-05},
+    {-3.681404088114222e-05, -1.0471299231335476, 2.895613308401128, 7.117693326211072e-05, 0.0001227184630308513, 6.381360072118324e-05},
+    {-2.1935834302477296e-05, -1.0471295595038579, 2.8956131943970904, 7.109736128078043e-05, 0.00012254684158644367, 6.415792737528089e-05},
+    {2.3627184153735917e-05, -1.0471284459243293, 2.8956128452711365, 7.085368005248312e-05, 0.00012202126809089619, 6.521239328907687e-05},
+    {0.00010126761256782518, -1.0471265483592735, 2.895612250352505, 7.043844165075926e-05, 0.0001211256788007219, 6.700922738982574e-05},
+    {0.00021237804902011795, -1.0471238327730015, 2.8956113989704324, 6.984419814914925e-05, 0.00011984400997243393, 6.958065860478206e-05},
+    {0.00035835109159094243, -1.0471202651298246, 2.8956102804541564, 6.906350162119346e-05, 0.00011816019786254532, 7.295891586120038e-05},
+    {0.0005405793383606256, -1.0471158113940542, 2.8956088841329164, 6.808890414043235e-05, 0.00011605817872756914, 7.717622808633527e-05},
+    {0.0007604553874094952, -1.0471104375300013, 2.895607199335949, 6.691295778040631e-05, 0.00011352188882401848, 8.226482420744124e-05},
+    {0.0010185265369199753, -1.047104130161466, 2.8956052218695905, 6.55327354678472e-05, 0.00011054501501837873, 8.823737035809775e-05},
+    {0.0013058669463535243, -1.0470971074397832, 2.895603020127962, 6.399597459724109e-05, 0.00010723051768007864, 9.488729561919603e-05},
+    {0.0016095555860625899, -1.047089685160407, 2.8956006931182605, 6.237177972930546e-05, 0.0001037274420424682, 0.00010191556832435108},
+    {0.0019166712285407362, -1.047082179123627, 2.895598339849202, 6.072925648295148e-05, 0.00010018483562121734, 0.00010902315222812551},
+    {0.0022142926462815297, -1.0470749051297334, 2.8955960593294994, 5.9137510477090306e-05, 9.675174593199598e-05, 0.00011591101108508204},
+    {0.002489498611778533, -1.047068178979016, 2.895593950567867, 5.7665647330633064e-05, 9.357722049047405e-05, 0.0001222801086497832},
+    {0.0027293678975253105, -1.0470623164717638, 2.89559211257302, 5.638277266249094e-05, 9.081030681232151e-05, 0.00012783140867679172},
+    {0.002931501494425341, -1.0470573762407795, 2.8955905637273296, 5.530171691066264e-05, 8.847867768216565e-05, 0.00013250939084711024},
+    {0.003102623379205835, -1.0470531939492145, 2.8955892525084233, 5.438651874151738e-05, 8.650477142669687e-05, 0.0001364696682984157},
+    {0.0032423021664489396, -1.0470497801403122, 2.895588182221786, 5.363948530089525e-05, 8.489356411531688e-05, 0.00013970225746872626},
+    {0.0033501018188875544, -1.0470471454710077, 2.895587356208547, 5.3062948613767996e-05, 8.365008547692475e-05, 0.00014219706713821322},
+    {0.0034255862992545825, -1.047045300598238, 2.895586777809835, 5.265924070510745e-05, 8.277936524041956e-05, 0.00014394400608704793},
+    {0.0034683195702829247, -1.047044256178939, 2.8955864503667788, 5.2430693599885376e-05, 8.228643313470035e-05, 0.00014493298309540168},
+    {0.003478635691971859, -1.0470440040485423, 2.8955863713196495, 5.237552067040004e-05, 8.216743574777883e-05, 0.0001451717293210058},
+    {0.003478635691971859, -1.0470440040485423, 2.8955863713196495, 5.237552067040004e-05, 8.216743574777883e-05, 0.0001451717293210058},
+  };
+  JointProfile limits;
+  limits.joints={"Joint1","Joint2","Joint3","Joint4","Joint5","Joint6"};
+  limits.lower.assign(6,-4.); limits.upper.assign(6,4.);
+  limits.velocity.assign(6,0.03490658503988659); limits.acceleration.assign(6,0.1);
+  limits.path_tolerance.assign(6,0.001); limits.goal_tolerance.assign(6,0.001);
+  Position actual{-3.681404088114222e-05,-1.0471225528352308,2.895613308401128,7.117693326211072e-05,0.00013008162230741875,6.381360072118324e-05};
+  for (unsigned scenario=0;scenario<7;++scenario) {
+    Client client; Port port; port.stream_hold=scenario==6; ActionGate gate(client,port,limits);
+    Authorization auth; auth.session=auth.reference=auth.permit=true;
+    auth.identity.set_expected_session_id(9); auth.identity.set_configured_mask(63);
+    check(gate.enable(auth,1));
+    auto ready_reply=reply(1,1); ready_reply.position=ready_reply.hold_position=actual;
+    gate.observe(ready_reply,2);
+    check(gate.record_update(gate.generation(),1,1,actual));
+    ready_reply.result_valid=ready_reply.succeeded=ready_reply.hold_ready=true;
+    gate.observe(ready_reply,3); check(gate.ready());
+    wire::DummyJointStateV2 state;
+    state.set_schema_major(2); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
+    state.set_session_id(9); state.set_configured_mask(63); state.set_position_valid_mask(63);
+    state.set_motion_epoch(1); state.set_core_state(wire_value(WireCoreState::kHold)); state.set_hold_ready(true);
+    state.set_can_submitted_mask(63); state.set_can_sent_mask(63); state.set_committed_producer_seq(1);
+    state.set_state_seq(1); double actual_wire[6]; std::copy(actual.begin(),actual.end(),actual_wire); state.set_position_rad(actual_wire);
+    std::vector<std::uint8_t> bytes(wire::DummyJointStateV2Codec::kEncodedSize);
+    check(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
+    if(scenario!=4) check(gate.observe_state(bytes.data(),bytes.size(),4));
+    Trajectory motion; motion.joints=limits.joints;
+    for(std::size_t i=0;i<positions.size();++i)
+      motion.points.push_back({positions[i],{},{},0.02*(i+(scenario==0?0:1))});
+    if(scenario==2) for(auto &point:motion.points) point.positions[0]+=0.01;
+    if(scenario==3) { motion.points.resize(1); motion.points[0].positions.assign(actual.begin(),actual.end()); motion.points[0].positions[0]+=0.0002; }
+    const auto submitted=gate.submit(motion,scenario==5?250005:10);
+    if(scenario==6) {
+      check(submitted && client.requests.size()==1);
+      gate.observe_hold_drain({0,9,1,0,1,1},11);
+      actual_wire[0]+=0.01; state.set_position_rad(actual_wire); state.set_state_seq(2);
+      check(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
+      check(gate.observe_state(bytes.data(),bytes.size(),12));
+      check(client.requests.size()==1 && port.cancels==0 && port.starts==0);
+      check(gate.terminal()==Terminal::kAborted && gate.error()=="TRAJECTORY_LIMIT_VIOLATION");
+    } else if(scenario!=1) {
+      check(!submitted && client.requests.size()==1 && port.cancels==0 && port.starts==0);
+      check(gate.error()=="TRAJECTORY_LIMIT_VIOLATION" || gate.error()=="FRESH_HOLD_START_REQUIRED");
+    } else {
+      check(submitted && client.requests.size()==2 && client.requests.back().operation()==wire_value(ManageOperation::kBegin));
+      auto begin=reply(2,2); begin.position=actual; gate.observe(begin,11);
+      check(port.primes==2 && port.starts==0);
+      check(gate.record_update(gate.generation(),2,1,actual));
+      begin.result_valid=begin.succeeded=true; begin.hold_ready=true; gate.observe(begin,12);
+      check(port.starts==1);
+    }
+  }
+}
 int main() {
+  positions_only_real_command_entry_before_begin();
   cancel_receipt_rejects_foreign_owner();
   discarded_local_hold_generation_does_not_block_begin();
   begin_waits_for_final_hold_commit();
@@ -605,9 +688,7 @@ int main() {
   check(deferred_gate.record_update(deferred_gate.generation(),1,1,Position{}));
   deferred.replies.push_back(reply(1,1,true)); deferred_gate.tick(3); check(deferred_gate.ready());
   auto fast_first=trajectory(); fast_first.points.front().velocities.clear(); fast_first.points.front().time=0.1;
-  check(deferred_gate.submit(fast_first,4)); deferred.replies.push_back(reply(2,2)); deferred_gate.tick(5);
-  const bool deferred_start_rejected=deferred_port.starts==0 && deferred_port.cancels==1 &&
-      deferred_gate.terminal()==Terminal::kNone && deferred.requests.back().operation()==wire_value(ManageOperation::kCancel);
+  const bool deferred_start_rejected=!deferred_gate.submit(fast_first,4) && deferred_port.starts==0 && deferred_port.cancels==0 && deferred.requests.size()==1;
   check(deferred_start_rejected);
   auto invalid=trajectory(); invalid.path_tolerance={-1}; check(!validate_trajectory(invalid,profile()));
   invalid=trajectory(); invalid.points[0].time=std::numeric_limits<double>::quiet_NaN();

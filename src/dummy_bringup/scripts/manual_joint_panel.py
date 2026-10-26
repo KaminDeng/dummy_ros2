@@ -53,7 +53,7 @@ class JointPanel(QtWidgets.QWidget):
         self.pending_backend = None
         ##
         # /joint_states 仅来自新鲜测量/显示参考的 actual_q；/target_joint_states 独立表示未执行输入，两个描述 topic 也分开管理。
-        self.publisher = node.create_publisher(JointState, '/joint_states', 10)
+        self.publisher = None if self.backend == 'ros' else node.create_publisher(JointState, '/joint_states', 10)
         self.target_publisher = node.create_publisher(JointState, '/target_joint_states', 10)
         self.description_publisher = node.create_publisher(String, '/measured_robot_description', QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.description_xml = xacro.process_file(config['description_xacro']).toxml()
@@ -144,14 +144,25 @@ class JointPanel(QtWidgets.QWidget):
     # real 使用 QProcess，simulator 使用本地 SimulatorWorker；本方法仅创建不启动。标准输出、错误和 finished 都进入同一面板处理流程，模拟来源在界面明确标识。
     # @return None；执行上述状态更新、界面或日志操作。
     def create_worker(self):
+        if self.backend == 'ros':
+            from manual_panel_ros_backend import RosBackend, RosTransport
+            from manual_panel_runtime import PanelRuntime
+            self.worker = QtCore.QProcess(self)  # 仅为旧 UI 状态查询保留，不启动。
+            self.ros_status = None
+            self.ros_runtime = PanelRuntime()
+            self.ros_backend = RosBackend(RosTransport(self.node, self.ros_status_received, self.ros_state_received), self.ros_event)
+            self.ros_last_poll = 0
+            self.ros_auto_pending = bool(self.cfg.pop('auto_calibrate_and_test', False))
+            self.backend_notice.setText('真机-USB/ROS · C++ 权威控制 · 启动只读')
+            return
         if self.backend == 'simulator':
             from manual_panel_simulator import SimulatorWorker
             self.worker = SimulatorWorker(self.cfg, self)
-            self.backend_notice.setText('模拟模式 · 不连接硬件')
+            self.backend_notice.setText('仿真-本地 · 不连接硬件')
             self.backend_notice.setStyleSheet('color:#b45309;font-weight:bold')
         else:
             self.worker = QtCore.QProcess(self)
-            self.backend_notice.setText('真机反馈 · 启动仅只读')
+            self.backend_notice.setText('真机-USB/Native · 启动仅只读')
             self.backend_notice.setStyleSheet('color:#b42318;font-weight:bold')
         self.worker.readyReadStandardOutput.connect(self.stdout_ready)
         self.worker.readyReadStandardError.connect(self.stderr_ready)
@@ -165,19 +176,50 @@ class JointPanel(QtWidgets.QWidget):
     def request_backend_change(self, _index=None):
         selected = self.backend_choice.currentData()
         self.backend_choice.blockSignals(True)
-        self.backend_choice.setCurrentIndex(1 if self.backend == 'simulator' else 0)
+        self.backend_choice.setCurrentIndex(self.backend_choice.findData(self.backend))
         self.backend_choice.blockSignals(False)
         if selected == self.backend:
             return
+        if self.backend == 'ros':
+            next_config, next_decode = None, None
+            if selected == 'real':
+                from manual_panel_config import load_decoder
+                from manual_panel_runtime import load_runtime_panel_config
+                try:
+                    next_config = load_runtime_panel_config(self.cfg['_config_path'], 'real')
+                    next_decode = load_decoder(next_config)
+                except (OSError, ValueError, KeyError) as error:
+                    self.message(str(error))
+                    return
+            self.message('先请求停止释放，等待 C++ 确认后切换。')
+            if not self.ros_backend.released:
+                self.release('RELEASE')
+                return
+            if not self.ros_runtime.stop(True):
+                return
+            self.ros_backend.close()
+            if next_config is not None:
+                self.cfg, self.decode = next_config, next_decode
+            self.pending_backend = selected
+            self.apply_backend_change()
+            return
+        if selected == 'ros':
+            from manual_panel_runtime import load_runtime_panel_config as load_panel_config
+            try:
+                self.cfg = load_panel_config(self.cfg['_config_path'], 'ros')
+                self.decode = None
+            except (ValueError, OSError, KeyError) as error:
+                self.message(str(error))
+                return
         parameter_busy = hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue)
         if self.closing or self.busy or self.helper_active() or self.connection_action is not None or parameter_busy:
             self.message('请先停止当前操作，再切换连接目标。')
             return
         if selected == 'real' and self.cfg.get('_config_path'):
-            from manual_panel_config import resolve_config_path, load_panel_config, load_decoder
+            from manual_panel_config import resolve_config_path, load_decoder
+            from manual_panel_runtime import load_runtime_panel_config as load_panel_config
             try:
-                path = (resolve_config_path('', 'real', Path()) if not self.cfg.get('native_binary')
-                        else Path(self.cfg['_config_path']))
+                path = Path(self.cfg['_config_path'])
                 real_config = load_panel_config(path, 'real')
                 decoder = load_decoder(real_config)
             except (OSError, ValueError, KeyError) as error:
@@ -214,7 +256,7 @@ class JointPanel(QtWidgets.QWidget):
         self.show_actual_description(False)
         for label in self.feedback_labels:
             label.setText('—')
-        self.backend_choice.setCurrentIndex(1 if self.backend == 'simulator' else 0)
+        self.backend_choice.setCurrentIndex(self.backend_choice.findData(self.backend))
         self.create_worker()
         self.start_worker()
 
@@ -252,6 +294,16 @@ class JointPanel(QtWidgets.QWidget):
     # 关闭、忙碌、管理进程或已有连接动作时直接返回；重连仍先走旧连接释放屏障，不自动恢复使能。
     # @return None；执行上述状态更新、界面或日志操作。
     def request_reconnect(self):
+        if self.backend == 'ros':
+            if not self.ros_backend.released:
+                self.release('RELEASE')
+                self.message('先等待 C++ 确认失能释放，再次点击重连；重连不自动恢复运动。')
+                return
+            if not self.ros_runtime.stop(True) or not self.ros_backend.close():
+                return
+            self.pending_backend = 'ros'
+            self.apply_backend_change()
+            return
         if self.closing or self.busy or self.helper_active() or getattr(self, 'connection_action', None) is not None:
             return
         self.queue_connection_action('reconnect')
@@ -384,6 +436,28 @@ class JointPanel(QtWidgets.QWidget):
     # 关闭、helper 活动或 worker 非 NotRunning 时拒绝。重置本地反馈时间、授权和只读事件缓存；raw 每代单独保留，记录 argv 与本地软件/展开模型哈希。模拟模式写独立来源声明，不能混作硬件证据。
     # @return None；执行上述状态更新、界面或日志操作。
     def start_worker(self):
+        if self.backend == 'ros':
+            self.ros_started_at = time.monotonic()
+            from manual_panel_ros_backend import confirmed_ros_launch_argv
+            argv = list(self.cfg.get('ros_launch_command', []))
+            confirmed = bool(self.cfg.get('operator_confirmed_double_limits', False))
+            if argv and not confirmed:
+                confirmed = QtWidgets.QMessageBox.question(self, '本次 ROS 连接的标定确认',
+                    '机械臂当前是否位于人工双限位姿态，并已得到支撑？\n'
+                    '是：允许之后明确发起自动标定与测试；否：本次只读。\n连接本身不会使能或运动。',
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No) == QtWidgets.QMessageBox.Yes
+            self.cfg['operator_confirmed_double_limits'] = confirmed
+            try:
+                if argv:
+                    self.ros_backend.transport.assert_no_existing_owner()
+                self.ros_runtime.start(confirmed_ros_launch_argv(argv, confirmed) if argv else [])
+            except (RuntimeError, OSError) as error:
+                self.ros_backend.admitting = False
+                self.ros_runtime.fail(str(error))
+                self.message(str(error))
+                return
+            self.ros_backend.connect()
+            return
         if self.closing or self.helper_active() or self.worker.state() != QtCore.QProcess.NotRunning:
             return
         # 每次Native保留独立原件；重启只读，不自动申请owner或运动。
@@ -620,6 +694,18 @@ class JointPanel(QtWidgets.QWidget):
     # 只在等待人工命令的只读态 2 使用；检查工作起点，若需双限位 Rest 退让或专用低速恢复则给出对应说明。模态确认后重新检查反馈与恢复条件，发 RESUME 后仍不立即授权；CALIBRATION_* 事件和后续 State 才能建立 authorized。
     # @return None；执行上述状态更新、界面或日志操作。
     def start_resume(self):
+        if self.backend == 'ros':
+            if (self.closing or self.busy or not self.fresh() or not self.calibration or
+                    self.ros_backend.released or not self.ros_backend.admitting or
+                    not self.control_state_allowed((2,)) or self.last_state['session_id'] != 0):
+                return
+            if self.confirm_execution('恢复 ROS 手动控制',
+                    '复用本 boot 已有参考，由 C++ 完成 REST 核验、激活与保持；不重新采零，也不运行自动基线运动。') != QtWidgets.QMessageBox.Yes:
+                return
+            if (self.fresh() and self.calibration and self.control_state_allowed((2,)) and
+                    not self.busy and not self.closing and self.last_state['session_id'] == 0):
+                self.ros_backend.request_prepare_manual_control()
+            return
         if not self.control_state_allowed((2,)) or not self.wait_home or not self.calibration or not self.fresh() or self.busy:
             return
         issue = self.resume_position_issue()
@@ -709,6 +795,9 @@ class JointPanel(QtWidgets.QWidget):
     # @param text 不带末尾换行的 Native 风格单行命令。
     # @return bool：worker 正在运行且已调用 write 时 True，否则 False。
     def command(self, text):
+        if self.backend == 'ros':
+            self.message('ROS 模式不支持 Native 命令；请使用 ROS BackendAPI。')
+            return False
         if self.worker.state() != QtCore.QProcess.Running:
             self.message('通信进程已退出；需重新只读连接，零点以设备本次boot反馈为准。')
             return False
@@ -734,6 +823,16 @@ class JointPanel(QtWidgets.QWidget):
     # 双限位配置必须精确符合当前模型 J2 下挡/J3 上挡姿态；普通模式要求人工 Home。若当前已有 owner，先 RELEASE 并绑定下一 worker_generation，待新只读连接和静止反馈后才捕获；不能自动把当前 Rest 当作 Home。
     # @return None；执行上述状态更新、界面或日志操作。
     def start_zero(self):
+        if self.backend == 'ros':
+            reuse = bool(self.calibration and self.fresh() and self.ros_status is not None and self.ros_status.session_id == 0)
+            if not self.cfg.get('operator_confirmed_double_limits', False) and not reuse:
+                self.message('本次 ROS 连接未确认双限位；请重新启动面板并明确确认后再标定。')
+                return
+            prompt = ('复用本次 boot 已保留的绝对参考并受控返回 REST；不会重新采零。' if reuse else
+                      '确认设备处于人工双限位初始姿态；由 C++ 执行完整任务。')
+            if self.confirm_execution('自动标定与测试', prompt) == QtWidgets.QMessageBox.Yes:
+                self.ros_backend.request_calibration_and_test()
+            return
         if (not self.control_state_allowed() or not self.fresh() or self.busy or self.closing or self.pending_home or
                 self.worker.state() != QtCore.QProcess.Running or
                 not (self.wait_home or self.authorized)):
@@ -787,6 +886,15 @@ class JointPanel(QtWidgets.QWidget):
     # 拒绝未确认场景、参数事务、其他路径执行或未授权状态。先验证用户输入在名义限位，再向 self.limits 内收并更新虚影/记录投影；确认后重查授权和新鲜度，发 MOVE_SPEED，速度 °/s、加速度 rad/s²、目标 °。这不是 MoveIt 整条避碰路径执行。
     # @return None；执行上述状态更新、界面或日志操作。
     def start_move(self):
+        if self.backend == 'ros':
+            if self.busy or not self.fresh() or not self.authorized:
+                return
+            if not hasattr(self, 'moveit_tab'):
+                self.message('ROS运动需要完整MoveIt规划和碰撞校验。')
+                return
+            self.moveit_tab.start_joint_plan([spin.value() for spin in self.inputs])
+            self.message('ROS目标已交MoveIt规划；检查完整路径后点击执行规划路径。')
+            return
         if hasattr(self, 'obstacle_tab') and (self.obstacle_tab.blocked or not self.obstacle_tab.scene_ready):
             self.message('障碍物场景尚未确认，禁止提交运动。')
             return
@@ -824,6 +932,10 @@ class JointPanel(QtWidgets.QWidget):
     # 要求新鲜已授权反馈和允许生命周期；发 CANCEL_HOLD 后设置 cancel_hold_pending 并给 3 s 事件期限。该函数只请求取消，是否已停车需事件及具体调用方的后续 Hold 检查。
     # @return None；执行上述状态更新、界面或日志操作。
     def cancel_motion_hold(self):
+        if self.backend == 'ros':
+            self.ros_backend.cancel()
+            self.message('已请求ROS Action取消；等待C++停车终态。')
+            return
         if not self.fresh() or not self.authorized or not self.control_state_allowed((2,3,4,5,6)):
             self.release('STOP');return
         self.busy = True
@@ -849,6 +961,10 @@ class JointPanel(QtWidgets.QWidget):
     # @param command STOP 或 RELEASE，由对应操作入口选择。
     # @return None；执行上述状态更新、界面或日志操作。
     def release(self, command):
+        if self.backend == 'ros':
+            self.ros_runtime.begin_release()
+            self.ros_backend.release()
+            return
         if hasattr(self,'moveit_tab') and self.moveit_tab.auto_test.active:
             self.moveit_tab.auto_test.abort('已请求停止或释放设备',stop=False)
         if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
@@ -1136,6 +1252,9 @@ class JointPanel(QtWidgets.QWidget):
         # 有界批量消费只读规划响应；避免逐帧一次回调使碰撞检查耗时近一分钟。
         for _ in range(8):
             rclpy.spin_once(self.node, timeout_sec=0)
+        if self.backend == 'ros':
+            self.ros_tick()
+            return
         self.read_state()
         if hasattr(self, 'obstacle_tab'):
             self.obstacle_tab.tick()
@@ -1230,7 +1349,7 @@ class JointPanel(QtWidgets.QWidget):
             self.publisher.publish(msg)
         if state['core_state'] == 9 or getattr(self, 'readonly_fault', False):
             reference_note = '设备参考仍存在（同boot）' if state['reference_epoch'] != 0 else '当前没有有效设备参考'
-            self.status.setText(f'USB 实时反馈 · {reference_note} · 故障禁止控制，仅可停止或关闭只读连接；未自动清故障。 · boot={state["boot_epoch"]:016x}')
+            self.status.setText(f'真机-USB/Native · 实时反馈 · {reference_note} · 故障禁止控制，仅可停止或关闭只读连接；未自动清故障。 · boot={state["boot_epoch"]:016x}')
             return
         zero = '标定进行中' if self.zero_busy else ('设备参考存在（同boot）' if self.calibration else '未标定')
         zero += ' · 已使能控制' if self.authorized else ' · 未取得控制权限'
@@ -1244,7 +1363,7 @@ class JointPanel(QtWidgets.QWidget):
             resume_note = ' · 零点保留；仅允许固定0.1°/s低速内收，需明确使能并点击低速回工作区。'
         elif resume_issue and self.wait_home and not self.authorized:
             resume_note = ' · 零点保留，实际位置不足停车余量，需支撑调整后恢复；无需重新归零。' + resume_issue
-        feedback_source = '纯软件模拟反馈' if getattr(self, 'backend', 'real') == 'simulator' else 'USB 实时反馈'
+        feedback_source = '仿真-本地 · 运动学反馈' if getattr(self, 'backend', 'real') == 'simulator' else '真机-USB/Native · 实时反馈'
         self.status.setText(f'{feedback_source}{speed_note} · {zero} · {scope}{resume_note} · boot={state["boot_epoch"]:016x}')
 
     ##
@@ -1252,7 +1371,122 @@ class JointPanel(QtWidgets.QWidget):
     # 先关闭管理 helper，再取消重启/标定意图；对运行 worker 发 RELEASE，处理事件最多 6 s，必要时 terminate 再等 6 s。仍在运行则拒绝关闭；不把窗口退出请求当作设备释放证明。
     # @param event Qt QCloseEvent；未能确认进程结束时 ignore 保持窗口。
     # @return None；执行上述状态更新、界面或日志操作。
+    def ros_event(self, kind, value):
+        self.message('ROS ' + kind + ': ' + str(value))
+        if hasattr(self, 'moveit_tab'):
+            self.moveit_tab.ros_event(kind, value)
+        if hasattr(self, 'obstacle_tab'):
+            self.obstacle_tab.ros_event(kind, value)
+        if kind == 'failed':
+            self.busy = False
+            self.ros_runtime.fail(str(value))
+        elif kind == 'manual_ready':
+            self.busy = False
+            self.ros_runtime.active()
+        elif kind in ('released', 'canceled'):
+            self.busy = False
+        elif kind == 'accepted':
+            self.busy = True
+        elif kind == 'completed':
+            self.busy = False
+
+    def ros_status_received(self, status):
+        self.ros_status = status
+        self.ros_status_ns = time.monotonic_ns()
+        self.ros_backend.latest_status = status
+        self.ros_runtime.read_only()
+
+    def ros_state_received(self, state):
+        old = self.last_state
+        if old and old['boot_epoch'] == state.boot_epoch and state.state_seq <= old['state_seq']:
+            return
+        self.ros_backend.latest_state = state
+        # 只整理显示字段，不据此重建许可、完成或参考状态机。
+        self.last_state = {name: getattr(state, name) for name in state.get_fields_and_field_types()}
+        self.last_state_ns = time.monotonic_ns()
+        if state.position_valid_mask == 63:
+            self.actual_q = list(state.position_rad)
+            for label, value in zip(self.feedback_labels, state.position_rad):
+                label.setText(f'{math.degrees(value):.3f}°')
+            self.show_actual_description(True)
+
+    def ros_tick(self):
+        now = time.monotonic()
+        self.ros_runtime.check_startup_timeout(now - self.ros_started_at, float(self.cfg.get('ros_startup_timeout_s', 30)))
+        graph_error = self.ros_backend.transport.control_graph_error()
+        if graph_error:
+            self.authorized = False
+            self.status.setText(graph_error + '；禁止控制请求，未接管其他进程。')
+            return
+        ready = getattr(self.ros_backend.transport, 'ready', lambda *args: True)
+        if ready() and now - self.ros_last_poll >= 0.5:
+            self.ros_last_poll = now
+            if self.ros_runtime.state == 'Releasing' and self.ros_backend.operation != 'release':
+                self.ros_backend.release()
+            else:
+                self.ros_backend.poll()
+        if self.ros_auto_pending and self.ros_status is not None and not self.ros_backend.pending and ready('auto_calibrate_and_test'):
+            self.ros_auto_pending = False
+            self.ros_backend.request_calibration_and_test()
+        state, status = self.last_state, self.ros_status
+        status_budget_ms = getattr(self.ros_backend.transport, 'status_max_age_ms', None)
+        status_age_ns = time.monotonic_ns() - getattr(self, 'ros_status_ns', 0)
+        status_fresh = bool(status is not None and status_budget_ms is not None and
+                            0 <= status_age_ns <= status_budget_ms * 1_000_000)
+        matched = bool(state and status and all(state[key] == getattr(status, key, None)
+                       for key in ('boot_epoch', 'reference_epoch', 'session_id')))
+        # 仅镜像权威快照用于UI准入；不申请或推导设备许可。
+        self.authorized = bool(matched and self.fresh() and
+            status_fresh and
+            getattr(status, 'real_motion_permitted', False) and getattr(status, 'permit_remaining_us', 0) > 0 and
+            state['session_id'] != 0 and state['position_valid_mask'] == 63)
+        self.calibration = ((state['boot_epoch'], state['reference_epoch']) if matched and
+                            state['reference_epoch'] != 0 and state['position_valid_mask'] == 63 else None)
+        self.move.setEnabled(self.authorized and not self.busy and not self.closing and hasattr(self, 'moveit_tab'))
+        if hasattr(self, 'obstacle_tab'):
+            self.obstacle_tab.tick()
+        if hasattr(self, 'moveit_tab'):
+            self.moveit_tab.tick()
+        for button in (self.recover, self.clear_fault):
+            button.setEnabled(False)
+        self.resume.setEnabled(bool(matched and self.fresh() and self.calibration and
+            status_fresh and
+            not self.busy and not self.closing and self.ros_backend.admitting and not self.ros_backend.released and
+            state['core_state']==2 and status.core_state==2 and state['session_id']==0 and
+            status.session_id==0 and not status.real_motion_permitted and status.permit_remaining_us==0))
+        self.zero.setEnabled(status_fresh and not self.closing and not self.busy and self.ros_backend.admitting and not self.ros_backend.released)
+        self.stop.setEnabled(not self.ros_backend.released)
+        self.copy.setEnabled(self.fresh() and hasattr(self, 'actual_q'))
+        if hasattr(self, 'motor_parameter_tab'):
+            self.motor_parameter_tab.tick()
+        status = self.ros_status
+        identity = '' if status is None else f' · boot={status.boot_epoch:016x} · reference={status.reference_epoch}'
+        budget_text = ' · 等待C++ Status预算（只读）' if status_budget_ms is None else f' · Status预算={status_budget_ms}ms'
+        self.status.setText('真机-USB/ROS · ' + self.ros_runtime.state + identity + budget_text + (' · ' + self.ros_runtime.error if self.ros_runtime.error else ''))
+        target = JointState()
+        target.header.stamp = self.node.get_clock().now().to_msg()
+        target.name = [j['name'] for j in self.cfg['joints']]
+        target.position = [math.radians(box.value()) for box in self.inputs]
+        self.target_publisher.publish(target)
+
     def closeEvent(self, event):
+        if self.backend == 'ros':
+            self.closing = True
+            if not self.ros_backend.released:
+                self.release('RELEASE')
+                deadline = time.monotonic() + float(self.cfg.get('ros_release_timeout_s', 6))
+                while not self.ros_backend.released and time.monotonic() < deadline:
+                    rclpy.spin_once(self.node, timeout_sec=0.02)
+                    self.ros_tick()
+                    QtWidgets.QApplication.processEvents()
+            if not self.ros_runtime.stop(self.ros_backend.released):
+                self.message(self.ros_runtime.error)
+                self.closing = False
+                event.ignore()
+                return
+            self.ros_backend.close()
+            event.accept()
+            return
         self.closing = True
         self.connection_action = None
         if self.helper_active():
@@ -1291,15 +1525,20 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument('--description-xacro', default='')
-    parser.add_argument('--backend', choices=('real', 'simulator'), default='real')
+    parser.add_argument('--backend', choices=('real', 'ros', 'simulator'), default='real')
+    parser.add_argument('--auto-calibrate-and-test', action='store_true')
+    parser.add_argument('--initial-pose', choices=('manual_limits',), default='manual_limits')
     parser.add_argument('--moveit', action='store_true', help='启用末端规划页；另启动仅规划 MoveIt 服务')
     args = parser.parse_args(rclpy.utilities.remove_ros_args(args=sys.argv)[1:])
-    from manual_panel_config import load_panel_config, load_decoder
+    from manual_panel_config import load_decoder
+    from manual_panel_runtime import load_runtime_panel_config as load_panel_config
     try:
         config = load_panel_config(Path(args.config), args.backend, args.description_xacro)
         _decode = load_decoder(config) if args.backend == 'real' else None
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
+    config['auto_calibrate_and_test'] = args.auto_calibrate_and_test
+    config['initial_pose'] = args.initial_pose
     config['moveit_enabled'] = args.moveit
     config['backend'] = args.backend
     app = QtWidgets.QApplication(sys.argv[:1])
