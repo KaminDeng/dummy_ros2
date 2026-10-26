@@ -1,7 +1,7 @@
 ##
 # @file manual_moveit_execution.py
 # @brief 校验规划折线并维护等待设备收据的分段执行进度。
-# 所有路点采用六轴弧度；此模块不打开设备、不自行发送命令。路径几何校验、碰撞采样与真实完成确认是不同步骤，调用方须执行每一步。
+# 所有路点采用六轴弧度；不打开设备或自行发送命令。末端规划须检查实际执行曲线的碰撞；关节直控仅检查范围和动态上限，两者的准入与完成仍由通信所有者确认。
 """按完整规划折线逐段执行；不持有设备接口，完成必须由调用方提供设备收据。"""
 import math
 
@@ -152,6 +152,25 @@ class SegmentedExecution:
     # @return 无；通过实例状态或界面产生作用。
     def abort(self):
         self.aborted = True
+
+
+def joint_goal_path(start, goal, limits_deg, speed, acceleration):
+    """关节直控的同步直线：检查范围和动态上限，不调用MoveIt碰撞服务。
+
+    输入位置为rad、范围为deg；保留实际起点，使用首末零速Hermite插值，
+    再按现有20ms准备器检查每个命令的速度/加速度。设备准入仍由C++负责。
+    """
+    points = checked_points((start, goal))
+    if (len(limits_deg) != 6 or any(len(bounds) != 2 or
+            not all(math.isfinite(v) for v in bounds) or bounds[0] > bounds[1]
+            for bounds in limits_deg)):
+        raise ValueError('关节直控需要完整有效的六轴范围')
+    if any(not math.radians(lo) <= value <= math.radians(hi)
+           for point in points for value, (lo, hi) in zip(point, limits_deg)):
+        raise ValueError('关节直控起点或目标超出工作范围，未提交运动')
+    # 延迟导入避免与准备器的checked_points依赖形成模块初始化环。
+    from manual_moveit_continuous import prepare_path
+    return prepare_path(points, (0., 1.), speed, acceleration, ((0.,) * 6,) * 2)
 
 
 def ros_trajectory(path, names):

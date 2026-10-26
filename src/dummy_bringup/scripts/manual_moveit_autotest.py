@@ -142,20 +142,18 @@ class AutoTestSession:
     # @return bool：测试成功进入活动状态为 True；忙、拒绝确认或初始准备失败为 False。
     def start(self, seconds):
         t = self.tab
-        if getattr(t.panel, 'backend', None) == 'ros':
-            accepted = t.panel.ros_backend.request_calibration_and_test()
-            self._status('C++ 自动任务已请求；等待权威流程结果' if accepted else 'C++ 自动任务未受理', '#1d4ed8')
-            return accepted
         if self.active or t.executing or t.pending or t.panel.busy or not t.request_ready():return False
         if not math.isfinite(seconds) or not .1 <= seconds <= 86400.:raise ValueError('测试时长必须在0.1秒至24小时之间')
         chain = hasattr(t,'auto_continuous') and t.auto_continuous.isChecked()
+        ros = getattr(t.panel, 'backend', None) == 'ros'
+        if ros and seconds > 570.:raise ValueError('ROS自动测试最长9.5分钟，另留Home回程预算；完整轨迹不得超过630秒')
         if chain and (not t.continuous_enabled or seconds>3420.):
             raise ValueError('连续测试需启用底层连续执行，单轮最长57分钟（另留回程与停车预算）')
         answer = t.panel.confirm_execution('开始自动测试',
             f'将在当前姿态附近连续生成并执行已检查路径，测试时长 {seconds:g} 秒。\n'
             f'变化幅度：{t.amplitude.currentText()}；逆解偏好：{t.ik_preference.currentText()}。\n'
             f'速度 {t.panel.speed_input.value():g}°/s，加速度 {t.panel.acceleration_input.value():g}rad/s²；'+
-            ('跨规划曲线圆滑衔接，目标附近不停稳。\n' if chain else '每段确认到位。\n')+
+            (('ROS整轮预规划随机段与Home后，一次提交完整连续轨迹；非在线续接。\n' if ros else '跨规划曲线圆滑衔接，目标附近不停稳。\n') if chain else '每段确认到位。\n')+
             '到期完成当前段后回Home；报错或按停止则中止，不在故障下强行回Home。确认现场路径畅通后开始。')
         if answer != QtWidgets.QMessageBox.Yes or not t.request_ready() or t.panel.busy:return False
         t.invalidate();t.preview_timer.stop()
@@ -172,6 +170,11 @@ class AutoTestSession:
         self.chain_version = 1;self.chain_origin = 0;self.chain_phase = 0;self.chain_markers = [];self.chain_draining = False
         self.chain_received_at = None
         self.chain_budget = seconds+60.
+        self.requested_seconds = seconds
+        self.ros_batch = ros and chain
+        self.ros_batch_count = 0
+        self.ros_completion_pending = False
+        self.ros_preplan_deadline = time.monotonic()+120.
         self.manual_finish = False
         self._status('自动测试运行中', '#1d4ed8')
         self.speed = t.panel.speed_input.value();self.acceleration = t.panel.acceleration_input.value()
@@ -206,6 +209,8 @@ class AutoTestSession:
         self.manual_finish = reason != '测试时长到期'
         self._drop_planning()
         self.tab.record('AUTO_TEST_RETURNING',reason=reason,completed=self.completed)
+        if getattr(self, 'ros_batch', False) and not self.chain_live:
+            self._begin(self.chain_path.points[-1] if self.chain_path is not None else tuple(self.tab.panel.actual_q), home=True)
 
     ##
     # @brief 更新可选自动测试状态标签与颜色。
@@ -270,6 +275,7 @@ class AutoTestSession:
     def on_path_completed(self):
         if not self.active:return
         if self.executing_home:
+            if getattr(self, 'ros_batch', False):self.completed = self.ros_batch_count
             self._complete();return
         if self.chain_enabled:
             self.completed += len(self.chain_markers)+1
@@ -309,7 +315,7 @@ class AutoTestSession:
         self.plan_deadline = time.monotonic()+12.;self.attempts = 0
         if home:
             self.goal = tuple(math.radians(q) for q in self.tab.panel.cfg['home_deg'])
-            if max(abs(a-b) for a,b in zip(start,self.goal)) <= .003:
+            if max(abs(a-b) for a,b in zip(start,self.goal)) <= .003 and not (getattr(self, 'ros_batch', False) and self.chain_path is not None):
                 self._complete();return
             self.future = self.tab.planner.request_validity(self.goal);self.stage = 'validity'
         else:self._candidate()
@@ -386,7 +392,7 @@ class AutoTestSession:
                                             required=self.tab.panel.cfg.get('backend')=='real'))
                                         if self.tab.continuous_enabled else None)
                 self.joined_path = None
-                if self.chain_enabled and self.chain_path is not None and not self.plan_home:
+                if self.chain_enabled and self.chain_path is not None and (not self.plan_home or getattr(self, 'ros_batch', False)):
                     try:
                         self.joined_path,self.join_cut = blend_paths(self.chain_path,self.continuous_path)
                     except ValueError as error:
@@ -455,17 +461,30 @@ class AutoTestSession:
             if self.chain_enabled or hasattr(self,'scene_version'):
                 if not self.tab.scene_ready() or self.tab.scene_revision()!=self.scene_version:
                     raise ValueError('碰撞场景已改变或尚未确认，旧场景测试不可继续')
-            if getattr(p,'closing',False) or not p.fresh() or not p.authorized or self.tab.execution_identity() != self.identity or not p.control_state_allowed((2,3,4,5,6)):
+            ros = getattr(p, 'backend', None) == 'ros'
+            # ROS在途/Complete过渡由同UUID的C++Action监督；下一条提交仍必须真实ready。
+            if (getattr(p,'closing',False) or not p.fresh() or
+                    self.tab.execution_identity() != self.identity or
+                    (not ros and (not p.authorized or not p.control_state_allowed((2,3,4,5,6))))):
                 raise ValueError('设备反馈、授权、身份或生命周期变化')
-            if time.monotonic() >= self.deadline:self.request_finish('测试时长到期')
-            if self.returning and not self.tab.executing and not self.chain_live and self.stage is None and self.queued is None:
+            if getattr(self, 'ros_completion_pending', False):
+                if max(abs(a-b) for a,b in zip(p.actual_q,self.ros_completed_goal)) <= .003:
+                    self.ros_completion_pending = False
+                    self.on_path_completed()
+                elif time.monotonic() >= self.ros_completion_deadline:
+                    raise ValueError('ROS终态后未取得绑定目标的新鲜实际到位')
+                return
+            if getattr(self, 'ros_batch', False) and not self.chain_live and time.monotonic() >= self.ros_preplan_deadline:
+                raise ValueError('ROS整轮连续轨迹预规划超时，未提交运动')
+            if not getattr(self, 'ros_batch', False) and time.monotonic() >= self.deadline:self.request_finish('测试时长到期')
+            if self.returning and not getattr(self, 'ros_batch', False) and not self.tab.executing and not self.chain_live and self.stage is None and self.queued is None:
                 self.chain_path = None
                 self._begin(tuple(p.actual_q),home=True)
             self._poll_plan()
             if self.chain_enabled and not self.executing_home:
                 self._chain_tick()
                 self.update_preview()
-            if self.queued is not None and not self.tab.executing and self.tab.request_ready() and (not self.chain_enabled or self.plan_home):self._submit()
+            if self.queued is not None and not getattr(self, 'ros_batch', False) and not self.tab.executing and self.tab.request_ready() and (not self.chain_enabled or self.plan_home):self._submit()
             if hasattr(self.tab,'auto_status') and self.active:
                 remaining = max(0.,self.deadline-time.monotonic())
                 state = '正在回Home' if self.returning else f'剩余 {remaining:.0f} 秒'
@@ -511,7 +530,33 @@ class AutoTestSession:
     # @brief 准备足够前瞻后启动同 RUN 链并滚动补充已检查尾部。
     # 起步前至少 6 s、至少两个连接 marker；运行中等待 MOVE_STARTED 后才续接。新曲线修改点须领先当前相位至少 400 ms；迟到则沿原已检查尾段停车。只裁掉已过前缀并保留四点回看，EXTEND_PATH 带 motion/version/origin/unchanged_through 和摘要，2 s 内等确认，确认前禁止从旧尾点再规划。
     # @return None；执行上述状态更新、界面或日志操作。
+    def _ros_chain_tick(self):
+        """整轮预规划并检查后一次提交公开FJT，不使用Native在线续接命令。"""
+        if self.chain_live or self.queued is None:return
+        item = self.queued
+        if item['home'] and not self.tab.request_ready():return
+        self.queued = None
+        path = item.get('joined_path') or item['continuous_path']
+        if path.duration + path.period > 630. or len(path.points) > 31500:
+            raise ValueError('ROS连续轨迹超过630秒或31500样本容量，未提交')
+        self.chain_path = path
+        self.chain_last = item
+        if item['home']:
+            self.executing_home = True
+            self.chain_live = True
+            self.returning = True
+            self.queued = dict(item, path=(path.points[0],path.points[-1]),
+                times=(0.,path.duration), continuous_path=path, start=path.points[0],
+                checked_at=time.monotonic())
+            self._submit()
+            return
+        self.ros_batch_count += 1
+        self._begin(path.points[-1], home=(self.returning or
+                    (self.ros_batch_count >= 2 and path.duration >= self.requested_seconds)))
+
     def _chain_tick(self):
+        if getattr(self, 'ros_batch', False):
+            return self._ros_chain_tick()
         if self.chain_live and self.tab.started_motion is None:return
         if self.chain_pending is not None:
             if time.monotonic()>self.chain_pending['deadline']:

@@ -287,3 +287,50 @@ def test_autotest_discards_gratuitous_multi_turn_wrist_route_before_execution(mo
         s._candidate.assert_not_called()
         assert s.stage=='checking'
     assert s.queued is None and s.active
+
+
+def test_ros_auto_start_uses_selected_session_not_calibration_baseline():
+    s, t = session()
+    s.active = False
+    t.panel.backend = 'ros';t.panel.busy = False
+    t.panel.ros_backend = NS(request_calibration_and_test=Mock())
+    t.request_ready=lambda:True;t.pending=None;t.invalidate=Mock();t.preview_timer=Mock()
+    t.panel.confirm_execution=lambda *args: __import__('PyQt5.QtWidgets',fromlist=['QMessageBox']).QMessageBox.Yes
+    t.amplitude=NS(currentData=lambda:'small',currentText=lambda:'小')
+    t.ik_preference=NS(currentData=lambda:'nearest',currentText=lambda:'最近')
+    t.scene_revision=lambda:1;t.continuous_enabled=True
+    t.auto_continuous=NS(isChecked=lambda:False)
+    t.panel.speed_input.value=lambda:60.;t.panel.acceleration_input.value=lambda:4.
+    s._begin=Mock()
+    assert s.start(6.)
+    t.panel.ros_backend.request_calibration_and_test.assert_not_called()
+    assert s.active and s.requested_seconds == 6.
+    s._begin.assert_called_once()
+
+
+def test_ros_continuous_collects_checked_blends_then_one_fjt_including_home():
+    from manual_moveit_continuous import PreparedPath
+    s,t=session();t.panel.backend='ros';s.ros_batch=True;s.chain_enabled=True;s.requested_seconds=.01
+    s.ros_batch_count=0;s.chain_last=None;s._begin=Mock();s._submit=Mock();t.request_ready=lambda:True
+    start=tuple(t.panel.actual_q);end=tuple(q+.01 for q in start)
+    path=PreparedPath((start,end),60.,4.,.02)
+    s.queued=dict(continuous_path=path,joined_path=None,goal=end,start=start,home=False)
+    s._ros_chain_tick()
+    assert s.chain_path is path and s._submit.call_count==0
+    s.queued=dict(continuous_path=path,joined_path=path,goal=end,start=end,home=False)
+    s._ros_chain_tick()
+    assert s._begin.call_args.kwargs == {'home':True} and s._submit.call_count==0
+    s.queued=dict(continuous_path=path,joined_path=path,goal=start,start=end,home=True,pose=None)
+    s._ros_chain_tick()
+    assert s._submit.call_count==1 and s.executing_home and s.chain_live
+    assert s.queued['continuous_path'] is path and s.queued['start']==start
+
+
+def test_ros_continuous_capacity_rejection_never_submits_or_uses_native():
+    from manual_moveit_continuous import PreparedPath
+    s,t=session();s.ros_batch=True;s.chain_live=False;s._submit=Mock();t.request_ready=lambda:True
+    q=tuple(t.panel.actual_q)
+    s.queued=dict(continuous_path=PreparedPath((q,q),60.,4.,631.),home=True)
+    with pytest.raises(ValueError,match='630秒'):
+        s._ros_chain_tick()
+    s._submit.assert_not_called()

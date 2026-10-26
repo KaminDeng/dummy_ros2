@@ -36,7 +36,7 @@ class PanelRuntime:
 
     def check_startup_timeout(self, elapsed, timeout):
         if self.state == 'Starting' and elapsed > timeout:
-            self.fail('ROS 启动超时：未收到 C++ 权威状态')
+            self.fail('ROS 启动超时：未收到控制链状态')
 
     def read_only(self):
         if self.state == 'Starting':

@@ -88,16 +88,16 @@ def test_simulator_panel_move_stop_and_switch_without_hardware(tmp_path, monkeyp
         event = panel.worker.model.advance(100)
         panel.worker.emit_event(event); pump(panel)
         assert not panel.busy and math.degrees(panel.actual_q[0]) == 2.
-        assert '纯软件模拟反馈' in panel.status.text()
+        assert panel.status.text().startswith('仿真-本地 · 运动学反馈')
         panel.stop.click(); pump(panel)
         assert not panel.authorized and panel.wait_home and panel.calibration
         assert starts == [] and not list((tmp_path/'report').glob('*.raw'))
-        panel.backend_choice.setCurrentIndex(0); pump(panel)
+        panel.backend_choice.setCurrentIndex(panel.backend_choice.findData('real')); pump(panel)
         assert panel.backend == 'real' and len(starts) == 1
         assert panel.last_state is None and panel.calibration is None
         assert all(label.text() == '—' for label in panel.feedback_labels)
         assert not panel.authorized and not hasattr(panel, 'actual_q')
-        panel.backend_choice.setCurrentIndex(1); pump(panel)
+        panel.backend_choice.setCurrentIndex(panel.backend_choice.findData('simulator')); pump(panel)
         assert panel.backend == 'simulator' and panel.fresh() and not panel.authorized
         assert len(starts) == 1
     finally:

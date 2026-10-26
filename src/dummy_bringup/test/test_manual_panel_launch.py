@@ -187,3 +187,30 @@ def test_planning_passes_backend_and_resolved_model(installation, monkeypatch):
     arguments = {entity.name for entity in module.generate_launch_description().entities
                  if hasattr(entity, 'name')}
     assert 'backend' in arguments
+
+
+def test_panel_exit_shuts_down_only_its_launch_session(installation, monkeypatch):
+    """正常关闭面板也收回本launch；其他子进程退出不能触发全会话退出。"""
+    from launch.actions import EmitEvent, RegisterEventHandler
+    from launch.events import Shutdown
+    from launch.events.process import ProcessExited
+    module = load_launch('manual_joint_panel')
+    monkeypatch.setattr(module, 'Node', lambda **kw: SimpleNamespace(**kw))
+    actions = module.build_nodes(context())
+    panel = next(node for node in actions if getattr(node, 'executable', '') == 'manual_joint_panel.py')
+    registrations = [action for action in actions if isinstance(action, RegisterEventHandler)]
+    assert len(registrations) == 1
+    handler = registrations[0].event_handler
+    def exited(action, code=0):
+        return ProcessExited(action=action, name='isolated-test', cmd=[], cwd=None,
+                             env=None, pid=123, returncode=code)
+    assert handler.matches(exited(panel))
+    for other in actions:
+        if other is not panel:
+            assert not handler.matches(exited(other))
+    for code in (0, 1):
+        result = list(handler.handle(exited(panel, code), context()))
+        assert len(result) == 1 and isinstance(result[0], EmitEvent)
+        assert isinstance(result[0].event, Shutdown)
+    # 先注册再启动panel，避免立即退出早于handler注册。
+    assert actions.index(registrations[0]) < actions.index(panel)

@@ -222,7 +222,8 @@ class MoveItTab(QtWidgets.QWidget):
         test_row.addWidget(self.auto_duration)
         self.auto_continuous = QtWidgets.QCheckBox('连续轨迹')
         self.auto_continuous.setToolTip('提前规划并检查连接曲线，在同一RUN内滚动补充；目标附近圆滑过渡，不要求逐目标停稳。补充不及时则沿已检查尾段停车。')
-        self.auto_continuous.toggled.connect(lambda checked:self.auto_duration.setMaximum(57. if checked else 1440.))
+        self.auto_continuous.toggled.connect(lambda checked:self.refresh_auto_backend_options())
+        self.refresh_auto_backend_options()
         test_row.addWidget(self.auto_continuous)
         self.auto_start = QtWidgets.QPushButton('开始自动测试')
         self.auto_start.setToolTip('需已使能；一次确认后循环执行已检查的随机目标。勾选连续轨迹后圆滑衔接后续路径，不逐目标停车；未勾选时逐目标确认到位。')
@@ -260,6 +261,17 @@ class MoveItTab(QtWidgets.QWidget):
     ##
     # @brief 查询本面板圆柱场景是否已确认且未封锁。
     # @return bool：没有圆柱控制器时 True；否则 scene_ready 且 not blocked。
+    def refresh_auto_backend_options(self):
+        """ROS采用整轮预规划单FJT；Native保留在线滚动续接。"""
+        ros = self.panel.backend == 'ros'
+        if getattr(self, '_auto_options_backend', self.panel.backend) != self.panel.backend:
+            self.continuous_enabled = ros or self.panel.cfg.get('moveit_continuous_execution', True)
+        self._auto_options_backend = self.panel.backend
+        self.auto_duration.setMaximum(9.5 if ros else (57. if self.auto_continuous.isChecked() else 1440.))
+        self.auto_continuous.setToolTip(
+            'ROS：整轮预规划随机段与Home回程，逐样本碰撞检查后一次提交连续轨迹；非在线续接。最长9.5分钟，完整路径上限630秒。'
+            if ros else '提前规划并检查连接曲线，在同一RUN内滚动补充；目标附近圆滑过渡，不要求逐目标停稳。补充不及时则沿已检查尾段停车。')
+
     def scene_ready(self):
         scene=getattr(self.panel,'obstacle_tab',None)
         if scene is not None and hasattr(scene, 'validate_topology') and not scene.validate_topology():
@@ -721,6 +733,7 @@ class MoveItTab(QtWidgets.QWidget):
                 validate_trajectory(trajectory, self.planner.names, self.panel.limits)
                 self.execution.waiting = True
                 self.segment_deadline = time.monotonic() + self.continuous_path.duration + 30.
+                self.ros_execution_goal = tuple(self.continuous_path.points[-1])
                 self.record('ROS_TRAJECTORY_SUBMITTED', points=self.continuous_path.points,
                             duration_s=self.continuous_path.duration,
                             sha256=hashlib.sha256(json.dumps(self.continuous_path.points).encode()).hexdigest())
@@ -770,6 +783,10 @@ class MoveItTab(QtWidgets.QWidget):
             self.execute.setEnabled(False)
             self.panel.busy = False
             self.record('PATH_COMPLETED', backend='ros', result=str(value))
+            if self.auto_test.active:
+                self.auto_test.ros_completed_goal = self.ros_execution_goal
+                self.auto_test.ros_completion_deadline = self.segment_deadline
+                self.auto_test.ros_completion_pending = True
             self.status.setText('公开 ROS Action 已确认整轨迹完成。')
         elif kind in ('failed', 'canceled'):
             self.cancel_execution('ROS Action：' + str(value), stop=False)
@@ -884,6 +901,7 @@ class MoveItTab(QtWidgets.QWidget):
     # 更新控件后校验场景、参考身份和实测起点；过期/旧版本 future 本地取消并保留目标输入。规划结果保留全部路点，连续模式重采样后检查实际曲线；最多八个碰撞请求并行。预览仅改目标输入。执行中失鲜、失权或超时按是否已提交决定 STOP，最后推进自动测试。
     # @return None；执行上述状态更新、界面或日志操作。
     def tick(self):
+        self.refresh_auto_backend_options()
         if not self.scene_ready() and (self.path or self.pending):
             self.scene_change_requested()
         available = self.panel.fresh() and hasattr(self.panel, 'actual_q')

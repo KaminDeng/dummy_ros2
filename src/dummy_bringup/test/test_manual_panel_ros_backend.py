@@ -109,8 +109,15 @@ def test_action_cancel_terminal_preserves_actual_goal_uuid():
     transport.action = action; transport.action_type = NS(Goal=lambda: NS())
     transport.uuid_type=lambda **kw:NS(**kw)
     transport.closed=False;transport._submission=None
+    transport.latest_state=NS(device_id=[1]*16,profile_id=201,boot_epoch=7,session_id=8,reference_epoch=9,motion_epoch=10,management_epoch=1,state_seq=1)
+    transport.latest_status=NS(management_epoch=1)
+    transport.status_at=0.
+    transport._fresh_retry_binding=lambda:(tuple([1]*16),201,7,8,9,10)
+    transport.request=lambda name,cb:cb(NS(success=True,message='ENABLED_HOLD'))
     events = []
     assert transport.submit_trajectory(NS(), lambda *event: events.append(event))
+    transport._readonly_requests={}
+    transport._poll_trajectory_retry()
     assert events[0] == ('accepted', {'goal_uuid': '01'*16})
     assert events[-1] == ('canceled', {'goal_uuid': '01'*16, 'status': 5})
 
@@ -256,6 +263,16 @@ def renewal_transport(monkeypatch, receipts=None):
     transport.action=NS(server_is_ready=lambda:True,send_goal_async=send)
     transport.request=lambda name,cb:pending.append((name,cb))
     trajectory=NS(points=[NS(time_from_start=NS(sec=1,nanosec=0))],joint_names=['Joint1'])
+    original_submit = transport.submit_trajectory
+    def submit_with_initial_cpp_ready(trajectory, callback):
+        accepted = original_submit(trajectory, callback)
+        if accepted:
+            transport._poll_trajectory_retry()
+            name, response = pending.pop(0)
+            assert name == 'bootstrap_status'
+            response(NS(success=True, message='ENABLED_HOLD'))
+        return accepted
+    transport.submit_trajectory = submit_with_initial_cpp_ready
     return transport,trajectory,clock,calls,pending,events
 
 
@@ -746,3 +763,37 @@ def test_auto_failed_preserves_error_and_only_confirmed_release_allows_close(cle
     assert backend.released is released
     assert backend.close() is released and transport.closed is released
     assert transport.calls==['auto_calibrate_and_test','baseline_status']
+
+
+def test_first_goal_waits_for_cpp_ready_without_sending_or_resetting_deadline(monkeypatch):
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    t.request=lambda name,cb:pending.append((name,cb))
+    from manual_panel_ros_backend import RosTransport
+    assert RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    deadline=t._submission['retry_deadline']
+    assert calls==[]
+    t._poll_trajectory_retry()
+    name,cb=pending.pop(0)
+    assert name=='bootstrap_status'
+    cb(NS(success=False,message='ENABLED_HOLD_PENDING'))
+    assert calls==[]
+    clock[0]+=.1;t.state_at=t.status_at=clock[0]
+    t._poll_trajectory_retry();pending.pop(0)[1](NS(success=True,message='ENABLED_HOLD'))
+    assert len(calls)==1 and t._submission['retry_deadline']==deadline
+
+
+@pytest.mark.parametrize('failure',['owner','stale','pending'])
+def test_preflight_never_sends_on_owner_drift_stale_or_unready(failure,monkeypatch):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    t.request=lambda name,cb:pending.append((name,cb))
+    assert RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    deadline=t._submission['retry_deadline']
+    if failure=='owner':t.latest_state.session_id+=1
+    if failure=='stale':clock[0]+=.5
+    t._poll_trajectory_retry()
+    pending.pop(0)[1](NS(success=failure!='pending',message='ENABLED_HOLD'))
+    assert not calls
+    clock[0]=deadline+.001
+    t._poll_trajectory_retry()
+    assert t._submission is None and events[-1][0]=='failed' and not calls

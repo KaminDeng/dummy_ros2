@@ -1,9 +1,9 @@
 #!/usr/bin/python3
 ##
 # @file manual_joint_panel.py
-# @brief 以单一 Native 通信所有者组织六轴手动面板、只读反馈和显式执行。
-# Qt 主线程驱动界面和 rclpy 回调；ROS 发布测量状态与独立目标虚影，运动命令只经现有 worker。启动/重连只读，控制授权必须由设备事件和后续同身份新鲜反馈共同建立；管理辅助进程须在旧 worker 确认退出后串行接管，避免双 USB owner。
-"""六轴空载交互面板：SDK单owner；ROS只发布实际关节状态，不在启动时运动。"""
+# @brief 按后端保持 Native 或 ROS C++ 单一通信所有者的六轴交互面板。
+# Qt驱动界面与rclpy回调；Native实测由面板发布，ROS实测由控制链发布，目标虚影独立。关节直控与末端避碰规划分开，启动/重连只读，控制授权与最终完成均以设备或C++权威回执为准。
+"""六轴交互面板：单通信所有者、实测与目标分离、显式确认后执行。"""
 import argparse
 import json
 import hashlib
@@ -155,7 +155,7 @@ class JointPanel(QtWidgets.QWidget):
             self.ros_backend = RosBackend(RosTransport(self.node, self.ros_status_received, self.ros_state_received), self.ros_event)
             self.ros_last_poll = 0
             self.ros_auto_pending = bool(self.cfg.pop('auto_calibrate_and_test', False))
-            self.backend_notice.setText('真机-USB/ROS · C++ 权威控制 · 启动只读')
+            self.backend_notice.setText('真机-USB/ROS · 启动只读')
             return
         if self.backend == 'simulator':
             from manual_panel_simulator import SimulatorWorker
@@ -193,7 +193,7 @@ class JointPanel(QtWidgets.QWidget):
                 except (OSError, ValueError, KeyError) as error:
                     self.message(str(error))
                     return
-            self.message('先请求停止释放，等待 C++ 确认后切换。')
+            self.message('先请求停止释放，等待 ROS 控制链确认后切换。')
             if not self.ros_backend.released:
                 self.release('RELEASE')
                 return
@@ -240,6 +240,11 @@ class JointPanel(QtWidgets.QWidget):
     def apply_backend_change(self):
         self.worker.deleteLater()
         self.backend, self.pending_backend = self.pending_backend, None
+        # 实测发布权跟随通信所有者；ROS由JSB发布，Native/仿真由面板发布。
+        if self.publisher is not None:
+            self.node.destroy_publisher(self.publisher)
+        self.publisher = (None if self.backend == 'ros' else
+                          self.node.create_publisher(JointState, '/joint_states', 10))
         # 两个目标的参考、反馈、规划和控制权限不能互相继承。
         self.last_state = self.calibration = self.control_session = None
         self.last_state_ns = 0
@@ -307,7 +312,7 @@ class JointPanel(QtWidgets.QWidget):
                 return
             if not self.ros_backend.released:
                 self.release('RELEASE')
-                self.message('先等待 C++ 确认失能释放，再次点击重连；重连不自动恢复运动。')
+                self.message('先等待 ROS 控制链确认失能释放，再次点击重连；重连不自动恢复运动。')
                 return
             if not self.ros_runtime.stop(True) or not self.ros_backend.close():
                 return
@@ -712,7 +717,7 @@ class JointPanel(QtWidgets.QWidget):
                     not self.control_state_allowed((2,)) or self.last_state['session_id'] != 0):
                 return
             if self.confirm_execution('恢复 ROS 手动控制',
-                    '复用本 boot 已有参考，由 C++ 完成 REST 核验、激活与保持；不重新采零，也不运行自动基线运动。') != QtWidgets.QMessageBox.Yes:
+                    '复用本 boot 已有参考，由 ROS 控制链完成 Rest 核验、激活与保持；不重新采零，也不运行自动基线运动。') != QtWidgets.QMessageBox.Yes:
                 return
             if (self.fresh() and self.calibration and self.control_state_allowed((2,)) and
                     not self.busy and not self.closing and self.last_state['session_id'] == 0):
@@ -843,9 +848,9 @@ class JointPanel(QtWidgets.QWidget):
             if not self.cfg.get('operator_confirmed_double_limits', False) and not reuse:
                 self.message('本次 ROS 连接未确认双限位；请重新启动面板并明确确认后再标定。')
                 return
-            prompt = ('复用本次 boot 已保留的参考，由 C++ 恢复手动控制；不会重新采零。' if reuse else
-                      '确认设备处于人工双限位初始姿态；由 C++ 标定、退回 Rest 并准备手动控制。')
-            prompt += '\n此操作不运行自动验收测试；必要的限位退让由 C++ 完成。'
+            prompt = ('复用本次 boot 已保留的参考，由 ROS 控制链恢复手动控制；不会重新采零。' if reuse else
+                      '确认设备处于人工双限位初始姿态；由 ROS 控制链标定、退回 Rest 并准备手动控制。')
+            prompt += '\n此操作不运行自动验收测试；必要的限位退让由 ROS 控制链完成。'
             if (self.confirm_execution('标定 / 恢复手动控制', prompt) == QtWidgets.QMessageBox.Yes and
                     not self.closing and not self.busy and self.fresh()):
                 self.ros_backend.request_prepare_manual_control()
@@ -900,24 +905,16 @@ class JointPanel(QtWidgets.QWidget):
 
     ##
     # @brief 检查名义目标后按工作范围投影并明确提交六轴运动。
-    # 拒绝未确认场景、参数事务、其他路径执行或未授权状态。先验证用户输入在名义限位，再向 self.limits 内收并更新虚影/记录投影；确认后重查授权和新鲜度，发 MOVE_SPEED，速度 °/s、加速度 rad/s²、目标 °。这不是 MoveIt 整条避碰路径执行。
+    # 先检查会话、范围、参数/路径互斥与人工确认；ROS关节直控按所选动态上限准备完整FJT，Native发MOVE_SPEED。ROS此入口不调用MoveIt避碰；末端规划页仍检查完整路径的碰撞。
     # @return None；执行上述状态更新、界面或日志操作。
     def start_move(self):
-        if self.backend == 'ros':
-            if self.busy or not self.fresh() or not self.authorized:
-                return
-            if not hasattr(self, 'moveit_tab'):
-                self.message('ROS运动需要完整MoveIt规划和碰撞校验。')
-                return
-            self.moveit_tab.start_joint_plan([spin.value() for spin in self.inputs])
-            self.message('ROS目标已交MoveIt规划；检查完整路径后点击执行规划路径。')
-            return
-        if hasattr(self, 'obstacle_tab') and (self.obstacle_tab.blocked or not self.obstacle_tab.scene_ready):
+        ros_direct = self.backend == 'ros'
+        if not ros_direct and hasattr(self, 'obstacle_tab') and (self.obstacle_tab.blocked or not self.obstacle_tab.scene_ready):
             self.message('障碍物场景尚未确认，禁止提交运动。')
             return
         if hasattr(self, 'motor_parameter_tab') and (self.motor_parameter_tab.pending or self.motor_parameter_tab.queue):
             return
-        if hasattr(self, 'moveit_tab') and self.moveit_tab.executing:
+        if hasattr(self, 'moveit_tab') and (self.moveit_tab.executing or self.moveit_tab.auto_test.active):
             return
         if not self.control_state_allowed((2, 4)) or not self.authorized or not self.calibration or not self.fresh() or self.busy:
             return
@@ -941,7 +938,26 @@ class JointPanel(QtWidgets.QWidget):
             text = '请求 → 有效目标：' + projection + '\n实际发送：' + text
         answer = self.confirm_execution('执行六轴目标', text + f'\n本次目标速度 {self.speed_input.value():.1f}°/s，加速度 {self.acceleration_input.value():.2f}rad/s²；确认实物路径畅通后执行。\n'
             '将按所选速度和加速度规划；较长运动使用原有会话续租。')
-        if answer == QtWidgets.QMessageBox.Yes and self.control_state_allowed((2, 4)) and self.authorized and self.fresh() and self.command(f'MOVE_SPEED {self.speed_input.value():.1f} ACCEL {self.acceleration_input.value():.2f} ' + ' '.join(f'{v:.8f}' for v in goal)):
+        if answer != QtWidgets.QMessageBox.Yes or self.closing or not self.control_state_allowed((2, 4)) or not self.authorized or not self.fresh():
+            return
+        if ros_direct:
+            from manual_moveit_execution import joint_goal_path, ros_trajectory
+            try:
+                path = joint_goal_path(self.actual_q, [math.radians(v) for v in goal], self.limits,
+                                       self.speed_input.value(), self.acceleration_input.value())
+                trajectory = ros_trajectory(path, [j['name'] for j in self.cfg['joints']])
+                if hasattr(self, 'moveit_tab'):
+                    self.moveit_tab.invalidate()
+                self.busy = True
+                if not self.ros_backend.submit_trajectory(trajectory):
+                    self.busy = False
+                    self.message('ROS关节轨迹未提交；未发送Native命令。')
+                else:
+                    self.message('关节直控轨迹已提交ROS；不进行MoveIt避碰，等待 ROS 执行结果。')
+            except ValueError as error:
+                self.busy = False
+                self.message(str(error))
+        elif self.command(f'MOVE_SPEED {self.speed_input.value():.1f} ACCEL {self.acceleration_input.value():.2f} ' + ' '.join(f'{v:.8f}' for v in goal)):
             self.busy = True
 
     ##
@@ -951,7 +967,7 @@ class JointPanel(QtWidgets.QWidget):
     def cancel_motion_hold(self):
         if self.backend == 'ros':
             self.ros_backend.cancel()
-            self.message('已请求ROS Action取消；等待C++停车终态。')
+            self.message('已请求ROS Action取消；等待 ROS 停车终态。')
             return
         if not self.fresh() or not self.authorized or not self.control_state_allowed((2,3,4,5,6)):
             self.release('STOP');return
@@ -1470,7 +1486,8 @@ class JointPanel(QtWidgets.QWidget):
             state['session_id'] != 0 and state['position_valid_mask'] == 63)
         self.calibration = ((state['boot_epoch'], state['reference_epoch']) if matched and
                             state['reference_epoch'] != 0 and state['position_valid_mask'] == 63 else None)
-        self.move.setEnabled(self.authorized and not self.busy and not self.closing and hasattr(self, 'moveit_tab'))
+        planning_busy = hasattr(self, 'moveit_tab') and (self.moveit_tab.executing or self.moveit_tab.auto_test.active)
+        self.move.setEnabled(self.authorized and not self.busy and not self.closing and not planning_busy)
         if hasattr(self, 'obstacle_tab'):
             self.obstacle_tab.tick()
         if hasattr(self, 'moveit_tab'):
@@ -1494,7 +1511,7 @@ class JointPanel(QtWidgets.QWidget):
             self.motor_parameter_tab.tick()
         status = self.ros_status
         identity = '' if status is None else f' · boot={status.boot_epoch:016x} · reference={status.reference_epoch}'
-        budget_text = ' · 等待C++ Status预算（只读）' if status_budget_ms is None else f' · Status预算={status_budget_ms}ms'
+        budget_text = ' · 等待状态反馈配置（只读）' if status_budget_ms is None else f' · Status预算={status_budget_ms}ms'
         self.status.setText('真机-USB/ROS · ' + self.ros_runtime.state + identity + budget_text + (' · ' + self.ros_runtime.error if self.ros_runtime.error else ''))
         target = JointState()
         target.header.stamp = self.node.get_clock().now().to_msg()

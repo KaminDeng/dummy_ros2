@@ -16,14 +16,20 @@ def test_prepared_trajectory_preserves_all_points_and_time():
     assert all(not p.velocities and not p.accelerations for p in message.points)
 
 
-def test_ros_autotest_requests_cpp_without_python_motion():
+def test_ros_autotest_does_not_bypass_confirmation_with_cpp_calibration():
     from manual_moveit_autotest import AutoTestSession
+    from PyQt5 import QtWidgets
     requests = []
-    panel = NS(backend='ros', ros_backend=NS(request_calibration_and_test=lambda: requests.append('cpp') or True))
-    session = AutoTestSession(NS(panel=panel))
-    session._status = lambda *args: None
-    assert session.start(60.)
-    assert requests == ['cpp']
+    panel = NS(backend='ros', busy=False,
+        speed_input=NS(value=lambda:60.), acceleration_input=NS(value=lambda:4.),
+        confirm_execution=lambda *args:QtWidgets.QMessageBox.No,
+        ros_backend=NS(request_calibration_and_test=lambda: requests.append('cpp') or True))
+    tab = NS(panel=panel, executing=False, pending=None, request_ready=lambda:True,
+        auto_continuous=NS(isChecked=lambda:False), amplitude=NS(currentText=lambda:'小幅度'),
+        ik_preference=NS(currentText=lambda:'最近构型'))
+    session = AutoTestSession(tab)
+    assert not session.start(60.)
+    assert requests == []
     assert not session.active
 
 

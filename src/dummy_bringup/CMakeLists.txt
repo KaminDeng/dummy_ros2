@@ -24,6 +24,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(manual_panel_deployment_config test/test_manual_panel_deployment_config.py)
   ament_add_pytest_test(manual_panel_runtime_config test/test_manual_panel_runtime_config.py)
   ament_add_pytest_test(manual_panel_launch test/test_manual_panel_launch.py)
+  ament_add_pytest_test(manual_panel_measured_publisher test/test_manual_panel_measured_publisher.py)
+  ament_add_pytest_test(manual_panel_ros_joint_control test/test_manual_panel_ros_joint_control.py
+    ENV QT_QPA_PLATFORM=offscreen)
   ament_add_pytest_test(manual_panel_install_deployment test/test_manual_panel_install_deployment.py)
 # 可选相机关闭时不依赖传感器overlay；真实六轴测试用固定输入/替身检查身份预检和模型配置边界。
   ament_add_pytest_test(sensor_optional test/test_sensor_optional.py)

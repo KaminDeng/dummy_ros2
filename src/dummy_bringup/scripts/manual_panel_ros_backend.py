@@ -387,7 +387,7 @@ class RosTransport:
     def _poll_trajectory_retry(self):
         self._expire_readonly_requests()
         context = getattr(self, '_submission', None)
-        if self.closed or context is None or context['stage'] not in ('receipt', 'renewal'):
+        if self.closed or context is None or context['stage'] not in ('preflight', 'receipt', 'renewal'):
             return
         if time.monotonic() >= context['retry_deadline']:
             self._submission_failed(context, 'ROS续租拒绝回执/重试原2秒期限已到')
@@ -405,6 +405,23 @@ class RosTransport:
                 return
             if isinstance(value, Exception):
                 self._submission_failed(context, str(value))
+            elif stage == 'preflight':
+                state, status = self.latest_state, self.latest_status
+                if state is None or status is None:
+                    self._submission_failed(context, 'ROS起步缺少原绑定反馈')
+                    return
+                identity = (tuple(state.device_id), state.profile_id, state.boot_epoch,
+                            state.session_id, state.reference_epoch, state.motion_epoch)
+                if identity != context['binding']:
+                    self._submission_failed(context, 'ROS起步等待的原身份已改变')
+                    return
+                if (value.success and value.message in ('ENABLED_HOLD', 'LEASE_RENEWED') and
+                        self._fresh_retry_binding() == context['binding'] and
+                        state.management_epoch == status.management_epoch):
+                    context['management'] = state.management_epoch
+                    context['state_seq'] = state.state_seq
+                    context['status_at'] = self.status_at
+                    self._send_trajectory_attempt(context)
             elif stage == 'receipt':
                 if value.success and value.message == 'RENEWAL_PENDING:' + context['uuid'] and context['attempts'] == 1:
                     context['stage'] = 'renewal'
@@ -441,8 +458,14 @@ class RosTransport:
                        state_seq=getattr(getattr(self, 'latest_state', None), 'state_seq', 0),
                        status_at=getattr(self, 'status_at', 0.),
                        retry_deadline=time.monotonic()+2., stage='sending', rpc_pending=False)
+        state = self.latest_state
+        if state is None:
+            callback('failed', 'ROS起步缺少原绑定State')
+            return False
+        context['binding'] = (tuple(state.device_id), state.profile_id, state.boot_epoch,
+                              state.session_id, state.reference_epoch, state.motion_epoch)
+        context['stage'] = 'preflight'
         self._submission = context
-        self._send_trajectory_attempt(context)
         return True
 
     def _send_trajectory_attempt(self, context):

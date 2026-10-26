@@ -1385,5 +1385,67 @@ class MoveItTabTests(unittest.TestCase):
         self.assertEqual(self.panel.commands,[])
 
 
+    def test_ros_auto_continuous_batch_submits_one_full_fjt_and_waits_real_home(self):
+        from manual_moveit_continuous import prepare_path, blend_paths
+        self.panel.backend = 'ros'
+        self.tab.continuous_enabled = True
+        sent = []
+        self.panel.ros_backend = NS(submit_trajectory=lambda trajectory: sent.append(trajectory) or True)
+        home = tuple(self.panel.actual_q)
+        q1 = (home[0]+.05,)+home[1:]
+        q2 = (home[0]+.10,)+home[1:]
+        speed = self.panel.speed_input.value()
+        acceleration = self.panel.acceleration_input.value()
+        first = prepare_path((home,q1),(0.,1.),speed,acceleration)
+        second = prepare_path((q1,q2),(0.,1.),speed,acceleration)
+        joined,_ = blend_paths(first,second)
+        back = prepare_path((q2,home),(0.,1.5),speed,acceleration)
+        full,_ = blend_paths(joined,back)
+        auto = self.tab.auto_test
+        auto.active = True;auto.ros_batch = True;auto.chain_enabled = True
+        auto.ros_batch_count = 2;auto.identity = self.tab.execution_identity()
+        auto.scene_version = self.tab.scene_revision();auto.started_at = module.time.monotonic()
+        auto.queued = dict(joined_path=full,continuous_path=back,home=True,goal=home,start=q2,
+            pose=NS(position=NS(x=0.,y=0.,z=0.),orientation=NS(x=0.,y=0.,z=0.,w=1.)))
+        auto._ros_chain_tick()
+        self.assertTrue(self.tab.executing)
+        self.assertEqual(len(sent),1)
+        self.assertEqual(len(sent[0].points),len(full.points))
+        self.assertEqual(tuple(sent[0].points[-1].positions),home)
+        self.assertEqual(self.panel.commands,[])
+        self.panel.actual_q = list(q2)
+        self.tab.ros_event('completed',{})
+        self.assertTrue(auto.active)
+        self.panel.authorized = False
+        auto.tick()
+        self.assertTrue(auto.active)
+        self.panel.actual_q = list(home)
+        auto.tick()
+        self.assertEqual(auto.result,'completed')
+        self.assertEqual(auto.completed,2)
+        self.assertEqual(len(sent),1)
+
+    def test_other_ros_action_result_does_not_complete_idle_moveit_tab(self):
+        self.panel.backend = 'ros'
+        self.tab.ros_event('accepted',{'goal_uuid':'direct-joint'})
+        self.tab.ros_event('completed',{'goal_uuid':'direct-joint'})
+        self.assertFalse(self.tab.executing)
+        self.assertFalse((self.panel.report/'moveit-events.jsonl').exists())
+
+
+    def test_ros_auto_options_follow_backend_without_changing_native_limits(self):
+        self.tab.auto_continuous.setChecked(True)
+        self.assertEqual(self.tab.auto_duration.maximum(),57.)
+        self.panel.backend = 'ros'
+        self.tab.refresh_auto_backend_options()
+        self.assertEqual(self.tab.auto_duration.maximum(),9.5)
+        self.assertIn('非在线续接',self.tab.auto_continuous.toolTip())
+        self.assertTrue(self.tab.continuous_enabled)
+        self.panel.backend = 'real'
+        self.tab.refresh_auto_backend_options()
+        self.assertEqual(self.tab.auto_duration.maximum(),57.)
+        self.assertNotIn('非在线续接',self.tab.auto_continuous.toolTip())
+
+
 if __name__ == '__main__':
     unittest.main()

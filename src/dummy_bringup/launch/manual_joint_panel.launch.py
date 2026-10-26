@@ -12,7 +12,9 @@ import yaml
 from pathlib import Path
 from ament_index_python.packages import get_package_prefix, get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription, RegisterEventHandler, EmitEvent
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, EnvironmentVariable
 from launch_ros.actions import Node
@@ -103,6 +105,15 @@ def build_nodes(context):
             launch_arguments={'config': str(config_path if backend == 'ros' else planning_config_path), 'backend': backend}.items()))
     actions.append(Node(package='robot_state_publisher', executable='robot_state_publisher',
                         parameters=[{'robot_description': urdf}]))
+    # 面板退出后只关闭本launch拥有的显示/规划进程，不终止其他会话。
+    panel = Node(package='dummy_bringup', executable='manual_joint_panel.py',
+             arguments=['--config', str(config_path), '--report', LaunchConfiguration('report'),
+                        '--description-xacro', model_path, '--backend', LaunchConfiguration('backend')] + (['--moveit'] if moveit_arg == 'true' else []) +
+                       (['--auto-calibrate-and-test'] if LaunchConfiguration('auto_calibrate_and_test', default='false').perform(context) == 'true' else []) +
+                       ['--initial-pose', LaunchConfiguration('initial_pose')], output='screen')
+    panel_exit = RegisterEventHandler(OnProcessExit(
+        target_action=lambda action: action is panel,
+        on_exit=[EmitEvent(event=Shutdown(reason='手动面板已退出，关闭本会话显示与规划'))]))
     return actions + [
         Node(package='robot_state_publisher', executable='robot_state_publisher',
              namespace='target_preview', name='target_robot_state_publisher',
@@ -115,13 +126,8 @@ def build_nodes(context):
              arguments=['--frame-id', 'base_link', '--child-frame-id', 'target_preview/base_link']),
         Node(package='rviz2', executable='rviz2',
              arguments=['-d', str(bringup / 'config/manual_joint_panel.rviz')]),
-        ##
-        # 面板进程接收同一配置和模型路径；报告记录、只读连接、授权和设备完成确认均在面板/Native 状态机中处理。
-        Node(package='dummy_bringup', executable='manual_joint_panel.py',
-             arguments=['--config', str(config_path), '--report', LaunchConfiguration('report'),
-                        '--description-xacro', model_path, '--backend', LaunchConfiguration('backend')] + (['--moveit'] if moveit_arg == 'true' else []) +
-                       (['--auto-calibrate-and-test'] if LaunchConfiguration('auto_calibrate_and_test', default='false').perform(context) == 'true' else []) +
-                       ['--initial-pose', LaunchConfiguration('initial_pose')], output='screen'),
+        panel_exit,
+        panel,
     ]
 
 
