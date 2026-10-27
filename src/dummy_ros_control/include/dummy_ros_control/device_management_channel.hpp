@@ -396,8 +396,8 @@ struct DeviceManagementChannel {
        dummy_wire::DummyDeviceStatusV2Codec::decode(current.status.data(),current.status.size(),&status)!=dummy_wire::CodecResult::kOk)return false;
     const bool lineage=(status.attempt_kind()==1U && status.parent_run_id()==0U && status.final_state()==2U) ||
       (status.attempt_kind()==3U && status.run_id()>1U && status.parent_run_id()==status.run_id()-1U && status.final_state()==8U);
-    if(!dummy_ref::host::session_release_observed({true,true,true,status.boot_epoch(),status.core_state(),
-          state.core_state(),status.session_id(),status.cleanup_state(),status.permit_remaining_us()}) ||
+    if(!dummy_ref::host::session_release_observed({true,true,true,status.boot_epoch(),status.core_state()==2U,
+          state.core_state()==2U,status.session_id(),status.cleanup_state(),status.permit_remaining_us()}) ||
        state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=0U ||
        state.reference_epoch()!=reference || status.reference_epoch()!=reference ||
        state.motion_epoch()!=status.motion_epoch() || state.management_epoch()!=status.management_epoch() ||
