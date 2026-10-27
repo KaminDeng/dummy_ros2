@@ -172,11 +172,19 @@ void RawEvidenceCollector::stop() noexcept {
  * @param run_id 非零且新增时单调递增的尝试ID。
  * @return bool；重复期望允许，满槽且无已消费终页可回收时粘滞Overflow。
  */
-bool RawEvidenceCollector::expect_run(std::uint64_t run_id) noexcept {
+bool RawEvidenceCollector::expect_run(std::uint64_t run_id,
+    std::uint32_t verified_pre_motion_epoch) noexcept {
   if (failure() != Failure::kNone) return false;
   if (run_id == 0U) { fail(Failure::kInvalid); return false; }
   for (std::size_t i = 0U; i < expected_count_; ++i)
-    if (expected_runs_[i].run_id == run_id) return true;
+    if (expected_runs_[i].run_id == run_id) {
+      // 同生产者已接纳首CAN后，任何迟到Status都不能重写attempt来源。
+      if (verified_pre_motion_epoch != 0U && !expected_runs_[i].terminal &&
+          (run_id_ != run_id || next_seq_ == 0U) &&
+          verified_pre_motion_epoch >= expected_runs_[i].pre_motion_epoch)
+        expected_runs_[i].pre_motion_epoch = verified_pre_motion_epoch;
+      return true;
+    }
   if (run_id <= last_expected_run_id_) {
     fail(Failure::kIdentity);
     return false;
@@ -192,7 +200,7 @@ bool RawEvidenceCollector::expect_run(std::uint64_t run_id) noexcept {
     }
     if (slot == expected_runs_.size()) { fail(Failure::kOverflow); return false; }
   } else ++expected_count_;
-  expected_runs_[slot] = {run_id, 0U, false};
+  expected_runs_[slot] = {run_id, 0U, false, verified_pre_motion_epoch};
   last_expected_run_id_ = run_id;
   return true;
 }
@@ -385,9 +393,14 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     last_reported_group_count_ = 0U;
     safety_hold_motion_epoch_ = 0U;
     first_motion_epoch_ = 0U;
+    cancel_origin_epoch_ = 0U;
+    for (std::size_t i = 0U; i < expected_count_; ++i)
+      if (expected_runs_[i].run_id == page.run_id)
+        cancel_origin_epoch_ = expected_runs_[i].pre_motion_epoch;
     safety_hold_valid_ = false;
     safety_hold_regressed_ = false;
     terminal_seen_ = false;
+    accepted_clean_cancel_hold_ = false;
     owner_last_disable_valid_=false;owner_group_counts_valid_=true;
     owner_disable_motion_=0U;owner_disable_source_=0U;owner_disable_axis_mask_=0U;
     owner_connection_generation_=channel_?channel_->worker_connection_generation_.load():0U;
@@ -569,7 +582,9 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
     record.connection_generation=owner_connection_generation_;
     record.safety_hold_motion_epoch = safety_hold_motion_epoch_;
     record.safety_hold_valid = safety_hold_valid_ &&
-        decoded.motion_epoch() == first_motion_epoch_;
+        (cancel_origin_epoch_ == 0U || cancel_origin_epoch_ <= first_motion_epoch_) &&
+        decoded.motion_epoch() == (cancel_origin_epoch_ != 0U ?
+          cancel_origin_epoch_ : first_motion_epoch_);
   }
   if (page.evidence_seq == 0U && !record.terminal) {
     const bool full_six = decoded.expected_mask() == 0x3fU &&
@@ -593,6 +608,11 @@ bool RawEvidenceCollector::offer_page(const RawEvidencePage &page,
   last_chain_ = page.chain_sha256;
   next_seq_ = page.evidence_seq + 1U;
   terminal_seen_ = page.category == 4U;
+  accepted_clean_cancel_hold_ = record.terminal && record.attempt_kind == 1U &&
+      record.parent_run_id == 0U && record.final_state == 7U &&
+      record.first_failure_source == 0U && record.first_failure_axis_mask == 0U &&
+      !record.evidence_lost && !record.motion_complete && !record.release_committed &&
+      record.safety_hold_valid;
   if (!terminal_seen_) {
     ++can_page_count_;
     last_reported_group_count_ = page.group_count;

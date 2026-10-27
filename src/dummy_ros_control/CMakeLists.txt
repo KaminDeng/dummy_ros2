@@ -118,6 +118,20 @@ if(BUILD_TESTING)
     "${DPSDK_ROOT}/applications/dummy_ref_control/include")
   target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
+  target_link_options(transport_component_tests PRIVATE "-Wl,--export-dynamic-symbol=fflush"
+    "-Wl,--export-dynamic-symbol=pthread_mutex_unlock")
+  add_test(NAME transport_cancel_pending_flush COMMAND transport_component_tests six_axis raw_order_cancel_pending_flush)
+  set_tests_properties(transport_cancel_pending_flush PROPERTIES TIMEOUT 20 LABELS "component_only;synthetic_pty")
+  foreach(fault IN ITEMS bad_safety non_hold bad_mask bad_motion wrong_chain io_failure consumer_snapshot)
+    add_test(NAME transport_cancel_pending_flush_${fault}
+      COMMAND transport_component_tests six_axis raw_order_cancel_pending_flush_${fault})
+    set_tests_properties(transport_cancel_pending_flush_${fault} PROPERTIES TIMEOUT 20 LABELS "component_only;synthetic_pty")
+  endforeach()
+  foreach(origin IN ITEMS "" _wrong_terminal _first_can_terminal _late_rebase _nonzero_groups _wrong_attempt _future_origin)
+    add_test(NAME transport_cancel_origin${origin}
+      COMMAND transport_component_tests six_axis raw_order_cancel_origin${origin})
+    set_tests_properties(transport_cancel_origin${origin} PROPERTIES TIMEOUT 20 LABELS "component_only;synthetic_pty")
+  endforeach()
   add_test(NAME transport_worker_slow_stderr
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/run_slow_stderr_fixture.py"
       "$<TARGET_FILE:transport_component_tests>" six_axis)

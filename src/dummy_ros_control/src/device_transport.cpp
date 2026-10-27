@@ -823,11 +823,23 @@ struct DeviceTransport::Impl {
       if (released_child)
         evidence_owner = parent->session_id;
     }
+    // Acquire/恢复已有参考可以在首CAN前建立/重基准attempt；终页携创建epoch，
+    // EnableHold首CAN则携后继epoch。只认经此函数绑定身份的零组Idle根Status。
+    const bool pre_motion_origin = value.session_id() != 0U &&
+        value.reference_epoch() != 0U && value.motion_epoch() != 0U &&
+        value.core_state() == 2U && value.attempt_kind() == 1U &&
+        value.attempt_id() == value.run_id() &&
+        value.parent_run_id() == 0U && value.final_state() == 0U &&
+        value.group_count() == 0U && !value.motion_complete() && !value.release_committed() &&
+        value.failure_source() == 0U && value.failure_axis_mask() == 0U &&
+        value.first_failure_reason() == 0U && value.can_failed_mask() == 0U &&
+        std::all_of(std::begin(value.evidence_chain_sha256()),
+            std::end(value.evidence_chain_sha256()), [](auto byte) { return byte == 0U; });
     return evidence_bindings.observe({value.run_id(), value.boot_epoch(),
                                       evidence_owner, value.parent_run_id(),
                                       value.attempt_kind()},
                                      raw_evidence.terminal_written_run_id()) &&
-           raw_evidence.expect_run(value.run_id());
+           raw_evidence.expect_run(value.run_id(), pre_motion_origin ? value.motion_epoch() : 0U);
   }
 
   /**
@@ -2211,12 +2223,15 @@ struct DeviceTransport::Impl {
     /**
      * @brief 管理channel回执来自writer写出/flush；accepted_completed_terminal可能仅验链尚未写出。下面按writer水位明确区分，不能把两个结构同名字段误当同一层级。
      */
+    // writer先在锁下发布回执，再release发布水位；先acquire水位后复制回执，
+    // 新水位必能看见对应回执。后续资格判断共用该快照，避免旧副本/新水位混读。
+    const auto terminal_written_run = self.raw_evidence.terminal_written_run_id();
     const auto flushed_terminal = !binding && value.evidence_seq() == 0U
         ? self.management->raw_evidence_terminal_flushed() : RawEvidenceTerminalFlushed{};
     // A successor page may arrive after terminal chain validation but before
     // the writer publishes its flush receipt. Binding is provisional only.
     const bool terminal_writer_completed = self.accepted_completed_terminal.run_id != 0U &&
-        self.raw_evidence.terminal_written_run_id() >= self.accepted_completed_terminal.run_id;
+        terminal_written_run >= self.accepted_completed_terminal.run_id;
     const auto &completed_terminal = terminal_writer_completed ||
         (flushed_terminal.run_id >= self.accepted_completed_terminal.run_id &&
          flushed_terminal.run_id != 0U)
@@ -2260,12 +2275,12 @@ struct DeviceTransport::Impl {
         self.last_state_management_epoch == self.status.management_epoch();
     const bool fresh_completed_terminal_state = completed_terminal_page_first_page &&
         fresh_matching_hold_state;
-    const bool fresh_canceled_terminal_state = canceled_refresh_first_page &&
+    const bool flushed_canceled_terminal =
         flushed_terminal.boot_epoch == self.boot &&
         flushed_terminal.session_id == self.status.session_id() &&
         flushed_terminal.run_id == self.status.run_id() &&
         flushed_terminal.run_id == self.last_terminal_chain_run &&
-        flushed_terminal.run_id == self.raw_evidence.terminal_written_run_id() &&
+        flushed_terminal.run_id == terminal_written_run &&
         flushed_terminal.attempt_kind == 1U && flushed_terminal.parent_run_id == 0U &&
         flushed_terminal.final_state == 7U && flushed_terminal.chain_valid &&
         !flushed_terminal.evidence_lost && !flushed_terminal.motion_complete &&
@@ -2274,6 +2289,16 @@ struct DeviceTransport::Impl {
         flushed_terminal.first_failure_axis_mask == 0U &&
         flushed_terminal.safety_hold_valid &&
         flushed_terminal.safety_hold_motion_epoch == self.status.motion_epoch() &&
+        self.raw_evidence.failure() == RawEvidenceCollector::Failure::kNone;
+    // 取消终页与后继首页可在同一批接收，不能以writer调度快慢决定是否接受原页。
+    // 尚未flush时只借用collector同生产者的完整验链/安全Hold证人作provisional绑定；
+    // 已有flush水位却回执不匹配时仍拒绝，最终ROS结果也继续要求实际flush。
+    const bool accepted_cancel_pending =
+        terminal_written_run < self.status.run_id() &&
+        self.raw_evidence.accepted_cancel_hold(self.boot,self.status.session_id(),
+            self.status.run_id(),self.status.motion_epoch());
+    const bool fresh_canceled_terminal_state = canceled_refresh_first_page &&
+        (flushed_canceled_terminal || accepted_cancel_pending) &&
         self.status.motion_epoch() == value.motion_epoch() &&
         self.raw_evidence.failure() == RawEvidenceCollector::Failure::kNone &&
         fresh_matching_hold_state;
@@ -2294,7 +2319,7 @@ struct DeviceTransport::Impl {
         flushed_terminal.session_id == self.status.session_id() &&
         flushed_terminal.run_id == self.status.run_id() &&
         flushed_terminal.run_id == self.last_terminal_chain_run &&
-        flushed_terminal.run_id == self.raw_evidence.terminal_written_run_id() &&
+        flushed_terminal.run_id == terminal_written_run &&
         flushed_terminal.attempt_kind == 1U && flushed_terminal.parent_run_id == 0U &&
         flushed_terminal.final_state == 7U && flushed_terminal.chain_valid &&
         !flushed_terminal.evidence_lost && !flushed_terminal.motion_complete &&

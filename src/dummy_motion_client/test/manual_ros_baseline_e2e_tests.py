@@ -10,7 +10,7 @@ import time
 import yaml
 
 mode = sys.argv[2] if len(sys.argv) > 2 else "denied"
-assert mode in ("released_fault", "released_fault_wrong_reference", "released_fault_no_commit", "released_fault_wrong_tag", "external_release", "external_release_no_authority", "denied", "stale", "shutdown", "unconfirmed", "retained", "wrongref", "owner", "noowner", "status_cadence", "status_qualification_cadence", "state_stale_status_live", "can_stale", "status_stale", "calibration_motion", "release_retry", "release_unavailable", "planning_duplicate_nodes", "planning_duplicate_servers", "planning_private_scene", "planning_unrelated_scene", "planning_bad_private_suffix", "planning_wrong_scene_namespace", "renewal_retry", "renewal_wrong_uuid", "renewal_no_receipt", "renewal_owner_drift", "renewal_pending", "consumed_permit", "consumed_permit_denied", "consumed_owner_drift", "scene_normalized", "scene_wrong_pose", "scene_wrong_dimensions", "scene_wrong_frame", "scene_equivalent_local", "scene_wrong_orientation", "scene_full_positive_origin", "scene_full_negative_origin", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
+assert mode in ("released_fault", "released_fault_wrong_reference", "released_fault_no_commit", "released_fault_wrong_tag", "external_release", "external_release_no_authority", "denied", "stale", "shutdown", "unconfirmed", "retained", "wrongref", "owner", "noowner", "status_cadence", "status_qualification_cadence", "state_stale_status_live", "can_stale", "status_stale", "calibration_motion", "release_retry", "release_unavailable", "release_pending_evidence", "planning_duplicate_nodes", "planning_duplicate_servers", "planning_private_scene", "planning_unrelated_scene", "planning_bad_private_suffix", "planning_wrong_scene_namespace", "renewal_retry", "renewal_wrong_uuid", "renewal_no_receipt", "renewal_owner_drift", "renewal_pending", "consumed_permit", "consumed_permit_denied", "consumed_owner_drift", "scene_normalized", "scene_wrong_pose", "scene_wrong_dimensions", "scene_wrong_frame", "scene_equivalent_local", "scene_wrong_orientation", "scene_full_positive_origin", "scene_full_negative_origin", "scene_cancel_evidence_failure", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
 os.environ.setdefault("ROS_DOMAIN_ID", str(100 + os.getpid() % 100))
 
 import rclpy
@@ -25,8 +25,8 @@ rclpy.init()
 node = Node("baseline_software_peer")
 fault_release_mode = mode.startswith("released_fault")
 external_mode = mode.startswith("external_release")
-planning_mode = external_mode or mode in ("planning_duplicate_nodes", "planning_duplicate_servers", "planning_private_scene", "planning_unrelated_scene", "planning_bad_private_suffix", "planning_wrong_scene_namespace", "renewal_retry", "renewal_wrong_uuid", "renewal_no_receipt", "renewal_owner_drift", "renewal_pending", "consumed_permit", "consumed_permit_denied", "consumed_owner_drift", "scene_normalized", "scene_wrong_pose", "scene_wrong_dimensions", "scene_wrong_frame", "scene_equivalent_local", "scene_wrong_orientation", "scene_full_positive_origin", "scene_full_negative_origin", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
-full_scene_mode = mode in ("scene_full_positive_origin", "scene_full_negative_origin", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
+planning_mode = external_mode or mode in ("planning_duplicate_nodes", "planning_duplicate_servers", "planning_private_scene", "planning_unrelated_scene", "planning_bad_private_suffix", "planning_wrong_scene_namespace", "renewal_retry", "renewal_wrong_uuid", "renewal_no_receipt", "renewal_owner_drift", "renewal_pending", "consumed_permit", "consumed_permit_denied", "consumed_owner_drift", "scene_normalized", "scene_wrong_pose", "scene_wrong_dimensions", "scene_wrong_frame", "scene_equivalent_local", "scene_wrong_orientation", "scene_full_positive_origin", "scene_full_negative_origin", "scene_cancel_evidence_failure", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
+full_scene_mode = mode in ("scene_full_positive_origin", "scene_full_negative_origin", "scene_cancel_evidence_failure", "scene_unrelated_plan_error", "scene_restore_plan_failure", "scene_clear_plan_failure", "scene_blocked_plan_success")
 scene_mode = mode.startswith("scene_")
 origin_noise = (3.19e-5 if mode == "scene_full_positive_origin" else -3.19e-5) if full_scene_mode else 0.0
 cancel_running = False
@@ -71,7 +71,7 @@ sequence = 0
 last_status_published = 0.0
 status_period_index = 0
 calibration_at = 0.0
-calibration_denied = fault_release_mode or mode in ("denied", "unconfirmed", "retained", "wrongref", "release_retry", "release_unavailable")
+calibration_denied = fault_release_mode or mode in ("denied", "unconfirmed", "retained", "wrongref", "release_retry", "release_unavailable", "release_pending_evidence")
 
 
 def publish():
@@ -80,9 +80,15 @@ def publish():
         cancel_running = False
         permit_consumed = True
         permit_consumed_at = time.monotonic()
-        cancel_handle.canceled()
         from control_msgs.action import FollowJointTrajectory
-        cancel_future.set_result(FollowJointTrajectory.Result())
+        result = FollowJointTrajectory.Result()
+        if mode == "scene_cancel_evidence_failure":
+            cancel_handle.abort()
+            result.error_code = -4
+            result.error_string = "EVIDENCE_INCOMPLETE"
+        else:
+            cancel_handle.canceled()
+        cancel_future.set_result(result)
     if (mode == "consumed_permit" or scene_mode) and permit_consumed and time.monotonic() - permit_consumed_at >= 0.15:
         assert scene_mode or action_calls == 1, "无许可期间不许发送下一Goal"
         permit_consumed = False
@@ -183,7 +189,7 @@ def release(_request, response):
     released = mode != "unconfirmed"
     freeze = False
     response.success = False
-    response.message = "RELEASE_QUEUED"
+    response.message = "EVIDENCE_INCOMPLETE;RELEASE_PENDING" if mode == "release_pending_evidence" else "RELEASE_QUEUED"
     return response
 
 
@@ -201,8 +207,8 @@ def bootstrap_status(_request, response):
         response.success = not pending
         response.message = "LEASE_RENEWAL_PENDING" if pending else "ENABLED_HOLD"
         return response
-    response.success = released or (planning_mode and held)
-    response.message = "RELEASED_IDLE" if released else ("HOLD" if planning_mode and held else "READ_ONLY")
+    response.success = (released or (planning_mode and held)) and mode != "release_pending_evidence"
+    response.message = ("EVIDENCE_INCOMPLETE;RELEASED_IDLE" if mode == "release_pending_evidence" else "RELEASED_IDLE") if released else ("HOLD" if planning_mode and held else "READ_ONLY")
     return response
 
 
@@ -574,7 +580,7 @@ try:
         assert calls == {"calibrate": 1, "release": 1}, calls
         print("PASS SIGTERM finally cleanup confirmed; report:", root)
         sys.exit(0)
-    deadline = time.monotonic() + (25 if (fault_release_mode or mode in ("unconfirmed", "wrongref", "release_retry", "release_unavailable")) else (18 if consumed_mode else 8))
+    deadline = time.monotonic() + (25 if (fault_release_mode or mode in ("unconfirmed", "wrongref", "release_retry", "release_unavailable", "release_pending_evidence")) else (18 if consumed_mode else 8))
     while time.monotonic() < deadline:
         spin_once()
         response = call("/device_action_gate/baseline_status")
@@ -602,6 +608,15 @@ try:
         assert "cleanup=RELEASED_IDLE" in response.message, response
         assert calls == {"calibrate": 1, "release": 1}
         print("PASS", mode, "unrelated error rejected despite same-ID collision; report:", root)
+        sys.exit(0)
+    if mode == "scene_cancel_evidence_failure":
+        assert not response.success and "未确认运行中的目标取消终态" in response.message, response
+        assert "cleanup=RELEASED_IDLE" in response.message, response
+        assert cancel_receipts == 1 and action_calls == 17 and cancel_future.done()
+        report = (root / "report.txt").read_text()
+        assert "result_code=6 error_code=-4 error_string=EVIDENCE_INCOMPLETE" in report, (report, root)
+        assert "cancel_requested=1 goal_running=1" in report, (report, root)
+        print("PASS cancel public result retains evidence failure and cleanup; report:", root)
         sys.exit(0)
     if full_scene_mode:
         assert response.success and "BASELINE_PASSED" in response.message, (response, root)

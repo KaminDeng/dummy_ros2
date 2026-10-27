@@ -935,6 +935,11 @@ private:
                             ticket](const GoalHandle::WrappedResult &result) {
       if (ticket != ticket_)
         return;
+      record("GOAL_RESULT", "result_code=" + std::to_string(static_cast<int>(result.code)) +
+             " error_code=" + (result.result ? std::to_string(result.result->error_code) : "missing") +
+             " error_string=" + (result.result ? result.result->error_string : "missing") +
+             " cancel_requested=" + std::to_string(cancel_requested_) +
+             " goal_running=" + std::to_string(goal_running_));
       busy_ = false;
       goal_.reset();
       goal_deadline_us_ = 0;
@@ -1567,6 +1572,7 @@ private:
           return;
         }
         if (response.message == "RELEASE_QUEUED" ||
+            response.message == "EVIDENCE_INCOMPLETE;RELEASE_PENDING" ||
             response.message == "EVIDENCE_INCOMPLETE;RELEASED_IDLE" ||
             response.message == "EVIDENCE_INCOMPLETE;RELEASED_FAULT" ||
             (response.success && response.message == "RELEASED_IDLE"))

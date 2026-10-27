@@ -230,12 +230,23 @@ class RawEvidenceCollector final {
    * @return bool仅表示通过验证且RAM入队；真正写出/flush稍后发生。
    */
   bool offer_page(const RawEvidencePage &page, std::uint64_t received_at_us) noexcept;
+  /** @brief 单生产者查询已验链且已入队的干净Cancel及全轴安全Hold；不代表writer已flush。
+   * 仅用于相邻run首页的临时身份绑定，最终封口仍须读取独立flush回执。
+   */
+  bool accepted_cancel_hold(std::uint64_t boot, std::uint64_t session,
+                            std::uint64_t run, std::uint32_t hold_motion) const noexcept {
+    return failure() == Failure::kNone && terminal_seen_ && accepted_clean_cancel_hold_ &&
+        boot_epoch_ == boot && session_id_ == session && run_id_ == run &&
+        safety_hold_motion_epoch_ == hold_motion;
+  }
+
   /**
    * @brief 登记未来应收到终页的run并限制期望槽容量。
    * @param run_id 非零且新增时单调递增的尝试ID。
+   * @param verified_pre_motion_epoch 已核身份、尚无CAN组的Idle根尝试Status epoch；0表示无该证人。首CAN前允许更新，之后冻结。
    * @return bool；重复期望允许，满槽且无已消费终页可回收时粘滞Overflow。
    */
-  bool expect_run(std::uint64_t run_id) noexcept;
+  bool expect_run(std::uint64_t run_id, std::uint32_t verified_pre_motion_epoch = 0U) noexcept;
   /**
    * @brief 复制State/Status原始字节并携带清理生命周期代入队。
    * @param kind 仅kState或kStatus。
@@ -386,6 +397,7 @@ class RawEvidenceCollector final {
     std::uint64_t run_id = 0U;
     std::uint64_t terminal_record_end = 0U;
     bool terminal = false;
+    std::uint32_t pre_motion_epoch = 0U;
   };
   std::array<ExpectedRun, 8U> expected_runs_{};
   std::size_t expected_count_ = 0U;
@@ -399,11 +411,14 @@ class RawEvidenceCollector final {
   std::uint32_t can_page_count_ = 0U;
   std::uint32_t last_reported_group_count_ = 0U;
   std::uint32_t first_motion_epoch_ = 0U, safety_hold_motion_epoch_ = 0U;
+  // Cancel的attempt创建epoch可早于EnableHold首CAN；仅取已验零组Idle Status并在首CAN冻结。
+  std::uint32_t cancel_origin_epoch_ = 0U;
   bool safety_hold_valid_ = false;
   bool safety_hold_regressed_ = false;
   std::uint8_t attempt_kind_ = 0U;
   std::array<std::uint8_t, 32U> last_chain_{};
   bool terminal_seen_ = false;
+  bool accepted_clean_cancel_hold_ = false;
   /**
    * @brief 完整故障证明另lane：运动→停止→唯一disable组的身份/六轴SENT/设备µs时间顺序等，不能与普通取消Hold证明混同。
    */

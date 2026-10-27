@@ -48,6 +48,7 @@ static unsigned cancel_hold_case=0;
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <dlfcn.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -62,6 +63,40 @@ static unsigned cancel_hold_case=0;
 #include "dummy_ros_control/raw_evidence_collector.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
+
+// 只在本测试进程拦截文件flush；生产collector仍执行真实写入与真实fflush。
+// 暂停终页flush而不阻塞通信worker，复现验链与写出回执之间的窗口。
+static std::atomic<bool> cancel_flush_armed{false}, cancel_flush_entered{false}, cancel_flush_resume{false};
+// 捕获回执getter的mutex，只在副本已复制、mutex已解锁但getter尚未返回时暂停worker。
+// 此时放行writer并等水位发布，确定性构造“旧回执副本 + 随后发布的新水位”。
+static thread_local bool capture_cancel_receipt_mutex=false;
+static std::atomic<pthread_mutex_t*> cancel_receipt_mutex{nullptr};
+static std::atomic<bool> cancel_receipt_armed{false}, cancel_receipt_entered{false}, cancel_receipt_resume{false};
+static bool cancel_pending_flush_case=false;
+static unsigned cancel_pending_flush_fault=0U;
+static bool cancel_origin_case=false;
+static unsigned cancel_origin_fault=0U;
+extern "C" int pthread_mutex_unlock(pthread_mutex_t* mutex) noexcept {
+  using Unlock=int(*)(pthread_mutex_t*);
+  static const auto actual=reinterpret_cast<Unlock>(::dlsym(RTLD_NEXT,"pthread_mutex_unlock"));
+  const int result=actual(mutex);
+  if(capture_cancel_receipt_mutex)cancel_receipt_mutex=mutex;
+  if(mutex==cancel_receipt_mutex.load() && cancel_receipt_armed.exchange(false)) {
+    cancel_receipt_entered=true;
+    while(!cancel_receipt_resume.load())std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return result;
+}
+extern "C" int fflush(FILE* file) {
+  using Flush=int(*)(FILE*);
+  static const auto actual=reinterpret_cast<Flush>(::dlsym(RTLD_NEXT,"fflush"));
+  if(file && ::fileno(file)>2 && cancel_flush_armed.exchange(false)) {
+    cancel_flush_entered=true;
+    while(!cancel_flush_resume.load())std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if(file && ::fileno(file)>2 && cancel_flush_entered.load() && cancel_pending_flush_fault==6U) {errno=EIO;return EOF;}
+  return actual(file);
+}
 
 namespace {
 /**
@@ -3328,6 +3363,20 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               (run == 2U && sequence == 0U && raw_order_case == 40U))
             message.set_sent_mask(31U);
         }
+        if(cancel_pending_flush_case) {
+          if((cancel_pending_flush_fault==1U && run==123U && category==2U) ||
+             (cancel_pending_flush_fault==3U && run==124U && sequence==0U))message.set_sent_mask(31U);
+          if(cancel_pending_flush_fault==4U && run==124U && sequence==0U)message.set_motion_epoch(11U);
+        }
+        if(cancel_origin_case && run==123U) {
+          message.set_motion_epoch(category==4U ?
+            (cancel_origin_fault==1U ? 48U : cancel_origin_fault==2U || cancel_origin_fault==3U ? 50U : cancel_origin_fault==6U ? 53U : 49U) :
+            category==2U ? 52U : sequence==0U ? 50U : 51U);
+        }
+        if(cancel_origin_case && run==124U) {
+          message.set_motion_epoch(52U);
+          if(category==4U)message.set_motion_complete(true);
+        }
         std::uint8_t previous_digest[32]{};
         std::copy(previous.begin(), previous.end(), previous_digest);
         if (run == 2U && (raw_order_case == 5U || raw_order_case == 55U ||
@@ -3370,6 +3419,68 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         ::SHA256(seed.data(), seed.size(), previous.data());
         return previous;
       };
+      if(cancel_origin_case) {
+        // 实机顺序：Acquire Idle epoch48，恢复参考后零组Idle epoch49，
+        // EnableHold首CAN50，Begin CAN51，Cancel安全Hold52，终页attempt epoch49。
+        auto origin=valid;origin.send_state=false;origin.status.set_core_state(2U);
+        origin.status.set_attempt_id(cancel_origin_fault==5U ? 999U : 123U);
+        origin.status.set_group_count(cancel_origin_fault==4U ? 1U : 0U);origin.status.set_final_state(0U);
+        auto send_origin=[&](unsigned epoch) {
+          origin.status.set_motion_epoch(epoch);
+          return send(origin) && wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
+            Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+              channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
+              observed.run_id()==123U && observed.motion_epoch()==epoch && observed.core_state()==2U;});
+        };
+        if(!send_origin(48U) || !send_origin(cancel_origin_fault==6U ? 53U : 49U))return 410;
+        std::array<std::uint8_t,32U> first{},motion{},safety{},terminal{};
+        if(!publish_page(123U,0U,1U,1U,0U,seed_for(123U),&first) ||
+           !wait_for([&]{return transport.statistics().raw_evidence_pages_written==1U;}))return 411;
+        // 已接纳首CAN后，迟到的“零组Idle”不能改写已冻结的attempt来源。
+        if(cancel_origin_fault==3U && !send_origin(50U))return 412;
+        if(!publish_page(123U,1U,1U,2U,0U,first,&motion) ||
+           !publish_page(123U,2U,2U,3U,0U,motion,&safety) ||
+           !publish_page(123U,3U,4U,3U,7U,safety,&terminal) ||
+           !wait_for([&]{return transport.statistics().raw_evidence_last_terminal_written_run==123U;}))return 413;
+        const auto receipt=channel->raw_evidence_terminal_flushed();
+        std::fprintf(stderr,"cancel-origin: pre_motion=%u first_can=50 safety=52 terminal=%u safety_valid=%u\n",
+          cancel_origin_fault==6U ? 53U : 49U,
+          cancel_origin_fault==1U ? 48U : cancel_origin_fault==2U || cancel_origin_fault==3U ? 50U : cancel_origin_fault==6U ? 53U : 49U,
+          receipt.safety_hold_valid);
+        if(cancel_origin_fault==0U && receipt.safety_hold_valid) {
+          auto hold=valid;hold.status.set_motion_epoch(52U);hold.state.set_motion_epoch(52U);
+          hold.status.set_core_state(4U);hold.state.set_core_state(4U);hold.state.set_hold_ready(true);
+          hold.state.set_state_seq(100U);hold.status.set_final_state(7U);hold.status.set_group_count(3U);
+          std::uint8_t digest[32]{};std::copy(terminal.begin(),terminal.end(),digest);
+          hold.status.set_evidence_chain_sha256(digest);
+          if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
+            State observed;return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+              channel->observation.state.size(),&observed)==wire::CodecResult::kOk && observed.state_seq()==100U;}))return 416;
+          std::array<std::uint8_t,32U> next_first{},next_terminal{};
+          if(!publish_page(124U,0U,1U,1U,0U,seed_for(124U),&next_first) ||
+             !wait_for([&]{return transport.statistics().raw_evidence_pages_written==5U ||
+               transport.statistics().raw_evidence_failure!=0U;}) ||
+             transport.statistics().raw_evidence_failure!=0U)return 417;
+          hold.status.set_run_id(124U);hold.status.set_final_state(0U);hold.status.set_group_count(1U);
+          std::fill(std::begin(digest),std::end(digest),0U);hold.status.set_evidence_chain_sha256(digest);
+          hold.state.set_state_seq(101U);
+          if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
+            Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+              channel->observation.status.size(),&observed)==wire::CodecResult::kOk && observed.run_id()==124U;}) ||
+             !publish_page(124U,1U,4U,1U,6U,next_first,&next_terminal) ||
+             !wait_for([&]{return transport.statistics().raw_evidence_last_terminal_written_run==124U;}))return 418;
+          hold.status.set_final_state(6U);hold.status.set_motion_complete(true);hold.state.set_state_seq(102U);
+          std::copy(next_terminal.begin(),next_terminal.end(),digest);hold.status.set_evidence_chain_sha256(digest);
+          if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
+            Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+              channel->observation.status.size(),&observed)==wire::CodecResult::kOk && observed.run_id()==124U && observed.final_state()==6U;}))return 419;
+        }
+        transport.stop();
+        return receipt.boot_epoch==7U && receipt.session_id==8U && receipt.run_id==123U &&
+          receipt.chain_valid && receipt.final_state==7U && receipt.safety_hold_motion_epoch==52U &&
+          receipt.safety_hold_valid==(cancel_origin_fault==0U) &&
+          transport.statistics().raw_evidence_failure==0U ? 0 : 414;
+      }
       /**
        * @brief 多个后继run在Status落后时依赖前run终态flush精确绑定。
        * 43依次允许run1→2→3；44旧run回执、45错boot、46错session、47错run、48缺终态均失败且不得多落页。
@@ -3737,6 +3848,89 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 2U; }))
             return 288;
           motion_group = safety_group;
+        }
+        if(cancel_pending_flush_case) {
+          // 与实机相同：旧Stopping Status超过254480us，但Hold State持续新鲜。
+          auto hold=valid;hold.send_status=false;hold.state.set_core_state(4U);
+          hold.state.set_hold_ready(true);hold.state.set_position_valid_mask(63U);
+          if(cancel_pending_flush_fault==2U) {hold.state.set_core_state(3U);hold.state.set_hold_ready(false);}
+          std::uint64_t status_at=0U;
+          {std::lock_guard<std::mutex> lock(channel->mutex);status_at=channel->observation.status_received_us;}
+          std::uint32_t sequence=2U;
+          do {
+            hold.state.set_state_seq(sequence++);
+            if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
+              State state;return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+                channel->observation.state.size(),&state)==wire::CodecResult::kOk && state.state_seq()==hold.state.state_seq();}))return 390;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          } while(transport_steady_now_us()-status_at<254480U);
+          struct ResumeFlush {~ResumeFlush(){cancel_flush_resume=true;cancel_receipt_resume=true;}} resume_flush;
+          cancel_flush_armed=true;
+          if(!publish_page(motion_run,2U,4U,2U,7U,motion_group,&motion_terminal) ||
+             !wait_for([]{return cancel_flush_entered.load();}))return 391;
+          if(transport.statistics().raw_evidence_last_terminal_written_run==motion_run ||
+             channel->raw_evidence_terminal_flushed().run_id==motion_run)return 392;
+          if(cancel_pending_flush_fault==7U) {
+            capture_cancel_receipt_mutex=true;
+            (void)channel->raw_evidence_terminal_flushed();
+            capture_cancel_receipt_mutex=false;
+            if(cancel_receipt_mutex.load()==nullptr)return 406;
+            cancel_receipt_armed=true;
+          }
+          if(!publish_page(next_run,0U,1U,1U,0U,seed_for(next_run),&release_page))return 393;
+          if(cancel_pending_flush_fault==7U) {
+            if(!wait_for([]{return cancel_receipt_entered.load();}))return 407;
+            cancel_flush_resume=true;
+            if(!wait_for([&]{return transport.statistics().raw_evidence_last_terminal_written_run==motion_run;}))return 408;
+            std::fprintf(stderr,"cancel-consumer-snapshot: old receipt copied, writer watermark=%llu before getter returns\n",
+              (unsigned long long)transport.statistics().raw_evidence_last_terminal_written_run);
+            cancel_receipt_resume=true;
+          }
+          // 后发State到达确认worker已处理前面的原页；普通模式writer仍暂停，
+          // consumer_snapshot模式则已确定性完成writer发布。
+          hold.state.set_state_seq(sequence++);
+          if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
+            State state;return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
+              channel->observation.state.size(),&state)==wire::CodecResult::kOk && state.state_seq()==hold.state.state_seq();}))return 394;
+          const auto pending=transport.statistics();
+          std::fprintf(stderr,"cancel-pending-window: status_age=%llu failure=%u terminal_written=%llu\n",
+            (unsigned long long)(transport_steady_now_us()-status_at),unsigned(pending.raw_evidence_failure),
+            (unsigned long long)pending.raw_evidence_last_terminal_written_run);
+          if(cancel_pending_flush_fault>=1U && cancel_pending_flush_fault<=4U) {
+            cancel_flush_resume=true;transport.stop();
+            return pending.raw_evidence_failure==6U ? 0 : 401;
+          }
+          if(pending.raw_evidence_failure!=0U)return 395;
+          if(cancel_pending_flush_fault!=7U && channel->raw_evidence_terminal_flushed().run_id==motion_run)return 396;
+          cancel_flush_resume=true;
+          if(cancel_pending_flush_fault==6U) {
+            if(!wait_for([&]{return transport.statistics().raw_evidence_failure!=0U;}))return 402;
+            transport.stop();
+            return transport.statistics().raw_evidence_failure==5U &&
+              channel->raw_evidence_terminal_flushed().run_id!=motion_run ? 0 : 403;
+          }
+          if(!wait_for([&]{return transport.statistics().raw_evidence_pages_written==4U;}))return 397;
+          auto successor=hold;successor.send_status=true;successor.status.set_run_id(next_run);
+          successor.status.set_core_state(4U);successor.status.set_final_state(0U);
+          successor.state.set_state_seq(sequence++);
+          if(!send(successor) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
+            Status status;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+              channel->observation.status.size(),&status)==wire::CodecResult::kOk && status.run_id()==next_run;}))return 398;
+          if(!publish_page(next_run,1U,4U,1U,6U,release_page,&release_terminal) ||
+             !wait_for([&]{return transport.statistics().raw_evidence_last_terminal_written_run==next_run;}))return 399;
+          successor.status.set_final_state(6U);
+          std::uint8_t final_chain[32]{};std::copy(release_terminal.begin(),release_terminal.end(),final_chain);
+          if(cancel_pending_flush_fault==5U)final_chain[0]^=1U;
+          successor.status.set_evidence_chain_sha256(final_chain);successor.state.set_state_seq(sequence++);
+          if(!send(successor) || !wait_for([&]{
+            if(transport.statistics().raw_evidence_failure!=0U)return true;
+            std::lock_guard<std::mutex> lock(channel->mutex);Status status;
+            return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
+              channel->observation.status.size(),&status)==wire::CodecResult::kOk &&
+              status.run_id()==next_run && status.final_state()==6U;
+          }))return 404;
+          transport.stop();
+          return transport.statistics().raw_evidence_failure==(cancel_pending_flush_fault==5U ? 6U : 0U) ? 0 : 400;
         }
         if (!publish_page(motion_run, raw_order_case >= 59U ? 2U : 1U, 4U,
                           raw_order_case >= 59U ? 2U : 1U, 7U, motion_group, &motion_terminal) ||
@@ -5602,6 +5796,29 @@ int main(int argc, char **argv) {
    * terminal7命令还可叠加final4/5/6/9、错/零链、failure字段与Stopping不ready；不是另创一个未经检查的默认case。
    */
   cancel_hold_case=0U;
+  if(argc==3 && std::strncmp(argv[2],"raw_order_cancel_origin",23U)==0) {
+    const char* suffix=argv[2]+23U;
+    if(std::strcmp(suffix,"_wrong_terminal")==0)cancel_origin_fault=1U;
+    else if(std::strcmp(suffix,"_first_can_terminal")==0)cancel_origin_fault=2U;
+    else if(std::strcmp(suffix,"_late_rebase")==0)cancel_origin_fault=3U;
+    else if(std::strcmp(suffix,"_nonzero_groups")==0)cancel_origin_fault=4U;
+    else if(std::strcmp(suffix,"_wrong_attempt")==0)cancel_origin_fault=5U;
+    else if(std::strcmp(suffix,"_future_origin")==0)cancel_origin_fault=6U;
+    else if(*suffix!='\0')return 415;
+    cancel_origin_case=true;argv[2]=const_cast<char*>("raw_order_cancel_stale_status_fresh_state");
+  }
+  if(argc==3 && std::strncmp(argv[2],"raw_order_cancel_pending_flush",30U)==0) {
+    const char* suffix=argv[2]+30U;
+    if(std::strcmp(suffix,"_bad_safety")==0)cancel_pending_flush_fault=1U;
+    else if(std::strcmp(suffix,"_non_hold")==0)cancel_pending_flush_fault=2U;
+    else if(std::strcmp(suffix,"_bad_mask")==0)cancel_pending_flush_fault=3U;
+    else if(std::strcmp(suffix,"_bad_motion")==0)cancel_pending_flush_fault=4U;
+    else if(std::strcmp(suffix,"_wrong_chain")==0)cancel_pending_flush_fault=5U;
+    else if(std::strcmp(suffix,"_io_failure")==0)cancel_pending_flush_fault=6U;
+    else if(std::strcmp(suffix,"_consumer_snapshot")==0)cancel_pending_flush_fault=7U;
+    else if(*suffix!='\0')return 405;
+    cancel_pending_flush_case=true;argv[2]=const_cast<char*>("raw_order_cancel_stale_status_fresh_state");
+  }
   if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_fresh_state")==0) cancel_hold_case=71U;
   if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_receipt_boot")==0) cancel_hold_case=72U;
   if(argc==3 && std::strcmp(argv[2],"raw_order_cancel_hold_status_bad_receipt_session")==0) cancel_hold_case=73U;
