@@ -326,7 +326,47 @@ void manual_permit_restore_requires_closed_previous_goal() {
   assert(!input.ready());
 }
 
-int main() {
+// 真实ROS Action句柄验证内部失能取消不冒充Canceling；独立DDS域且无设备。
+int action_release_loopback(int argc,char** argv) {
+  setenv("ROS_DOMAIN_ID","214",1);
+  rclcpp::init(argc,argv);
+  using F=control_msgs::action::FollowJointTrajectory;
+  using H=rclcpp_action::ServerGoalHandle<F>;
+  auto node=std::make_shared<rclcpp::Node>("release_action_loopback");
+  std::shared_ptr<H> active;
+  auto server=rclcpp_action::create_server<F>(node,"/release_loopback",
+    [](const auto&,auto){return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;},
+    [](auto){return rclcpp_action::CancelResponse::ACCEPT;},
+    [&](auto handle){active=handle;});
+  auto client=rclcpp_action::create_client<F>(node,"/release_loopback");
+  assert(client->wait_for_action_server(std::chrono::seconds(3)));
+  auto sent=client->async_send_goal(F::Goal{});
+  assert(rclcpp::spin_until_future_complete(node,sent,std::chrono::seconds(3))==rclcpp::FutureReturnCode::SUCCESS);
+  auto handle=sent.get();assert(handle && active && !active->is_canceling());
+  auto result=client->async_get_result(handle);
+  dummy_motion_client::finish_interrupted_public_goal(active,std::make_shared<F::Result>());
+  assert(rclcpp::spin_until_future_complete(node,result,std::chrono::seconds(3))==rclcpp::FutureReturnCode::SUCCESS);
+  assert(result.get().code==rclcpp_action::ResultCode::ABORTED);
+  sent=client->async_send_goal(F::Goal{});
+  assert(rclcpp::spin_until_future_complete(node,sent,std::chrono::seconds(3))==rclcpp::FutureReturnCode::SUCCESS);
+  handle=sent.get();result=client->async_get_result(handle);
+  auto canceled=client->async_cancel_goal(handle);
+  assert(rclcpp::spin_until_future_complete(node,canceled,std::chrono::seconds(3))==rclcpp::FutureReturnCode::SUCCESS);
+  assert(active->is_canceling());
+  dummy_motion_client::finish_interrupted_public_goal(active,std::make_shared<F::Result>());
+  assert(rclcpp::spin_until_future_complete(node,result,std::chrono::seconds(3))==rclcpp::FutureReturnCode::SUCCESS);
+  assert(result.get().code==rclcpp_action::ResultCode::CANCELED);
+  rclcpp::shutdown();return 0;
+}
+
+int main(int argc,char** argv) {
+  using dummy_motion_client::ManageOperation;
+  using dummy_motion_client::explicit_manual_permit_restarts_window;
+  assert(!explicit_manual_permit_restarts_window(true,false,ManageOperation::kSetPermit));
+  assert(explicit_manual_permit_restarts_window(true,true,ManageOperation::kSetPermit));
+  assert(!explicit_manual_permit_restarts_window(false,true,ManageOperation::kSetPermit));
+  assert(!explicit_manual_permit_restarts_window(true,true,ManageOperation::kRenewLease));
+  if(argc>1 && std::string(argv[1])=="--action-release-loopback")return action_release_loopback(argc,argv);
   {
     // GUI13同拍本地期望比实测领先0.0524rad；默认不能据此声称真实SENT跟踪失败。
     dummy_motion_client::Trajectory trajectory{{"Joint3"},{{{1.570795},{},{},1.54}},{0},{.003},0};
@@ -372,6 +412,19 @@ int main() {
   }
 
   manual_permit_restore_requires_closed_previous_goal();
+  // 首张许可尚有效时复用；只有消费并封口才允许明确新任务安装。
+  assert(dummy_motion_client::readonly_idle_retirement_failure(true,false));
+  assert(dummy_motion_client::readonly_idle_retirement_failure(false,true));
+  assert(!dummy_motion_client::readonly_idle_retirement_failure(false,false));
+  using D=dummy_motion_client::ManualTaskPermitDecision;
+  using dummy_motion_client::manual_task_permit_decision;
+  assert(manual_task_permit_decision(true,true,true,42,false,false)==D::kReuse);
+  assert(manual_task_permit_decision(true,false,false,0,true,true)==D::kInstall);
+  assert(manual_task_permit_decision(true,false,false,0,true,false)==D::kUnavailable);
+  assert(manual_task_permit_decision(false,true,true,42,true,true)==D::kUnavailable);
+  assert(manual_task_permit_decision(true,false,true,42,true,true)==D::kUnavailable);
+  assert(manual_task_permit_decision(true,true,true,0,true,true)==D::kUnavailable);
+  assert(manual_task_permit_decision(true,false,false,0,false,true)==D::kUnavailable);
   {
     using namespace dummy_motion_client;
     struct RaceClient final : ManagementClient {
@@ -465,6 +518,17 @@ int main() {
     foreign.session_id = 8;
     assert(intent.decision(foreign, 104, true, true, false) ==
            ManualReleaseDecision::kUnconfirmed);
+  }
+  {
+    using namespace dummy_motion_client;
+    ManualReleaseIntent intent;
+    BootstrapSnapshot owner;owner.boot_epoch=7;owner.session_id=9;owner.reference_epoch=2;
+    assert(intent.begin(owner,100,20000000U));
+    assert(intent.decision(owner,5000100U,false,true,false)==ManualReleaseDecision::kWait);
+    assert(intent.decision(owner,19999999U,true,true,false)==ManualReleaseDecision::kSubmit);
+    assert(intent.decision(owner,20000100U,true,true,false)==ManualReleaseDecision::kUnconfirmed);
+    auto foreign=owner;foreign.session_id++;
+    assert(intent.decision(foreign,101,true,true,false)==ManualReleaseDecision::kUnconfirmed);
   }
   {
     dummy_motion_client::wire::DummyDeviceStatusV2 status;

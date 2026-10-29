@@ -743,7 +743,9 @@ class MoveItTab(QtWidgets.QWidget):
                             duration_s=duration,
                             sha256=hashlib.sha256(json.dumps(self.continuous_path.points).encode()).hexdigest())
                 self.ros_inflight_uuid = None
-                if not self.panel.ros_backend.submit_trajectory(trajectory):
+                task_budget = ({'task_budget_s': max(duration, self.auto_test.deadline-time.monotonic()+60.)}
+                               if self.auto_test.active else {})
+                if not self.panel.ros_backend.submit_trajectory(trajectory, **task_budget):
                     raise ValueError('ROS完整轨迹未提交')
             else:
                 self.advance_execution()

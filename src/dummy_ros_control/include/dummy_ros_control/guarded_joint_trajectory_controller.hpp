@@ -116,6 +116,8 @@ class GuardedJointTrajectoryController
    * @param context 借用上下文，设置方保证回调期间存活。
    */
   void set_update_sink(UpdateSink sink, void *context) noexcept;
+  /** @brief 非控制线程一次性输出已冻结的首错现场；控制拍不执行日志I/O。 */
+  void log_update_failure();
   /**
    * @brief 在非实时端分配保持目标并写RT缓冲。
    * @param position 六轴容器中的前dof项rad，dof只允许1或6。
@@ -134,6 +136,25 @@ class GuardedJointTrajectoryController
   std::optional<GuardedExecutionSample> execution_sample() const noexcept;
 
  private:
+  // 控制拍只写固定八槽；故障后才输出，避免逐拍日志干扰正常调度。
+  struct UpdateDiagnostic {
+    std::uint64_t sequence=0;
+    std::int64_t time_ns=0, period_ns=0, clock_delta_ns=0, steady_gap_ns=0;
+    int clock_type=0;
+  };
+  std::array<UpdateDiagnostic,8> update_diagnostics_{};
+  std::uint64_t diagnostic_updates_=0;
+  std::int64_t diagnostic_last_steady_ns_=0;
+  bool diagnostic_failure_reported_=false;
+  std::atomic<bool> diagnostic_pending_{false};
+  const char* diagnostic_reason_=nullptr;
+  std::array<char,33> diagnostic_uuid_{};
+  unsigned diagnostic_axis_mask_=0;
+  std::int64_t diagnostic_nominal_ns_=0;
+  std::uint64_t diagnostic_phase_ns_=0, diagnostic_sample_seq_=0;
+  bool diagnostic_sink_enabled_=false;
+  controller_interface::return_type report_update_failure(
+      const char* reason, std::size_t axis=6);
   /**
    * @brief 登记mutex仅用于非实时register/submit/clear；update不获取此锁。
    */

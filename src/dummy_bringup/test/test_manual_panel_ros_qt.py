@@ -14,7 +14,9 @@ def test_ros_panel_readonly_without_native(tmp_path, monkeypatch):
     from manual_joint_panel import JointPanel
     class Transport:
         def control_graph_error(self): return ''
-        def __init__(self, node, on_status, on_state): self.requests = []
+        def __init__(self, node, on_status, on_state, *, own_control_node=False):
+            assert own_control_node
+            self.requests = []
         def request(self, service, callback):
             self.requests.append(service)
             callback(NS(success=True, message='RELEASED_IDLE' if service == 'bootstrap_status' else 'RELEASE_QUEUED'))
@@ -72,7 +74,7 @@ def test_ros_resume_only_sends_cpp_prepare_after_confirmation():
 def test_ros_reconnect_does_not_replace_owner_before_release():
     from manual_joint_panel import JointPanel
     calls=[]
-    panel=NS(backend='ros',ros_runtime=NS(process=object()),ros_backend=NS(released=False),
+    panel=NS(backend='ros',ros_runtime=NS(state='Active',process=object()),ros_backend=NS(released=False),
         release=lambda *args:calls.append('release'),message=lambda *args:None)
     JointPanel.request_reconnect(panel)
     assert calls==['release']
@@ -149,7 +151,7 @@ def test_status_buttons_wait_for_cpp_parameter_and_use_returned_budget(tmp_path,
     from manual_joint_panel import JointPanel
     class Transport:
         def control_graph_error(self): return ''
-        def __init__(self, *args): self.status_max_age_ms = None
+        def __init__(self, *args, **kwargs): self.status_max_age_ms = None
         def ready(self, *args): return False
         def close(self): pass
     monkeypatch.setattr(manual_panel_ros_backend, 'RosTransport', Transport)
@@ -192,13 +194,36 @@ def test_explicit_reconnect_after_refused_start_never_releases_external_owner():
     assert panel.pending_backend=='ros'
 
 
+def test_release_after_refused_start_does_not_latch_busy_or_touch_external_owner():
+    from manual_joint_panel import JointPanel
+    calls=[]
+    panel=NS(backend='ros',busy=False,authorized=False,
+        ros_runtime=NS(process=None,begin_release=lambda:calls.append('FORBIDDEN_begin_release')),
+        ros_backend=NS(released=False,transport=NS(_startup_owner_conflict='existing owner'),
+                       release=lambda:calls.append('FORBIDDEN_D10')),
+        message=lambda message:calls.append(message))
+    JointPanel.release(panel,'RELEASE')
+    assert not panel.busy
+    assert not any(item.startswith('FORBIDDEN') for item in calls)
+
+
+def test_repeated_expired_release_does_not_leave_connection_controls_busy():
+    from manual_joint_panel import JointPanel
+    calls=[]
+    panel=NS(backend='ros',busy=False,authorized=True,
+        ros_runtime=NS(process=object(),begin_release=lambda:calls.append('release')),
+        ros_backend=NS(released=False,pending=False,transport=NS(),release=lambda:False))
+    JointPanel.release(panel,'RELEASE')
+    assert not panel.busy and not panel.authorized
+
+
 def test_ros_actual_model_requires_cpp_ready_and_fresh_matched_feedback(tmp_path, monkeypatch):
     import time
     import manual_panel_ros_backend
     from manual_joint_panel import JointPanel
     from dpsdk_interfaces.msg import DummyJointStateV2
     class Transport:
-        def __init__(self, *args): self.status_max_age_ms=1000
+        def __init__(self, *args, **kwargs): self.status_max_age_ms=1000
         def control_graph_error(self): return ''
         def ready(self, *args): return False
         def close(self): pass
@@ -223,6 +248,14 @@ def test_ros_actual_model_requires_cpp_ready_and_fresh_matched_feedback(tmp_path
         panel.ros_state_received(state);panel.ros_backend.manual_ready=True
         panel.ros_event('manual_ready','MANUAL_CONTROL_READY');panel.ros_tick()
         assert panel.description_visible and panel.publisher is None
+        # C++常驻监视仍持有本owner；下一次明确执行会先申请许可，不直接授予设备运动。
+        state.hold_ready=True;state.state_seq=3;panel.ros_state_received(state)
+        panel.ros_status.real_motion_permitted=False;panel.ros_status.permit_remaining_us=0
+        panel.ros_tick()
+        assert panel.authorized and panel.move.isEnabled()
+        panel.ros_backend.manual_ready=False;panel.ros_tick()
+        assert not panel.authorized
+        panel.ros_backend.manual_ready=True
         panel.last_state_ns=time.monotonic_ns()-300_000_000;panel.ros_tick()
         assert not panel.description_visible
         # 自动基线没有manual_ready事件，但真实双Hold表明已通过Node控制器激活门。

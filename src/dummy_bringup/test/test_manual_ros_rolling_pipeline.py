@@ -69,7 +69,7 @@ class Transport:
         self.current = None
         self.version = 0
 
-    def submit_trajectory(self, trajectory):
+    def submit_trajectory(self, trajectory, task_budget_s=None):
         self.mothers.append(trajectory)
         self.current = trajectory
         return True

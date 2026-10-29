@@ -490,6 +490,9 @@ class AutoTestSession:
             if (getattr(p,'closing',False) or not p.fresh() or
                     self.tab.execution_identity() != self.identity or
                     (not ros and (not p.authorized or not p.control_state_allowed((2,3,4,5,6))))):
+                # 同一Qt拍内缓存也可能刚过期；复用母FJT原身份和接收锚的有界等待。
+                # helper到期已取消时也直接返回，避免再次abort；不续期或提交新运动。
+                if ros and self.tab._wait_for_ros_inflight_feedback():return
                 raise ValueError('设备反馈、授权、身份或生命周期变化')
             if self.ros_stream and not self.chain_live and not self.returning and time.monotonic() >= self.ros_preplan_deadline:
                 raise ValueError('ROS连续轨迹首段准备超时，未提交运动')

@@ -679,5 +679,43 @@ int main() {
     pending_permit.tick(2000200U);
     assert(pending_permit.phase() == BootstrapPhase::kFault);
   }
+  {
+    Client explicit_task_client;
+    BootstrapCoordinator task(explicit_task_client,identity,compiled_policy,1000000U);
+    auto quiet=holding;
+    quiet.real_motion_permitted=false;quiet.permit_remaining_us=0;
+    assert(!task.restart_manual_permit_window(quiet,100U));
+    assert(task.begin_manual_permit_window(quiet.boot_epoch,100U));
+    assert(task.start_operation(quiet,ManageOperation::kSetPermit,200U));
+    task.tick(201U);++quiet.management_epoch;
+    quiet.real_motion_permitted=true;quiet.permit_remaining_us=999000U;
+    task.observe(quiet,202U);task.tick(202U);
+    assert(task.operation_complete());
+    assert(task.manual_permit_remaining_us(1000200U)==0U);
+    assert(task.restart_manual_permit_window(quiet,1000200U));
+    assert(task.manual_permit_remaining_us(1000200U)==1000000U);
+    for(unsigned bad=0;bad<10;++bad) {
+      auto wrong=quiet;
+      if(bad==0)++wrong.boot_epoch;
+      if(bad==1)++wrong.session_id;
+      if(bad==2)++wrong.reference_epoch;
+      if(bad==3)wrong.core_state=wire_value(WireCoreState::kRunning);
+      if(bad==4)wrong.state_core_state=wire_value(WireCoreState::kRunning);
+      if(bad==5)wrong.raw_ready=false;
+      if(bad==6)wrong.freshness_ticket=0;
+      if(bad==7)wrong.profile_sha256[0]^=1;
+      if(bad==8)wrong.configured_mask^=1;
+      if(bad==9)wrong.motion_supported=false;
+      assert(!task.restart_manual_permit_window(wrong,1100200U));
+      assert(task.manual_permit_remaining_us(1100200U)==900000U);
+    }
+    quiet.real_motion_permitted=false;quiet.permit_remaining_us=0;
+    assert(task.start_operation(quiet,ManageOperation::kSetPermit,1100200U));
+    assert(explicit_task_client.requests.back().permit_remaining_us()==900000U);
+    assert(!task.restart_manual_permit_window(quiet,1100201U));
+    assert(task.manual_permit_remaining_us(1100201U)==899999U);
+    task.invalidate("TEST_FAULT");
+    assert(!task.restart_manual_permit_window(quiet,1100202U));
+  }
   return 0;
 }

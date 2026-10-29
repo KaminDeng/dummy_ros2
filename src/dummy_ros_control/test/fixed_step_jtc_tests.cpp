@@ -106,6 +106,8 @@ int main(int argc,char** argv) {
     assert(probe.controller.update(rclcpp::Time(probe.now,RCL_ROS_TIME),
       rclcpp::Duration::from_nanoseconds(20000000))==controller_interface::return_type::ERROR);
     assert(probe.sinks==before);
+    probe.controller.log_update_failure();
+    probe.controller.log_update_failure(); // 重复读取不重复输出，且不再走控制拍。
   }
   {
     Probe probe;

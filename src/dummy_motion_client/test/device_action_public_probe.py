@@ -60,6 +60,12 @@ def main():
             response = renewal.call_async(Trigger.Request())
             rclpy.spin_until_future_complete(node, response, timeout_sec=2)
             assert response.done() and not response.result().success, "renewal without device authority was accepted"
+            permit = node.create_client(Trigger, "/device_action_gate/set_bench_permit")
+            assert permit.wait_for_service(timeout_sec=2), "explicit permit service missing"
+            response = permit.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(node, response, timeout_sec=2)
+            assert response.done() and not response.result().success, "permit without authority was queued"
+            assert response.result().message == "PERMIT_NOT_QUEUED", "unaccepted permit lacks precise receipt"
             rejection = node.create_client(Trigger, "/device_action_gate/last_goal_rejection")
             assert rejection.wait_for_service(timeout_sec=2), "goal rejection receipt service missing"
             response = rejection.call_async(Trigger.Request())

@@ -8,6 +8,14 @@
 
 2026-10-27 的自动测试回归已区分本地 DDS 缓存短暂超龄与真实设备异常：在已受理的同身份 ROS 轨迹中，暂时缓存失鲜不会被当作规划编辑；等待保持固定截止，不能提交新动作或用旧位置确认完成。C++ 源反馈、许可、碰撞及停止保护保持原边界。240 项相关软件回归通过，GUI53 已交人工长时验收；GUI51/52 的失败记录仍保留，不作为通过证据。
 
+## 2026-10-30：自动测试同一GUI拍内的缓存边界修复
+
+长母轨迹的构造、复制和CDR序列化会占用Host执行时间；同一GUI tick开始时尚新鲜的本地缓存，可能在该拍后续检查时刚跨过250ms。自动测试现在复用已有的ROS在途反馈等待，不仅因这一缓存边界立即Cancel。只有已受理母FJT的UUID、boot/reference/session、许可、有效掩码、碰撞场景和控制图仍绑定一致，且缓存内报告的真实CAN反馈年龄仍满足原条件时，才等待新的真实反馈；等待期间既有Action继续由ROS权威控制监督。
+
+等待沿用最后真实接收锚：`min(state_at, status_at, last_state_ns/1e9) + 2s`，并且不得越过原段截止。它不是从本次发现失鲜重新计2秒，反复tick不能续期；期间不新发或重发动作，也不用旧位置确认完成。新鲜反馈恢复后才按原条件继续；真正源反馈超龄、身份/许可/masks/场景/图变化，或原截止到期，仍按原逻辑停止。底层C++、SDK和REF的反馈及运动准入门限不变。实现见 [AutoTest的在途检查](../../src/dummy_bringup/scripts/manual_moveit_autotest.py) 与 [`_wait_for_ros_inflight_feedback`](../../src/dummy_bringup/scripts/manual_moveit_tab.py)。
+
+本次另行离线Host诊断中，7461点的构造、deepcopy和CDR合计约166–168ms，28500点约807–867ms；这些是Host上下文测量，不是本轮硬链性能原件。Native会裁剪已经过去的轨迹前缀，ROS处理完整母轨迹，两者Host工作量不同。本修复只复用既有等待，不引入新线程或协议变化；它发生在C6六窗实采结束之后，不改变原C6物理测量、原冻结FAIL或另行批准的工程验收PASS，也不替代后续长时实机验收。
+
 以下旧轮次记录用于追溯，不代表当前面板的实时状态；使用步骤以上方指南为准。
 
 面板保留Python/Qt界面，下拉选项和连接状态统一为“真机-USB/Native”（`real`，既有USB Native进程）、“真机-USB/ROS”（`ros`，独立C++ ROS控制链）和“仿真-本地”（`simulator`，软件模型）。内部backend键仍为real/ros/simulator，显示名称不改变通信、许可或释放语义。选择ROS不会运行Native标定/运动/释放，也不使用Native stdout或Python raw decoder作实时反馈。三种目标的设备身份、参考、许可和旧规划不会互相继承。
@@ -398,3 +406,14 @@ GUI17实测已验证六轴非零joint_states及实测RobotModel动态TF齐全，
 纯Python隔离测试先RED后GREEN，40 pass/1 skip，覆盖空图发现期、700ms后退订、持续真实owner拒绝及无回调重入。此变更仅Backend及其测试，不改Main、Native、固件或协议；GUI20真实无运动Stop/单次重连已通过，现场证据与40项软件验证分别保留。
 
 GUI20已用新Python进程完成真实无运动Stop/重连复测：方法签名为(self, timeout=2.0)，确认加载本次Backend；UI Stop收到RELEASED_IDLE后只点击一次Reconnect，ReadOnly→Starting→ReadOnly，error与graph_error均为空，约4.21秒完成（包含新进程启动）。旧自有进程组及其记录成员均退出，新组只读单链建立；同boot/ref1、session0/core2，界面速度60°/s与加速度4rad/s²未改，实际RobotModel隐藏且Python joint-state publisher不存在。本次没有使能、FJT或运动，故只证明无运动收尾与重连，不覆盖默认高速四项，也不是enabled的8→2保留参考释放修复实机复放。
+
+
+## 2026-10-29：ROS 自动退役与重复重连竞争
+
+现象：USB 断开后，定时器已退役旧通信进程并启动新的只读连接；随后点击“重新连接”又把 Starting 新代送入释放流程。新图尚未发现时释放请求失败，界面持续 BOOTSTRAP_PENDING / RELEASE_UNCONFIRMED，即使后台已恢复。
+
+根因：request_reconnect 未区分“本代正在启动”与“旧代仍需释放”。Native 对连接操作已有忙碌/连接动作保护；本次仅补 ROS 相同职责的保护。空图检查本身没有自动发起释放。
+
+修复：保留原严格 USB 断开退休检查；无法证明需要退休且新代仍 Starting 时，仅等待原启动预算、撤销重复重连排队，不发送释放或管理请求、不创建第二个 owner。SDK、Native、固件及请求后新鲜双消息释放判据均未改变。
+
+验证：反例先复现两个多余释放失败；定向 runtime 共 21 项通过，主线程再核 Starting 相关 3 项通过。安装新 Python 面板后，固定两次 CDC 驱动断开各 2 秒，均恢复公开 MANUAL_CONTROL_READY、同 boot/reference 新鲜 Hold，并在每轮结束主动失能至新 State 序号推进、双 Idle/session0/permit0/release_committed。驱动注入到控制 READY 为 10.709 / 6.861 秒，包含 UI 重连、确认和控制准入；n=2 的 p95/p99 等于最大观测值，不能称为纯 SDK 链路时延或机械运动恢复保证。原失败、短测试预算错误及完整原件保留；这不代表完整 G0 或重构前后性能验收通过。

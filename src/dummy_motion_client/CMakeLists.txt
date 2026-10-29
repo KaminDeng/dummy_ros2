@@ -172,7 +172,7 @@ if(BUILD_TESTING)
     set_tests_properties(manual_ros_baseline_e2e_${mode} PROPERTIES TIMEOUT 35
       LABELS "component_only;synthetic_peer;ros_baseline")
   endforeach()
-  foreach(mode IN ITEMS external stale shutdown timeout controllers_late controllers_arm_active controllers_timeout controllers_partial_active)
+  foreach(mode IN ITEMS external stale shutdown timeout controllers_late controllers_arm_active controllers_timeout controllers_partial_active ready_past_deadline spent_permit dds_gap)
     add_test(NAME manual_ros_control_e2e_${mode} COMMAND ${Python3_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/test/manual_ros_control_e2e_tests.py"
       "$<TARGET_FILE:manual_ros_baseline_node>" ${mode})

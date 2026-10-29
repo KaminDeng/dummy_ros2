@@ -147,6 +147,9 @@ class BootstrapCoordinator {
   bool begin_manual_permit_window(std::uint64_t boot,
                                   std::uint64_t issued_at_us) noexcept;
   /** @brief 已扣原签发年龄的剩余预算；失效/释放/Fault/到期均为0。 */
+  // 只供显式新手动任务使用；调用方须先证明前一Goal已封口且无busy。
+  bool restart_manual_permit_window(const BootstrapSnapshot &snapshot,
+                                    std::uint64_t now_us) noexcept;
   std::uint64_t manual_permit_remaining_us(std::uint64_t now_us) const noexcept;
   bool start_release(
       const BootstrapSnapshot &snapshot, std::uint64_t now_us,

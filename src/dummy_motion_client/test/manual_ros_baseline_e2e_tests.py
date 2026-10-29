@@ -45,6 +45,7 @@ permit_consumed = False
 permit_requests = 0
 permit_consumed_at = None
 permit_refresh_count = 0
+permit_requested_at = None
 renewal_mode = mode.startswith("renewal_")
 rejected_uuid = ""
 action_calls = 0
@@ -89,7 +90,7 @@ def publish():
         else:
             cancel_handle.canceled()
         cancel_future.set_result(result)
-    if (mode == "consumed_permit" or scene_mode) and permit_consumed and time.monotonic() - permit_consumed_at >= 0.15:
+    if (scene_mode or (mode == "consumed_permit" and permit_requests == 1 and permit_requested_at is not None)) and permit_consumed and time.monotonic() - (permit_requested_at if mode == "consumed_permit" else permit_consumed_at) >= 0.15:
         assert scene_mode or action_calls == 1, "无许可期间不许发送下一Goal"
         permit_consumed = False
         permit_refresh_count += 1
@@ -194,6 +195,10 @@ def release(_request, response):
 
 
 def bootstrap_status(_request, response):
+    if mode in ("consumed_permit", "consumed_permit_denied") and permit_consumed and not released:
+        response.success = True
+        response.message = "ENABLED_HOLD_PERMIT_REQUIRED"
+        return response
     if fault_release_mode and released:
         response.success=False
         response.message="EVIDENCE_INCOMPLETE;RELEASED_FAULT"+(" extra" if mode=="released_fault_wrong_tag" else "")
@@ -429,11 +434,15 @@ if renewal_mode or consumed_mode:
         return response
 
     def install_permit(_request, response):
-        global permit_consumed, permit_requests
+        global permit_consumed, permit_requests, permit_requested_at
         permit_requests += 1
+        permit_requested_at = time.monotonic()
+        if mode == "consumed_permit":
+            assert permit_requests == 1, "同一等待轮不能重复D5"
+
         response.success = mode != "consumed_permit_denied"
         response.message = "Operation queued; poll bootstrap_status for final result" if response.success else "Operation unavailable or another management request is pending"
-        if response.success:
+        if response.success and mode != "consumed_permit":
             permit_consumed = False
         return response
 
@@ -651,7 +660,7 @@ try:
     if consumed_mode:
         assert action_calls == (2 if mode == "consumed_permit" else 1), (action_calls, response, root)
         if mode == "consumed_permit":
-            assert permit_requests == 0 and permit_refresh_count == 1, (permit_requests, permit_refresh_count, root)
+            assert permit_requests == 1 and permit_refresh_count == 1, (permit_requests, permit_refresh_count, root)
             assert "ARRIVAL_CONFIRMED" in (root / "report.txt").read_text()
             assert "NEXT_MOTION_READY" in (root / "report.txt").read_text()
             assert "公开FJT非成功终态" in response.message, response

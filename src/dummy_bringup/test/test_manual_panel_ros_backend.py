@@ -136,14 +136,28 @@ def test_action_cancel_terminal_preserves_actual_goal_uuid():
     transport.action = action; transport.action_type = NS(Goal=lambda: NS())
     transport.uuid_type=lambda **kw:NS(**kw)
     transport.closed=False;transport._submission=None
-    transport.latest_state=NS(device_id=[1]*16,profile_id=201,boot_epoch=7,session_id=8,reference_epoch=9,motion_epoch=10,management_epoch=1,state_seq=1)
-    transport.latest_status=NS(management_epoch=1)
-    transport.status_at=0.
-    transport._fresh_retry_binding=lambda:(tuple([1]*16),201,7,8,9,10)
-    transport.request=lambda name,cb:cb(NS(success=True,message='ENABLED_HOLD'))
+    import time
+    now=time.monotonic()
+    transport.latest_state=NS(device_id=[1]*16,profile_id=201,boot_epoch=7,session_id=8,
+        reference_epoch=9,motion_epoch=10,management_epoch=1,state_seq=1,core_state=4,
+        hold_ready=True,position_valid_mask=63,velocity_valid_mask=63,can_rx_age_us=[0]*6)
+    transport.latest_status=NS(**vars(transport.latest_state),real_motion_permitted=True,
+        permit_remaining_us=20000000,evidence_lost=False)
+    transport.state_at=transport.status_at=now
+    transport.feedback_max_age_ms=250;transport.status_max_age_ms=1000
+    def request(name,cb):
+        if name=='set_bench_permit':
+            transport.latest_state.management_epoch+=1;transport.latest_status.management_epoch+=1
+            transport.latest_state.state_seq+=1
+            transport.state_at=transport.status_at=time.monotonic()
+            cb(NS(success=True,message='QUEUED'))
+        else:cb(NS(success=True,message='ENABLED_HOLD'))
+    transport.request=request
     events = []
-    assert transport.submit_trajectory(NS(), lambda *event: events.append(event))
+    assert transport.submit_trajectory(NS(points=[NS(time_from_start=NS(sec=1,nanosec=0))]), lambda *event: events.append(event))
     transport._readonly_requests={}
+    transport._poll_trajectory_retry()
+    transport._poll_trajectory_retry()
     transport._poll_trajectory_retry()
     assert events[0] == ('accepted', {'goal_uuid': '01'*16})
     assert events[-1] == ('canceled', {'goal_uuid': '01'*16, 'status': 5})
@@ -261,6 +275,13 @@ def test_invalid_parameter_response_does_not_invent_a_budget():
 
 
 # 独立假时钟/服务/Action刺激续租占槽排序；不创建SDK设备连接。
+def initial_permit_readiness(t,pending):
+    t._poll_trajectory_retry()
+    name,ready=pending.pop(0)
+    assert name=='bootstrap_status'
+    ready(NS(success=True,message='ENABLED_HOLD'))
+
+
 def renewal_transport(monkeypatch, receipts=None):
     import manual_panel_ros_backend as module
     class Future:
@@ -276,7 +297,7 @@ def renewal_transport(monkeypatch, receipts=None):
     transport.action_type=NS(Goal=lambda:NS())
     transport.status_max_age_ms=731;transport.feedback_max_age_ms=251
     state=NS(device_id=[1]*16,boot_epoch=7,profile_id=201,session_id=8,reference_epoch=9,
-             motion_epoch=10,management_epoch=11,state_seq=1,core_state=4,hold_ready=True,
+             motion_epoch=10,management_epoch=10,state_seq=1,core_state=4,hold_ready=True,
              position_valid_mask=63,velocity_valid_mask=63,can_rx_age_us=[0]*6)
     status=NS(**vars(state),real_motion_permitted=True,permit_remaining_us=10000000,evidence_lost=False)
     transport.latest_state=state;transport.latest_status=status
@@ -294,9 +315,17 @@ def renewal_transport(monkeypatch, receipts=None):
     def submit_with_initial_cpp_ready(trajectory, callback):
         accepted = original_submit(trajectory, callback)
         if accepted:
+            initial_permit_readiness(transport,pending)
             transport._poll_trajectory_retry()
             name, response = pending.pop(0)
-            assert name == 'bootstrap_status'
+            assert name == 'set_bench_permit'
+            response(NS(success=True, message='QUEUED'))
+            transport.latest_state.management_epoch+=1;transport.latest_status.management_epoch+=1
+            transport.latest_state.state_seq+=1;clock[0]+=.001
+            transport.state_at=transport.status_at=clock[0]
+            transport._poll_trajectory_retry()
+            name,response=pending.pop(0)
+            assert name=='bootstrap_status'
             response(NS(success=True, message='ENABLED_HOLD'))
         return accepted
     transport.submit_trajectory = submit_with_initial_cpp_ready
@@ -316,7 +345,7 @@ def test_renewal_retries_only_uuid_receipt_and_cpp_ready_same_binding(monkeypatc
     pending.pop()[1](NS(success=False,message='LEASE_RENEWAL_PENDING'))
     assert len(calls)==1
     transport.latest_state.management_epoch=12;transport.latest_status.management_epoch=12
-    transport.latest_state.state_seq=2;clock[0]+=.01;transport.status_at=clock[0]
+    transport.latest_state.state_seq=3;clock[0]+=.01;transport.status_at=clock[0]
     transport._poll_trajectory_retry()
     pending.pop()[1](NS(success=True,message='ENABLED_HOLD'))  # 自动Renew无需LEASE_RENEWED提示。
     assert len(calls)==2
@@ -367,7 +396,7 @@ def test_ready_waits_for_management_streams_without_extending_original_retry_dea
     transport._poll_trajectory_retry();pending.pop()[1](NS(success=True,message='ENABLED_HOLD'))
     assert len(calls)==1 and transport._submission['retry_deadline']==deadline
     transport.latest_status.management_epoch=12
-    transport.latest_state.state_seq=2;clock[0]+=.01;transport.status_at=clock[0]
+    transport.latest_state.state_seq=3;clock[0]+=.01;transport.status_at=clock[0]
     transport._poll_trajectory_retry();pending.pop()[1](NS(success=True,message='ENABLED_HOLD'))
     assert len(calls)==2 and transport._submission['retry_deadline']==deadline
 
@@ -415,6 +444,9 @@ def test_real_rclpy_uuid_rejection_receipt_ready_and_same_trajectory():
         response.success=True;response.message='RENEWAL_PENDING:'+attempt_uuids[0];return response
     def ready(request,response):
         renew_polls.append(True);response.success=True;response.message='ENABLED_HOLD';return response
+    def install_permit(request,response):
+        state.management_epoch+=1;status.management_epoch+=1
+        response.success=True;response.message='QUEUED';return response
     def unused_control(request,response):
         raise AssertionError('续租窄重试场景不应调用标定、释放或控制器管理')
     def parameters(request,response):
@@ -424,11 +456,12 @@ def test_real_rclpy_uuid_rejection_receipt_ready_and_same_trajectory():
         return response
     services=[server.create_service(Trigger,'/device_action_gate/last_goal_rejection',receipt),
               server.create_service(Trigger,'/device_action_gate/bootstrap_status',ready),
+              server.create_service(Trigger,'/device_action_gate/set_bench_permit',install_permit),
               server.create_service(GetParameters,'/manual_ros_baseline/get_parameters',parameters),
               server.create_service(ListControllers,'/controller_manager/list_controllers',unused_control)]
     # 注册真实DDS服务与下方typed发布者，满足当前唯一控制owner守卫；不伪造计数。
     services.extend(server.create_service(Trigger,name,unused_control) for name in CONTROL_SERVICES
-                    if name not in ('/device_action_gate/bootstrap_status',
+                    if name not in ('/device_action_gate/bootstrap_status','/device_action_gate/set_bench_permit',
                                     '/manual_ros_baseline/get_parameters',
                                     '/controller_manager/list_controllers'))
     status_pub=server.create_publisher(msg.DummyDeviceStatusV2,'/device_action_gate/device_status',10)
@@ -477,7 +510,7 @@ def test_second_renewal_rejection_does_not_create_an_unbounded_retry(monkeypatch
     transport.submit_trajectory(trajectory,lambda *e:events.append(e))
     transport._poll_trajectory_retry()
     pending.pop()[1](NS(success=True,message='RENEWAL_PENDING:'+bytes(calls[0][1]['goal_uuid'].uuid).hex()))
-    transport.latest_state.state_seq=2;clock[0]+=.01;transport.status_at=clock[0]
+    transport.latest_state.state_seq=3;clock[0]+=.01;transport.status_at=clock[0]
     transport._poll_trajectory_retry();pending.pop()[1](NS(success=True,message='ENABLED_HOLD'))
     assert len(calls)==2
     transport._poll_trajectory_retry()
@@ -519,7 +552,7 @@ def test_cpp_ready_alone_cannot_reuse_pre_rejection_snapshots(monkeypatch,advanc
     transport._poll_trajectory_retry()
     pending.pop()[1](NS(success=True,message='RENEWAL_PENDING:'+bytes(calls[0][1]['goal_uuid'].uuid).hex()))
     clock[0]+=.01
-    if advanced=='state_only':transport.latest_state.state_seq=2
+    if advanced=='state_only':transport.latest_state.state_seq=3
     if advanced=='status_only':transport.status_at=clock[0]
     transport._poll_trajectory_retry();pending.pop()[1](NS(success=True,message='ENABLED_HOLD'))
     assert len(calls)==1 and not any(e[0]=='accepted' for e in events)
@@ -724,17 +757,84 @@ def readonly_rpc_transport(monkeypatch):
     return module,transport,clock,calls
 
 
+@pytest.mark.parametrize('late_after_acceptance', [False, True])
+def test_manual_prepare_is_sent_once_while_bootstrap_query_is_inflight(monkeypatch, late_after_acceptance):
+    module,transport,clock,calls=readonly_rpc_transport(monkeypatch)
+    transport.status_max_age_ms=731
+    events=[];backend=module.RosBackend(transport,lambda *event:events.append(event));backend.connect()
+    assert backend.poll();old=calls[-1][1]
+    assert backend.request_prepare_manual_control()
+    assert [name for name,_ in calls]==['bootstrap_status','prepare_manual_control']
+    prepare=calls[-1][1]
+    assert not backend.request_prepare_manual_control()
+    assert not backend.request_calibration_and_test() and backend.operation=='manual'
+    assert not backend.poll() and len(calls)==2
+    if late_after_acceptance:
+        prepare.resolve(True,'MANUAL_CONTROL_ACCEPTED')
+    # 旧只读结果既不能清管理单飞，也不能在新操作中伪造终态。
+    old.resolve(True,'BASELINE_PASSED boot=7')
+    assert backend.pending is (not late_after_acceptance)
+    assert backend.operation=='manual' and not backend.released
+    assert not any(kind=='completed' for kind,_ in events)
+    if not late_after_acceptance:
+        prepare.resolve(True,'MANUAL_CONTROL_ACCEPTED')
+    assert events[-1]==('accepted','MANUAL_CONTROL_ACCEPTED')
+    assert backend.poll() and calls[-1][0]=='manual_control_status'
+    calls[-1][1].resolve(True,'MANUAL_CONTROL_READY boot=7 session=8')
+    assert events[-1][0]=='manual_ready'
+    assert [name for name,_ in calls].count('prepare_manual_control')==1
+
+
+def test_readonly_query_is_single_flight_and_never_overtakes_management(monkeypatch):
+    module,transport,clock,calls=readonly_rpc_transport(monkeypatch)
+    transport.status_max_age_ms=731
+    backend=module.RosBackend(transport,lambda *_:None);backend.connect()
+    assert backend.poll() and not backend.poll() and len(calls)==1
+    assert backend.request_prepare_manual_control()
+    assert not backend.poll() and len(calls)==2
+    calls[0][1].resolve(False,'BOOTSTRAP_PENDING')
+    assert backend.pending and not backend.poll() and len(calls)==2
+    calls[1][1].resolve(True,'MANUAL_CONTROL_ACCEPTED')
+    assert backend.poll() and not backend.poll() and len(calls)==3
+
+
+def test_release_has_priority_over_inflight_readonly_and_later_prepare(monkeypatch):
+    module,transport,clock,calls=readonly_rpc_transport(monkeypatch)
+    transport.status_max_age_ms=731
+    backend=module.RosBackend(transport,lambda *_:None);backend.connect();backend.poll()
+    assert backend.release()
+    assert [name for name,_ in calls]==['bootstrap_status','disable_and_release']
+    assert backend.pending and not backend.request_prepare_manual_control()
+    assert not backend.poll() and len(calls)==2
+    calls[0][1].resolve(True,'RELEASED_IDLE')
+    assert backend.pending and not backend.released
+    calls[1][1].resolve(False,'RELEASE_QUEUED')
+    assert backend.poll() and calls[-1][0]=='bootstrap_status'
+    calls[-1][1].resolve(True,'RELEASED_IDLE')
+    assert backend.released
+    assert [name for name,_ in calls].count('disable_and_release')==1
+
+
+def test_pending_management_rejects_second_write_without_changing_operation(monkeypatch):
+    module,transport,clock,calls=readonly_rpc_transport(monkeypatch)
+    transport.status_max_age_ms=731
+    backend=module.RosBackend(transport,lambda *_:None);backend.connect()
+    assert backend.request_prepare_manual_control()
+    assert not backend.request_calibration_and_test()
+    assert backend.operation=='manual' and backend.pending
+    assert [name for name,_ in calls]==['prepare_manual_control']
+
+
 def test_lost_readonly_rpc_does_not_block_release_and_late_reply_cannot_confirm_it(monkeypatch):
     module,transport,clock,calls=readonly_rpc_transport(monkeypatch);events=[]
     backend=module.RosBackend(transport,lambda *event:events.append(event));backend.connect()
     backend.poll();old=calls[-1][1]
-    assert backend.pending and calls[-1][0]=='bootstrap_status'
+    assert backend.readonly_query_pending and not backend.pending and calls[-1][0]=='bootstrap_status'
     backend.release();deadline=backend._release_deadline
-    assert len(calls)==1 and backend.release_pending
+    assert len(calls)==2 and calls[-1][0]=='disable_and_release' and backend.pending
     clock[0]+=1.01;transport._poll_trajectory_retry()
-    assert not backend.pending and old.cancelled and not backend.released
-    assert events[-1][0]=='progress' and 'READONLY_REQUEST_TIMEOUT' in events[-1][1]
-    backend.poll();assert calls[-1][0]=='disable_and_release' and backend.pending
+    assert backend.pending and not backend.readonly_query_pending and old.cancelled and not backend.released
+    assert not backend.poll() and calls[-1][0]=='disable_and_release' and backend.pending
     calls[-1][1].resolve(False,'RELEASE_QUEUED')
     old.resolve(True,'RELEASED_IDLE')
     assert not backend.released and backend._release_deadline==deadline
@@ -803,7 +903,13 @@ def test_first_goal_waits_for_cpp_ready_without_sending_or_resetting_deadline(mo
     t.request=lambda name,cb:pending.append((name,cb))
     from manual_panel_ros_backend import RosTransport
     assert RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
     deadline=t._submission['retry_deadline']
+    t._poll_trajectory_retry();name,installed=pending.pop(0)
+    assert name=='set_bench_permit'
+    installed(NS(success=True,message='QUEUED'))
+    t.latest_state.management_epoch+=1;t.latest_status.management_epoch+=1
+    t.latest_state.state_seq+=1
     assert calls==[]
     t._poll_trajectory_retry()
     name,cb=pending.pop(0)
@@ -821,7 +927,13 @@ def test_preflight_never_sends_on_owner_drift_stale_or_unready(failure,monkeypat
     t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
     t.request=lambda name,cb:pending.append((name,cb))
     assert RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
     deadline=t._submission['retry_deadline']
+    t._poll_trajectory_retry();name,installed=pending.pop(0)
+    assert name=='set_bench_permit'
+    installed(NS(success=True,message='QUEUED'))
+    t.latest_state.management_epoch+=1;t.latest_status.management_epoch+=1
+    t.latest_state.state_seq+=1
     if failure=='owner':t.latest_state.session_id+=1
     if failure=='stale':clock[0]+=.5
     t._poll_trajectory_retry()
@@ -874,16 +986,19 @@ def test_fault_release_retires_owner_without_restoring_motion_authority():
     assert events[-1]==('released','RELEASED_FAULT')
 
 
-def test_confirmed_readonly_release_cancels_unsent_write_and_emits_once():
+def test_pre_management_readonly_release_cannot_complete_inflight_release_and_emits_once():
     from manual_panel_ros_backend import RosBackend
     calls=[];events=[];callbacks=[]
     t=NS(request=lambda name,cb:(calls.append(name),callbacks.append(cb)))
     b=RosBackend(t,lambda *x:events.append(x));b.poll();b.release()
     callbacks.pop(0)(NS(success=True,message='RELEASED_IDLE'))
-    assert b.released
+    assert not b.released and b.pending
+    callbacks.pop(0)(NS(success=False,message='RELEASE_QUEUED'))
     b.poll()
-    assert calls==['bootstrap_status','bootstrap_status']
+    assert calls==['bootstrap_status','disable_and_release','bootstrap_status']
     callbacks.pop(0)(NS(success=True,message='RELEASED_IDLE'))
+    assert b.released
+    b.poll();callbacks.pop(0)(NS(success=True,message='RELEASED_IDLE'))
     assert sum(x[0]=='released' for x in events)==1
 
 
@@ -1093,3 +1208,388 @@ def test_extension_fresh_identity_or_permission_change_fails_immediately(monkeyp
     transport._poll_trajectory_retry()
     assert calls == ['cancel'] and len(events) == 1 and events[0][0] == 'failed'
     assert ('UUID_CHANGED' if change == 'uuid' else 'IDENTITY_OR_PERMISSION_CHANGED') in events[0][1]
+
+
+def test_explicit_goal_installs_once_then_waits_for_fresh_committed_permit(monkeypatch):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    assert RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
+    deadline=t._submission['retry_deadline']
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='set_bench_permit' and not calls
+    cb(NS(success=True,message='QUEUED'))
+    for _ in range(2):
+        t._poll_trajectory_retry();name,cb=pending.pop(0)
+        assert name=='bootstrap_status'
+        cb(NS(success=True,message='ENABLED_HOLD'))
+        assert not calls  # 旧ready及排队回执均不能确认新许可。
+    t.latest_state.management_epoch+=1;t.latest_status.management_epoch+=1
+    t.latest_state.state_seq+=1;clock[0]+=.02;t.state_at=t.status_at=clock[0]
+    t._poll_trajectory_retry();name,cb=pending.pop(0);cb(NS(success=True,message='ENABLED_HOLD'))
+    assert len(calls)==1 and t._submission['retry_deadline']==deadline
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='last_goal_rejection'
+    cb(NS(success=True,message='RENEWAL_PENDING:'+bytes(calls[0][1]['goal_uuid'].uuid).hex()))
+    t.latest_state.state_seq+=1;clock[0]+=.02;t.status_at=clock[0]
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='bootstrap_status'
+    cb(NS(success=True,message='ENABLED_HOLD'))
+    assert len(calls)==2 and t._submission['retry_deadline']==deadline
+
+
+@pytest.mark.parametrize('change',['cancel','owner','deadline','denied'])
+def test_permit_install_late_callback_never_sends_or_reinstalls(monkeypatch,change):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='set_bench_permit'
+    if change=='cancel':t.cancel_pending_submission()
+    elif change=='owner':t.latest_state.session_id+=1;t.latest_status.session_id+=1
+    elif change=='deadline':clock[0]+=2.01
+    cb(NS(success=change!='denied',message='QUEUED' if change!='denied' else 'POLICY_DENIED'))
+    t._poll_trajectory_retry()
+    assert not calls and not pending and t._submission is None
+    assert events[-1][0]=='failed'
+
+
+@pytest.mark.parametrize('missing',['management','state_seq','status_at','state_age','status_age'])
+def test_new_permit_needs_independent_fresh_dual_stream_watermarks(monkeypatch,missing):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    t.latest_status.real_motion_permitted=False;t.latest_status.permit_remaining_us=0
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
+    t._poll_trajectory_retry();name,install=pending.pop(0)
+    assert name=='set_bench_permit'  # 旧许可已过期仍可显式申请本次新窗口。
+    install(NS(success=True,message='QUEUED'))
+    old=t._submission.copy();clock[0]+=.01
+    t.latest_state.management_epoch+=1;t.latest_status.management_epoch+=1
+    t.latest_state.state_seq+=1;t.state_at=t.status_at=clock[0]
+    t.latest_status.real_motion_permitted=True;t.latest_status.permit_remaining_us=900000000
+    if missing=='management':t.latest_state.management_epoch=t.latest_status.management_epoch=old['management']
+    elif missing=='state_seq':t.latest_state.state_seq=old['state_seq']
+    elif missing=='status_at':t.status_at=old['status_at']
+    elif missing=='state_age':t.state_at=clock[0]-.3
+    elif missing=='status_age':t.status_at=clock[0]-1.
+    t._poll_trajectory_retry();pending.pop(0)[1](NS(success=True,message='ENABLED_HOLD'))
+    assert not calls
+    clock[0]=old['retry_deadline']+.01;t._poll_trajectory_retry()
+    install(NS(success=True,message='QUEUED'))
+    assert t._submission is None and not pending and not calls
+
+
+def test_new_permit_waits_for_readiness_before_single_write_under_original_deadline(monkeypatch):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    deadline=t._submission['retry_deadline']
+    for _ in range(2):
+        t._poll_trajectory_retry();name,cb=pending.pop(0)
+        assert name=='bootstrap_status'
+        cb(NS(success=False,message='LEASE_RENEWAL_PENDING'))
+        assert not calls and t._submission['retry_deadline']==deadline
+        clock[0]+=.01;t.state_at=t.status_at=clock[0]
+    t._poll_trajectory_retry();name,old_ready=pending.pop(0)
+    old_ready(NS(success=True,message='ENABLED_HOLD'))
+    t._poll_trajectory_retry();name,queued=pending.pop(0)
+    assert name=='set_bench_permit'
+    queued(NS(success=True,message='QUEUED'))
+    old_ready(NS(success=True,message='ENABLED_HOLD'))
+    assert t._submission['stage']=='preflight'
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='bootstrap_status'
+    cb(NS(success=True,message='ENABLED_HOLD'))
+    assert not calls and t._submission['retry_deadline']==deadline
+
+
+def test_unconsumed_permit_reuse_sends_without_new_management_commit(monkeypatch):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
+    management=t.latest_state.management_epoch
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='set_bench_permit'
+    cb(NS(success=True,message='PERMIT_REUSED'))
+    assert len(calls)==1 and t.latest_state.management_epoch==management
+    assert not pending
+
+
+def test_not_queued_permit_rechecks_readiness_without_replaying_accepted_write(monkeypatch):
+    """两次RPC之间准入被占用：只重试明确未入队的请求，仍等真实许可提交。"""
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    assert RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
+    deadline=t._submission['retry_deadline']
+    t._poll_trajectory_retry();name,rejected=pending.pop(0)
+    assert name=='set_bench_permit'
+    rejected(NS(success=False,message='PERMIT_NOT_QUEUED'))
+    assert t._submission is not None and not events and not calls
+    assert t._submission['retry_deadline']==deadline
+    t._poll_trajectory_retry();name,ready=pending.pop(0)
+    assert name=='bootstrap_status'
+    ready(NS(success=False,message='LEASE_RENEWAL_PENDING'))
+    clock[0]+=.02;t.state_at=t.status_at=clock[0]
+    t._poll_trajectory_retry();name,ready=pending.pop(0)
+    assert name=='bootstrap_status'
+    ready(NS(success=True,message='ENABLED_HOLD_PERMIT_REQUIRED'))
+    t._poll_trajectory_retry();name,accepted=pending.pop(0)
+    assert name=='set_bench_permit'
+    accepted(NS(success=True,message='QUEUED'))
+    for _ in range(2):
+        t._poll_trajectory_retry();name,confirmed=pending.pop(0)
+        assert name=='bootstrap_status'  # 已入队后只查询，绝不重发写请求。
+        confirmed(NS(success=True,message='ENABLED_HOLD'))
+        assert not calls
+    t.latest_state.management_epoch+=1;t.latest_status.management_epoch+=1
+    t.latest_state.state_seq+=1;clock[0]+=.02;t.state_at=t.status_at=clock[0]
+    t._poll_trajectory_retry();name,confirmed=pending.pop(0)
+    assert name=='bootstrap_status'
+    confirmed(NS(success=True,message='ENABLED_HOLD'))
+    assert len(calls)==1 and t._submission['retry_deadline']==deadline
+
+
+@pytest.mark.parametrize('change',['cancel','owner','deadline','stale'])
+def test_not_queued_permit_cannot_outlive_original_binding_or_deadline(monkeypatch,change):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
+    deadline=t._submission['retry_deadline']
+    t._poll_trajectory_retry();name,rejected=pending.pop(0)
+    assert name=='set_bench_permit'
+    rejected(NS(success=False,message='PERMIT_NOT_QUEUED'))
+    assert t._submission is not None
+    if change=='cancel':t.cancel_pending_submission()
+    elif change=='owner':
+        t.latest_state.session_id+=1;t.latest_status.session_id+=1
+    elif change=='deadline':clock[0]=deadline
+    else:clock[0]+=.3
+    t._poll_trajectory_retry()
+    while pending:
+        name,ready=pending.pop(0)
+        assert name=='bootstrap_status'
+        ready(NS(success=True,message='ENABLED_HOLD'))
+    assert not calls
+    if t._submission is not None:
+        assert t._submission['retry_deadline']==deadline
+        clock[0]=deadline;t._poll_trajectory_retry()
+    assert t._submission is None and events[-1][0]=='failed'
+
+
+@pytest.mark.parametrize('bad',['short','aged_budget','no_permit','stale','owner'])
+def test_reused_permit_requires_fresh_identity_and_whole_trajectory_budget(monkeypatch,bad):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    initial_permit_readiness(t,pending)
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    if bad=='short':t.latest_status.permit_remaining_us=999999
+    elif bad=='aged_budget':
+        t.latest_status.permit_remaining_us=1010000;clock[0]+=.02
+    elif bad=='no_permit':t.latest_status.real_motion_permitted=False
+    elif bad=='stale':clock[0]+=.3
+    elif bad=='owner':t.latest_status.session_id+=1
+    cb(NS(success=True,message='PERMIT_REUSED'))
+    assert not calls and t._submission is None and events[-1][0]=='failed'
+
+
+def test_permit_required_marker_only_allows_install_not_direct_send(monkeypatch):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    t.latest_status.real_motion_permitted=False;t.latest_status.permit_remaining_us=0
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e))
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='bootstrap_status'
+    cb(NS(success=True,message='ENABLED_HOLD_PERMIT_REQUIRED'))
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    assert name=='set_bench_permit' and not calls
+    cb(NS(success=True,message='QUEUED'))
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    cb(NS(success=True,message='ENABLED_HOLD_PERMIT_REQUIRED'))
+    assert not calls and t._submission['stage']=='preflight'
+
+
+@pytest.mark.parametrize('remaining,accepted',[(40000000,False),(70000000,True)])
+def test_short_mother_goal_requires_frozen_whole_task_permit(monkeypatch,remaining,accepted):
+    from manual_panel_ros_backend import RosTransport
+    t,path,clock,calls,pending,events=renewal_transport(monkeypatch)
+    t.latest_status.permit_remaining_us=remaining
+    RosTransport.submit_trajectory(t,path,lambda *e:events.append(e),task_budget_s=60.)
+    initial_permit_readiness(t,pending)
+    t._poll_trajectory_retry();name,cb=pending.pop(0)
+    cb(NS(success=True,message='PERMIT_REUSED'))
+    assert bool(calls) is accepted
+
+
+def owned_node_fakes(monkeypatch, fail_entities=False):
+    """只安装叶层Fake；绝不创建ROS节点或DDS participant。"""
+    import manual_panel_ros_backend as module
+    calls=[];nodes=[];contexts=[]
+    class Context:
+        def __init__(self):contexts.append(self)
+        def init(self, **kw):calls.append(('context_init',kw))
+        def try_shutdown(self):calls.append(('context_shutdown',self))
+        def destroy(self):calls.append(('context_destroy',self))
+    class Node:
+        def __init__(self, **kw):self.kw=kw;self.callbacks=[];self.count=0;nodes.append(self)
+        def create_client(self,*args):
+            if fail_entities:raise RuntimeError('entity construction failure')
+            return object()
+        def create_timer(self,*args):return object()
+        def create_subscription(self,typ,name,cb,qos):self.callbacks.append(cb);return object()
+        def count_services(self,name):return self.count
+        def count_publishers(self,name):return self.count
+        def destroy_node(self):calls.append(('node_destroy',self))
+        def destroy_timer(self,*a):pass
+        def destroy_client(self,*a):pass
+        def destroy_subscription(self,*a):pass
+    class Executor:
+        def __init__(self,**kw):self.kw=kw
+        def add_node(self,node):calls.append(('executor_add',node))
+        def remove_node(self,node):calls.append(('executor_remove',node))
+        def spin_once(self,**kw):calls.append(('spin',kw))
+        def shutdown(self,**kw):calls.append(('executor_shutdown',kw))
+    modules={
+        'std_srvs.srv':NS(Trigger=object), 'rcl_interfaces.srv':NS(GetParameters=object),
+        'rcl_interfaces.msg':NS(ParameterType=NS(PARAMETER_INTEGER=2)),
+        'dpsdk_interfaces.msg':NS(DummyDeviceStatusV2=object,DummyJointStateV2=object),
+        'control_msgs.action':NS(FollowJointTrajectory=object),
+        'rclpy.action':NS(ActionClient=lambda *a:NS(destroy=lambda:None)),
+        'unique_identifier_msgs.msg':NS(UUID=object),
+        'dummy_motion_interfaces.srv':NS(ExtendJointTrajectory=object),
+        'rclpy.context':NS(Context=Context), 'rclpy.executors':NS(SingleThreadedExecutor=Executor),
+        'rclpy':NS(create_node=lambda name,**kw:Node(**kw)),
+    }
+    for name,value in modules.items():monkeypatch.setitem(sys.modules,name,value)
+    shared=NS(context=NS(get_domain_id=lambda:77),get_namespace=lambda:'/manual_control',
+        count_services=lambda _:1,count_publishers=lambda _:1)
+    return module,shared,calls,nodes,contexts
+
+
+def test_owned_control_context_same_node_preflight_and_idempotent_close(monkeypatch):
+    module,shared,calls,nodes,contexts=owned_node_fakes(monkeypatch)
+    seen=[];t=module.RosTransport(shared,lambda v:seen.append(v),lambda v:seen.append(v),own_control_node=True)
+    assert t.node is nodes[0] and t.node is not shared and t.owns_control_node
+    assert nodes[0].kw['context'] is contexts[0]
+    assert nodes[0].kw['namespace']=='/manual_control'
+    assert calls[0][0]=='context_init' and calls[0][1]['domain_id']==77
+    t.assert_no_existing_owner(timeout=0)
+    t.pump();assert ('spin',dict(timeout_sec=0)) in calls
+    nodes[0].count=1;t.close();t.close()
+    for cb in nodes[0].callbacks:cb(NS(boot_epoch=1,state_seq=99))
+    assert not seen
+    assert sum(name=='node_destroy' for name,*rest in calls)==1
+    assert sum(name=='context_shutdown' for name,*rest in calls)==1
+    assert ('node_destroy',shared) not in calls
+
+
+def test_owned_node_partial_entity_failure_cleans_only_owned_context(monkeypatch):
+    module,shared,calls,nodes,contexts=owned_node_fakes(monkeypatch,True)
+    with pytest.raises(RuntimeError,match='entity construction failure'):
+        module.RosTransport(shared,lambda v:None,lambda v:None,own_control_node=True)
+    assert ('node_destroy',nodes[0]) in calls
+    assert ('context_shutdown',contexts[0]) in calls
+    assert ('node_destroy',shared) not in calls
+
+
+@pytest.mark.parametrize('bad',['none','stale','same_seq','old_state','old_status','identity','permit','uncommitted','core','fault','ok'])
+def test_owned_gui_can_close_requires_authority_and_fresh_advancing_double_disable(monkeypatch,bad):
+    import manual_panel_ros_backend as module
+    monkeypatch.setattr(module.time,'monotonic',lambda:10.)
+    t=object.__new__(module.RosTransport);t.owns_control_node=True
+    fields=dict(device_id=[1,2],profile_id=201,boot_epoch=3,reference_epoch=4,session_id=7)
+    t.latest_state=NS(**fields,state_seq=10);t.latest_status=NS(**fields)
+    t.state_at=t.status_at=9.;t.feedback_max_age_ms=t.status_max_age_ms=500
+    checkpoint=t.release_checkpoint()
+    t.latest_state=NS(**dict(fields,session_id=0),state_seq=11,core_state=2,first_failure_reason=0)
+    t.latest_status=NS(**dict(fields,session_id=0),core_state=2,first_failure_reason=0,evidence_lost=False,
+        release_committed=True,real_motion_permitted=False,permit_remaining_us=0)
+    t.state_at=t.status_at=10.1
+    monkeypatch.setattr(module.time,'monotonic',lambda:10.2)
+    if bad=='none':t.latest_status=None
+    elif bad=='stale':t.state_at=9.
+    elif bad=='same_seq':t.latest_state.state_seq=10
+    elif bad=='old_state':t.state_at=9.9
+    elif bad=='old_status':t.status_at=9.9
+    elif bad=='identity':t.latest_status.boot_epoch=99
+    elif bad=='permit':t.latest_status.permit_remaining_us=1
+    elif bad=='uncommitted':t.latest_status.release_committed=False
+    elif bad=='core':t.latest_state.core_state=4
+    elif bad=='fault':t.latest_status.evidence_lost=True
+    b=module.RosBackend(t,lambda *v:None);b._release_observation=checkpoint
+    assert not b.can_close
+    b.released=True
+    assert b.can_close is (bad=='ok')
+
+
+def test_default_transport_never_owns_or_destroys_callers_node(monkeypatch):
+    module,shared,calls,nodes,contexts=owned_node_fakes(monkeypatch)
+    # 外层拥有且自行spin；使用叶层Fake Node，不导入真实ROS。
+    node=type(nodes[0])() if nodes else None
+    if node is None:
+        import rclpy
+        node=rclpy.create_node('external')
+    t=module.RosTransport(node,lambda v:None,lambda v:None)
+    t.pump();t.close()
+    assert not t.owns_control_node and not contexts
+    assert not any(name in ('node_destroy','context_shutdown','executor_shutdown','spin') for name,*rest in calls)
+
+
+@pytest.mark.parametrize('count',[1,2])
+def test_owned_fresh_node_existing_owner_stays_refused_without_any_d10(monkeypatch,count):
+    module,shared,calls,nodes,contexts=owned_node_fakes(monkeypatch)
+    t=module.RosTransport(shared,lambda v:None,lambda v:None,own_control_node=True)
+    nodes[0].count=count
+    with pytest.raises(RuntimeError,match='已有ROS控制链'):t.assert_no_existing_owner(timeout=0)
+    replies=[];t.request('disable_and_release',replies.append)
+    assert len(replies)==1 and isinstance(replies[0],RuntimeError)
+    t.close()
+
+
+def test_owned_release_proof_survives_own_process_shutdown_delay(monkeypatch):
+    import manual_panel_ros_backend as module
+    observed=[True]
+    t=NS(owns_control_node=True,release_observed=lambda checkpoint:observed[0],close=lambda:None)
+    b=module.RosBackend(t,lambda *v:None);b.released=True
+    assert b.can_close
+    # PGID确认退出可能花6秒；旧子链已停后不能要求再收到新消息。
+    observed[0]=False
+    assert b.can_close and b.close()
+
+
+def test_owned_authoritative_release_without_fresh_double_times_out_original_deadline(monkeypatch):
+    import manual_panel_ros_backend as module
+    clock=[10.];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    requests=[];events=[]
+    t=NS(owns_control_node=True,release_checkpoint=lambda:{'at':clock[0]},release_observed=lambda checkpoint:False,
+        request=lambda name,cb:requests.append((name,cb)))
+    b=module.RosBackend(t,lambda *v:events.append(v));b.release()
+    requests[-1][1](NS(success=False,message='RELEASE_QUEUED'))
+    b.poll();requests[-1][1](NS(success=True,message='RELEASED_IDLE'))
+    assert b.released and not b.can_close
+    deadline=b._release_deadline;clock[0]=deadline+.1
+    b.poll();requests[-1][1](NS(success=True,message='RELEASED_IDLE'))
+    assert any(kind=='failed' and 'RELEASE_UNCONFIRMED' in str(value) for kind,value in events)
+    assert not b.can_close and not b.release()
+    assert b._release_deadline==deadline
+    assert [name for name,cb in requests].count('disable_and_release')==1
+    assert [kind for kind,value in events].count('released')==1
+
+
+def test_owned_manual_terminal_bounds_first_double_feedback_wait_without_d10(monkeypatch):
+    import manual_panel_ros_backend as module
+    clock=[10.];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    requests=[];events=[]
+    t=NS(owns_control_node=True,release_checkpoint=lambda:{'at':clock[0]},release_observed=lambda checkpoint:False,
+        request=lambda name,cb:requests.append((name,cb)))
+    b=module.RosBackend(t,lambda *v:events.append(v));b.operation='manual'
+    b.poll();requests[-1][1](NS(success=True,message='MANUAL_CONTROL_RELEASED'))
+    assert b._release_deadline==30. and not b.can_close
+    clock[0]=31.;b.poll()
+    assert any(k=='failed' and 'RELEASE_UNCONFIRMED' in str(v) for k,v in events)
+    assert all(name!='disable_and_release' for name,cb in requests)

@@ -69,6 +69,30 @@ bool BootstrapCoordinator::begin_manual_permit_window(
   manual_permit_deadline_us_ = issued_at_us + permit_remaining_us_;
   return true;
 }
+bool BootstrapCoordinator::restart_manual_permit_window(
+    const BootstrapSnapshot &snapshot, std::uint64_t now_us) noexcept {
+  constexpr std::uint64_t kMaximumManualTaskPermitUs = 900000000ULL;
+  if (!manual_permit_window_ || manual_permit_closed_ ||
+      (phase_ != BootstrapPhase::kReady && phase_ != BootstrapPhase::kOperationComplete) ||
+      now_us == 0U || now_us < manual_permit_issued_at_us_ ||
+      permit_remaining_us_ == 0U || permit_remaining_us_ > kMaximumManualTaskPermitUs ||
+      now_us > UINT64_MAX - permit_remaining_us_ ||
+      !same_binding(snapshot, snapshot_) || snapshot.boot_epoch != manual_permit_boot_ ||
+      snapshot.session_id == 0U || snapshot.session_id != identity_.expected_session_id() ||
+      snapshot.session_id != snapshot_.session_id || manual_permit_reference_ == 0U ||
+      snapshot.reference_epoch != manual_permit_reference_ ||
+      snapshot.reference_epoch != snapshot_.reference_epoch ||
+      snapshot.configured_mask == 0U || snapshot.configured_mask != snapshot_.configured_mask ||
+      !snapshot.raw_ready || !snapshot.motion_supported || snapshot.freshness_ticket == 0U ||
+      snapshot.core_state != wire_value(WireCoreState::kHold) ||
+      snapshot.state_core_state != wire_value(WireCoreState::kHold) ||
+      snapshot.motion_epoch < snapshot_.motion_epoch || snapshot.management_epoch < snapshot_.management_epoch)
+    return false;
+  // 只重开明确新任务的本地许可预算，不发送请求，也不把历史run清零或伪作终结。
+  manual_permit_issued_at_us_ = now_us;
+  manual_permit_deadline_us_ = now_us + permit_remaining_us_;
+  return true;
+}
 std::uint64_t BootstrapCoordinator::manual_permit_remaining_us(
     std::uint64_t now_us) const noexcept {
   if (!manual_permit_window_ || manual_permit_closed_ ||

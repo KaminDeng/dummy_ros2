@@ -668,15 +668,36 @@ struct ReleaseAvailability {
   bool manual_mode = false, manual_session_owned = false, manual_quiet = false;
 };
 
+// 首次SetPermit仍走原准备流程；只有已使能后的显式任务入口重开窗口。
+inline bool explicit_manual_permit_restarts_window(bool manual,bool enabled,ManageOperation operation) noexcept {
+  return manual && enabled && operation==ManageOperation::kSetPermit;
+}
+
+// Native未消费许可只复用；新许可须等待上一真实目标封口，不能由轮询或续租安装。
+inline bool readonly_idle_retirement_failure(bool evidence_failed,bool bootstrap_fault) noexcept {
+  return evidence_failed || bootstrap_fault;
+}
+enum class ManualTaskPermitDecision { kUnavailable, kReuse, kInstall };
+inline ManualTaskPermitDecision manual_task_permit_decision(
+    bool eligible,bool gate_ready,bool permitted,std::uint64_t remaining,
+    bool refresh_allowed,bool previous_sealed) noexcept {
+  if(!eligible)return ManualTaskPermitDecision::kUnavailable;
+  if(gate_ready && permitted && remaining!=0U)return ManualTaskPermitDecision::kReuse;
+  if(!permitted && remaining==0U && refresh_allowed && previous_sealed)
+    return ManualTaskPermitDecision::kInstall;
+  return ManualTaskPermitDecision::kUnavailable;
+}
+
 enum class ManualReleaseDecision { kWait, kSubmit, kUnconfirmed };
 class ManualReleaseIntent {
 public:
-  bool begin(const BootstrapSnapshot &snapshot, std::uint64_t now) noexcept {
+  bool begin(const BootstrapSnapshot &snapshot, std::uint64_t now,
+             std::uint64_t budget_us=5000000U) noexcept {
     if (snapshot.boot_epoch == 0U || snapshot.session_id == 0U ||
-        now > UINT64_MAX - 5000000U)
+        budget_us==0U || now > UINT64_MAX - budget_us)
       return false;
     origin_ = snapshot;
-    deadline_ = now + 5000000U;
+    deadline_ = now + budget_us;
     active_ = true;
     return true;
   }
@@ -924,6 +945,14 @@ template<std::size_t Size> std::array<std::uint8_t,Size> hex_id(const std::strin
  * @brief ROS取消回调到单控制消费者的固定8槽请求交接。
  * 每槽0空/1生产中/2ready，CAS占槽后复制shared_ptr并release发布；控制方只消费ready，不无限排队。shared_ptr保持GoalHandle寿命，取消仍绑定当前active对象。
  */
+// 内部显式失能不是客户端Cancel ACK；只有真实Canceling句柄才能发CANCELED。
+template<class Handle,class Result>
+void finish_interrupted_public_goal(const std::shared_ptr<Handle>& handle,
+                                    const std::shared_ptr<Result>& result) {
+  if(handle->is_canceling())handle->canceled(result);
+  else {result->error_code=Result::PATH_TOLERANCE_VIOLATED;handle->abort(result);}
+}
+
 template<class Handle,std::size_t Capacity=8U> class PendingGoalCancels {
  public:
   /**
@@ -1498,6 +1527,9 @@ class DeviceActionGate final : public rclcpp::Node {
             (release==4 ? "RELEASE_UNCONFIRMED" : "RELEASE_PENDING");
           return;
         }
+        if(manual_task_permit_available(management_now_us())==ManualTaskPermitDecision::kInstall) {
+          response->success=true;response->message="ENABLED_HOLD_PERMIT_REQUIRED";return;
+        }
         const bool operation_complete=management_request_.load()==0 && bootstrap_ && bootstrap_->operation_complete();
         const bool renewal_pending=renewal_reserved_.load();
         if(bootstrap_->phase()!=BootstrapPhase::kFault &&
@@ -1552,6 +1584,7 @@ class DeviceActionGate final : public rclcpp::Node {
     /**
      * @brief 装配单步bootstrap操作服务，回调只CAS排管理编号。
      * 服务返回排队说明，控制线程复核最新观察后才start_operation；不在服务回调直接发送副作用管理请求。
+     * SetPermit拒绝时明确返回未入队，薄客户端可在原身份及期限内重新等待准入；此回执不是设备许可确认。
      * @param name ROS私有服务名。
      * @param operation Select/Grant/Capture/SetPermit之一。
      */
@@ -1559,13 +1592,28 @@ class DeviceActionGate final : public rclcpp::Node {
       management_services_.push_back(create_service<std_srvs::srv::Trigger>(name,
         [this,operation](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                          std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-          const bool available=operation==ManageOperation::kSetPermit ?
+          auto admission=cancel_admission_.try_control();
+          if(!admission) {
+            response->message=operation==ManageOperation::kSetPermit ? "PERMIT_NOT_QUEUED" :
+              "Operation unavailable or another management request is pending";return;
+          }
+          bool available=operation==ManageOperation::kSetPermit ?
             permit_operation_available_.load() : explicit_operation_available_.load();
-          response->success=release_stage_.load()==0 && available &&
+          const bool explicit_manual_permit=explicit_manual_permit_restarts_window(manual_reference_mode_,enabled_,operation);
+          if(explicit_manual_permit) {
+            const auto decision=manual_task_permit_available(management_now_us());
+            if(decision==ManualTaskPermitDecision::kReuse) {
+              response->success=true;response->message="PERMIT_REUSED";return;
+            }
+            available=decision==ManualTaskPermitDecision::kInstall;
+          }
+          response->success=admission && release_stage_.load()==0 && available &&
             queue_management_request(management_request_,busy_,renewal_reserved_,
                                      static_cast<int>(wire_value(operation)),available);
+          if(response->success && explicit_manual_permit) manual_explicit_permit_restart_=true;
           response->message=response->success ? "Operation queued; poll bootstrap_status for final result" :
-            "Operation unavailable or another management request is pending";
+            (operation==ManageOperation::kSetPermit ? "PERMIT_NOT_QUEUED" :
+              "Operation unavailable or another management request is pending");
         }));
     };
     add_operation_service("~/select_control_mode",ManageOperation::kSelectMode);
@@ -1653,6 +1701,21 @@ class DeviceActionGate final : public rclcpp::Node {
             response->success = true;
             response->message = "RELEASED_IDLE";
             return;
+          }
+          // 同一明确释放意图只排一次现有Action取消；不占D10槽、不抢在途管理。
+          if(manual_cancel_before_release_) {
+            response->message="RELEASE_QUEUED";return;
+          }
+          if(manual_reference_mode_ && active_ && active_->is_active() &&
+             goal_boot_==latest_bootstrap_.boot_epoch && goal_session_==expected_session_id_ &&
+             expected_session_id_!=0 && readonly_fresh && observation_ready_.load() && !observation_lost_ &&
+             !evidence_incomplete_.load() && release_stage_.load()==0 && transport_->ready() &&
+             bootstrap_authority_coherent(panel_status_,panel_state_) &&
+             panel_status_.session_id()==expected_session_id_ &&
+             manual_release_intent_.begin(latest_bootstrap_,release_now,20000000U) &&
+             cancel_requests_.request(active_)) {
+            manual_cancel_before_release_=true;admission_prerequisites_=false;ready_=false;
+            response->message="RELEASE_QUEUED";return;
           }
           // 同锁重核管理槽；合法在途只排清理意图，不能抢发D10或丢弃意图。
           if (manual_reference_mode_) {
@@ -1809,10 +1872,13 @@ class DeviceActionGate final : public rclcpp::Node {
    * @param manager 借用ControllerManager，get_loaded_controllers会取其非RT锁。
    */
   void attach(controller_manager::ControllerManager &manager) {
-    if(std::atomic_load(&discovered_controller_)) return;
+    if(auto controller=std::atomic_load(&discovered_controller_)) {
+      controller->log_update_failure(); return;
+    }
     for(const auto &spec:manager.get_loaded_controllers()) {
       if(spec.info.name!=controller_name_) continue;
       auto controller=std::dynamic_pointer_cast<Controller>(spec.c);
+      if(controller) controller->log_update_failure();
       if(controller && controller->get_lifecycle_state().id()==lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
         std::atomic_store(&discovered_controller_,std::move(controller));
     }
@@ -1939,7 +2005,8 @@ class DeviceActionGate final : public rclcpp::Node {
    }
    bool confirm_readonly_idle_owner_retirement(std::uint64_t now) noexcept {
      if(!manual_reference_mode_ || !readonly_owner_retirement_requested_ ||
-        !transport_ || !evidence_incomplete_.load() || active_ ||
+        !transport_ || !readonly_idle_retirement_failure(evidence_incomplete_.load(),
+            bootstrap_ && bootstrap_->phase()==BootstrapPhase::kFault) || active_ ||
         management_request_.load()!=0 || manual_calibration_requested_.load() ||
         (bootstrap_ && bootstrap_->management_operation_pending()) ||
         !transport_->readonly_released_owner_observed(
@@ -2668,8 +2735,13 @@ class DeviceActionGate final : public rclcpp::Node {
                 ? (renewal_binding_ready &&
                    bootstrap_->start_renew_lease(latest_bootstrap_,
                                                  requested_lease_us_, now))
-                : bootstrap_->start_operation(latest_bootstrap_, operation,
-                                              now);
+                : ((!manual_explicit_permit_restart_.exchange(false) ||
+                    (operation==ManageOperation::kSetPermit && !active_ &&
+                     !manual_cancel_before_release_ && !renewal_reserved_.load() &&
+                     observation_ready_.load() && !observation_lost_ &&
+                     readonly_release_samples_fresh(panel_status_received_us_,panel_state_received_us_,now,state_max_age_us_) &&
+                     bootstrap_->restart_manual_permit_window(latest_bootstrap_,now))) &&
+                   bootstrap_->start_operation(latest_bootstrap_,operation,now));
         if(!started) {
           port_.diagnostics.detail("EXPLICIT_MANAGEMENT_OPERATION_REJECTED operation=%d",requested);
           if(operation==ManageOperation::kRenewLease) {
@@ -3048,52 +3120,41 @@ class DeviceActionGate final : public rclcpp::Node {
    * 先消费真实发布的JTC update或直接同值Hold代/排空，再取pending目标并复验profile/LIMITED预算，之后刷新direct Hold和检测执行。gate有终态还要核对已配置的原页/时间线封口，可有限等两秒；异常证据永不报Succeeded。
    * @param admission 已成功取得控制mutex的RAII对象，负责open/close当前取消目标。
    */
-  void maybe_restore_manual_permit(std::uint64_t now) {
-    if (!manual_reference_mode_ || !manual_reference_ || !bootstrap_)
-      return;
-    const bool fresh_hold =
-        readonly_release_samples_fresh(panel_status_received_us_,
-                                       panel_state_received_us_, now,
-                                       state_max_age_us_) &&
-        bootstrap_authority_coherent(panel_status_, panel_state_) &&
-        panel_status_.core_state() == wire_value(WireCoreState::kHold) &&
-        panel_state_.core_state() == wire_value(WireCoreState::kHold) &&
-        panel_state_.hold_ready() &&
-        panel_status_.session_id() == expected_session_id_ &&
-        panel_status_.reference_epoch() ==
-            manual_reference_->qualified_reference_epoch() &&
-        panel_status_.reference_epoch() != 0U;
-    const bool previous_sealed =
-        timeline_goal_hold_confirmed_ && timeline_hold_ &&
-        (!timeline_ || timeline_->drained()) &&
-        transport_->post_complete_begin_ready() &&
-        transport_->raw_evidence_capture_enabled() &&
-        raw_terminal_matches(transport_->raw_terminal_flushed(), goal_boot_,
-                             goal_session_, goal_run_id_);
-    const ManualPermitRestoreInputs input{
-        manual_reference_->phase() == ManualReferencePhase::kReady,
-        enabled_,
-        !active_ && !busy_.load(),
-        management_request_.load() == 0 && !renewal_reserved_.load() &&
-            release_stage_.load() == 0 &&
-            (bootstrap_->ready() || bootstrap_->operation_complete()) &&
-            !evidence_incomplete_.load() && transport_->ready() &&
-            transport_->raw_evidence_failure() == 0U,
-        fresh_hold,
-        gate_->permit_refresh_allowed() &&
-            !panel_status_.real_motion_permitted() &&
-            panel_status_.permit_remaining_us() == 0U,
-        previous_sealed,
-        bootstrap_->manual_permit_remaining_us(now) != 0U,
-        panel_state_.motion_epoch(),
-        manual_last_permit_restore_epoch_};
-    if (input.ready() &&
-        queue_management_request(
-            management_request_, busy_, renewal_reserved_,
-            static_cast<int>(wire_value(ManageOperation::kSetPermit)), true)) {
-      manual_last_permit_restore_epoch_ = input.motion_epoch;
-      ready_ = false;
+  // 这里只提供明确新任务的准入快照；常驻Hold不自动安装或重开任务许可。
+  ManualTaskPermitDecision manual_task_permit_available(std::uint64_t now) const {
+    if(!manual_reference_mode_ || !enabled_ || !manual_reference_ || !bootstrap_)
+      return ManualTaskPermitDecision::kUnavailable;
+    const bool eligible=observation_ready_.load() && !observation_lost_ && !evidence_incomplete_.load() &&
+      !active_ && !busy_.load() && !manual_cancel_before_release_ &&
+      !manual_calibration_requested_.load() && management_request_.load()==0 &&
+      release_stage_.load()==0 && !renewal_reserved_.load() &&
+      transport_->ready() && transport_->raw_evidence_failure()==0U && bootstrap_->release_slot_available() &&
+      manual_reference_->phase()==ManualReferencePhase::kReady &&
+      readonly_release_samples_fresh(panel_status_received_us_,panel_state_received_us_,now,state_max_age_us_) &&
+      bootstrap_authority_coherent(panel_status_,panel_state_) &&
+      expected_session_id_!=0 && panel_status_.session_id()==expected_session_id_ &&
+      panel_status_.reference_epoch()==manual_reference_->qualified_reference_epoch() &&
+      panel_status_.core_state()==4U && panel_state_.core_state()==4U && panel_state_.hold_ready();
+    const bool sealed=timeline_goal_hold_confirmed_ && timeline_hold_ &&
+      (!timeline_ || timeline_->drained()) && transport_->post_complete_begin_ready() &&
+      transport_->raw_evidence_capture_enabled() &&
+      raw_terminal_matches(transport_->raw_terminal_flushed(),goal_boot_,goal_session_,goal_run_id_);
+    return manual_task_permit_decision(eligible,gate_->ready(),
+      panel_status_.real_motion_permitted(),panel_status_.permit_remaining_us(),
+      gate_->permit_refresh_allowed(),sealed);
+  }
+
+  void advance_manual_cancel_release(std::uint64_t now) {
+    if(!manual_cancel_before_release_)return;
+    const auto decision=manual_release_intent_.decision(latest_bootstrap_,now,
+      !active_ && !busy_.load() && release_available_.load(),observation_ready_.load(),
+      bootstrap_->phase()==BootstrapPhase::kFault);
+    if(decision==ManualReleaseDecision::kUnconfirmed) {
+      manual_cancel_before_release_=false;release_stage_=4;return;
     }
+    if(decision==ManualReleaseDecision::kSubmit &&
+       queue_disable_and_release(release_available_,management_request_,busy_,release_stage_))
+      manual_cancel_before_release_=false;
   }
 
   void cycle_impl(GoalCancelAdmission<GoalHandle>::Control &admission) {
@@ -3317,15 +3378,16 @@ class DeviceActionGate final : public rclcpp::Node {
         result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED;
         result->error_string=evidence_incomplete_result_error(result->error_string);
         active_->abort(result);
-      } else if(gate_->terminal()==Terminal::kCanceled && active_->is_canceling()) active_->canceled(result);
+      } else if(gate_->terminal()==Terminal::kCanceled) finish_interrupted_public_goal(active_,result);
       else { result->error_code=Follow::Result::PATH_TOLERANCE_VIOLATED; active_->abort(result); }
       if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
          (gate_->terminal()!=Terminal::kSucceeded || evidence_incomplete_.load()))
         { limited_goal_budget_.fail(); ready_=false; }
       active_.reset(); busy_=false;
     }
+    advance_manual_cancel_release(now);
     if(!fault_cleanup_confirmed_.load()) request_evidence_release(now);
-    maybe_restore_manual_permit(now);
+    // 常驻手动Hold只等待下一明确任务请求，不自动补装许可。
     /**
      * @brief 下一goal ready重新合成真实Gate/Port/观察/容差/Complete屏障，再扣除续租/释放/证据及LIMITED预算；不是单个长期锁存enable布尔值。
      */
@@ -3339,7 +3401,7 @@ class DeviceActionGate final : public rclcpp::Node {
     admission_prerequisites_=prerequisites.ready() && !fault;
     ready_ =
         admission_prerequisites_.load() && !renewal_reserved_.load() &&
-        release_stage_.load() == 0 && !evidence_incomplete_.load() &&
+        release_stage_.load() == 0 && !manual_cancel_before_release_ && !evidence_incomplete_.load() &&
         (!manual_reference_mode_ ||
          bootstrap_->manual_permit_remaining_us(now) != 0U) &&
         (device_profile_.no_load_basis != NoLoadBasis::kFunctionalLimited ||
@@ -3467,6 +3529,8 @@ class DeviceActionGate final : public rclcpp::Node {
   std::uint64_t expected_session_id_ = 0U;
   ManualReleaseIntent manual_release_intent_;
   bool manual_release_waiting_ = false;
+  bool manual_cancel_before_release_ = false;
+  std::atomic<bool> manual_explicit_permit_restart_{false};
   bool readonly_release_confirmed_ = false;
   bool local_readonly_retired_ = false;
   bool readonly_owner_retirement_requested_ = false;

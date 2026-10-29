@@ -155,7 +155,21 @@ class JointPanel(QtWidgets.QWidget):
             endpoint = (arguments[arguments.index('--endpoint') + 1]
                         if '--endpoint' in arguments else None)
             self.ros_runtime = PanelRuntime(serial_endpoint=endpoint)
-            self.ros_backend = RosBackend(RosTransport(self.node, self.ros_status_received, self.ros_state_received), self.ros_event)
+            self._ros_generation = getattr(self, '_ros_generation', 0) + 1
+            generation = self._ros_generation
+            holder = {}
+            def guarded(callback):
+                def received(*args):
+                    transport = holder.get('transport')
+                    if (self._ros_generation == generation and transport is not None and
+                            not getattr(transport, 'closed', False)):
+                        callback(*args)
+                return received
+            transport = RosTransport(self.node, guarded(self.ros_status_received),
+                guarded(self.ros_state_received), own_control_node=True)
+            holder['transport'] = transport
+            self.ros_backend = RosBackend(transport, guarded(self.ros_event))
+            self._ros_reconnect_queued = False
             self.ros_last_poll = 0
             self.ros_auto_pending = bool(self.cfg.pop('auto_calibrate_and_test', False))
             self.backend_notice.setText('真机-USB/ROS · 启动只读')
@@ -304,6 +318,8 @@ class JointPanel(QtWidgets.QWidget):
     # 关闭、忙碌、管理进程或已有连接动作时直接返回；重连仍先走旧连接释放屏障，不自动恢复使能。
     # @return None；执行上述状态更新、界面或日志操作。
     def request_reconnect(self):
+        if getattr(self, 'closing', False):
+            return
         if self.backend == 'ros':
             if (self.ros_runtime.process is None and
                     getattr(self.ros_backend.transport, '_startup_owner_conflict', '')):
@@ -323,6 +339,12 @@ class JointPanel(QtWidgets.QWidget):
                     self.message('旧USB连接已物理断开，已退出本窗口的旧通信进程；原释放未确认记录保留。重新建立只读连接，不自动恢复运动。')
                     self.pending_backend = 'ros'
                     self.apply_backend_change()
+                    return
+                if self.ros_runtime.state == 'Starting':
+                    # 旧代可由timer先退休；后到的重连点击不能把新代发现期变成释放。
+                    # 已证实USB断开的退休分支在上方，启动期限仍由ros_tick原预算监督。
+                    self.ros_reconnect_pending = False
+                    self.message('ROS只读连接正在启动，继续等待控制链；未发送释放或创建新拥有者。')
                     return
                 self.release('RELEASE')
                 self.message('正在确认 ROS 失能释放，确认后重新建立只读连接。')
@@ -470,11 +492,12 @@ class JointPanel(QtWidgets.QWidget):
             from manual_panel_ros_backend import confirmed_ros_launch_argv
             argv = list(self.cfg.get('ros_launch_command', []))
             confirmed = bool(self.cfg.get('operator_confirmed_double_limits', False))
-            if argv and not confirmed:
+            if argv and not confirmed and not self.cfg.get('_ros_limits_confirmation_answered', False):
                 confirmed = QtWidgets.QMessageBox.question(self, '本次 ROS 连接的标定确认',
                     '机械臂当前是否位于人工双限位姿态，并已得到支撑？\n'
                     '是：允许之后明确发起自动标定与测试；否：本次只读。\n连接本身不会使能或运动。',
                     QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No) == QtWidgets.QMessageBox.Yes
+                self.cfg['_ros_limits_confirmation_answered'] = True
             self.cfg['operator_confirmed_double_limits'] = confirmed
             try:
                 if argv:
@@ -1016,9 +1039,18 @@ class JointPanel(QtWidgets.QWidget):
         if self.backend == 'ros':
             # 先撤销界面未来目标，设备停车/失能仍仅由ROS控制链处理。
             self.authorized = False
+            if (self.ros_runtime.process is None and
+                    getattr(self.ros_backend.transport, '_startup_owner_conflict', '')):
+                # 预检拒绝的启动没有拥有设备，不能向外部链释放或锁住重试按钮。
+                self.busy = False
+                self.message('本次未启动 ROS 控制链；可点击重新连接重试发现，未向其他拥有者发送释放。')
+                return
             self.busy = True
+            self.ros_reconnect_pending = not getattr(self, 'closing', False)
             self.ros_runtime.begin_release()
-            self.ros_backend.release()
+            if not self.ros_backend.release() and not self.ros_backend.pending:
+                # 原释放已超时的重复点击没有新的异步回执，不保留界面忙碌标记。
+                self.busy = False
             return
         self.cancel_hold_pending = False
         self.remember_readonly_handoff()
@@ -1306,6 +1338,8 @@ class JointPanel(QtWidgets.QWidget):
         callback_deadline = time.perf_counter() + .003 if ros else None
         for _ in range(32 if ros else 8):
             rclpy.spin_once(self.node, timeout_sec=0)
+            if ros:
+                getattr(self.ros_backend.transport, 'pump', lambda: None)()
             if ros and time.perf_counter() >= callback_deadline:
                 break
         if self.backend == 'ros':
@@ -1452,8 +1486,24 @@ class JointPanel(QtWidgets.QWidget):
             self.ros_runtime.active()
         elif kind in ('released', 'retired', 'canceled'):
             self.busy = False
-            if kind in ('released', 'retired') and getattr(self, 'ros_reconnect_pending', False):
-                QtCore.QTimer.singleShot(0, self.request_reconnect)
+            if (kind == 'released' and not getattr(self, 'closing', False) and
+                    getattr(self.ros_runtime, 'process', None) is not None):
+                # 公开runner也可触发本链权威释放；仅登记只读意图，双消息门仍在can_close。
+                self.ros_reconnect_pending = True
+            if kind in ('released', 'retired'):
+                self.ros_runtime.state = ('Released' if getattr(self.ros_backend, 'can_close', False)
+                                          else 'WaitingReleaseFeedback')
+            if (kind in ('released', 'retired') and getattr(self, 'ros_reconnect_pending', False) and
+                    not getattr(self, 'closing', False) and not getattr(self, '_ros_reconnect_queued', False)):
+                self._ros_reconnect_queued = True
+                backend = self.ros_backend
+                def reconnect():
+                    if self.ros_backend is not backend:
+                        return
+                    self._ros_reconnect_queued = False
+                    if not getattr(self, 'closing', False):
+                        self.request_reconnect()
+                QtCore.QTimer.singleShot(0, reconnect)
         elif kind == 'accepted':
             self.busy = True
         elif kind == 'completed':
@@ -1488,6 +1538,10 @@ class JointPanel(QtWidgets.QWidget):
     def ros_tick(self):
         self.refresh_ros_connection_controls()
         now = time.monotonic()
+        if (not self.closing and getattr(self, 'ros_reconnect_pending', False) and
+                getattr(self.ros_backend, 'can_close', False)):
+            self.request_reconnect()
+            return
         if (not self.closing and getattr(self, 'ros_reconnect_pending', False) and
                 not getattr(self.ros_backend, 'can_close', self.ros_backend.released) and
                 now >= getattr(self, '_ros_detach_retry_at', 0.)):
@@ -1535,10 +1589,14 @@ class JointPanel(QtWidgets.QWidget):
             state['position_valid_mask'] == 63 and state['reference_epoch'] != 0 and
             state['session_id'] != 0 and len(positions) == 6 and
             all(math.isfinite(q) for q in positions) and (manual_model_ready or auto_model_ready)))
-        # 仅镜像权威快照用于UI准入；不申请或推导设备许可。
+        # 等待下一张许可的本owner Hold可提交明确执行意图；实际FJT仍须C++确认许可后才发送。
+        waiting_for_permit = bool(manual_model_ready and matched and
+            state['core_state'] == 4 and status.core_state == 4 and state.get('hold_ready', False) and
+            not getattr(status, 'real_motion_permitted', False) and getattr(status, 'permit_remaining_us', 0) == 0 and
+            not getattr(status, 'evidence_lost', False))
         self.authorized = bool(matched and self.fresh() and
             status_fresh and
-            getattr(status, 'real_motion_permitted', False) and getattr(status, 'permit_remaining_us', 0) > 0 and
+            (waiting_for_permit or (getattr(status, 'real_motion_permitted', False) and getattr(status, 'permit_remaining_us', 0) > 0)) and
             state['session_id'] != 0 and state['position_valid_mask'] == 63)
         self.calibration = ((state['boot_epoch'], state['reference_epoch']) if matched and
                             state['reference_epoch'] != 0 and state['position_valid_mask'] == 63 else None)
@@ -1580,6 +1638,7 @@ class JointPanel(QtWidgets.QWidget):
                 deadline = time.monotonic() + float(self.cfg.get('ros_release_timeout_s', 6))
                 while not getattr(self.ros_backend, 'can_close', self.ros_backend.released) and time.monotonic() < deadline:
                     rclpy.spin_once(self.node, timeout_sec=0.02)
+                    getattr(self.ros_backend.transport, 'pump', lambda: None)()
                     self.ros_tick()
                     QtWidgets.QApplication.processEvents()
             if not self.ros_runtime.stop(getattr(self.ros_backend, 'can_close', self.ros_backend.released)):

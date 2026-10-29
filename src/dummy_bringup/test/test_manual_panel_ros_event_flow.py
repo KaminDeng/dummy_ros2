@@ -58,7 +58,7 @@ def test_reconnect_waits_for_release_then_reopens_once(monkeypatch):
     calls, queued = [], []
     panel, _, _ = event_panel()
     panel.backend = 'ros'
-    panel.ros_runtime = NS(process=object(), stop=lambda value: calls.append('stop') or True,
+    panel.ros_runtime = NS(state='Active', process=object(), stop=lambda value: calls.append('stop') or True,
                            retire_disconnected_owner=lambda: False)
     panel.ros_backend = NS(released=False, transport=NS(), close=lambda: calls.append('close') or True)
     panel.release = lambda value: calls.append('release')
@@ -84,7 +84,8 @@ def test_ros_callback_pump_drains_burst_with_a_gui_time_budget(monkeypatch, call
         seen.append('callback')
         clock[0] += callback_cost
     monkeypatch.setattr(module.rclpy, 'spin_once', spin)
-    panel = NS(node=object(), backend='ros', ros_tick=lambda: seen.append('ui'))
+    panel = NS(node=object(), backend='ros', ros_tick=lambda: seen.append('ui'),
+               ros_backend=NS(transport=NS(pump=lambda:None)))
     JointPanel.tick(panel)
     assert seen == ['callback'] * expected + ['ui']
 

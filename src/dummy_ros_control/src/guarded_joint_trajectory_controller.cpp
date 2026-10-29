@@ -9,6 +9,7 @@
 #include "pluginlib/class_list_macros.hpp"
 #include <openssl/sha.h>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -107,13 +108,64 @@ TrajectoryDigest trajectory_digest(const trajectory_msgs::msg::JointTrajectory &
 }
 
 /**
- * @brief 在实时控制拍处理prime或JTC轨迹并发布本地采样。
- * @param time ROS控制时刻，传基类和sink，不与设备时间直接相减。
- * @param period 实际控制拍时长，仅用于完整丢拍拒绝；JTC轨迹相位使用配置的固定周期。
- * @return 基类结果或接口/轴数错误；只有OK且desired形状匹配才调用sink。
+ * @brief 冻结实例首个更新错误的固定八槽现场；不改变原有失败处理。
+ * @param reason 静态原因标签。
+ * @param axis 0..5表示对应轴，其他值表示无特定轴。
+ * @return 原有ERROR结果，不把日志当作设备停止或失能证明。
  */
+controller_interface::return_type GuardedJointTrajectoryController::report_update_failure(
+    const char* reason, std::size_t axis) {
+  if(!diagnostic_failure_reported_) {
+    diagnostic_reason_=reason;
+    constexpr char hex[]="0123456789abcdef";
+    for(std::size_t i=0;i<active_goal_uuid_.size();++i) {
+      diagnostic_uuid_[2*i]=hex[active_goal_uuid_[i]>>4];
+      diagnostic_uuid_[2*i+1]=hex[active_goal_uuid_[i]&15];
+    }
+    diagnostic_axis_mask_=axis<6?(1U<<axis):0U;
+    diagnostic_nominal_ns_=update_period_.nanoseconds();
+    diagnostic_phase_ns_=sample_phase_ns_.load(std::memory_order_relaxed);
+    diagnostic_sample_seq_=sample_sequence_.load(std::memory_order_relaxed);
+    diagnostic_sink_enabled_=update_sink_.load(std::memory_order_acquire)!=nullptr;
+    // 此后不再改现场；非控制侧acquire后读取，不延迟原有停止路径。
+    diagnostic_failure_reported_=true;
+    diagnostic_pending_.store(true,std::memory_order_release);
+  }
+  return controller_interface::return_type::ERROR;
+}
+
+void GuardedJointTrajectoryController::log_update_failure() {
+  if(!diagnostic_pending_.exchange(false,std::memory_order_acquire))return;
+  RCLCPP_ERROR(get_node()->get_logger(),
+    "JTC_UPDATE_FAILED reason=%s goal_uuid=%s axis_mask=0x%02x nominal_ns=%lld phase_ns=%llu sample_seq=%llu sink=%u",
+    diagnostic_reason_,diagnostic_uuid_.data(),diagnostic_axis_mask_,static_cast<long long>(diagnostic_nominal_ns_),
+    static_cast<unsigned long long>(diagnostic_phase_ns_),
+    static_cast<unsigned long long>(diagnostic_sample_seq_),diagnostic_sink_enabled_?1U:0U);
+  const auto first=diagnostic_updates_>update_diagnostics_.size()?
+    diagnostic_updates_-update_diagnostics_.size():0U;
+  for(auto i=first;i<diagnostic_updates_;++i) {
+    const auto& d=update_diagnostics_[i%update_diagnostics_.size()];
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "JTC_UPDATE_CONTEXT seq=%llu time_ns=%lld period_ns=%lld clock_delta_ns=%lld steady_gap_ns=%lld clock_type=%d",
+      static_cast<unsigned long long>(d.sequence),static_cast<long long>(d.time_ns),
+      static_cast<long long>(d.period_ns),static_cast<long long>(d.clock_delta_ns),
+      static_cast<long long>(d.steady_gap_ns),d.clock_type);
+  }
+}
+
 controller_interface::return_type GuardedJointTrajectoryController::update(
     const rclcpp::Time &time, const rclcpp::Duration &period) {
+  if(!diagnostic_failure_reported_) {
+    const auto steady_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto index=diagnostic_updates_++;
+    update_diagnostics_[index%update_diagnostics_.size()]={index+1,time.nanoseconds(),
+      period.nanoseconds(),update_clock_known_ && time.get_clock_type()==last_update_clock_type_?
+        time.nanoseconds()-last_update_clock_ns_:0,
+      diagnostic_last_steady_ns_!=0?steady_ns-diagnostic_last_steady_ns_:0,
+      static_cast<int>(time.get_clock_type())};
+    diagnostic_last_steady_ns_=steady_ns;
+  }
   /**
    * @brief prime存在时直接输出保持位置并读取actual，不推进JTC轨迹；无prime才调用基类update。该分支仍只写命令接口，不表示设备已到位。
    */
@@ -124,10 +176,13 @@ controller_interface::return_type GuardedJointTrajectoryController::update(
   // 完整丢拍不得靠缩短轨迹相位或补发掩盖；返回原ERROR路径，停生产并撤身份。
   if(timing_failed_ || nominal_ns<=0 || period.nanoseconds()<=0 ||
      period.nanoseconds()>=2*nominal_ns || invalid_clock) {
+    const char* reason=timing_failed_?"TIMING_LATCHED":nominal_ns<=0?"INVALID_NOMINAL_PERIOD":
+      period.nanoseconds()<=0?"NON_POSITIVE_PERIOD":period.nanoseconds()>=2*nominal_ns?"PERIOD_GAP":
+      time.get_clock_type()!=last_update_clock_type_?"CLOCK_TYPE_CHANGED":"CLOCK_NOT_ADVANCING";
     timing_failed_=true;
     set_update_sink(nullptr,nullptr);
     clear_command_identity();
-    return controller_interface::return_type::ERROR;
+    return report_update_failure(reason);
   }
   update_clock_known_=true;
   last_update_clock_ns_=time.nanoseconds();
@@ -135,12 +190,12 @@ controller_interface::return_type GuardedJointTrajectoryController::update(
   const auto prime=*prime_buffer_.readFromRT();
   auto result=controller_interface::return_type::OK;
   if(prime) {
-    if(dof_!=1 && dof_!=6) return controller_interface::return_type::ERROR;
+    if(dof_!=1 && dof_!=6) return report_update_failure("PRIME_DOF");
     for(std::size_t index=0;index<dof_;++index) {
       state_desired_.positions[index]=(*prime)[index];
       state_current_.positions[index]=joint_state_interface_[0][index].get().get_optional().value_or(NAN);
       if(!joint_command_interface_[0][index].get().set_value((*prime)[index]))
-        return controller_interface::return_type::ERROR;
+        return report_update_failure("COMMAND_WRITE_REJECTED",index);
     }
   // CM传入实际调度间隔，而固件按生产序号差×20ms验证导数。
   // 复用JTC自身traj_time_推进，不把壁钟抖动注入固定生产相位。
@@ -154,7 +209,7 @@ controller_interface::return_type GuardedJointTrajectoryController::update(
       current_trajectory_->set_point_before_trajectory_msg(time,state_desired_,joints_angle_wraparound_);
       joint_trajectory_controller::TrajectoryPointConstIter a,b;
       if(!current_trajectory_->sample(time,interpolation_method_,state_desired_,a,b))
-        return controller_interface::return_type::ERROR;
+        return report_update_failure("ENTRY_SAMPLE_REJECTED");
       traj_time_=time-update_period_;
       entry_prime_.reset();
     }
@@ -183,6 +238,8 @@ controller_interface::return_type GuardedJointTrajectoryController::update(
     sink(state_desired_.positions.data(), state_desired_.positions.size(),
          time.nanoseconds(), update_sink_context_.load(std::memory_order_relaxed));
   }
+  if(result!=controller_interface::return_type::OK)
+    return report_update_failure("BASE_JTC_UPDATE_ERROR");
   return result;
 }
 
@@ -195,6 +252,7 @@ controller_interface::CallbackReturn GuardedJointTrajectoryController::on_config
     const rclcpp_lifecycle::State &previous_state) {
   const auto result = JointTrajectoryController::on_configure(previous_state);
   if (result != controller_interface::CallbackReturn::SUCCESS) return result;
+  RCLCPP_INFO(get_node()->get_logger(),"JTC_DIAGNOSTICS_READY history=8 mode=first_failure_non_rt");
   joint_command_subscriber_.reset();
   action_server_.reset();
   subscriber_is_active_.store(false);
@@ -212,6 +270,7 @@ controller_interface::CallbackReturn GuardedJointTrajectoryController::on_activa
     const rclcpp_lifecycle::State &previous_state) {
   timing_failed_=false;
   update_clock_known_=false;
+  if(!diagnostic_failure_reported_) {diagnostic_updates_=0;diagnostic_last_steady_ns_=0;}
   return JointTrajectoryController::on_activate(previous_state);
 }
 

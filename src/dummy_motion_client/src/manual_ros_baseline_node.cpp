@@ -133,7 +133,7 @@ public:
     controller_list_ = create_client<Controllers>("/controller_manager/list_controllers");
     for (const auto &name :
          {"calibrate_manual_reference", "manual_reference_status",
-          "enable_hold", "bootstrap_status", "disable_and_release", "last_goal_rejection"})
+          "enable_hold", "bootstrap_status", "disable_and_release", "last_goal_rejection", "set_bench_permit"})
       services_[name] =
           create_client<Trigger>(std::string("/device_action_gate/") + name);
     start_service_ =
@@ -160,7 +160,7 @@ public:
           response->success =
               manual_mode_ &&
               ((manual_ready_ && flow_.stage() == BaselineStage::kSingleAxis &&
-                moving_ready() && state_.session_id == manual_session_ &&
+                (moving_ready() || waiting_for_next_permit()) && state_.session_id == manual_session_ &&
                 state_.reference_epoch == expected_reference_) ||
                (manual_external_release_ && released_ && !released_fault_ && !flow_.active()));
           response->message = description();
@@ -251,6 +251,17 @@ private:
            status_.real_motion_permitted &&
            status_.permit_remaining_us > age_us_ && !status_.evidence_lost;
   }
+  bool waiting_for_next_permit() const {
+    return controllers_active_ && fresh() && state_.core_state == 4 &&
+            status_.core_state == 4 && state_.hold_ready &&
+            state_.position_valid_mask == 63 && state_.velocity_valid_mask == 63 &&
+            state_.session_id == manual_session_ && status_.session_id == manual_session_ &&
+            state_.profile_id == status_.profile_id &&
+            state_.reference_epoch == expected_reference_ &&
+            status_.reference_epoch == expected_reference_ &&
+            !status_.real_motion_permitted && status_.permit_remaining_us == 0 &&
+            !status_.evidence_lost;
+  }
   std::string description() const {
     if (manual_mode_) {
       if (manual_external_release_ && released_ && !released_fault_ && !flow_.active())
@@ -289,6 +300,7 @@ private:
     if (!flow_.start(started_at))
       return false;
     controllers_active_ = false;
+    next_permit_requested_ = false;
     pending_controller_activation_.clear();
     task_started_us_ = started_at;
     manual_mode_ = manual;
@@ -369,8 +381,27 @@ private:
     if (!flow_.active())
       return;
     const auto now = steady_us();
-    flow_.tick(now);
+    // 手动Ready后由本owner的反馈、许可和动作期限监督；准备/自动基线才消费一次性总期限。
+    if (!(manual_mode_ && manual_ready_ &&
+          flow_.stage() == BaselineStage::kSingleAxis))
+      flow_.tick(now);
     if (flow_.stage() != BaselineStage::kRelease && boot_ && !fresh()) {
+      // 只等待本节点DDS缓存追上；等待期间不发新动作。USB/逐轴CAN的250ms保护仍由唯一设备worker执行。
+      bool local_delivery_wait = manual_ready_ && state_at_ && status_at_ &&
+          state_.boot_epoch == boot_ && status_.boot_epoch == boot_ &&
+          state_.device_id == device_ && status_.device_id == device_ &&
+          state_.session_id == manual_session_ && status_.session_id == manual_session_ &&
+          state_.reference_epoch == expected_reference_ && status_.reference_epoch == expected_reference_ &&
+          state_.profile_id == status_.profile_id && !status_.evidence_lost &&
+          state_.position_valid_mask == 63 && state_.velocity_valid_mask == 63 &&
+          state_.core_state != 9 && status_.core_state != 9 &&
+          now - state_at_ <= age_us_ + 2000000 &&
+          now - status_at_ <= status_age_us_ + 2000000;
+      for (unsigned i = 0; i < 6; ++i)
+        local_delivery_wait = local_delivery_wait && axis_at_[i] &&
+            now - axis_at_[i] <= age_us_ + 2000000 && state_.can_rx_age_us[i] <= age_us_;
+      if (local_delivery_wait)
+        return;
       // 首次失鲜保留独立接收锚/轴推进/CAN年龄，不能把DDS停发误称设备源停发。
       std::string detail="state_age_us="+std::to_string(state_at_?now-state_at_:UINT64_MAX)+
         " status_age_us="+std::to_string(status_at_?now-status_at_:UINT64_MAX)+
@@ -483,7 +514,7 @@ private:
         if (released_idle) {
           manual_external_release_ = true;
           fail("手动控制已释放");
-        } else if (!moving_ready() || state_.session_id != manual_session_ ||
+        } else if ((!moving_ready() && !waiting_for_next_permit()) || state_.session_id != manual_session_ ||
                    state_.reference_epoch != expected_reference_) {
           if (state_.core_state == 9 || status_.core_state == 9 ||
               state_.reference_epoch != expected_reference_ ||
@@ -979,11 +1010,26 @@ private:
       return;
     }
     trigger("bootstrap_status", [this](const auto &response) {
+      if (response.success && response.message == "ENABLED_HOLD_PERMIT_REQUIRED") {
+        if (!next_permit_requested_) {
+          next_permit_requested_ = true;
+          next_permit_management_ = state_.management_epoch;
+          const bool sent = trigger("set_bench_permit", [this](const auto &permit) {
+            record("NEXT_PERMIT_REQUEST", permit.message);
+            if (!permit.success && permit.message.find("QUEUED") == std::string::npos &&
+                permit.message.find("queued") == std::string::npos)
+              fail("下一运动显式许可请求未受理: " + permit.message);
+          });
+          if (!sent)
+            next_permit_requested_ = false;
+        }
+        return;
+      }
       if (!response.success ||
           (response.message.find("HOLD") == std::string::npos && response.message.find("LEASE_RENEWED") == std::string::npos))
         return;
-      // Gate独占实际SetPermit；这里不能重开许可、代造授权或把queued当COMMITTED。
-      if (moving_ready() && state_.core_state == 4 && status_.core_state == 4 && state_.hold_ready &&
+      // 显式请求只排管理操作；仍须新管理水位、真实许可及双源反馈确认，queued不是Ready。
+      if ((!next_permit_requested_ || std::int32_t(state_.management_epoch - next_permit_management_) > 0) && moving_ready() && state_.core_state == 4 && status_.core_state == 4 && state_.hold_ready &&
           state_.management_epoch == status_.management_epoch &&
           state_.motion_epoch == arrival_state_.motion_epoch && status_.motion_epoch == arrival_status_.motion_epoch &&
           state_.session_id == arrival_state_.session_id && status_.session_id == arrival_status_.session_id &&
@@ -1049,6 +1095,7 @@ private:
            evidence.str());
     result_waiting_ = false;
     next_motion_waiting_ = true;
+    next_permit_requested_ = false;
     next_motion_until_ = steady_us() + 15000000;
     arrival_state_ = state_;
     arrival_status_ = status_;
@@ -1673,7 +1720,8 @@ private:
   trajectory_msgs::msg::JointTrajectory planned_trajectory_;
   GoalHandle::SharedPtr goal_;
   std::shared_ptr<ReceiptActionClient> action_;
-  bool next_motion_waiting_{};
+  bool next_motion_waiting_{}, next_permit_requested_{};
+  std::uint32_t next_permit_management_{};
   std::uint64_t next_motion_until_{}, arrival_status_at_{};
   State arrival_state_{};
   Status arrival_status_{};

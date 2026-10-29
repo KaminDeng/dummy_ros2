@@ -117,3 +117,15 @@ def test_cli_forwards_explicit_endpoint(monkeypatch, capsys):
                                   '--description-xacro','/d','--endpoint',endpoint])
     module.main()
     assert calls[0][1]=={'endpoint':endpoint}
+
+
+def test_cli_requires_explicit_endpoint_before_deploying(monkeypatch):
+    import deploy_manual_panel as module
+    calls=[]
+    monkeypatch.setattr(module,'deploy',lambda *args,**kwargs:calls.append(args))
+    monkeypatch.setattr(sys,'argv',['deploy','--native','/n','--firmware','/f','--identity','/i',
+                                  '--description-xacro','/d'])
+    with pytest.raises(SystemExit) as error:
+        module.main()
+    assert error.value.code==2
+    assert not calls

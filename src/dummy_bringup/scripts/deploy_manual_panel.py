@@ -115,7 +115,7 @@ def main():
     for name in ('native','firmware','identity'):
         parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--description-xacro',type=Path)
-    parser.add_argument('--endpoint',help='显式覆盖模板端点值；不连接或探测串口')
+    parser.add_argument('--endpoint',required=True,help='明确指定真机端点，不沿用模板示例；不连接或探测串口')
     args=parser.parse_args()
     try:
         output=deploy(args.native,args.firmware,args.identity,args.description_xacro or installed_description(),endpoint=args.endpoint)

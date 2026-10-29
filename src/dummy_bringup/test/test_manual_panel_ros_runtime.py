@@ -220,3 +220,174 @@ def test_detach_retirement_rejects_new_live_fd_unknown_endpoint_or_unproven_old_
     assert not r.retire_disconnected_owner()
     unknown=PanelRuntime(spawn=lambda argv:NS(pid=321));unknown.start(['owned-launch'])
     assert not unknown.retire_disconnected_owner()
+
+
+def panel_methods(*names, **scope):
+    """仅编译真实方法AST；不import Qt/ROS，也不启动进程。"""
+    import ast, time, math
+    source=Path(__file__).resolve().parents[1]/'scripts/manual_joint_panel.py'
+    cls=next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='JointPanel')
+    methods=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in names]
+    env=dict(time=time,math=math,**scope)
+    exec(compile(ast.Module(body=methods,type_ignores=[]),str(source),'exec'),env)
+    return env
+
+
+def test_ros_owned_observer_generations_drop_all_old_backend_and_message_callbacks(monkeypatch):
+    from types import SimpleNamespace as N
+    import sys
+    calls=[];transports=[];backends=[]
+    class Transport:
+        def __init__(self,node,on_status,on_state,**kw):
+            assert kw==dict(own_control_node=True)
+            self.closed=False;self.status,self.state=on_status,on_state;transports.append(self)
+    class Backend:
+        def __init__(self,transport,callback):self.transport,self.callback=transport,callback;backends.append(self)
+    monkeypatch.setitem(sys.modules,'manual_panel_ros_backend',N(RosTransport=Transport,RosBackend=Backend))
+    env=panel_methods('create_worker',QtCore=N(QProcess=lambda parent:N()))
+    p=N(backend='ros',node=N(),cfg={},zero=N(setText=lambda v:None),backend_notice=N(setText=lambda v:None),
+        ros_status_received=lambda v:calls.append(('status',v)),ros_state_received=lambda v:calls.append(('state',v)),
+        ros_event=lambda *v:calls.append(v))
+    env['create_worker'](p);transports[0].closed=True;env['create_worker'](p)
+    transports[0].status('old');transports[0].state('old');backends[0].callback('released','old')
+    transports[1].status('new');transports[1].state('new');backends[1].callback('connected','new')
+    assert calls==[('status','new'),('state','new'),('connected','new')]
+
+
+def test_normal_ros_release_arms_readonly_reconnect_but_not_while_closing():
+    from types import SimpleNamespace as N
+    queued=[];calls=[]
+    env=panel_methods('release','ros_event',QtCore=N(QTimer=N(singleShot=lambda delay,fn:queued.append(fn))))
+    p=N(backend='ros',closing=False,authorized=True,busy=False,ros_reconnect_pending=False,
+        ros_runtime=N(process=object(),begin_release=lambda:calls.append('begin')),
+        ros_backend=N(transport=N(),pending=False,release=lambda:True),
+        request_reconnect=lambda:calls.append('reconnect'),message=lambda v:None)
+    env['release'](p,'RELEASE');assert p.ros_reconnect_pending and not p.authorized
+    env['ros_event'](p,'released','RELEASED_IDLE');assert len(queued)==1
+    p.closing=True;queued.pop()();assert calls==['begin']
+    env['ros_event'](p,'released','RELEASED_IDLE');assert not queued
+
+
+def test_ros_readonly_reconnect_remembers_no_without_granting_calibration():
+    from types import SimpleNamespace as N
+    questions=[];argvs=[]
+    box=N(Yes=1,No=0,question=lambda *v:questions.append(v) or 0)
+    env=panel_methods('start_worker',QtWidgets=N(QMessageBox=box))
+    p=N(backend='ros',cfg=dict(ros_launch_command=['fake-launch']),
+        ros_runtime=N(start=lambda argv:argvs.append(argv)),
+        ros_backend=N(transport=N(assert_no_existing_owner=lambda:None),connect=lambda:None))
+    env['start_worker'](p);env['start_worker'](p)
+    assert len(questions)==1
+    assert p.cfg['operator_confirmed_double_limits'] is False
+    assert all('operator_confirmed_double_limits:=false' in argv for argv in argvs)
+
+
+def test_no_double_limits_still_blocks_reference_zero_but_reuses_existing_reference():
+    from types import SimpleNamespace as N
+    box=N(Yes=1,No=0)
+    env=panel_methods('start_zero',QtWidgets=N(QMessageBox=box))
+    for reference in (False,True):
+        calls=[]
+        p=N(backend='ros',closing=False,busy=False,calibration=(1,1) if reference else None,
+            cfg=dict(operator_confirmed_double_limits=False),fresh=lambda:True,
+            ros_status=N(session_id=0),message=lambda v:None,confirm_execution=lambda *v:1,
+            ros_backend=N(released=False,admitting=True,request_prepare_manual_control=lambda:calls.append('prepare')))
+        env['start_zero'](p)
+        assert calls==(['prepare'] if reference else [])
+        assert p.cfg['operator_confirmed_double_limits'] is False
+
+
+def test_queued_retired_backend_cannot_clear_new_generations_reconnect_guard():
+    from types import SimpleNamespace as N
+    queued=[];calls=[]
+    env=panel_methods('ros_event',QtCore=N(QTimer=N(singleShot=lambda delay,fn:queued.append(fn))))
+    p=N(backend='ros',closing=False,ros_reconnect_pending=True,ros_runtime=N(),
+        ros_backend=N(can_close=True),message=lambda v:None,request_reconnect=lambda:calls.append('reconnect'))
+    env['ros_event'](p,'released','RELEASED_IDLE')
+    p.ros_backend=N(can_close=True);p._ros_reconnect_queued=True
+    queued.pop()()
+    assert p._ros_reconnect_queued and not calls
+
+
+def test_external_runner_release_arms_only_current_owned_nonclosing_readonly_restart():
+    from types import SimpleNamespace as N
+    for owned,closing in ((True,False),(False,False),(True,True)):
+        queued=[];calls=[]
+        env=panel_methods('ros_event',QtCore=N(QTimer=N(singleShot=lambda delay,fn:queued.append(fn))))
+        p=N(closing=closing,ros_reconnect_pending=False,ros_runtime=N(process=object() if owned else None,state='Active'),
+            ros_backend=N(can_close=False),message=lambda v:None,request_reconnect=lambda:calls.append('reconnect'))
+        env['ros_event'](p,'released','MANUAL_CONTROL_RELEASED')
+        assert p.ros_reconnect_pending is (owned and not closing)
+        assert len(queued)==int(owned and not closing)
+        assert p.ros_runtime.state=='WaitingReleaseFeedback'
+        if queued:
+            env['ros_event'](p,'released','MANUAL_CONTROL_RELEASED')
+            assert len(queued)==1
+        assert not calls  # 排队意图不越过request_reconnect原fresh双反馈门。
+
+
+# ROS新代仍在发现期时，重复重连不能变成释放或创建第二个拥有者。
+def reconnect_starting_fixture(state='Starting', detached=False):
+    from types import SimpleNamespace as N
+    from manual_panel_runtime import PanelRuntime
+    calls = []
+    runtime = PanelRuntime(spawn=lambda argv: object())
+    runtime.start(['fake-owned-launch'])
+    runtime.state = state
+    runtime.retire_disconnected_owner = lambda: calls.append('retire') or detached
+    runtime.stop = lambda released: calls.append(('stop', released)) or True
+    transport = N(close=lambda: calls.append('close'),
+                  control_graph_error=lambda: 'ROS控制链缺失：所有服务=0')
+    backend = N(can_close=False, released=False, transport=transport,
+                close=lambda: calls.append('backend_close') or True)
+    panel = N(backend='ros', closing=False, ros_runtime=runtime, ros_backend=backend,
+              ros_started_at=100., ros_reconnect_pending=False, authorized=False,
+              release=lambda command: calls.append(('release', command)),
+              apply_backend_change=lambda: calls.append('new_owner'),
+              refresh_ros_connection_controls=lambda: None, message=lambda value: None)
+    env = panel_methods('request_reconnect', 'ros_tick')
+    env['time'] = N(monotonic=lambda: 100.)
+    return panel, calls, env
+
+
+def test_ros_auto_detach_relaunch_then_manual_double_reconnect_keeps_starting_readonly():
+    from types import SimpleNamespace as N
+    panel, calls, env = reconnect_starting_fixture('ReadOnly', detached=True)
+    panel.ros_reconnect_pending = True
+    def relaunch():
+        calls.append('new_owner')
+        panel.ros_runtime.state = 'Starting'
+        panel.ros_runtime.retire_disconnected_owner = lambda: False
+    panel.apply_backend_change = relaunch
+    # 与实际日志一致：timer先退休旧USB并启动新图；随后人工重连仍面对空图。
+    env['ros_tick'](panel)
+    assert panel.ros_backend.transport.control_graph_error()
+    env['request_reconnect'](panel)
+    env['request_reconnect'](panel)
+    assert calls == ['retire', 'close', 'new_owner']
+    assert panel.ros_runtime.state == 'Starting'
+    assert not panel.ros_reconnect_pending and panel.ros_started_at == 100.
+
+
+def test_ros_starting_duplicate_reconnect_does_not_restart_startup_deadline():
+    panel, calls, env = reconnect_starting_fixture()
+    env['request_reconnect'](panel)
+    panel.ros_runtime.check_startup_timeout(31., 30.)
+    assert panel.ros_runtime.state == 'Error'
+    assert '启动超时' in panel.ros_runtime.error
+    assert calls == ['retire'] and panel.ros_started_at == 100.
+    assert not panel.ros_reconnect_pending
+
+
+def test_ros_starting_real_usb_detach_still_retires_owned_generation():
+    panel, calls, env = reconnect_starting_fixture(detached=True)
+    env['request_reconnect'](panel)
+    assert calls == ['retire', 'close', 'new_owner']
+    assert not panel.ros_reconnect_pending
+
+
+def test_ros_readonly_unreleased_reconnect_still_requests_original_release():
+    panel, calls, env = reconnect_starting_fixture('ReadOnly')
+    env['request_reconnect'](panel)
+    assert calls == ['retire', ('release', 'RELEASE')]
+    assert panel.ros_reconnect_pending
