@@ -40,7 +40,7 @@ setup(
     maintainer='Dummy ROS maintainers',
     maintainer_email='maintainer@example.invalid',
     description='Robot description and model resources for the Dummy six-axis arm',
-    license='Apache-2.0',
+    license='Apache-2.0 AND GPL-3.0',
     tests_require=['pytest'],
     ##
     # console_scripts列表为空；该资源包没有通过setuptools注册命令行节点，启动入口由launch文件提供。

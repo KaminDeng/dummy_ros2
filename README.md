@@ -34,7 +34,8 @@ listed in [NOTICE](NOTICE) and [LICENSES](LICENSES/README.md).
 flowchart LR
     Panel[Joint panel] --> Planner[MoveIt planning]
     Planner --> Panel
-    Panel --> Native[Deployed Native CLI]
+    Panel -->|USB/Native| Native[Deployed Native CLI]
+    Panel -->|USB/ROS| Action
     Action[ROS action client] --> Gate[Device action gate]
     Gate --> Control[ros2_control]
     Native --> Device[REF controller]
@@ -56,7 +57,8 @@ Only one process should own a given device serial port.
 | `src/dummy_bringup` | Panel, backend configuration, and simulation/hardware launches |
 | `src/dummy_ros_control` | Transport, hardware plugins, and guarded trajectory control |
 | `src/dummy_motion_client` | Device management, bootstrap, and public action interfaces |
-| `contracts` | Protocol definitions, generated codecs, profiles, and versioned test data |
+| `src/dummy_motion_interfaces` | ROS service for extending an accepted trajectory |
+| `contracts` | Business model, profiles, and policies; protocol definitions and codecs come from the selected SDK |
 | `scripts` | Build helpers, offline checks, model conversion, and integration tools |
 | `docs` | Operation, architecture, model-conversion, and test documentation |
 
@@ -72,21 +74,28 @@ git clone https://github.com/KaminDeng/dummy_ros2.git
 cd dummy_ros2
 source /opt/ros/jazzy/setup.bash
 # Initialize rosdep first if it has not been configured on this machine.
-rosdep install --from-paths src --ignore-src -r -y
+rosdep install --from-paths src --ignore-src --skip-keys dpsdk_interfaces -r -y
 ```
 
 The [runtime model assets](docs/model-assets.md) are included in the clone.
-Build the model, MoveIt configuration, and bringup packages:
+First export a compatible PIC Host SDK as described in [Full control workspace](#full-control-workspace).
+The panel helper also needs the common protocol generator to assemble `dpsdk_interfaces`;
+this generated package is the rosdep key skipped above. Replace both paths below:
 
 ```bash
+export DPSDK_HOST_SDK_PREFIX=/absolute/matching/host-sdk-install
+export DPSDK_PROTOCOL_TOOLS=/path/to/dpsdk/libraries/dp_protocol/tools
 bash scripts/build_manual_panel.sh
 source /opt/ros/jazzy/setup.bash
+source install_protocol/local_setup.bash
 source install_panel_guide/local_setup.bash
 ROS_DOMAIN_ID=84 ros2 launch dummy_bringup manual_joint_panel.launch.py backend:=simulator
 ```
 
-This helper writes `build_panel_guide/`, `install_panel_guide/`, and `log_panel_guide/`
-and configures `BUILD_TESTING=OFF`. It builds the panel packages; it does not run tests.
+This helper builds the generated protocol package in `build_protocol/`, `install_protocol/`,
+and `log_protocol/`, then the six workspace packages in `build_panel_guide/`,
+`install_panel_guide/`, and `log_panel_guide/`. It configures `BUILD_TESTING=OFF`;
+building does not run tests.
 The software backend uses no USB connection and is distinct from Gazebo physics.
 For zsh, use the corresponding `setup.zsh` and `local_setup.zsh` files.
 
@@ -104,9 +113,13 @@ and identity document:
 ros2 run dummy_bringup deploy_manual_panel.py \
   --native /path/to/dummy_joint_cli \
   --firmware /path/to/dpsdk_firmware.bin \
-  --identity /path/to/identity.json
+  --identity /path/to/identity.json \
+  --endpoint /dev/serial/by-id/EXAMPLE_DEVICE_0001
 ros2 launch dummy_bringup manual_joint_panel.launch.py backend:=real
 ```
+
+`backend:=real` selects the physical Native route. Use `backend:=ros` for the ROS route,
+with the SDK prefix exported above or an explicit `sdk_prefix:=/absolute/matching/host-sdk-install`.
 
 The deployment utility copies local artifacts and updates a local symlink; it does
 not flash firmware or connect to a motor. The checked-in panel configuration is a
@@ -122,13 +135,14 @@ Axis arrays use indices 0–5 for Joint1–Joint6; the low six mask bits select 
 
 ## Full control workspace
 
-`dummy_ros_control` and `dummy_motion_client` need a compatible DPSDK source checkout
-and a separately exported PIC Host SDK. They are not bundled with this repository.
+`dummy_ros_control` and `dummy_motion_client` consume a separately exported, compatible
+PIC Host SDK. The build helper also needs the common protocol generator; Core/model
+tests need a matching DPSDK source checkout. These inputs are not bundled here.
 The build verifies the source and library hashes and the required 651-byte message /
 18000-byte storage role. An arbitrary SDK installation is not interchangeable.
 
 From a compatible DPSDK checkout, use its
-`applications/dummy_ref_control/host/sdk_export.cmake` export path. The complete
+`applications/dummy_ref_control/dummy_sdk/cmake/sdk_export.cmake` export path. The complete
 build commands and installation arguments are in the [Chinese setup guide](README_zh.md)
 and [operation guide](docs/dummy/ros-runbook.md).
 

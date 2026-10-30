@@ -27,3 +27,18 @@ Apache-2.0 的权威文本见 [Apache Software Foundation](https://www.apache.or
 完整装配的23份派生网格与 MINIF08 近似网格随仓库提供，采用 Apache-2.0；
 旧版七份 STL 继续采用 GPL-3.0。模型目录中的 `LICENSE` 保存对应范围和完整许可文本，
 与网格一同安装。正常克隆和构建无需另行准备模型文件；原始 STEP 仅在重新转换时需要。
+
+## 离线源码阅读指南
+
+`docs/dummy/source-reading-guide.html` 的压缩资料包内含部分 DPSDK 及其依赖的源码快照。
+源码保留自身许可头；不能把这些片段统一解释为本仓库原创 Apache-2.0 代码。
+
+| 材料范围 | 许可与原文 |
+| --- | --- |
+| DPSDK Core 的五份 OSAL 接口/契约文件 | MIT；[原许可](DPSDK-Core-MIT.txt) |
+| 四份带 MIT 标识的通信源码/接口快照 | MIT；[许可正文](MIT.txt)，逐文件范围见根 NOTICE |
+| FreeRTOS ARM_CM4F `portmacro.h` | MIT；保留 Amazon 版权及完整头，[组件许可](FreeRTOS-Kernel-MIT.txt) |
+| zenoh-pico 四份源码及三份补丁上下文 | 保留双许可原头，本次选择 Apache-2.0；[原 NOTICE](Zenoh-Pico-NOTICE.md)、[Apache 原文](Apache-2.0.txt) |
+
+页内附有上述补充文本，脱离仓库阅读时仍可查阅。旧内部工作记录不封装进公开阅读指南；
+维护工作区原件及清理前 Git 备份另行保留，不属于公开运行资源。

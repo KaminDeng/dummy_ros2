@@ -1,0 +1,5 @@
+# 离线源码包包含压缩资料；避免把编码载荷展开成百万行差异。
+docs/dummy/source-reading-guide.html -diff
+
+# 上游 NOTICE 原件末尾保留空行，只豁免该文件的文件尾空行检查。
+LICENSES/Zenoh-Pico-NOTICE.md whitespace=-blank-at-eof

@@ -295,3 +295,63 @@ def test_ros_reference_entry_still_requires_confirmed_pose_without_reference():
         confirm_execution=lambda *args:(_ for _ in ()).throw(AssertionError('不得提交')))
     JointPanel.start_zero(panel)
     assert len(calls) == 1 and '未确认双限位' in calls[0]
+
+
+def test_ros_target_switch_waits_for_retirement_and_keeps_requested_backend(monkeypatch):
+    """等待C++只读退休不丢失目标；证明到达后退出旧owner再切换，不重连ROS。"""
+    from manual_joint_panel import JointPanel
+    from manual_panel_ros_backend import RosBackend
+    import manual_panel_runtime
+    import manual_panel_config
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(manual_panel_runtime, 'load_runtime_panel_config', lambda *_: {'target': 'native'})
+    monkeypatch.setattr(manual_panel_config, 'load_decoder', lambda *_: 'decoder')
+    for target in ('real', 'simulator'):
+        calls = []
+        choice = QtWidgets.QComboBox()
+        for label, value in [('ROS', 'ros'), ('Native', 'real'), ('Simulator', 'simulator')]:
+            choice.addItem(label, value)
+        choice.setCurrentIndex(choice.findData(target))
+        class Transport:
+            def request(self, name, callback):
+                calls.append(name)
+                self.callback = callback
+            def close(self): calls.append('close')
+        t = Transport()
+        panel = NS(backend='ros', backend_choice=choice, cfg={'_config_path': '/selected/config'},
+            pending_backend=None, closing=False, busy=False, authorized=False,
+            ros_reconnect_pending=False, message=lambda *_:None,
+            ros_runtime=NS(process=object(), state='ReadOnly', begin_release=lambda:None,
+                stop=lambda proof:calls.append(('stop', proof)) or True),
+            apply_backend_change=lambda:calls.append(('switch', panel.pending_backend)),
+            refresh_ros_connection_controls=lambda:None,
+            request_reconnect=lambda:calls.append('FORBIDDEN_ROS_RECONNECT'))
+        panel.request_backend_change=lambda *args, **kwargs:JointPanel.request_backend_change(panel, *args, **kwargs)
+        panel.release=lambda command:JointPanel.release(panel, command)
+        b=RosBackend(t, lambda kind,value:JointPanel.ros_event(panel,kind,value));panel.ros_backend=b
+        b.connect()
+        JointPanel.request_backend_change(panel)
+        assert calls == ['disable_and_release']
+        assert panel.pending_backend == target
+        assert not panel.ros_reconnect_pending
+        assert choice.currentData() == 'ros'
+        t.callback(NS(success=False, message='LOCAL_READONLY_RETIRED'))
+        app.processEvents()
+        JointPanel.ros_tick(panel)
+        assert calls == ['disable_and_release', ('stop', True), 'close', ('switch', target)]
+        assert not b.released and b.local_retired
+
+
+def test_ros_target_selection_cancels_already_queued_reconnect():
+    """较早释放回执排队的重连回调不能覆盖随后选择的连接目标。"""
+    from manual_joint_panel import JointPanel
+    app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls=[]
+    panel=NS(ros_backend=NS(can_close=True),ros_runtime=NS(process=object()),
+        pending_backend=None,ros_reconnect_pending=True,closing=False,busy=True,
+        message=lambda *_:None,request_reconnect=lambda:calls.append('unexpected_reconnect'))
+    JointPanel.ros_event(panel,'retired','LOCAL_READONLY_RETIRED')
+    panel.pending_backend='real'
+    panel.ros_reconnect_pending=False
+    app.processEvents()
+    assert calls==[]

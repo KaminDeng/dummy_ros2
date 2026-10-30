@@ -55,3 +55,16 @@ rosbag2_*/
 /.claude/
 /.codex/
 /docs/superpowers/
+
+# 本机凭据和私钥；公开示例仅使用占位内容。
+.env
+.env.*
+!.env.example
+!.env.*.example
+/credentials/
+/secrets/
+id_rsa
+id_ecdsa
+id_ed25519
+*.p12
+*.pfx

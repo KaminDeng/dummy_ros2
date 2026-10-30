@@ -192,8 +192,9 @@ class JointPanel(QtWidgets.QWidget):
     # 立即把下拉框复原到当前后端；有运动、管理、参数事务或连接动作时拒绝。切到真机先重新加载/校验部署配置和解码器；设置 pending_backend 后通过 RELEASE/退出确认移交，禁止直接并行启动。
     # @param _index Qt 下拉框索引参数；实际选择从 currentData 读取。
     # @return None；执行上述状态更新、界面或日志操作。
-    def request_backend_change(self, _index=None):
-        selected = self.backend_choice.currentData()
+    # @param selected_backend 释放确认后重入的原目标；不读取已复原的下拉框。
+    def request_backend_change(self, _index=None, *, selected_backend=None):
+        selected = selected_backend if selected_backend is not None else self.backend_choice.currentData()
         self.backend_choice.blockSignals(True)
         self.backend_choice.setCurrentIndex(self.backend_choice.findData(self.backend))
         self.backend_choice.blockSignals(False)
@@ -212,6 +213,7 @@ class JointPanel(QtWidgets.QWidget):
                     return
             self.message('先请求停止释放，等待 ROS 控制链确认后切换。')
             if not getattr(self.ros_backend, 'can_close', self.ros_backend.released):
+                self.pending_backend = selected
                 self.release('RELEASE')
                 return
             if not self.ros_runtime.stop(True):
@@ -1046,7 +1048,8 @@ class JointPanel(QtWidgets.QWidget):
                 self.message('本次未启动 ROS 控制链；可点击重新连接重试发现，未向其他拥有者发送释放。')
                 return
             self.busy = True
-            self.ros_reconnect_pending = not getattr(self, 'closing', False)
+            self.ros_reconnect_pending = (not getattr(self, 'closing', False) and
+                                          getattr(self, 'pending_backend', None) not in ('real', 'simulator'))
             self.ros_runtime.begin_release()
             if not self.ros_backend.release() and not self.ros_backend.pending:
                 # 原释放已超时的重复点击没有新的异步回执，不保留界面忙碌标记。
@@ -1487,6 +1490,7 @@ class JointPanel(QtWidgets.QWidget):
         elif kind in ('released', 'retired', 'canceled'):
             self.busy = False
             if (kind == 'released' and not getattr(self, 'closing', False) and
+                    getattr(self, 'pending_backend', None) not in ('real', 'simulator') and
                     getattr(self.ros_runtime, 'process', None) is not None):
                 # 公开runner也可触发本链权威释放；仅登记只读意图，双消息门仍在can_close。
                 self.ros_reconnect_pending = True
@@ -1501,7 +1505,7 @@ class JointPanel(QtWidgets.QWidget):
                     if self.ros_backend is not backend:
                         return
                     self._ros_reconnect_queued = False
-                    if not getattr(self, 'closing', False):
+                    if not getattr(self, 'closing', False) and getattr(self, 'ros_reconnect_pending', False):
                         self.request_reconnect()
                 QtCore.QTimer.singleShot(0, reconnect)
         elif kind == 'accepted':
@@ -1538,6 +1542,12 @@ class JointPanel(QtWidgets.QWidget):
     def ros_tick(self):
         self.refresh_ros_connection_controls()
         now = time.monotonic()
+        if (not self.closing and getattr(self, 'pending_backend', None) in ('real', 'simulator') and
+                getattr(self.ros_backend, 'can_close', False)):
+            # 只在原拥有者可关闭后兑现选择；等待期间不并行启动Native或重连ROS。
+            self.ros_reconnect_pending = False
+            self.request_backend_change(selected_backend=self.pending_backend)
+            return
         if (not self.closing and getattr(self, 'ros_reconnect_pending', False) and
                 getattr(self.ros_backend, 'can_close', False)):
             self.request_reconnect()

@@ -9,7 +9,7 @@
 
 ## 仓库中的运行资源
 
-资源位于 `src/dummy-ros2_description/meshes/`。下表保持现有转换/碰撞回归所绑定的摘要；
+资源位于 `src/dummy-ros2_description/meshes/`。下表记录当前文件的摘要；彩色 OBJ 当前使用原始视觉版本，优化候选的历史摘要保留在转换记录中。
 SHA-256用于核对文件字节，不代表机械安装、碰撞安全或设备运动资格。
 自行重新生成或修改资源后，须重新验证关节链、碰撞覆盖、间隙和 REST 双向规划，不能只改摘要跳过检查。
 
@@ -19,26 +19,26 @@ SHA-256用于核对文件字节，不代表机械安装、碰撞安全或设备�
 | `full_step_base-collision-local-clearance-5mm.stl` | `1e83390aec6dfc9c25a10c0aea3f1337991e86d6012b9e97dbf0c3f394e23d1e` |
 | `full_step_base-collision-local.stl` | `2db87db875b0aaec18e091327c80c4a1d79e34877fa42d8174359c19731007d1` |
 | `full_step_base-colors.mtl` | `ace2544eb8e4c342576d590d79eb3730fa0a27095711e45895b487631f03089a` |
-| `full_step_base-colors.obj` | `e0ed7e89b7cefec39970e8d8cc8fec8e3cee71227c9403b2cca0b9a26e4a12ed` |
+| `full_step_base-colors.obj` | `f591c9e2d0559fd3113fe8cd5b3bb775d2d84d14ec64d894a5ad05c1bb086d4d` |
 | `full_step_link1-bracket-source.stl` | `e579bfc4d06ed646e894a037980e74a4786279b27a72499a29a12f5f51ac5c4c` |
 | `full_step_link1-collision-local-clearance-5mm.stl` | `c36497c4ee3b988a8d116dc1fd6766363c70036b10cce016750eee0b3bb38fc3` |
 | `full_step_link1-collision-local.stl` | `038d033a9fee033981e84320968ae6fc41faa264409eb8c7f497303f18e938b9` |
 | `full_step_link1-colors.mtl` | `fa7666b06147a929a038ff3ed5bdbb72fbda05bcf88415bf98f2a06144f73549` |
-| `full_step_link1-colors.obj` | `cbd38c8a51a36dc5a1c373f126d6c9fbfb0c8ad83e6e2607629fd64f2fb9f163` |
+| `full_step_link1-colors.obj` | `d4f6f8fa81fc473ec8d111557080e88ef0c74dd8778c010cde2a92b9a2463f12` |
 | `full_step_link1-fasteners-source.stl` | `89977225fc4350993223b6b961ed922a36e07f89edf2b150e56ec4de45a78d6b` |
 | `full_step_link2-collision-local-clearance-5mm.stl` | `75e1a48d1ae9c2d57809ef28256ba0c02ff35bbc57d5faa9ae237f84275578a7` |
 | `full_step_link2-collision-local.stl` | `9efe3423d3a6174650dd43a3878d8a0bc75e342a5fcad17a143032a638b5d9a4` |
 | `full_step_link2-colors.mtl` | `da671782470ab5230de0c4d13648b560ef6d1a5bac7048c576b1d7f9c8505140` |
-| `full_step_link2-colors.obj` | `76ad0dd7c5c070dd2efc8655810cbd4ec9beb6dd2e955714ab2e3bc68f91d45c` |
+| `full_step_link2-colors.obj` | `d19238ebdfd91be01e0132b2e424f1a773dec577723803ad1c82b40d61ce4420` |
 | `full_step_link3-collision-local.stl` | `864d57f863b7cbb93d7f10a6efac82126b6ca150ba3daa7214b79632e0d46572` |
 | `full_step_link3-colors.mtl` | `8b46f0c8b505704619b49fbe90d57d74acf9b387bce874ee608c425687efab29` |
-| `full_step_link3-colors.obj` | `2d9012a16dd5994469843227e89eb0dc57b2e1169a6c85fef07c7567730a251c` |
+| `full_step_link3-colors.obj` | `b8268ea9f3ad143bb4f963e1be348d9d16e0000ee3bc54e788032f52ea46f456` |
 | `full_step_link4-collision-local.stl` | `a88e00d019bfd713b9c4f50a2d3daf4c50e7c54305336f67a863c25a19d16cb1` |
 | `full_step_link4-colors.mtl` | `5e319e28f4464b477074ec114c82aed07653e96b0c308429a27b31bbd35a1443` |
-| `full_step_link4-colors.obj` | `189a2fe8dccf2986d3d468bd7b1f62ad9725aaaf994545094e5347edca5beab9` |
+| `full_step_link4-colors.obj` | `1613fcec9699143a60d7ccba7261b4e680bf3a19a569d7c6dd60460776f7f493` |
 | `full_step_link5-collision-local.stl` | `96460d96d0871da40702eae038a408630c2348e41eabae7644465bf3f460a2b0` |
 | `full_step_link5-colors.mtl` | `a0790db2586208e176afa8a547205851d8500a925d4a3109023c8e36ade6a70b` |
-| `full_step_link5-colors.obj` | `4a7d5ff13d2267623b129a012db9e5d1addf781a3f82ec9a9fe29433835bbb5a` |
+| `full_step_link5-colors.obj` | `29b204c71341975374f88ec36491d0c8960ba33826c483f55f629175228e9695` |
 
 ## 使用与验证
 

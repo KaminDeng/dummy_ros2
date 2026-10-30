@@ -18,7 +18,7 @@ from manual_panel_messages import moveit_error
 from manual_moveit_execution import SegmentedExecution, collision_samples, execution_polyline
 from manual_moveit_continuous import prepare_path, write_path, trajectory_velocities
 from manual_moveit_target import target_markers
-from manual_moveit_autotest import AutoTestSession
+from manual_moveit_autotest import AutoTestSession, ROS_RUN_BUDGET_S
 
 
 def planner_request_slot(method):
@@ -213,7 +213,7 @@ class MoveItTab(QtWidgets.QWidget):
         test_row = QtWidgets.QHBoxLayout()
         test_row.addWidget(QtWidgets.QLabel('自动测试时长'))
         ##
-        # 界面自动测试时长以分钟显示，start 调用前乘 60 转秒；连续链限制 57 分钟，给回程与停车预留预算。
+        # 界面时长以分钟显示；ROS的0表示持续运行，Native保留原57分钟连续链范围。
         self.auto_duration = QtWidgets.QDoubleSpinBox()
         self.auto_duration.setRange(.01,1440.)
         self.auto_duration.setDecimals(2)
@@ -263,14 +263,23 @@ class MoveItTab(QtWidgets.QWidget):
     # @brief 查询本面板圆柱场景是否已确认且未封锁。
     # @return bool：没有圆柱控制器时 True；否则 scene_ready 且 not blocked。
     def refresh_auto_backend_options(self):
-        """两条链路均短前瞻后在线续接；ROS仍保留单次RUN的630秒上限。"""
+        """ROS的0为不限总时长；单RUN保持原预算，Native保留原时长范围。"""
         ros = self.panel.backend == 'ros'
-        if getattr(self, '_auto_options_backend', self.panel.backend) != self.panel.backend:
+        changed = getattr(self, '_auto_options_backend', None) != self.panel.backend
+        previous_value = self.auto_duration.value()
+        if changed:
             self.continuous_enabled = ros or self.panel.cfg.get('moveit_continuous_execution', True)
         self._auto_options_backend = self.panel.backend
-        self.auto_duration.setMaximum(9.5 if ros else (57. if self.auto_continuous.isChecked() else 1440.))
+        self.auto_duration.setRange(0. if ros else .01,
+                                    1440. if ros else (57. if self.auto_continuous.isChecked() else 1440.))
+        self.auto_duration.setSpecialValueText('不限时（手动结束）' if ros else '')
+        if changed and (ros or previous_value == 0.):
+            self.auto_duration.setValue(0. if ros else 10.)
+        self.auto_duration.setToolTip(
+            '0表示持续运行，手动结束；正数为总时长（分钟）。单次RUN仍保持630秒预算，长时测试在确认尾段到位后换下一RUN。'
+            if ros else '到期不再生成随机目标，完成当前段后规划回Home；回程不计入测试时长。')
         self.auto_continuous.setToolTip(
-            'ROS：准备短前瞻后起步，边运动边规划并平滑续接；每次检查完整修改曲线。补充不及时沿已检查尾段停车。最长9.5分钟，单次运行上限630秒。'
+            'ROS：准备短前瞻后起步，边运动边规划并平滑续接；每次检查完整修改曲线。总时长可不限，单RUN保持630秒预算；换RUN前沿已检查尾段到位，边界会短暂停稳。'
             if ros else '提前规划并检查连接曲线，在同一RUN内滚动补充；目标附近圆滑过渡，不要求逐目标停稳。补充不及时则沿已检查尾段停车。')
 
     def scene_ready(self):
@@ -399,9 +408,10 @@ class MoveItTab(QtWidgets.QWidget):
     # @brief 作废路径、碰撞结果与预览并推进用户规划版本。
     # 自动测试活动时先中止，执行活动时请求 STOP。清 path/continuous_path/noop 和检查队列，取消 preset_fk 与 checks；主 pending 通过 revision 不匹配由 start_plan/tick 取消，不能误读为远端计算已撤销。
     # @param _ Qt 信号附带参数，不使用。
+    # @param reason 真正的作废原因；反馈/参考失效与用户编辑分别报告。
     # @return None；执行上述状态更新、界面或日志操作。
-    def invalidate(self, *_):
-        if self.auto_test.active:self.auto_test.abort('规划内容已改变，停止自动测试')
+    def invalidate(self, *_, reason='规划内容已改变，停止自动测试'):
+        if self.auto_test.active:self.auto_test.abort(reason)
         self.collision_timer.stop()
         self.planning_deadline = None
         self.planning_started_at = None
@@ -570,7 +580,7 @@ class MoveItTab(QtWidgets.QWidget):
             'SEGMENT_SUBMITTED': '已提交一个运动段，等待设备到位确认',
             'PATH_COMPLETED': '整条规划路径已由设备确认完成',
             'EXECUTION_ABORTED': '执行已取消，请查看具体原因',
-            'AUTO_TEST_STARTED': '自动测试已开始，将在设定时长后回Home',
+            'AUTO_TEST_STARTED': '自动测试已开始，按设定时长运行或手动结束',
             'AUTO_TEST_RETURNING': '自动测试不再生成新目标，当前段完成后回Home',
             'AUTO_TEST_CYCLE_COMPLETED': '自动测试已确认一个随机目标到位',
             'AUTO_TEST_COMPLETED': '自动测试已确认回Home并结束',
@@ -743,7 +753,8 @@ class MoveItTab(QtWidgets.QWidget):
                             duration_s=duration,
                             sha256=hashlib.sha256(json.dumps(self.continuous_path.points).encode()).hexdigest())
                 self.ros_inflight_uuid = None
-                task_budget = ({'task_budget_s': max(duration, self.auto_test.deadline-time.monotonic()+60.)}
+                task_budget = ({'task_budget_s': max(duration, min(ROS_RUN_BUDGET_S,
+                                    self.auto_test.deadline-time.monotonic()+60.))}
                                if self.auto_test.active else {})
                 if not self.panel.ros_backend.submit_trajectory(trajectory, **task_budget):
                     raise ValueError('ROS完整轨迹未提交')
@@ -994,8 +1005,11 @@ class MoveItTab(QtWidgets.QWidget):
                 if hasattr(self.panel, 'message'):
                     self.panel.message(self.status.text())
         if (self.path or self.noop_goal is not None) and feedback_identity != self.identity:
+            # 页面入口通过后，缓存仍可能在本拍跨龄；复用原UUID/接收锚的等待门。
+            if self._wait_for_ros_inflight_feedback():
+                return
             retry = feedback_identity is None and observed_identity == self.identity and not self.executing
-            self.invalidate()
+            self.invalidate(reason='反馈失鲜或设备参考改变，停止自动测试')
             if retry:
                 self.preview_timer.start(100)
             self.status.setText('反馈失鲜或设备参考改变，路径已作废。')
@@ -1157,6 +1171,8 @@ class MoveItTab(QtWidgets.QWidget):
                            not self.panel.control_state_allowed((2, 3, 4, 5, 6)) or
                            self.execution_identity() != self.execution.identity)
             if invalid:
+                if self._wait_for_ros_inflight_feedback():
+                    return
                 self.cancel_execution('设备反馈、授权或生命周期不再允许控制。', stop=True)
             elif time.monotonic() > self.segment_deadline:
                 submitted = self.execution.waiting

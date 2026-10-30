@@ -1,46 +1,694 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ROS 面板操作指南 · Dummy</title><style>
-:root{--bg:#f1f5f4;--card:#fff;--ink:#183735;--muted:#55716f;--line:#d6e4df;--green:#126c60;--warm:#fff1da;--red:#8e2924}*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 system-ui,"Noto Sans CJK SC","Microsoft YaHei",sans-serif}a{color:var(--green);text-underline-offset:4px}.wrap{max-width:1320px;margin:auto;display:grid;grid-template-columns:220px minmax(0,1fr);gap:36px;padding:32px}aside{position:sticky;top:26px;align-self:start}nav a{display:block;padding:7px 10px;text-decoration:none;border-left:2px solid var(--line);font-size:14px}nav a:hover{background:#deeee7;border-color:var(--green)}main{min-width:0}header{padding:28px 0}h1{font-size:clamp(30px,4vw,48px);line-height:1.3;margin:12px 0}h2{font-size:26px;margin:0 0 16px}h3{font-size:19px;margin:20px 0 8px}p{margin:10px 0}.eyebrow,.tag{font-size:12px;color:var(--green);font-weight:700;letter-spacing:.08em}.lead{font-size:19px;color:var(--muted)}section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px;margin:22px 0}.alert{border:2px solid #c77b49;background:var(--warm);border-radius:12px;padding:20px}.alert strong{color:var(--red)}.note{border-left:4px solid var(--green);padding:12px 18px;background:#eaf5ee;margin:16px 0}.step{display:inline-flex;background:var(--green);color:white;border-radius:50%;width:36px;height:36px;align-items:center;justify-content:center;margin-right:10px;font-size:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.tile{padding:18px;border:1px solid var(--line);border-radius:10px;background:#f7faf8}.tile h3{margin-top:0}code{font:13px/1.7 ui-monospace,monospace;background:#eaf0ed;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}.command{border:1px solid #ccddd6;border-radius:10px;overflow:hidden;margin:16px 0}.bar{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#e8f1eb;font-size:12px}.copy{background:white;border:1px solid #b6cec3;border-radius:5px;color:var(--green);padding:4px 12px;cursor:pointer}pre{margin:0;padding:16px;background:#f5f9f7;overflow:auto;line-height:1.75}pre code{background:none;padding:0;white-space:pre;overflow-wrap:normal}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#eff5f1}.scroll{overflow:auto}.caption{font-size:13px;color:var(--muted)}.flow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:20px 0}.flow span{padding:12px;background:#eaf4ef;border-radius:8px}.flow b{color:var(--green)}details{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0}summary{font-weight:700;cursor:pointer}li{margin:6px 0}.check{display:block;padding:5px 0}svg{max-width:100%;height:auto}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #367dcc;outline-offset:3px}footer{font-size:13px;color:var(--muted);padding:24px 0}.pill{display:inline-block;background:#deede6;padding:3px 10px;border-radius:20px;font-size:12px}.skip{position:absolute;top:-100px}.skip:focus{top:0;background:white;padding:12px}.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#183735;color:white;padding:8px 18px;border-radius:8px;display:none}@media(max-width:850px){.wrap{display:block;padding:18px}aside{position:static}nav{display:flex;flex-wrap:wrap;margin-bottom:18px}nav a{border-left:0;font-size:13px}.grid{grid-template-columns:1fr}section{padding:20px}h1{font-size:34px}}@media print{aside,.copy,.toast{display:none}.wrap{display:block;padding:0}body{background:white}section{break-inside:avoid}pre code{white-space:pre-wrap}header{padding-top:0}}
-</style></head><body><aside><p class="eyebrow">DUMMY · ROS JAZZY</p><p><strong>自己启动面板<br>按状态继续操作</strong></p><nav aria-label="目录"><a href="#prepare">1 加载环境</a><a href="#deploy">部署端点（换机或重部署）</a><a href="#launch">2 启动面板</a><a href="#reference">3 确认零点与使能</a><a href="#motion">4 控制与自动测试</a><a href="#stop">5 停止、关闭、重连</a><a href="#diagnose">查看进程与日志</a><a href="#build">更换电脑与首次构建</a><a href="#sdk">SDK 与配置位置</a></nav><p class="caption">更新：2026-10-30<br>命令只复制，不会自动执行。<br>本页可单独复制并离线打开。</p></aside><main><header><span class="pill">ROS 面板操作指南</span><h1>从终端启动，<br>在面板完成控制。</h1><p class="lead">一个启动命令打开控制面板、RViz 和规划服务。面板负责管理本机 ROS 控制链，连接先进入只读；使能和运动由操作者另行确认。</p></header>
-<section id="prepare"><h2>1 加载当前环境</h2><p>从桌面会话打开终端，输入 <code>bash</code> 后执行以下命令。将 ROS 仓库与 SDK 安装前缀改为本机实际位置。当前开发环境先加载 <code>install_panel_guide</code>，再加载包含最新控制包的 <code>install_protocol</code>，避免使用旧安装副本。</p><div class="command"><button class="copy" type="button">复制</button><pre><code># 在 ROS 仓库根目录打开终端；下面命令使用 bash
-export ROS_WS=&quot;$HOME/kamin_work/00-code/dummy_ros2_consolidated&quot;
-export DPSDK_ROOT=&quot;$ROS_WS/../dpsdk&quot;
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>ROS 面板操作指南 · Dummy</title>
+    <style>
+:root {
+  --bg:#f1f5f4;
+  --card:#fff;
+  --ink:#183735;
+  --muted:#55716f;
+  --line:#d6e4df;
+  --green:#126c60;
+  --warm:#fff1da;
+  --red:#8e2924;
+}
+* {
+  box-sizing:border-box;
+}
+html {
+  scroll-behavior:smooth;
+  scroll-padding-top:24px;
+}
+body {
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font:16px/1.85 system-ui,"Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+}
+a {
+  color:var(--green);
+  text-underline-offset:4px;
+}
+.wrap {
+  max-width:1320px;
+  margin:auto;
+  display:grid;
+  grid-template-columns:220px minmax(0,1fr);
+  gap:36px;
+  padding:32px;
+}
+aside {
+  position:sticky;
+  top:26px;
+  align-self:start;
+}
+nav a {
+  display:block;
+  padding:7px 10px;
+  text-decoration:none;
+  border-left:2px solid var(--line);
+  font-size:14px;
+}
+nav a:hover {
+  background:#deeee7;
+  border-color:var(--green);
+}
+main {
+  min-width:0;
+}
+header {
+  padding:28px 0;
+}
+h1 {
+  font-size:clamp(30px,4vw,48px);
+  line-height:1.3;
+  margin:12px 0;
+}
+h2 {
+  font-size:26px;
+  margin:0 0 16px;
+}
+h3 {
+  font-size:19px;
+  margin:20px 0 8px;
+}
+p {
+  margin:10px 0;
+}
+.eyebrow,.tag {
+  font-size:12px;
+  color:var(--green);
+  font-weight:700;
+  letter-spacing:.08em;
+}
+.lead {
+  font-size:19px;
+  color:var(--muted);
+}
+section {
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:16px;
+  padding:28px;
+  margin:22px 0;
+}
+.alert {
+  border:2px solid #c77b49;
+  background:var(--warm);
+  border-radius:12px;
+  padding:20px;
+}
+.alert strong {
+  color:var(--red);
+}
+.note {
+  border-left:4px solid var(--green);
+  padding:12px 18px;
+  background:#eaf5ee;
+  margin:16px 0;
+}
+.step {
+  display:inline-flex;
+  background:var(--green);
+  color:white;
+  border-radius:50%;
+  width:36px;
+  height:36px;
+  align-items:center;
+  justify-content:center;
+  margin-right:10px;
+  font-size:18px;
+}
+.grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+}
+.tile {
+  padding:18px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#f7faf8;
+}
+.tile h3 {
+  margin-top:0;
+}
+code {
+  font:13px/1.7 ui-monospace,monospace;
+  background:#eaf0ed;
+  padding:2px 5px;
+  border-radius:4px;
+  overflow-wrap:anywhere;
+}
+.command {
+  border:1px solid #ccddd6;
+  border-radius:10px;
+  overflow:hidden;
+  margin:16px 0;
+}
+.bar {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:7px 12px;
+  background:#e8f1eb;
+  font-size:12px;
+}
+.copy {
+  background:white;
+  border:1px solid #b6cec3;
+  border-radius:5px;
+  color:var(--green);
+  padding:4px 12px;
+  cursor:pointer;
+}
+pre {
+  margin:0;
+  padding:16px;
+  background:#f5f9f7;
+  overflow:auto;
+  line-height:1.75;
+}
+pre code {
+  background:none;
+  padding:0;
+  white-space:pre;
+  overflow-wrap:normal;
+}
+table {
+  border-collapse:collapse;
+  width:100%;
+  font-size:14px;
+}
+th,td {
+  padding:11px;
+  border-bottom:1px solid var(--line);
+  text-align:left;
+  vertical-align:top;
+}
+th {
+  background:#eff5f1;
+}
+.scroll {
+  overflow:auto;
+}
+.caption {
+  font-size:13px;
+  color:var(--muted);
+}
+.flow {
+  display:flex;
+  gap:10px;
+  align-items:center;
+  flex-wrap:wrap;
+  margin:20px 0;
+}
+.flow span {
+  padding:12px;
+  background:#eaf4ef;
+  border-radius:8px;
+}
+.flow b {
+  color:var(--green);
+}
+details {
+  border:1px solid var(--line);
+  border-radius:8px;
+  padding:12px 16px;
+  margin:12px 0;
+}
+summary {
+  font-weight:700;
+  cursor:pointer;
+}
+li {
+  margin:6px 0;
+}
+.check {
+  display:block;
+  padding:5px 0;
+}
+svg {
+  max-width:100%;
+  height:auto;
+}
+button:focus-visible,a:focus-visible,summary:focus-visible {
+  outline:3px solid #367dcc;
+  outline-offset:3px;
+}
+footer {
+  font-size:13px;
+  color:var(--muted);
+  padding:24px 0;
+}
+.pill {
+  display:inline-block;
+  background:#deede6;
+  padding:3px 10px;
+  border-radius:20px;
+  font-size:12px;
+}
+.skip {
+  position:absolute;
+  top:-100px;
+}
+.skip:focus {
+  top:0;
+  background:white;
+  padding:12px;
+}
+.toast {
+  position:fixed;
+  bottom:20px;
+  left:50%;
+  transform:translateX(-50%);
+  background:#183735;
+  color:white;
+  padding:8px 18px;
+  border-radius:8px;
+  display:none;
+}
+aside {
+  max-height:calc(100vh - 52px);
+  overflow-y:auto;
+  padding-right:6px;
+}
+nav a {
+  min-height:40px;
+}
+.bar {
+  gap:12px;
+  min-height:52px;
+}
+.copy {
+  min-height:40px;
+  min-width:88px;
+  font:inherit;
+}
+.table-wrap {
+  overflow-x:auto;
+}
+table {
+  min-width:480px;
+}
+th,td {
+  overflow-wrap:anywhere;
+}
+.skip {
+  z-index:10;
+}
+pre:focus-visible {
+  outline:3px solid #367dcc;
+  outline-offset:-3px;
+}
+@media(max-width:850px) {
+  .wrap {
+    display:block;
+    padding:18px;
+  }
+  aside {
+    position:static;
+    max-height:none;
+    overflow:visible;
+    padding-right:0;
+  }
+  nav {
+    display:flex;
+    flex-wrap:wrap;
+    margin-bottom:18px;
+  }
+  nav a {
+    border-left:0;
+    font-size:13px;
+  }
+  .grid {
+    grid-template-columns:1fr;
+  }
+  section {
+    padding:20px;
+  }
+  h1 {
+    font-size:34px;
+  }
+}
+@media print {
+  aside,.copy,.toast {
+    display:none;
+  }
+  .wrap {
+    display:block;
+    padding:0;
+  }
+  body {
+    background:white;
+  }
+  section {
+    break-inside:avoid;
+  }
+  pre code {
+    white-space:pre-wrap;
+  }
+  header {
+    padding-top:0;
+  }
+}
+@media(max-width:480px) {
+  .wrap {
+    padding:12px;
+  }
+  section {
+    padding:18px;
+  }
+  .bar {
+    padding:6px 10px;
+    font-size:12px;
+  }
+  h1 {
+    font-size:30px;
+  }
+  pre {
+    padding:12px;
+  }
+  .copy {
+    min-height:44px;
+  }
+  .table-wrap {
+    margin:0 -4px;
+  }
+}
+@media(prefers-reduced-motion:reduce) {
+  html {
+    scroll-behavior:auto;
+  }
+}
+</style>
+  </head>
+  <body>
+    <a class="skip" href="#main-content">跳到正文</a>
+    <div class="wrap">
+      <aside>
+        <p class="eyebrow">DUMMY · ROS JAZZY</p>
+        <p><strong>自己启动面板<br>按状态继续操作</strong></p>
+        <nav aria-label="目录">
+          <a href="#prepare">1 加载环境</a>
+          <a href="#deploy">部署端点（换机或重部署）</a>
+          <a href="#launch">2 启动面板</a>
+          <a href="#reference">3 确认零点与使能</a>
+          <a href="#motion">4 控制与自动测试</a>
+          <a href="#stop">5 退出、清理与重新启动</a>
+          <a href="#diagnose">日志与单独关闭 MoveIt</a>
+          <a href="#build">更换电脑与首次构建</a>
+          <a href="#sdk">SDK 与配置位置</a>
+        </nav>
+        <p class="caption">更新：2026-10-31<br>命令只复制，不会自动执行。<br>本页可单独复制并离线打开。</p>
+      </aside>
+      <main id="main-content" tabindex="-1">
+        <header>
+          <span class="pill">ROS 面板操作指南</span>
+          <h1>从终端启动，<br>在面板完成控制。</h1>
+          <p class="lead">一个启动命令打开控制面板、RViz 和规划服务。面板负责管理本机 ROS 控制链，连接先进入只读；使能和运动由操作者另行确认。</p>
+        </header>
+        <section id="prepare">
+          <h2>1 加载当前环境</h2>
+          <p>从桌面会话打开终端，输入 <code>bash</code> 后执行以下命令。将 ROS 仓库与 SDK 安装前缀改为本机实际位置。当前开发环境先加载 <code>install_panel_guide</code>，再加载包含最新控制包的 <code>install_protocol</code>，避免使用旧安装副本。</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第1段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第1段 Bash 命令"><code># 在 ROS 仓库根目录打开终端；下面命令使用 bash
+export ROS_WS="$HOME/kamin_work/00-code/dummy_ros2_consolidated"
+export DPSDK_ROOT="$ROS_WS/../dpsdk"
 # 填写与当前部署匹配的 SDK 安装前缀，不沿用旧日期目录
-export DPSDK_HOST_SDK_PREFIX=&quot;/实际/SDK/安装目录&quot;
-cd &quot;$ROS_WS&quot;
+export DPSDK_HOST_SDK_PREFIX="/实际/SDK/安装目录"
+cd "$ROS_WS"
 source /opt/ros/jazzy/setup.bash
 source install_panel_guide/local_setup.bash
 source install_protocol/local_setup.bash
 export ROS_DOMAIN_ID=83
-ros2 pkg prefix dummy_bringup</code></pre></div><p>应看到本机当前工作区的 <code>dummy_bringup</code> 安装路径。不要同时加载另一个旧工作区；无需重新编译或烧录即可使用已经安装好的面板。</p></section>
-<section id="deploy"><h2>部署端点必须明确填写</h2><p>已有正确的 <code>current/panel-config.json</code> 时直接进入下一节，无需重复部署。换机、重新部署或更换实际USB端点时，命令行必须显式提供 <code>--endpoint</code>；缺少该参数会在创建部署前退出，不能沿用模板中的示例设备。</p><div class="command"><button class="copy" type="button">复制</button><pre><code># 将全部占位路径及设备标识替换为本机实际值；本命令只离线打包，不烧录或连接USB
+ros2 pkg prefix dummy_bringup</code></pre>
+          </div>
+          <p>应看到本机当前工作区的 <code>dummy_bringup</code> 安装路径。不要同时加载另一个旧工作区；无需重新编译或烧录即可使用已经安装好的面板。</p>
+        </section>
+        <section id="deploy">
+          <h2>部署端点必须明确填写</h2>
+          <p>已有正确的 <code>current/panel-config.json</code> 时直接进入下一节，无需重复部署。换机、重新部署或更换实际USB端点时，命令行必须显式提供 <code>--endpoint</code>；缺少该参数会在创建部署前退出，不能沿用模板中的示例设备。</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第2段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第2段 Bash 命令"><code># 将全部占位路径及设备标识替换为本机实际值；本命令只离线打包，不烧录或连接USB
 ros2 run dummy_bringup deploy_manual_panel.py \
-  --native &quot;/实际/Native/dummy_joint_cli&quot; \
-  --firmware &quot;/实际/固件.bin&quot; \
-  --identity &quot;/实际/身份清单.json&quot; \
-  --endpoint 'serial//dev/serial/by-id/&lt;设备标识&gt;#baudrate=115200'</code></pre></div><p>部署校验通过后才切换 <code>current</code>。实际设备标识留在本机配置与报告，不复制到公开文档。若长期停在 <code>BOOTSTRAP_PENDING</code>，先核当前部署端点是否仍是模板占位值及USB是否对应；反复重启面板不会修正错误的部署端点。已有控制链须先按第5节正常退出，再用新的部署启动。</p></section>
-<section id="launch"><h2>2 启动唯一一份面板</h2><div class="command"><button class="copy" type="button">复制</button><pre><code>ros2 launch dummy_bringup manual_joint_panel.launch.py \
+  --native "/实际/Native/dummy_joint_cli" \
+  --firmware "/实际/固件.bin" \
+  --identity "/实际/身份清单.json" \
+  --endpoint 'serial//dev/serial/by-id/&lt;设备标识&gt;#baudrate=115200'</code></pre>
+          </div>
+          <p>部署校验通过后才切换 <code>current</code>。实际设备标识留在本机配置与报告，不复制到公开文档。若长期停在 <code>BOOTSTRAP_PENDING</code>，先核当前部署端点是否仍是模板占位值及USB是否对应；反复重启面板不会修正错误的部署端点。还须核对设备在线报告的固件 SHA-256 与当前部署清单：烧录新固件后，应将经过验证的匹配固件、Native、身份和解码器重新部署到默认 <code>current</code>；仅在其他测试目录准备新部署，不会更新默认入口。身份不匹配时，USB虽能收到原始数据，ROS仍会拒绝接纳状态，标定按钮也会保持灰色；不要通过关闭身份检查或手改某个哈希恢复。已有控制链须先按第5节正常退出，再用新的部署启动。</p>
+        </section>
+        <section id="launch">
+          <h2>2 启动唯一一份面板</h2>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第3段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第3段 Bash 命令"><code>ros2 launch dummy_bringup manual_joint_panel.launch.py \
   backend:=ros \
-  sdk_prefix:=&quot;$DPSDK_HOST_SDK_PREFIX&quot; \
-  config:=&quot;$HOME/.local/share/dummy_ros/manual_panel/current/panel-config.json&quot; \
+  sdk_prefix:="$DPSDK_HOST_SDK_PREFIX" \
+  config:="$HOME/.local/share/dummy_ros/manual_panel/current/panel-config.json" \
+  moveit:=true \
+  auto_calibrate_and_test:=false \
   operator_confirmed_double_limits:=false \
-  report:=&quot;$ROS_WS/dummy_reports/manual-$(date +%Y%m%d-%H%M%S)&quot;</code></pre></div><p>启动后应看到六轴控制台和 RViz。报告目录由命令生成一个新名称，请勿提前创建最终目录，也不要重复使用旧目录。保留启动终端，后续可查看报错和正常退出。</p><div class="note"><strong>启动确认框需要人工回答。</strong>只读查看或未证明真实双限位姿态时，选择“否”。只有机械臂确实已位于双限位，才选择“是”；这项确认不是自动使能或自动运动。不要为了消除提示而确认错误姿态。</div><p>连接目标统一为 <strong>真机-USB/ROS</strong>、<strong>真机-USB/Native</strong>、<strong>仿真-本地</strong>。Native 与 ROS 共用同一设备时，只能保留一个通信所有者；从面板切换目标，等待原链路释放。</p><p>软件模拟可将 <code>backend:=ros</code> 改为 <code>backend:=simulator</code>。需要真机 ROS 控制时仍须提供有效 SDK 与部署配置。启动失败先看终端，不要不断另开面板。</p></section>
-<section id="reference"><h2>3 检查反馈，再恢复控制</h2><p>先看实际角度、boot、reference 和只读连接状态。启动、重连本身不代表已使能；只有设备确认控制会话准备完成，执行按钮才会开放。</p><div class="table-wrap"><table><thead><tr><th>当前情况</th><th>操作</th></tr></thead><tbody><tr><td>同一 REF 上电周期，reference 有效</td><td>点击“使能 / 恢复零点”，确认使用当前实际姿态。普通失能、关软件再连接无需重摆双限位。</td></tr><tr><td>REF 已重启或 reference 为 0</td><td>先支撑并人工摆到真实双限位，点击“重新连接”，在新启动确认中选择“是”，再点击“双限位标定 / 恢复控制”，等待ROS标定并退到Rest后再测试。当前固件的RAM参考不能跨本次REF重启沿用。</td></tr><tr><td>电机单独重启、真实位置超限或反馈故障</td><td>先处理实际原因。不要通过反复清故障、重新采零来绕过异常。</td></tr></tbody></table></div><div class="note"><strong>重启后以本次反馈为准。</strong>当前用户重启后的只读连接为 <code>reference=0</code>，历史报告中的 <code>ref1</code> 不能复用。此时“重新连接”“双限位标定”“停止失能”可以使用，“使能 / 恢复零点”应禁用；本次只读启动确认选“否”，直接点击当前标定按钮只会提示“本次连接未确认双限位”，不会采零。正确顺序：支撑并摆到真实双限位 → 点击“重新连接” → 新启动确认选择“是” → 点击“双限位标定 / 恢复控制” → 等ROS标定并退到Rest，再检查新参考和反馈后测试。</div><p>在已有参考下恢复控制会以实际测量姿态建立 Hold，不要求先到 Home；Home、Rest 都是随后明确规划或执行的目标。</p></section>
-<section id="motion"><h2>4 按页面选择运动方式</h2><p><strong>关节控制：</strong>“实际角度 → 目标”可复制当前测量角度，修改六轴目标后点击“执行六轴目标”。该路线直接通过 ROS 提交轨迹，检查限位和设备准入，不做 MoveIt 环境避碰；需要绕开圆柱等障碍时使用末端规划页。</p><p><strong>末端规划：</strong>选择空间目标、Home 或工作 Rest，先规划并检查整条路径，再执行。透明目标/预览模型不是实际姿态；实际模型跟随测量反馈。新障碍、目标编辑和设备身份变化会作废旧规划，禁止复用旧路径。</p><p><strong>自动测试：</strong>在真机-USB/ROS 下，恢复控制后，在末端规划页设置时长和连续轨迹选项，再点击“开始自动测试”。连续路线通过 ROS 内部 Action 与续接服务执行；Native 只作为行为对照，不参与 ROS 测试。测试保持面板设置的速度、加速度，不能把预览倍速当作真实速度。</p><div class="note"><strong>自动测试中的短暂反馈等待。</strong><p>同一GUI tick内处理长轨迹后，本地缓存可能刚跨过250ms；这一个缓存边界不再立即触发Cancel。仅对已受理、同UUID和boot/reference/session的母轨迹，且许可、有效掩码、碰撞场景和控制图仍一致、缓存内真实CAN年龄满足原条件时，等待新的真实反馈；既有Action仍由ROS权威控制监督。</p><p>等待以最后真实接收锚加原2秒为界，并受原段截止约束，不能从“刚发现失鲜”重新计时。等待期间不新发或重发动作、不续期，也不凭旧位置确认完成；真正源反馈超龄、身份或许可等变化、原期限到期，仍按原逻辑停止。底层C++、SDK和REF的门限不变。</p></div><details><summary>开发说明：Host长轨迹处理与本次修复范围</summary><p>等待锚为 <code>min(state_at, status_at, last_state_ns/1e9) + 2s</code>，不越原段截止；见 <a href="../../src/dummy_bringup/scripts/manual_moveit_autotest.py">AutoTest在途检查</a> 与 <a href="../../src/dummy_bringup/scripts/manual_moveit_tab.py"><code>_wait_for_ros_inflight_feedback</code></a>。新鲜反馈恢复后，仍按原条件继续。</p><p>另行离线Host诊断的7461点构造、deepcopy和CDR合计约166–168ms，28500点约807–867ms；不是本轮硬链性能原件。Native会裁剪过去前缀，ROS处理完整母轨迹，Host工作量不同。本修复复用已有等待，不引入新线程或改协议。</p><p>此修复发生在C6六窗实采之后；原C6物理测量、冻结FAIL与另行批准的工程验收PASS保持原记录。软件回归与后续长时实机验收分别记录。</p></details><p>“结束并回 Home”排空已确认安全尾部后安排回程；“立即中断测试”中断当前测试，“停止并失能”用于退出控制。出现异常时保留日志，不强行执行回 Home。软件回归通过不等于本轮长时实机验收通过，应以当前实际测试结果判断。</p></section>
-<section id="stop"><h2>5 停止、关闭与重新连接</h2><ol><li>点击公共区域“停止并失能”，等待控制链确认释放。</li><li>关闭面板，或在启动终端按 <code>Ctrl+C</code> 正常退出这一轮 launch。</li><li>再次使用启动命令，或在面板点击“重新连接”；重连保持只读，另行恢复使能。</li></ol><p><code>RELEASE_PENDING</code> / <code>RELEASE_UNCONFIRMED</code> 表示尚未取得释放确认，不能把按钮文字、进程退出或机械臂暂时不动当作释放完成。<code>EVIDENCE_INCOMPLETE;RELEASED_IDLE</code> 可表示物理释放已确认，但本轮证据不完整的失败仍然保留。</p><p>如果本次启动因已有owner被预检拒绝、尚未创建自己的ROS控制进程，点击停止只撤销本界面意图，不向外部owner发送D10；可重新连接重试发现。原释放超时后再次点击、且没有待回执时，控件不应一直busy。控件恢复可点击并不表示设备已释放，仍需核实际控制链状态。</p><p>REF 重启导致原 USB 消失时，旧进程应退出后再建立只读连接；重连不会自动恢复运动。保持同 boot 且 reference 仍有效时通常无需重烧或重新双限位标定。</p></section>
-<section id="diagnose"><h2>查看进程和日志，单独关闭 MoveIt</h2><div class="command"><button class="copy" type="button">复制</button><pre><code>pgrep -af &#x27;[r]os2 launch dummy_bringup|[m]anual_joint_panel.py|[d]evice_action_gate|[m]anual_ros_baseline_node|[m]oveit_ros_move_group/move_group|[r]viz2&#x27;
+  report:="$ROS_WS/dummy_reports/manual-$(date +%Y%m%d-%H%M%S)"</code></pre>
+          </div>
+          <p>启动后应看到六轴控制台和 RViz。报告目录由命令生成一个新名称，请勿提前创建最终目录，也不要重复使用旧目录。保留启动终端，后续可查看报错和正常退出。</p>
+          <div class="note"><strong>启动确认框需要人工回答。</strong>只读查看或未证明真实双限位姿态时，选择“否”。只有机械臂确实已位于双限位，才选择“是”；这项确认不是自动使能或自动运动。不要为了消除提示而确认错误姿态。</div>
+          <p>连接目标统一为 <strong>真机-USB/ROS</strong>、<strong>真机-USB/Native</strong>、<strong>仿真-本地</strong>。Native 与 ROS 共用同一设备时，只能保留一个通信所有者；从面板切换目标，等待原链路释放。</p>
+          <p>软件模拟可将 <code>backend:=ros</code> 改为 <code>backend:=simulator</code>。需要真机 ROS 控制时仍须提供有效 SDK 与部署配置。启动失败先看终端，不要不断另开面板。</p>
+        </section>
+        <section id="reference">
+          <h2>3 检查反馈，再恢复控制</h2>
+          <p>先看实际角度、boot、reference 和只读连接状态。启动、重连本身不代表已使能；只有设备确认控制会话准备完成，执行按钮才会开放。</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>当前情况</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>同一 REF 上电周期，reference 有效</td>
+                  <td>点击“使能 / 恢复零点”，确认使用当前实际姿态。普通失能、关软件再连接无需重摆双限位。</td>
+                </tr>
+                <tr>
+                  <td>REF 已重启或 reference 为 0</td>
+                  <td>先支撑并人工摆到真实双限位；若本次启动确认选择了“否”，重新打开面板，在启动确认中选择“是”，再点击“双限位标定 / 恢复控制”，等待ROS标定并退到Rest后再测试。当前固件的RAM参考不能跨本次REF重启沿用。</td>
+                </tr>
+                <tr>
+                  <td>电机单独重启、真实位置超限或反馈故障</td>
+                  <td>先处理实际原因。不要通过反复清故障、重新采零来绕过异常。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="note"><strong>重启后以本次反馈为准。</strong>REF重启后的只读连接可能为 <code>reference=0</code>，历史报告中的 <code>ref1</code> 不能复用。此时“重新连接”“双限位标定”“停止失能”可以使用，“使能 / 恢复零点”应禁用；本次只读启动确认选“否”，直接点击当前标定按钮只会提示“本次连接未确认双限位”，不会采零。正确顺序：支撑并摆到真实双限位 → 重新打开面板 → 启动确认选择“是” → 点击“双限位标定 / 恢复控制” → 等ROS标定并退到Rest，再检查新参考和反馈后测试。</div>
+          <p>在已有参考下恢复控制会以实际测量姿态建立 Hold，不要求先到 Home；Home、Rest 都是随后明确规划或执行的目标。</p>
+        </section>
+        <section id="motion">
+          <h2>4 按页面选择运动方式</h2>
+          <p><strong>关节控制：</strong>“实际角度 → 目标”可复制当前测量角度，修改六轴目标后点击“执行六轴目标”。该路线直接通过 ROS 提交轨迹，检查限位和设备准入，不做 MoveIt 环境避碰；需要绕开圆柱等障碍时使用末端规划页。</p>
+          <p><strong>末端规划：</strong>选择空间目标、Home 或工作 Rest，先规划并检查整条路径，再执行。透明目标/预览模型不是实际姿态；实际模型跟随测量反馈。新障碍、目标编辑和设备身份变化会作废旧规划，禁止复用旧路径。</p>
+          <p><strong>自动测试：</strong>真机-USB/ROS下，恢复控制后在末端规划页点击“开始自动测试”。ROS默认时长为<strong>0＝不限时（手动结束）</strong>；填写正数可按总时长定时结束，不再有ROS特有的9.5分钟总时长限制。点击“结束并回 Home”停止增加目标，排空已检查尾段后回程；“立即中断测试”请求受控停车并保持当前使能，“停止并失能”用于释放控制。</p>
+          <div class="note"><strong>持续测试与单次运行预算分开。</strong><p>勾选“连续轨迹”后，每个运行段（RUN）内部平滑续接。随机轨迹窗口接近570秒时停止补充，沿设备已确认的尾段完成，收到正式Action完成及新鲜实际到位后，从实际姿态开始下一段；整轮测试继续，不会每段回Home。跨运行段会短暂停稳，不是无限长的无缝母轨迹。</p><p>单次轨迹的630秒预算、31500样本容量、许可检查、完整曲线碰撞检查及速度/加速度均保留。许可按本次运行段申请，不把整轮时长或“无穷大”传给设备；手动结束或定时时限仍作用于整轮。Native保留原有时长设置，本改动不调整Native控制路线。</p></div>
+          <div class="note">
+            <strong>自动测试中的短暂反馈等待。</strong>
+            <p>同一GUI tick内处理长轨迹后，本地缓存可能刚跨过250ms，页面入口和后续路径身份检查之间也可能发生；这些缓存边界复用同一原期限等待，不把暂时失鲜误报成“规划内容改变”或立即触发Cancel。仅对已受理、同UUID和boot/reference/session的母轨迹，且许可、有效掩码、碰撞场景和控制图仍一致、缓存内真实CAN年龄满足原条件时，等待新的真实反馈；既有Action仍由ROS权威控制监督。</p>
+            <p>等待以最后真实接收锚加原2秒为界，并受原段截止约束，不能从“刚发现失鲜”重新计时。等待期间不新发或重发动作、不续期，也不凭旧位置确认完成；真正源反馈超龄、身份或许可等变化、原期限到期，仍按原逻辑停止。底层C++、SDK和REF的门限不变。</p>
+          </div>
+          <details>
+            <summary>开发说明：Host长轨迹处理与本次修复范围</summary>
+            <p>等待锚为 <code>min(state_at, status_at, last_state_ns/1e9) + 2s</code>，不越原段截止；见 <a href="../../src/dummy_bringup/scripts/manual_moveit_autotest.py">AutoTest在途检查</a> 与 <a href="../../src/dummy_bringup/scripts/manual_moveit_tab.py"><code>_wait_for_ros_inflight_feedback</code></a>。新鲜反馈恢复后，仍按原条件继续。</p>
+            <p>另行离线Host诊断的7461点构造、deepcopy和CDR合计约166–168ms，28500点约807–867ms；不是本轮硬链性能原件。Native会裁剪过去前缀，ROS处理完整母轨迹，Host工作量不同。本修复复用已有等待，不引入新线程或改协议。</p>
+            <p>此修复发生在C6六窗实采之后；原C6物理测量、冻结FAIL与另行批准的工程验收PASS保持原记录。软件回归与后续长时实机验收分别记录。</p>
+          </details>
+          <p>“结束并回 Home”排空已确认安全尾部后安排回程；“立即中断测试”中断当前测试，“停止并失能”用于退出控制。出现异常时保留日志，不强行执行回 Home。软件回归通过不等于本轮长时实机验收通过，应以当前实际测试结果判断。</p>
+        </section>
+        <section id="stop">
+          <h2>5 退出、清理与重新启动</h2>
+          <p>按“正常退出 → 检查残留 → 刷新发现缓存 → 手动重开”的顺序处理。以下命令在本页第1节已加载环境的 <strong>Bash</strong> 中运行，只处理本机这轮 Dummy 控制链。</p>
+          <h3>5.1 优先正常退出</h3>
+          <ol>
+            <li>在面板点击“停止并失能”，等待设备确认释放，并检查新鲜反馈。</li>
+            <li>在最初启动面板的终端按 <code>Ctrl+C</code>，等待本轮 launch 退出。仅关闭面板窗口时，RViz 或模型发布进程可能仍然保留。</li>
+            <li>先完成下方检查，再打开新面板；不要同时启动两份机械臂通信所有者。</li>
+          </ol>
+          <h3>5.2 找不到原启动终端时</h3>
+          <p>先查询本轮面板 launch，再向匹配的启动进程发送正常中断信号：</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第4段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第4段 Bash 命令"><code>pgrep -af '[r]os2 launch dummy_bringup manual_joint_panel.launch.py'
+pkill -INT -f '[r]os2 launch dummy_bringup manual_joint_panel.launch.py'</code></pre>
+          </div>
+          <p><code>SIGINT</code> 与终端的 <code>Ctrl+C</code> 使用同一种中断信号。没有匹配进程时，<code>pkill</code> 可以无输出并返回1；继续检查残留，不要据此认定全部节点已停止。</p>
+          <p>启动进程已经退出，但还有模型、坐标、RViz 或规划节点时，查看实际进程。输出四列依次为 <strong>PID、父进程 PID、进程组 PGID、启动命令</strong>：</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第5段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第5段 Bash 命令"><code>ps -eo pid,ppid,pgid,args | grep -E \
+  '[m]anual_joint_panel|[d]evice_action_gate|[m]ove_group|[r]obot_state_publisher|[s]tatic_transform_publisher|[r]viz2'</code></pre>
+          </div>
+          <p>根据启动命令和进程归属，确认某个 PID 属于本轮残留后，再执行下面的交互命令。其他工作区也可能运行同名程序；不要沿用历史 PID。</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第6段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第6段 Bash 命令"><code>read -r -p '输入已核实属于本轮的残留 PID: ' DUMMY_ROS_PID
+if [[ "$DUMMY_ROS_PID" =~ ^[1-9][0-9]*$ ]]; then
+  kill -INT "$DUMMY_ROS_PID"
+else
+  printf '%s\n' '未输入有效 PID，未发送信号'
+fi</code></pre>
+          </div>
+          <div class="note"><strong>停止进程不等于确认机械臂失能。</strong>正常释放卡住或反馈中断时，先支撑机械臂、保留日志，按现场情况处理；不能用进程消失来代替设备确认。</div>
+          <h3>5.3 刷新缓存，并确认本域已无节点</h3>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第7段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第7段 Bash 命令"><code>export ROS_DOMAIN_ID=83
+ros2 daemon stop
+ros2 node list --no-daemon --spin-time 2</code></pre>
+          </div>
+          <p><code>ros2 daemon stop</code> 只停止本域命令行工具的发现缓存服务，<strong>不会关闭业务节点，也不会使能或失能机械臂</strong>。最后一条命令绕过缓存进行发现；无输出表示本次发现未看到域83中的节点。结合上一步的实际进程检查判断是否清理完毕，其他域或尚未发现的节点不在此结论内。</p>
+          <p>“节点重名”警告不等于启动了同样数量的进程：一个进程可以创建多个 ROS 节点。判断是否多开应查看实际 PID、PGID 和启动命令；不要根据节点名数量直接结束进程。</p>
+          <h3>5.4 在终端手动重开</h3>
+          <p>仍在已经完成第1节环境加载的 Bash 中时，运行第2节启动命令即可。若换了终端，先重新执行第1节；为每轮报告生成新目录。连接保持只读，再由操作者确认恢复控制或标定。</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第8段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第8段 Bash 命令"><code>ros2 launch dummy_bringup manual_joint_panel.launch.py \
+  backend:=ros \
+  sdk_prefix:="$DPSDK_HOST_SDK_PREFIX" \
+  config:="$HOME/.local/share/dummy_ros/manual_panel/current/panel-config.json" \
+  moveit:=true \
+  auto_calibrate_and_test:=false \
+  operator_confirmed_double_limits:=false \
+  report:="$ROS_WS/dummy_reports/manual-$(date +%Y%m%d-%H%M%S)"</code></pre>
+          </div>
+          <details>
+            <summary>释放状态和设备重启的含义</summary>
+            <p><code>RELEASE_PENDING</code> / <code>RELEASE_UNCONFIRMED</code> 表示尚未取得释放确认，不能把按钮文字、进程退出或机械臂暂时不动当作释放完成。<code>EVIDENCE_INCOMPLETE;RELEASED_IDLE</code> 可表示物理释放已确认，但本轮证据不完整的失败仍然保留。</p>
+            <p>如果本次启动因已有owner被预检拒绝、尚未创建自己的ROS控制进程，点击停止只撤销本界面意图，不向外部owner发送D10；可重新连接重试发现。原释放超时后再次点击、且没有待回执时，控件不应一直busy。控件恢复可点击并不表示设备已释放，仍需核实际控制链状态。</p>
+            <p>REF 重启导致原 USB 消失时，旧进程应退出后再建立只读连接；重连不会自动恢复运动。保持同 boot 且 reference 仍有效时通常无需重烧或重新双限位标定。</p>
+          </details>
+        </section>
+        <section id="diagnose">
+          <h2>查看进程和日志，单独关闭 MoveIt</h2>
+          <p><code>ROS canceled</code>中的<code>status: 5</code>表示Action已取消。向上查看本轮<code>moveit-events.jsonl</code>中的<code>AUTO_TEST_ABORTED.reason</code>或面板的第一条退出原因，才能判断是人工中断、反馈/身份异常还是规划错误；取消终态本身不等于设备故障，也不代表测试通过。<code>MANUAL_CONTROL_READY</code>表示控制链仍可受理手动控制。</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第9段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第9段 Bash 命令"><code>pgrep -af '[r]os2 launch dummy_bringup|[m]anual_joint_panel.py|[d]evice_action_gate|[m]anual_ros_baseline_node|[m]oveit_ros_move_group/move_group|[r]viz2'
 ros2 node list
-ros2 service list | rg &#x27;device_action_gate|compute_ik|plan_kinematic_path&#x27;</code></pre></div><p>正常整轮退出优先使用启动终端的 <code>Ctrl+C</code>。如只需结束规划器，先停止并确认机械臂失能，再查询其 PID，输入要关闭的进程号：</p><div class="command"><button class="copy" type="button">复制</button><pre><code>pgrep -af &#x27;[m]oveit_ros_move_group/move_group&#x27;
-read -r -p &#x27;输入要关闭的 move_group PID: &#x27; MOVEIT_PID
-kill -INT &quot;$MOVEIT_PID&quot;</code></pre></div><p>只结束 MoveIt 不等于机械臂失能。不要用全局 <code>pkill python</code> 或 <code>kill -9</code> 代替正常释放；单个节点退出后，若需完整规划能力，请正常退出原 launch 再启动一轮。</p><div class="command"><button class="copy" type="button">复制</button><pre><code># 查看本轮面板报告与最近 ROS 日志
-ls -lt &quot;$ROS_WS/dummy_reports&quot;
-ls -lt &quot;$HOME/.ros/log&quot;
+ros2 service list | rg 'device_action_gate|compute_ik|plan_kinematic_path'</code></pre>
+          </div>
+          <p>正常整轮退出优先使用启动终端的 <code>Ctrl+C</code>。如只需结束规划器，先停止并确认机械臂失能，再查询其 PID，输入要关闭的进程号：</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第10段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第10段 Bash 命令"><code>pgrep -af '[m]oveit_ros_move_group/move_group'
+read -r -p '输入要关闭的 move_group PID: ' MOVEIT_PID
+kill -INT "$MOVEIT_PID"</code></pre>
+          </div>
+          <p>只结束 MoveIt 不等于机械臂失能。不要用全局 <code>pkill python</code> 或 <code>kill -9</code> 代替正常释放；单个节点退出后，若需完整规划能力，请正常退出原 launch 再启动一轮。</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第11段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第11段 Bash 命令"><code># 查看本轮面板报告与最近 ROS 日志
+ls -lt "$ROS_WS/dummy_reports"
+ls -lt "$HOME/.ros/log"
 # 查看最近报告中的事件（将路径换成本轮实际目录）
-# tail -n 30 /本轮报告目录/moveit-events.jsonl</code></pre></div><p>保留报错原文、时间、本轮报告目录与连接目标。圆柱碰撞导致候选路径被拒绝属于有效拦截；若整轮自动测试因此退出，需进一步区分规划失败、真实设备故障和面板反馈处理问题。</p></section>
-<section id="build"><h2>首次安装或主动重建</h2><p>已有可用安装时不用每次构建。新电脑先准备 ROS Jazzy、项目依赖、已导出的 PIC SDK 和匹配的部署配置，再从 ROS 仓库根目录运行：</p><div class="command"><button class="copy" type="button">复制</button><pre><code>export DPSDK_ROOT=&quot;$ROS_WS/../dpsdk&quot;
-export DPSDK_HOST_SDK_PREFIX=&quot;/实际/SDK/安装目录&quot;
-cd &quot;$ROS_WS&quot;
+# tail -n 30 /本轮报告目录/moveit-events.jsonl</code></pre>
+          </div>
+          <p>保留报错原文、时间、本轮报告目录与连接目标。圆柱碰撞导致候选路径被拒绝属于有效拦截；若整轮自动测试因此退出，需进一步区分规划失败、真实设备故障和面板反馈处理问题。</p>
+        </section>
+        <section id="build">
+          <h2>首次安装或主动重建</h2>
+          <p>已有可用安装时不用每次构建。新电脑先准备 ROS Jazzy、项目依赖、已导出的 PIC SDK 和匹配的部署配置，再从 ROS 仓库根目录运行：</p>
+          <div class="command">
+            <div class="bar">
+              <span>Bash · 复制后在终端运行</span>
+              <button class="copy" type="button" aria-label="复制第12段命令" aria-live="polite">复制命令</button>
+            </div>
+            <pre tabindex="0" aria-label="第12段 Bash 命令"><code>export DPSDK_ROOT="$ROS_WS/../dpsdk"
+export DPSDK_HOST_SDK_PREFIX="/实际/SDK/安装目录"
+cd "$ROS_WS"
 bash scripts/build_manual_panel.sh
-# 构建完成后重新执行第1节环境加载，再使用第2节启动命令</code></pre></div><p>构建脚本只构建需要的接口、描述、规划、控制与面板包，不连接或使能设备。更新源码后使用针对性构建/安装；更换固件部署需要重新核验完整部署身份，不要仅替换某个哈希。</p></section>
-<section id="sdk"><h2>开发者看哪里</h2><ul><li><code>applications/dummy_ref_control/dummy_sdk/</code>：Native 与 ROS 共用 SDK 的接口、实现和 CMake 导出；公共 <code>&lt;dummy_ref/...&gt;</code> include 用法保持一致。</li><li><code>applications/dummy_ref_control/host/</code>：Native CLI 入口与命令行适配。</li><li><code>src/dummy_bringup/launch/manual_joint_panel.launch.py</code>：ROS 面板公开启动入口。</li><li><code>src/dummy_bringup/scripts/manual_panel_ros_backend.py</code>：面板 ROS 传输适配；设备准入与最终完成由控制链确认。</li><li><code>~/.local/share/dummy_ros/manual_panel/current/panel-config.json</code>：当前本机部署入口，不能从历史报告目录随意拼装。</li></ul><p>本页面内含样式和复制功能，复制 HTML 即可离线阅读；命令引用的 SDK、工作区和部署配置属于实际运行环境，不作为网页资源下载。</p></section></main><script>
-document.querySelectorAll('.copy').forEach(button=>button.addEventListener('click',async()=>{const text=button.closest('.command').querySelector('code').textContent;try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text)}else{const area=document.createElement('textarea');area.value=text;document.body.appendChild(area);area.select();if(!document.execCommand('copy'))throw new Error('copy');area.remove()}button.textContent='已复制';setTimeout(()=>button.textContent='复制',1600)}catch{button.textContent='请选中文字复制'}}));
-</script></body></html>
+# 构建完成后重新执行第1节环境加载，再使用第2节启动命令</code></pre>
+          </div>
+          <p>构建脚本只构建需要的接口、描述、规划、控制与面板包，不连接或使能设备。更新源码后使用针对性构建/安装；更换固件部署需要重新核验完整部署身份，不要仅替换某个哈希。</p>
+        </section>
+        <section id="sdk">
+          <h2>开发者看哪里</h2>
+          <ul>
+            <li><code>applications/dummy_ref_control/dummy_sdk/</code>：Native 与 ROS 共用 SDK 的接口、实现和 CMake 导出；公共 <code>&lt;dummy_ref/...&gt;</code> include 用法保持一致。</li>
+            <li><code>applications/dummy_ref_control/host/</code>：Native CLI 入口与命令行适配。</li>
+            <li><code>src/dummy_bringup/launch/manual_joint_panel.launch.py</code>：ROS 面板公开启动入口。</li>
+            <li><code>src/dummy_bringup/scripts/manual_panel_ros_backend.py</code>：面板 ROS 传输适配；设备准入与最终完成由控制链确认。</li>
+            <li><code>~/.local/share/dummy_ros/manual_panel/current/panel-config.json</code>：当前本机部署入口，不能从历史报告目录随意拼装。</li>
+          </ul>
+          <p>本页面内含样式和复制功能，复制 HTML 即可离线阅读；命令引用的 SDK、工作区和部署配置属于实际运行环境，不作为网页资源下载。</p>
+        </section>
+      </main>
+    </div>
+    <script>
+      document.querySelectorAll('.copy').forEach(button => {
+        button.addEventListener('click', async () => {
+          const text = button.closest('.command').querySelector('code').textContent;
+          try {
+            if (navigator.clipboard && window.isSecureContext) {
+              await navigator.clipboard.writeText(text);
+            } else {
+              const area = document.createElement('textarea');
+              area.value = text;
+              area.style.cssText = 'position:fixed;left:-9999px;top:0';
+              document.body.appendChild(area);
+              try {
+                area.select();
+                if (!document.execCommand('copy')) throw new Error('copy');
+              } finally {
+                area.remove();
+              }
+            }
+            button.textContent = '已复制';
+            setTimeout(() => { button.textContent = '复制命令'; }, 1600);
+          } catch {
+            button.textContent = '请选中文字复制';
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

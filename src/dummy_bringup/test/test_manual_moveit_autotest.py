@@ -494,3 +494,39 @@ def test_ros_stream_preserves_queued_tail_until_feedback_passes_first_slot():
     s._chain_tick();s._chain_tick()
     t.panel.ros_backend.extend_trajectory.assert_called_once()
     assert s.queued is None and s.chain_pending['path'] is joined and s.chain_path is old
+
+
+@pytest.mark.parametrize('seconds',[0.,3600.,86400.])
+@pytest.mark.parametrize('continuous',[True,False])
+def test_ros_total_duration_is_independent_of_single_run_budget(monkeypatch,seconds,continuous):
+    s,t=session();s.active=False;t.panel.backend='ros';t.panel.busy=False
+    t.request_ready=lambda:True;t.pending=None;t.invalidate=Mock();t.preview_timer=Mock()
+    t.panel.confirm_execution=Mock(return_value=__import__('PyQt5.QtWidgets',fromlist=['QMessageBox']).QMessageBox.Yes)
+    t.amplitude=NS(currentData=lambda:'large',currentText=lambda:'大')
+    t.ik_preference=NS(currentData=lambda:'nearest',currentText=lambda:'最近')
+    t.scene_revision=lambda:1;t.continuous_enabled=True;t.auto_continuous=NS(isChecked=lambda:continuous)
+    t.panel.speed_input.value=lambda:60.;t.panel.acceleration_input.value=lambda:4.
+    s._begin=Mock();monkeypatch.setattr('manual_moveit_autotest.time.monotonic',lambda:10.)
+    assert s.start(seconds)
+    assert s.deadline==(math.inf if seconds==0 else 10.+seconds)
+    assert math.isfinite(s.chain_budget) and 0<s.chain_budget<=630.
+    assert s.requested_seconds==seconds
+    assert t.panel.speed_input.value()==60. and t.panel.acceleration_input.value()==4.
+
+
+@pytest.mark.parametrize("deadline",[math.inf,700.])
+def test_ros_window_drains_verified_tail_and_replans_without_ending_test(monkeypatch,deadline):
+    from manual_moveit_continuous import PreparedPath
+    s,t=stream_session();s.deadline=deadline;old=s.chain_path
+    oversized_window=PreparedPath((s.anchor,)*28600,60.,4.)
+    s.queued=dict(home=False,joined_path=oversized_window,continuous_path=oversized_window,
+                  join_cut=250,start=old.points[-1],goal=oversized_window.points[-1])
+    s._chain_tick()
+    assert s.active and s.chain_draining and s.chain_path is old
+    assert s.chain_pending is None and s.queued is None
+    t.panel.ros_backend.extend_trajectory.assert_not_called();t.cancel_execution.assert_not_called()
+    monkeypatch.setattr('manual_moveit_autotest.time.monotonic',lambda:600.)
+    s.on_path_completed()
+    assert s.active and not s.chain_draining and not s.chain_live and not s.returning
+    assert s.deadline==deadline and s.ros_preplan_deadline==min(deadline,720.)
+    s._begin.assert_called_with(tuple(t.panel.actual_q))

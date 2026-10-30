@@ -1,8 +1,8 @@
 ##
 # @file manual_moveit_autotest.py
-# @brief 组织限时随机目标测试、下一段预规划和同 RUN 连续链续接。
+# @brief 组织定时/持续随机测试、下一段预规划和受预算约束的连续链续接。
 # 测试以一次明确确认建立当前 boot/reference/session 与场景版本；随机候选被拒绝可继续搜索，但服务失联、身份/反馈/授权变化会退出。到期停止补充并在当前已检查路径结束后回 Home；故障或立即中断不强行回程。
-"""限时随机位姿测试：下一段预规划、完整碰撞检查、到期回Home、错误即退出。"""
+"""随机位姿测试：定时或手动结束、完整碰撞检查、回Home、错误即退出。"""
 import math
 import random
 import time
@@ -13,6 +13,11 @@ from manual_moveit_execution import collision_samples, execution_polyline
 from manual_moveit_continuous import prepare_path, trajectory_velocities, blend_paths, PreparedPath, write_path
 from pathlib import Path
 from manual_panel_messages import moveit_error
+
+# ROS单次轨迹仍沿用630秒预算；随机尾部到570秒后排空，留出连接和停车余量。
+# 整轮测试可跨多个RUN，不能把总时长或无穷大传成一次设备许可。
+ROS_RUN_BUDGET_S = 630.
+ROS_CHAIN_WINDOW_S = 570.
 
 
 ##
@@ -139,24 +144,27 @@ class AutoTestSession:
 
     ##
     # @brief 确认条件后冻结测试身份、场景、幅度与动态参数并开始预规划。
-    # 连续模式还要求底层连续执行开启；chain_budget=seconds+60 s 留链尾预算。确认前后重新检查可执行条件，先 invalidate 旧手工规划，再记录本轮实际 anchor 和身份；不会用前一轮授权或场景版本。
-    # @param seconds 随机测试宿主时长秒数，允许 0.1..86400；连续模式最多 3420。
+    # 连续模式要求底层连续执行开启；ROS总时长独立于单RUN预算，0表示手动结束。确认前后重新检查可执行条件，先invalidate旧规划，再记录当前anchor和身份。
+    # @param seconds 随机测试总时长秒数，允许0.1..86400；ROS的0表示手动结束，Native连续模式最多3420。
     # @return bool：测试成功进入活动状态为 True；忙、拒绝确认或初始准备失败为 False。
     def start(self, seconds):
         t = self.tab
         if self.active or t.executing or t.pending or t.panel.busy or not t.request_ready():return False
-        if not math.isfinite(seconds) or not .1 <= seconds <= 86400.:raise ValueError('测试时长必须在0.1秒至24小时之间')
         chain = hasattr(t,'auto_continuous') and t.auto_continuous.isChecked()
         ros = getattr(t.panel, 'backend', None) == 'ros'
-        if ros and seconds > 570.:raise ValueError('ROS自动测试最长9.5分钟，另留Home回程预算；完整轨迹不得超过630秒')
-        if chain and (not t.continuous_enabled or seconds>3420.):
+        unlimited = ros and seconds == 0.
+        if not math.isfinite(seconds) or (not unlimited and not .1 <= seconds <= 86400.):
+            raise ValueError('测试时长必须在0.1秒至24小时之间；ROS可设置0持续运行')
+        if chain and (not t.continuous_enabled or (not ros and seconds>3420.)):
             raise ValueError('连续测试需启用底层连续执行，单轮最长57分钟（另留回程与停车预算）')
+        duration_text = '持续运行，直到手动结束' if unlimited else f'测试时长 {seconds:g} 秒'
         answer = t.panel.confirm_execution('开始自动测试',
-            f'将在当前姿态附近连续生成并执行已检查路径，测试时长 {seconds:g} 秒。\n'
+            f'将在当前姿态附近连续生成并执行已检查路径，{duration_text}。\n'
             f'变化幅度：{t.amplitude.currentText()}；逆解偏好：{t.ik_preference.currentText()}。\n'
             f'速度 {t.panel.speed_input.value():g}°/s，加速度 {t.panel.acceleration_input.value():g}rad/s²；'+
             ('短前瞻后起步，边运动边规划，在同一运行中平滑续接；目标附近不停稳。\n' if chain else '每段确认到位。\n')+
-            '到期完成当前段后回Home；报错或按停止则中止，不在故障下强行回Home。确认现场路径畅通后开始。')
+            ('ROS长时测试会在已检查尾段确认Hold后换下一RUN，边界可能短暂停稳。\n' if ros and chain else '')+
+            '结束并回Home会完成当前段后回程；报错或按停止则中止，不在故障下强行回Home。确认现场路径畅通后开始。')
         if answer != QtWidgets.QMessageBox.Yes or not t.request_ready() or t.panel.busy:return False
         t.invalidate();t.preview_timer.stop()
         self.active,self.returning,self.executing_home = True,False,False
@@ -165,13 +173,13 @@ class AutoTestSession:
         # 冻结本轮运动身份和本地场景版本；后续即使参考不变，只要 session 改变也必须退出，不能借旧自动确认继续。
         self.identity = t.execution_identity()
         self.scene_version = t.scene_revision()
-        self.started_at = time.monotonic();self.deadline = self.started_at+seconds
+        self.started_at = time.monotonic();self.deadline = math.inf if unlimited else self.started_at+seconds
         self.anchor = tuple(t.panel.actual_q);self.direction = (0.,)*6
         self.amplitude = t.amplitude.currentData();self.preference = t.ik_preference.currentData()
         self.chain_enabled = chain;self.chain_live = False;self.chain_path = None;self.chain_pending = None
         self.chain_version = 0 if ros else 1;self.chain_origin = 0;self.chain_phase = 0;self.chain_markers = [];self.chain_draining = False
         self.chain_received_at = None
-        self.chain_budget = seconds+60.
+        self.chain_budget = min(ROS_RUN_BUDGET_S, (math.inf if unlimited else seconds+60.)) if ros else seconds+60.
         self.requested_seconds = seconds
         self.ros_stream = ros and chain
         self.ros_first_slot_ns = 0
@@ -181,7 +189,7 @@ class AutoTestSession:
         self._status('自动测试运行中', '#1d4ed8')
         self.speed = t.panel.speed_input.value();self.acceleration = t.panel.acceleration_input.value()
         t.panel.busy = True
-        t.record('AUTO_TEST_STARTED',seconds=seconds,identity=self.identity,
+        t.record('AUTO_TEST_STARTED',seconds=seconds,unlimited=unlimited,identity=self.identity,
                  speed_deg_s=self.speed,acceleration_rad_s2=self.acceleration,
                  amplitude=self.amplitude,ik_preference=self.preference,continuous_chain=chain)
         try:self._begin(tuple(t.panel.actual_q))
@@ -514,7 +522,8 @@ class AutoTestSession:
                         f'准备剩余 {remaining:.0f} 秒（可停止）')
                     return
                 remaining = max(0.,self.deadline-time.monotonic())
-                state = '正在回Home' if self.returning else f'剩余 {remaining:.0f} 秒'
+                state = ('正在回Home' if self.returning else '持续运行（手动结束）'
+                         if math.isinf(self.deadline) else f'剩余 {remaining:.0f} 秒')
                 search = f' · 正在寻找目标（第{self.attempts}次候选）' if self.stage else ''
                 self.tab.auto_status.setText(f'自动测试：完成 {self.completed} 个目标 · {state} · 下一段已就绪' if self.queued else
                                              f'自动测试：完成 {self.completed} 个目标 · {state}{search}')
@@ -576,6 +585,17 @@ class AutoTestSession:
                             key=lambda i:sum((a-b)**2 for a,b in zip(path.points[i],self.chain_path.points[-1])))
                 marker=self.chain_origin+closest
             if self.chain_live:
+                if self.ros_stream:
+                    if len(path.points)>31500:
+                        raise ValueError('ROS连续轨迹超过原630秒/31500样本预算，未续接')
+                    if path.duration>ROS_CHAIN_WINDOW_S:
+                        # 保留设备已确认的原尾段；正式Action完成和新鲜到位后，
+                        # on_path_completed才可从实际位置开始下一RUN，不取消母目标。
+                        self.chain_draining=True;self._drop_planning()
+                        self.tab.record('AUTO_TEST_ROS_WINDOW_DRAINING',phase_us=self.chain_phase,
+                                        accepted_duration_s=self.chain_path.duration,
+                                        proposed_duration_s=path.duration)
+                        return
                 cut_absolute=self.chain_origin+item['join_cut']
                 ##
                 # 400000 µs 是续接修改点最小前瞻；不足时不强行改在途命令，只停止补充并排空既有安全尾段。

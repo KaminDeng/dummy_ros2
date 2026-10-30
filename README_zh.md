@@ -30,7 +30,8 @@ https://github.com/user-attachments/assets/d9df87e6-6015-4944-a043-6c12fd92b136
 flowchart LR
     Panel[Qt 六轴面板] --> Planner[MoveIt 规划及碰撞检查]
     Planner --> Panel
-    Panel --> Native[已部署 Native CLI]
+    Panel -->|真机-USB/Native| Native[已部署 Native CLI]
+    Panel -->|真机-USB/ROS| Action
     Native --> REF[F405 参考控制固件]
     Action[ROS Action 客户端] --> Gate[device_action_gate]
     Gate --> Controller[受守卫的 ros2_control 控制器与硬件接口]
@@ -39,7 +40,7 @@ flowchart LR
 ```
 
 面板的 MoveIt 服务只计算路径，`allow_trajectory_execution` 为 false；操作者确认执行后，
-面板才把通过检查的采样轨迹交给 Native。ROS Action 路径由 gate 与控制插件协作，
+面板才把通过检查的采样轨迹交给所选 Native 或 ROS 后端。ROS Action 路径由 gate 与控制插件协作，
 不能用面板的“已恢复控制”代替其 bootstrap/permit 状态。两条路径应分别使用自己的
 完整部署配置；同一个 USB 串口同时只能有一个控制进程拥有。
 
@@ -47,10 +48,10 @@ flowchart LR
 运动最终完成和失能释放确认是不同阶段。实际姿态来自反馈，目标虚影走独立的
 `/target_joint_states` 与 `target_preview/` TF，不写回真实关节状态。
 
-## 五个 ROS 包与阅读入口
+## 六个 ROS 包与阅读入口
 
 [全源码阅读指南HTML](docs/dummy/source-reading-guide.html)提供适合新手的功能阅读顺序，
-把ROS与DPSDK应用放在同一条往返链路中讲解，再按模块补全2138份文件。
+把ROS与DPSDK应用放在同一条往返链路中讲解，并提供按模块组织的源码快照。
 页面内含离线源码、函数/字段定位、逐文件导读、自测与本地阅读记录；打开页面不启动ROS或设备。
 
 | 包 | 作用 | 建议先读 |
@@ -60,6 +61,7 @@ flowchart LR
 | `dummy_bringup` | 面板、配置解析、只读规划服务、场景与不同后端的 launch | [面板启动](src/dummy_bringup/launch/manual_joint_panel.launch.py)、[面板主程序](src/dummy_bringup/scripts/manual_joint_panel.py) |
 | `dummy_ros_control` | 设备传输、状态/指令桥、受守卫轨迹控制器及硬件插件 | [构建与依赖锁](src/dummy_ros_control/CMakeLists.txt)、[接口头](src/dummy_ros_control/include) |
 | `dummy_motion_client` | 管理事务、bootstrap、permit、公开 Action 入口与目标记录 | [实现目录](src/dummy_motion_client/src)、[接口头](src/dummy_motion_client/include) |
+| `dummy_motion_interfaces` | 为已接纳轨迹追加后续段的 ROS 服务接口 | [服务定义](src/dummy_motion_interfaces/srv/ExtendJointTrajectory.srv) |
 
 其他目录：
 
@@ -105,20 +107,25 @@ git clone https://github.com/KaminDeng/dummy_ros2.git
 cd dummy_ros2
 source /opt/ros/jazzy/setup.bash
 # rosdep 首次使用时需先按 ROS 官方说明初始化。
-rosdep install --from-paths src --ignore-src -r -y
+rosdep install --from-paths src --ignore-src --skip-keys dpsdk_interfaces -r -y
 ```
 
-随后在本仓库根目录运行：
+先按下方“完整 ROS 控制工作区”说明导出同版 PIC Host SDK。面板构建脚本还需要
+公共协议生成工具，由其组装 `dpsdk_interfaces`；上面的 rosdep 仅跳过这个自行生成的包。
+替换下面两项路径后，在本仓库根目录运行：
 
 ```bash
+export DPSDK_HOST_SDK_PREFIX=/absolute/matching/host-sdk-install
+export DPSDK_PROTOCOL_TOOLS=/path/to/dpsdk/libraries/dp_protocol/tools
 bash scripts/build_manual_panel.sh
 source /opt/ros/jazzy/setup.bash
+source install_protocol/local_setup.bash
 source install_panel_guide/local_setup.bash
 ROS_DOMAIN_ID=84 ros2 launch dummy_bringup manual_joint_panel.launch.py backend:=simulator
 ```
 
-该脚本只构建模型、MoveIt 配置、bringup 三个包，输出分别是
-`build_panel_guide/`、`install_panel_guide/`、`log_panel_guide/`。它传入
+该脚本先在 `build_protocol/`、`install_protocol/`、`log_protocol/` 中生成并构建协议包，
+再构建上述六个工作区包，输出为 `build_panel_guide/`、`install_panel_guide/`、`log_panel_guide/`。它传入
 `BUILD_TESTING=OFF`，因此“构建成功”不等于已运行测试。模拟器不打开 USB，
 也不运行 Gazebo 物理仿真，可用于认识关节页、规划页、目标预览和交互流程。
 
@@ -139,10 +146,14 @@ ROS_DOMAIN_ID=84 ros2 launch dummy_bringup manual_joint_panel.launch.py backend:
 ros2 run dummy_bringup deploy_manual_panel.py \
   --native /absolute/selected/dummy_joint_cli \
   --firmware /absolute/selected/dpsdk_firmware.bin \
-  --identity /absolute/selected/identity.json
+  --identity /absolute/selected/identity.json \
+  --endpoint /dev/serial/by-id/EXAMPLE_DEVICE_0001
 
 ros2 launch dummy_bringup manual_joint_panel.launch.py backend:=real
 ```
+
+`backend:=real` 选择真机 Native；选择真机 ROS 时改为 `backend:=ros`，并沿用上述
+`DPSDK_HOST_SDK_PREFIX` 或显式传入 `sdk_prefix:=/absolute/matching/host-sdk-install`。
 
 仓库内的 `manual_joint_panel.json` 是带 `deployment_required` 的模板，不能直接当作
 真机部署配置。启动后先只读显示；当前配置的人工双限位确认、退工作 REST、恢复控制、
@@ -160,9 +171,10 @@ ros2 launch dummy_bringup manual_joint_panel.launch.py backend:=real
 
 完整构建涉及 `dummy_ros_control` 和 `dummy_motion_client`，必须显式传入同版、PIC、
 651 字节消息 / 18000 字节存储契约的 Host SDK 安装前缀。生产构建使用
-`BUILD_TESTING=OFF`，不需要 DPSDK 源码；开启真实 Core/model 离线回归时才需 `DPSDK_ROOT`。
+`BUILD_TESTING=OFF`，C++ 包从安装 SDK 消费接口；接口组装脚本另外需要公共协议生成工具，
+开启真实 Core/model 离线回归时还需 `DPSDK_ROOT`。
 [verify_sdk_inputs.cmake](src/dummy_ros_control/cmake/verify_sdk_inputs.cmake)
-会检查安装包的协议、角色及头/库/业务包摘要；Host SDK 导出脚本 `applications/dummy_ref_control/host/sdk_export.cmake`
+会检查安装包的协议、角色及头/库/业务包摘要；Host SDK 导出脚本 `applications/dummy_ref_control/dummy_sdk/cmake/sdk_export.cmake`
 位于相邻 DPSDK 仓库。前缀是已经正确导出的安装目录，不是任意旧 build 目录。
 
 可先从所选 DPSDK 源码导出这一角色的 SDK。以下三步只做 Host 构建和安装：

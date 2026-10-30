@@ -1423,7 +1423,10 @@ class MoveItTabTests(unittest.TestCase):
         self.assertEqual(self.tab.auto_duration.maximum(),57.)
         self.panel.backend = 'ros'
         self.tab.refresh_auto_backend_options()
-        self.assertEqual(self.tab.auto_duration.maximum(),9.5)
+        self.assertEqual(self.tab.auto_duration.maximum(),1440.)
+        self.assertEqual(self.tab.auto_duration.minimum(),0.)
+        self.assertEqual(self.tab.auto_duration.value(),0.)
+        self.assertIn("不限时",self.tab.auto_duration.specialValueText())
         self.assertIn('边运动边规划',self.tab.auto_continuous.toolTip())
         self.assertTrue(self.tab.continuous_enabled)
         self.panel.backend = 'real'
@@ -1659,4 +1662,45 @@ def test_native_autotest_cache_expiry_keeps_original_abort():
                 wait.assert_not_called()
             assert not case.tab.auto_test.active and not case.tab.executing
             assert len(case.ros_cancels)+len(case.panel.releases)==1
+    finally:case.tearDown()
+
+
+def test_ros_cache_expiring_before_path_identity_check_keeps_active_action():
+    """页面入口新鲜、路径版本检查前跨过缓存龄，不能冒充用户修改规划。"""
+    MoveItTabTests.setUpClass();case=MoveItTabTests();case.setUp()
+    try:
+        clock=[10.]
+        with patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+            transport=_inflight_cache_wait_fixture(case,clock)
+            case.panel.is_fresh=True
+            actual_identity=case.tab.current_identity
+            def expire_at_identity():
+                clock[0]=10.3;case.panel.is_fresh=False
+                return actual_identity()
+            original_deadline=case.tab.segment_deadline
+            with patch.object(case.tab,'current_identity',side_effect=expire_at_identity):
+                case.tab.tick()
+            assert case.tab.auto_test.active and case.tab.executing
+            assert case.ros_cancels==[] and case.panel.releases==[]
+            assert case.tab.segment_deadline==original_deadline
+            assert transport.state_at==transport.status_at==10.
+    finally:case.tearDown()
+
+
+def test_ros_unlimited_session_submits_finite_action_permit_budget():
+    import math
+    from manual_moveit_continuous import prepare_path
+    MoveItTabTests.setUpClass();case=MoveItTabTests();case.setUp()
+    try:
+        p,t=case.panel,case.tab;p.backend='ros';t.continuous_enabled=True
+        sent=[];p.ros_backend=NS(submit_trajectory=lambda trajectory,**kwargs:sent.append(kwargs) or True)
+        home=tuple(p.actual_q);start=(home[0]+.1,)+home[1:];p.actual_q=list(start)
+        back=prepare_path((start,home),(0.,1.5),p.speed_input.value(),p.acceleration_input.value())
+        auto=t.auto_test;auto.active=True;auto.ros_stream=True;auto.chain_enabled=True
+        auto.identity=t.execution_identity();auto.scene_version=t.scene_revision();auto.deadline=math.inf
+        auto.queued=dict(path=(start,home),times=(0.,back.duration),continuous_path=back,
+                         home=True,goal=home,start=start,pose=None,checked_at=module.time.monotonic())
+        auto._submit()
+        assert t.executing and len(sent)==1
+        assert math.isfinite(sent[0]['task_budget_s']) and 0<sent[0]['task_budget_s']<=630.
     finally:case.tearDown()

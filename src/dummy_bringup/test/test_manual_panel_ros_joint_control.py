@@ -119,7 +119,8 @@ def test_ros_release_retires_ui_goals_before_authoritative_device_release(automa
     def release():
         assert not tab.auto_test.active and not tab.executing
         calls.append('release')
-    p=NS(backend='ros',moveit_tab=tab,ros_runtime=NS(begin_release=lambda:calls.append('begin_release')),
+        return True
+    p=NS(backend='ros',moveit_tab=tab,ros_runtime=NS(process=object(),begin_release=lambda:calls.append('begin_release')),
          ros_backend=NS(release=release),busy=False,authorized=True)
     JointPanel.release(p,'RELEASE')
     assert calls[-1]=='release' and 'retire' in calls

@@ -46,3 +46,33 @@ Dummy 模型及来源边界
 
 本 NOTICE 用于保存来源及归属信息，不修改任何原许可证条款，
 各项材料的许可范围以上述逐项说明为准。
+
+离线源码阅读指南中的外部材料
+--------------------------
+docs/dummy/source-reading-guide.html 内嵌部分 DPSDK 源码供离线阅读；这些材料
+保留各自原许可，不由根 Apache-2.0 重新许可。页内也附带下述许可文本。
+
+core/dp_sdk_core/dp_osal/src/interface/ 下的 interface_thread.h、
+interface_semaphore.h、interface_chrono.h、interface_system.h，以及同模块的
+文档 docs/formal_contracts.md：MIT，Copyright (c) 2026 kamin.deng。
+原许可全文见 LICENSES/DPSDK-Core-MIT.txt。
+
+下列通信材料原文标注 MIT；保留已有声明，不补写原文未列的版权人：
+  libraries/dp_comm_bridge/src/dp_comm_bridge.cpp
+  platform/common/dp_comm_pico_port/dp_comm_port.cpp
+  libraries/dp_comm/include/dp_comm_port_api.h
+  applications/dummy_ref_control/tools/tutorial_validation/assets/
+    exercise-real-pipeline/component-fixture/frozen/dp_comm.h.txt
+许可正文见 LICENSES/MIT.txt。
+
+FreeRTOS 的 thirdparty/rtos/freertos/portable/GCC/ARM_CM4F/portmacro.h：
+Copyright (C) 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+原有 MIT 完整声明保留；组件许可另见 LICENSES/FreeRTOS-Kernel-MIT.txt。
+
+zenoh-pico 的 src/transport/unicast/rx.c、src/system/unix/network.c、
+src/utils/encoding.c、src/utils/checksum.c，以及 thirdparty/patches/zenoh-pico/
+下的 0004-unix-serial-transport.patch、0015-propagate-peer-tx-errors.patch、
+0016-typed-write-backpressure.patch 保留原有版权和双许可声明。
+Copyright (c) 2022 ZettaScale Technology；贡献者见原文 Zenoh Team 声明。
+本次按原有 EPL-2.0 OR Apache-2.0 中的 Apache-2.0 分支分发；许可正文见
+LICENSES/Apache-2.0.txt，原组件 NOTICE 原样收录于 LICENSES/Zenoh-Pico-NOTICE.md。

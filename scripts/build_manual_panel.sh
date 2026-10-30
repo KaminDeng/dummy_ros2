@@ -18,7 +18,7 @@ colcon --log-base log_protocol build --base-paths build_protocol/interfaces \
 source install_protocol/local_setup.bash
 colcon --log-base log_panel_guide build \
   --base-paths src --build-base build_panel_guide --install-base install_panel_guide \
-  --packages-select dummy-ros2_description dummy_moveit_config dummy_ros_control dummy_motion_client dummy_bringup \
+  --packages-select dummy-ros2_description dummy_moveit_config dummy_motion_interfaces dummy_ros_control dummy_motion_client dummy_bringup \
   --symlink-install --cmake-args -DBUILD_TESTING=OFF -DPython3_EXECUTABLE=/usr/bin/python3 \
   -DDPSDK_HOST_SDK_PREFIX="$PANEL_SDK_PREFIX" \
   -DDPSDKHostSDK_DIR="$PANEL_SDK_PREFIX/lib/cmake/DPSDKHostSDK" "$@"
