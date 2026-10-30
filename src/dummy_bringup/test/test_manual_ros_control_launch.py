@@ -68,11 +68,20 @@ def test_graph_has_single_planner_single_actual_publisher_and_inactive_spawner(m
     from launch_ros.utilities import evaluate_parameters
     gate = next(node for node in nodes if node.node_executable == 'device_action_gate')
     from launch.utilities import perform_substitutions
-    expected_description = ('/robot_description', '/manual_control/robot_description')
-    for authority_node in (gate, next(node for node in nodes if node.node_executable == 'robot_state_publisher')):
+    def description_topic(node):
         remappings = [(perform_substitutions(context, source), perform_substitutions(context, target))
-                      for source, target in authority_node._Node__remappings]
-        assert expected_description in remappings
+                      for source, target in node._Node__remappings]
+        return dict(remappings)['/robot_description']
+    topic=description_topic(gate)
+    publisher=next(node for node in nodes if node.node_executable == 'robot_state_publisher')
+    assert description_topic(publisher)==topic
+    # 异常退出后旧发布器仍可能存活；下一代不能消费其transient-local硬件装配。
+    assert topic!='/manual_control/robot_description'
+    next_nodes=[action for action in control.start(context) if isinstance(action,Node)]
+    next_gate=next(node for node in next_nodes if node.node_executable=='device_action_gate')
+    next_publisher=next(node for node in next_nodes if node.node_executable=='robot_state_publisher')
+    assert description_topic(next_gate)==description_topic(next_publisher)
+    assert description_topic(next_gate)!=topic
     assert gate._Node__node_name is None  # 不得把同进程controller_manager一起全局改名。
     params = evaluate_parameters(context, gate._Node__parameters)[-1]
     assert params['operator_confirmed_double_limits'] is False

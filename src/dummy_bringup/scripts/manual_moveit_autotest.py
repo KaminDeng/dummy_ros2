@@ -605,17 +605,33 @@ class AutoTestSession:
                     self.chain_draining=True;self._drop_planning();return
                 if self.ros_stream:
                     from manual_moveit_execution import ros_trajectory
-                    trajectory=ros_trajectory(path,self.tab.planner.names,start_tolerance_rad=.003)
+                    # 全窗口转换可能跨过Qt缓存龄；候选只转换一次，等待DDS刷新时
+                    # 仍沿原母目标的身份/接收锚和2秒期限，不提交失鲜的新尾段。
+                    trajectory=item.get('ros_trajectory')
+                    if trajectory is None:
+                        trajectory=ros_trajectory(path,self.tab.planner.names,start_tolerance_rad=.003)
+                        item['ros_trajectory']=trajectory
                     if len(path.points)>31500:
                         raise ValueError('ROS连续轨迹超过31500样本容量，未续接')
                     first=trajectory.points[0].time_from_start
                     if first.sec*1_000_000_000+first.nanosec!=self.ros_first_slot_ns:
                         raise ValueError('ROS续接改变了母轨迹的起点时间')
+                    if not self.tab.panel.fresh():
+                        if self.tab._wait_for_ros_inflight_feedback():
+                            if self.active:self.queued=item
+                            return
+                        raise ValueError('ROS续接准备后反馈或设备身份已失效，停止测试')
                     self.chain_pending=dict(item=item,path=path,origin=0,marker=marker,file=None,
                                             deadline=time.monotonic()+2.)
                     through=self.ros_first_slot_ns+cut_absolute*20_000_000
                     if not self.tab.panel.ros_backend.extend_trajectory(trajectory,self.chain_version,through):
-                        raise ValueError('ROS控制链未接受轨迹续接请求')
+                        # 与Native拒绝候选一致：未提交不改旧尾段；真实身份、
+                        # 许可丢失和已提交RPC失败继续由原监督门取消，不能视作成功。
+                        if self.active:
+                            self.chain_pending=None;self.chain_draining=True;self._drop_planning()
+                            self.tab.record('AUTO_TEST_CHAIN_REJECTED_SAFE_TAIL',backend='ros',
+                                            phase_us=self.chain_phase,reason='LOCAL_NOT_SUBMITTED')
+                        return
                     self.tab.record('AUTO_TEST_CHAIN_UPDATE_SUBMITTED',backend='ros',version=self.chain_version+1,
                                     origin=0,unchanged_through=cut_absolute,samples=len(path.points))
                     return

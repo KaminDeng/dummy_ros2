@@ -530,3 +530,64 @@ def test_ros_window_drains_verified_tail_and_replans_without_ending_test(monkeyp
     assert s.active and not s.chain_draining and not s.chain_live and not s.returning
     assert s.deadline==deadline and s.ros_preplan_deadline==min(deadline,720.)
     s._begin.assert_called_with(tuple(t.panel.actual_q))
+
+
+def test_ros_tail_conversion_waits_for_fresh_feedback_without_rebuilding_or_cancel(monkeypatch):
+    """复现长轨迹转换跨过250ms缓存龄：保留候选，DDS刷新后只提交一次。"""
+    import manual_moveit_execution
+    from manual_moveit_continuous import PreparedPath
+    s,t=stream_session();old=s.chain_path
+    joined=PreparedPath(old.points+tuple((old.points[-1][0]+i*.001,)+s.anchor[1:] for i in range(1,101)),60.,4.)
+    item=dict(home=False,joined_path=joined,continuous_path=joined,join_cut=250,
+              start=old.points[-1],goal=joined.points[-1])
+    s.queued=item;fresh=[True]
+    t.panel.fresh=lambda:fresh[0]
+    t._wait_for_ros_inflight_feedback=Mock(return_value=True)
+    convert=manual_moveit_execution.ros_trajectory
+    def slow_conversion(*args,**kwargs):
+        trajectory=convert(*args,**kwargs);fresh[0]=False
+        return trajectory
+    converter=Mock(side_effect=slow_conversion)
+    monkeypatch.setattr(manual_moveit_execution,'ros_trajectory',converter)
+    t.panel.ros_backend.extend_trajectory.side_effect=lambda *args:fresh[0]
+    s._chain_tick()
+    assert s.queued is item and s.chain_path is old and s.chain_pending is None
+    t._wait_for_ros_inflight_feedback.assert_called_once()
+    t.panel.ros_backend.extend_trajectory.assert_not_called()
+    t.cancel_execution.assert_not_called();t.panel.release.assert_not_called()
+    fresh[0]=True
+    s._chain_tick()
+    assert s.queued is None and s.chain_pending['path'] is joined and s.chain_path is old
+    converter.assert_called_once();t.panel.ros_backend.extend_trajectory.assert_called_once()
+    assert s.chain_pending['deadline']>0 and s.chain_version==0
+
+
+
+def test_ros_tail_stale_feedback_rejects_when_original_wait_is_exhausted():
+    """反馈等待期限耗尽仍必须报错，不能把断连当成普通续接拒绝。"""
+    from manual_moveit_continuous import PreparedPath
+    s,t=stream_session();old=s.chain_path
+    joined=PreparedPath(old.points+tuple((old.points[-1][0]+i*.001,)+s.anchor[1:] for i in range(1,101)),60.,4.)
+    s.queued=dict(home=False,joined_path=joined,continuous_path=joined,join_cut=250,
+                  start=old.points[-1],goal=joined.points[-1])
+    t.panel.fresh=Mock(return_value=False)
+    t._wait_for_ros_inflight_feedback=Mock(return_value=False)
+    with pytest.raises(ValueError,match='反馈或设备身份已失效'):
+        s._chain_tick()
+    assert s.chain_path is old and s.chain_pending is None
+    t.panel.ros_backend.extend_trajectory.assert_not_called()
+
+def test_ros_unsent_tail_rejection_preserves_old_tail_like_native():
+    """本地未提交续接不取消已受理的母目标；排空旧尾段后再开下一RUN。"""
+    from manual_moveit_continuous import PreparedPath
+    s,t=stream_session();old=s.chain_path
+    joined=PreparedPath(old.points+tuple((old.points[-1][0]+i*.001,)+s.anchor[1:] for i in range(1,101)),60.,4.)
+    s.queued=dict(home=False,joined_path=joined,continuous_path=joined,join_cut=250,
+                  start=old.points[-1],goal=joined.points[-1])
+    t.panel.ros_backend.extend_trajectory.return_value=False
+    s._chain_tick()
+    assert s.active and s.chain_draining and s.chain_path is old and s.chain_version==0
+    assert s.chain_pending is None and s.queued is None
+    t.cancel_execution.assert_not_called();t.panel.release.assert_not_called();s._begin.assert_not_called()
+    t.record.assert_any_call('AUTO_TEST_CHAIN_REJECTED_SAFE_TAIL',backend='ros',
+                            phase_us=s.chain_phase,reason='LOCAL_NOT_SUBMITTED')

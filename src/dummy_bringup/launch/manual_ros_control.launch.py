@@ -102,9 +102,10 @@ def start(context):
     moveit = (MoveItConfigsBuilder("dummy-ros2", package_name="dummy_moveit_config")
       .robot_description(file_path=str(share / "config/dummy_ref_real_6dof.urdf.xacro"), mappings=mappings)
       .joint_limits(file_path=str(generated / "joint_limits.yaml")).to_moveit_configs())
-    # ControllerManager is embedded in Gate. Its transient-local description
-    # must never compete with the parent panel's display-only URDF.
-    control_description_remap = [("/robot_description", "/manual_control/robot_description")]
+    # 控制器管理器嵌入Gate；每代独立描述主题，避免旧发布器残留时
+    # transient-local消息把旧证据路径、设备装配覆盖到本代控制链。
+    description_topic = f"/manual_control/session_{secrets.token_hex(16)}/robot_description"
+    control_description_remap = [("/robot_description", description_topic)]
     gate = Node(package="dummy_motion_client", executable="device_action_gate", output="screen",
       remappings=control_description_remap,
       parameters=[str(controllers), moveit.robot_description, {
