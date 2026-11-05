@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 /**
  * @file device_lease_transition_tests.cpp
  * @brief 直接复用device_action_gate实现的租约、释放和准入helper测试。
@@ -63,7 +64,7 @@ void release_after_completed_goal() {
   assert(queue_disable_and_release(available,request,busy,stage));
   assert(busy.load() && stage.load()==1);
   assert(request.load()==static_cast<int>(dummy_motion_client::wire_value(
-    dummy_motion_client::ManageOperation::kDisableAndRelease)));
+    dummy_motion_client::ManageOperation::DISABLE_AND_RELEASE)));
 
   const auto reject=[&state](auto member) {
     auto invalid=state;
@@ -98,23 +99,23 @@ void release_after_completed_goal() {
  */
 void unreferenced_idle_is_the_only_release_observation() {
   using namespace dummy_motion_client;
-  wire::DummyDeviceStatusV2 status;
-  wire::DummyJointStateV2 state;
-  status.set_boot_epoch(7U);
-  state.set_boot_epoch(7U);
-  status.set_motion_epoch(4U);
-  state.set_motion_epoch(4U);
-  status.set_management_epoch(8U);
-  state.set_management_epoch(8U);
-  status.set_release_committed(true);
-  status.set_core_state(1U);
-  state.set_core_state(1U);
-  assert(released_idle_observation(status,state));
-  status.set_core_state(wire_value(WireCoreState::kIdle));
-  assert(!released_idle_observation(status,state));
-  status.set_core_state(1U);
-  state.set_reference_epoch(1U);
-  assert(!released_idle_observation(status,state));
+  auto status=owned_fixture::status();dp::comm::SourceId status_source{};
+  auto state=owned_fixture::state();dp::comm::SourceId state_source{};
+  status_source.boot_id=7U;
+  state_source.boot_id=7U;
+  status.motion_epoch()=4U;
+  state.motion_epoch()=4U;
+  status.management_epoch()=8U;
+  state.management_epoch()=8U;
+  status.release_committed()=true;
+  status.core_state()=1U;
+  state.core_state()=1U;
+  assert(released_idle_observation(status,state,status_source,state_source));
+  status.core_state()=wire_value(WireCoreState::kIdle);
+  assert(!released_idle_observation(status,state,status_source,state_source));
+  status.core_state()=1U;
+  state.reference_epoch()=1U;
+  assert(!released_idle_observation(status,state,status_source,state_source));
 }
 
 /**
@@ -124,23 +125,23 @@ void unreferenced_idle_is_the_only_release_observation() {
  */
 void released_idle_requires_coherent_bootstrap_authority() {
   using namespace dummy_motion_client;
-  wire::DummyDeviceStatusV2 status;
-  wire::DummyJointStateV2 state;
-  status.set_boot_epoch(14003434958659749721ULL);
-  state.set_boot_epoch(14003434958659749721ULL);
-  status.set_core_state(wire_value(WireCoreState::kUnreferencedIdle));
-  state.set_core_state(wire_value(WireCoreState::kUnreferencedIdle));
-  status.set_motion_epoch(0U);
-  status.set_management_epoch(0U);
-  state.set_motion_epoch(4U);
-  state.set_management_epoch(8U);
-  assert(!bootstrap_authority_coherent(status,state));
-  status.set_motion_epoch(4U);
-  assert(!bootstrap_authority_coherent(status,state));
-  status.set_management_epoch(8U);
-  assert(bootstrap_authority_coherent(status,state));
-  status.set_session_id(1U);
-  assert(!bootstrap_authority_coherent(status,state));
+  auto status=owned_fixture::status();dp::comm::SourceId status_source{};
+  auto state=owned_fixture::state();dp::comm::SourceId state_source{};
+  status_source.boot_id=14003434958659749721ULL;
+  state_source.boot_id=14003434958659749721ULL;
+  status.core_state()=wire_value(WireCoreState::kUnreferencedIdle);
+  state.core_state()=wire_value(WireCoreState::kUnreferencedIdle);
+  status.motion_epoch()=0U;
+  status.management_epoch()=0U;
+  state.motion_epoch()=4U;
+  state.management_epoch()=8U;
+  assert(!bootstrap_authority_coherent(status,state,status_source,state_source));
+  status.motion_epoch()=4U;
+  assert(!bootstrap_authority_coherent(status,state,status_source,state_source));
+  status.management_epoch()=8U;
+  assert(bootstrap_authority_coherent(status,state,status_source,state_source));
+  status.session_id()=1U;
+  assert(!bootstrap_authority_coherent(status,state,status_source,state_source));
 }
 
 /**
@@ -161,11 +162,11 @@ void same_boot_enable_seeds_pending_port_authority() {
   ActionGate gate(client,port,profile);
   Authorization authorization;
   authorization.session=authorization.reference=authorization.permit=true;
-  authorization.identity.set_expected_boot_epoch(boot);
-  authorization.identity.set_expected_session_id(session);
-  authorization.identity.set_expected_reference_epoch(2U);
-  authorization.identity.set_expected_motion_epoch(4U);
-  authorization.identity.set_expected_management_epoch(12U);
+  authorization.identity.expected_boot_epoch()=boot;
+  authorization.identity.expected_session_id()=session;
+  authorization.identity.expected_reference_epoch()=2U;
+  authorization.identity.expected_motion_epoch()=4U;
+  authorization.identity.expected_management_epoch()=12U;
   const StateAuthority observed{boot,session,2U,4U};
   const auto expected=[&port] {
     return StateAuthority{port.identity.boot,port.identity.session,
@@ -173,17 +174,17 @@ void same_boot_enable_seeds_pending_port_authority() {
   };
   assert(!state_authority_is_valid(observed,expected(),false,false));
   auto wrong=authorization;
-  wrong.identity.set_expected_boot_epoch(boot+1U);
+  wrong.identity.expected_boot_epoch()=boot+1U;
   assert(!enable_gate_with_port_authority(gate,port,wrong,1U));
   wrong=authorization;
-  wrong.identity.set_expected_session_id(session+1U);
+  wrong.identity.expected_session_id()=session+1U;
   assert(!enable_gate_with_port_authority(gate,port,wrong,1U));
   wrong=authorization;
-  wrong.identity.set_expected_reference_epoch(3U);
+  wrong.identity.expected_reference_epoch()=3U;
   assert(!enable_gate_with_port_authority(gate,port,wrong,1U));
   assert(port.identity.motion_epoch==0U);
   assert(enable_gate_with_port_authority(gate,port,authorization,1U));
-  assert(client.submitted.expected_motion_epoch()==4U);
+  assert(*client.submitted.expected_motion_epoch()==4U);
   assert(port.identity.motion_epoch==4U);
   assert(state_authority_is_valid(observed,expected(),false,false));
   assert(state_authority_is_valid({boot,session,2U,5U},expected(),false,false));
@@ -362,10 +363,10 @@ int action_release_loopback(int argc,char** argv) {
 int main(int argc,char** argv) {
   using dummy_motion_client::ManageOperation;
   using dummy_motion_client::explicit_manual_permit_restarts_window;
-  assert(!explicit_manual_permit_restarts_window(true,false,ManageOperation::kSetPermit));
-  assert(explicit_manual_permit_restarts_window(true,true,ManageOperation::kSetPermit));
-  assert(!explicit_manual_permit_restarts_window(false,true,ManageOperation::kSetPermit));
-  assert(!explicit_manual_permit_restarts_window(true,true,ManageOperation::kRenewLease));
+  assert(!explicit_manual_permit_restarts_window(true,false,ManageOperation::INSTALL_PERMIT));
+  assert(explicit_manual_permit_restarts_window(true,true,ManageOperation::INSTALL_PERMIT));
+  assert(!explicit_manual_permit_restarts_window(false,true,ManageOperation::INSTALL_PERMIT));
+  assert(!explicit_manual_permit_restarts_window(true,true,ManageOperation::RENEW_LEASE));
   if(argc>1 && std::string(argv[1])=="--action-release-loopback")return action_release_loopback(argc,argv);
   {
     // GUI13同拍本地期望比实测领先0.0524rad；默认不能据此声称真实SENT跟踪失败。
@@ -444,12 +445,12 @@ int main(int argc,char** argv) {
         reply.transaction_phase = 3;
         reply.result_valid = true;
         reply.succeeded = true;
-        reply.release_committed = requests.back().operation() == 10;
+        reply.release_committed = *requests.back().operation() == 10;
         return reply;
       }
     } client;
     ManageRequest identity;
-    identity.set_expected_session_id(7);
+    identity.expected_session_id()=7;
     std::array<std::uint8_t, 32> digest{};
     digest[0] = 1;
     BootstrapCoordinator bootstrap(client, identity, digest, 1000000);
@@ -466,7 +467,7 @@ int main(int argc,char** argv) {
     snapshot.freshness_ticket = 1;
     snapshot.management_epoch = 1;
     assert(bootstrap.start_operation(
-        snapshot, ManageOperation::kBeginQualification, 100, false, true));
+        snapshot, ManageOperation::BEGIN_QUALIFICATION, 100, false, true));
     ManualReleaseIntent intent;
     assert(intent.begin(snapshot, 101));
     assert(bootstrap.management_operation_pending());
@@ -485,7 +486,7 @@ int main(int argc,char** argv) {
                            true, false) == ManualReleaseDecision::kSubmit);
     assert(bootstrap.start_release(snapshot, 106, true, 1));
     assert(client.requests.size() == 2 &&
-           client.requests.back().operation() == 10);
+           *client.requests.back().operation() == 10);
     bootstrap.tick(107);
     snapshot.session_id = 0;
     bootstrap.observe(snapshot, 108);
@@ -531,14 +532,14 @@ int main(int argc,char** argv) {
     assert(intent.decision(foreign,101,true,true,false)==ManualReleaseDecision::kUnconfirmed);
   }
   {
-    dummy_motion_client::wire::DummyDeviceStatusV2 status;
-    dummy_motion_client::wire::DummyJointStateV2 state;
-    status.set_boot_epoch(1);
-    state.set_boot_epoch(1);
-    status.set_core_state(1);
-    state.set_core_state(1);
+    auto status=owned_fixture::status();dp::comm::SourceId status_source{};
+    auto state=owned_fixture::state();dp::comm::SourceId state_source{};
+    status_source.boot_id=1;
+    state_source.boot_id=1;
+    status.core_state()=1;
+    state.core_state()=1;
     assert(
-        dummy_motion_client::readonly_released_idle_observation(status, state));
+        dummy_motion_client::readonly_released_idle_observation(status, state,status_source,state_source));
     assert(
         dummy_motion_client::readonly_release_samples_fresh(100, 101, 102, 10));
     assert(!dummy_motion_client::readonly_release_samples_fresh(100, 101, 120,
@@ -557,38 +558,38 @@ int main(int argc,char** argv) {
         2000001, 1990000, 2000000, 250000));
     assert(!dummy_motion_client::readonly_release_samples_fresh(
         1500000, 2000001, 2000000, 250000));
-    status.set_session_id(3);
+    status.session_id()=3;
     assert(!dummy_motion_client::readonly_released_idle_observation(status,
-                                                                    state));
-    status.set_session_id(0);
-    status.set_reference_epoch(2);
-    state.set_reference_epoch(2);
-    status.set_core_state(2);
-    state.set_core_state(2);
+                                                                    state,status_source,state_source));
+    status.session_id()=0;
+    status.reference_epoch()=2;
+    state.reference_epoch()=2;
+    status.core_state()=2;
+    state.core_state()=2;
     assert(
-        dummy_motion_client::readonly_released_idle_observation(status, state));
-    status.set_reference_kind(1);
-    status.set_release_committed(true);
-    state.set_position_valid_mask(63);
+        dummy_motion_client::readonly_released_idle_observation(status, state,status_source,state_source));
+    status.reference_kind()=1;
+    status.release_committed()=true;
+    for(auto& joint:*state.joints())joint.position_valid_quality()=(63&(1U<<*joint.joint_id()))!=0U;
     assert(
-        dummy_motion_client::retained_manual_reference_reusable(status, state));
-    status.set_release_committed(false);
+        dummy_motion_client::retained_manual_reference_reusable(status, state,status_source,state_source));
+    status.release_committed()=false;
     assert(!dummy_motion_client::retained_manual_reference_reusable(status,
-                                                                    state));
-    status.set_release_committed(true);
-    status.set_real_motion_permitted(true);
+                                                                    state,status_source,state_source));
+    status.release_committed()=true;
+    status.real_motion_permitted()=true;
     assert(!dummy_motion_client::retained_manual_reference_reusable(status,
-                                                                    state));
-    status.set_real_motion_permitted(false);
-    state.set_position_valid_mask(0);
+                                                                    state,status_source,state_source));
+    status.real_motion_permitted()=false;
+    for(auto& joint:*state.joints())joint.position_valid_quality()=(0&(1U<<*joint.joint_id()))!=0U;
     assert(!dummy_motion_client::retained_manual_reference_reusable(status,
-                                                                    state));
-    state.set_position_valid_mask(63);
-    state.set_reference_epoch(3);
+                                                                    state,status_source,state_source));
+    for(auto& joint:*state.joints())joint.position_valid_quality()=(63&(1U<<*joint.joint_id()))!=0U;
+    state.reference_epoch()=3;
     assert(!dummy_motion_client::retained_manual_reference_reusable(status,
-                                                                    state));
+                                                                    state,status_source,state_source));
     assert(!dummy_motion_client::readonly_released_idle_observation(status,
-                                                                    state));
+                                                                    state,status_source,state_source));
   }
   {
     dummy_motion_client::ReleaseAvailability manual;
@@ -659,8 +660,8 @@ int main(int argc,char** argv) {
   unreferenced_idle_is_the_only_release_observation();
   released_idle_requires_coherent_bootstrap_authority();
   same_boot_enable_seeds_pending_port_authority();
-  const int renew=static_cast<int>(wire_value(ManageOperation::kRenewLease));
-  const int permit=static_cast<int>(wire_value(ManageOperation::kSetPermit));
+  const int renew=static_cast<int>(wire_value(ManageOperation::RENEW_LEASE));
+  const int permit=static_cast<int>(wire_value(ManageOperation::INSTALL_PERMIT));
 
   std::atomic<int> request{renew};
   std::atomic<bool> busy{true}, reserved{true}, started{false};
@@ -684,26 +685,26 @@ int main(int argc,char** argv) {
   // Automatic renewal leaves a usable Hold reported as ENABLED_HOLD. An
   // explicitly queued renewal gets one correlated completion report.
   explicit_renewal_status=0;
-  bool confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::kRenewLease);
+  bool confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::RENEW_LEASE);
   assert(!confirmed);
   assert(std::string(bootstrap_status_message(BootstrapPhase::kOperationComplete,
     "",confirmed,true,true,true))=="ENABLED_HOLD");
   explicit_renewal_status=2;
-  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,false,true,true,ManageOperation::kRenewLease);
+  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,false,true,true,ManageOperation::RENEW_LEASE);
   assert(!confirmed && explicit_renewal_status.load()==2);
-  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::kRenewLease);
+  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::RENEW_LEASE);
   assert(confirmed);
   explicit_renewal_status=2;
-  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::kRenewLease);
+  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::RENEW_LEASE);
   assert(confirmed && explicit_renewal_status.load()==0);
   explicit_renewal_status=2;
-  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,false,ManageOperation::kRenewLease);
+  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,false,ManageOperation::RENEW_LEASE);
   assert(!confirmed && explicit_renewal_status.load()==2);
-  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::kRenewLease);
+  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::RENEW_LEASE);
   assert(confirmed);
   assert(std::string(bootstrap_status_message(BootstrapPhase::kOperationComplete,
     "",confirmed,true,true,true))=="LEASE_RENEWED");
-  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::kRenewLease);
+  confirmed=take_confirmed_lease_renewal(explicit_renewal_status,true,true,true,ManageOperation::RENEW_LEASE);
   assert(!confirmed);
   assert(std::string(bootstrap_status_message(BootstrapPhase::kOperationComplete,
     "",confirmed,true,true,true))=="ENABLED_HOLD");

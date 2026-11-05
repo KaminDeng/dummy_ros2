@@ -26,14 +26,21 @@ with tempfile.TemporaryDirectory(prefix='dummy-installed-sdk-') as tmp:
             assert result.returncode!=0 and expected in output,(case,output)
     configure(args.prefix,'positive')
     cases=[
-      ('codec','lib/cmake/DPSDKHostSDK/DPSDKHostSDKInputs.cmake','raw-fixed','tlv-lite','协议'),
-      ('abi','lib/cmake/DPSDKHostSDK/DPSDKHostSDKInputs.cmake','RUNTIME_MESSAGE_BYTES 651','RUNTIME_MESSAGE_BYTES 672','角色'),
+      ('codec','lib/cmake/DPSDKHostSDK/DPSDKHostSDKInputs.cmake','flatbuffers','raw-fixed','协议'),
+      ('abi','lib/cmake/DPSDKHostSDK/DPSDKHostSDKInputs.cmake','RUNTIME_MESSAGE_BYTES 1536','RUNTIME_MESSAGE_BYTES 651','角色'),
+      ('storage','lib/cmake/DPSDKHostSDK/DPSDKHostSDKRuntime.cmake','STORAGE_BYTES 19456','STORAGE_BYTES 18000','角色'),
+      ('root_deployment','include/dummy_root_deployment.hpp',None,None,'Root部署生成头'),
       ('runtime','lib/libdummy_ref_ros_pic_runtime.a',None,None,'安装归档身份'),
+      ('native_runtime','lib/libdummy_ref_native_runtime.a',None,None,'安装归档身份'),
+      ('provider','lib/libdp_host_instance_identity.a',None,None,'安装归档身份'),
+      ('typed_header','include/dp_comm/typed_runtime.hpp',None,None,'公共头身份'),
+      ('host_slots','include/dp_protocol/host_default_binding_slots.hpp',None,None,'公共头身份'),
+      ('profile','lib/cmake/DPSDKHostSDK/DPSDKHostSDKRuntime.cmake','PROFILE dummy','PROFILE mcu','角色'),
       ('log_shim','lib/libdummy_ref_ros_pic_log_shim.a',None,None,'安装归档身份'),
       ('header','include/dp_comm/dp_comm.hpp',None,None,'公共头身份'),
       ('policy','include/dummy_ref/wire_validation.hpp',None,None,'业务验证头身份'),
-      ('protocol','lib/cmake/DpProtocol/include/dp_protocol_raw_fixed.hpp',None,None,'协议'),
-      ('selection','lib/cmake/DpProtocol/include/dp_protocol_selection.h',None,None,'协议'),
+      ('protocol','lib/dp_protocol/include/dummy_joint_state_bounded.h',None,None,'协议'),
+      ('selection','lib/dp_protocol/include/protocol_selection.h',None,None,'协议'),
     ]
     for case,path,old,new,expected in cases:
         prefix=root/case;shutil.copytree(args.prefix,prefix)
@@ -42,6 +49,6 @@ with tempfile.TemporaryDirectory(prefix='dummy-installed-sdk-') as tmp:
         else: changed.write_text(changed.read_text().replace(old,new))
         configure(prefix,case,expected)
     missing=root/'missing';shutil.copytree(args.prefix,missing)
-    shutil.rmtree(missing/'lib/cmake/DpProtocol')
+    shutil.rmtree(missing/'lib/dp_protocol')
     configure(missing,'missing','DpProtocol')
 print('真实安装SDK无源码配置通过；错Codec/ABI、缺包与六类篡改全部被拒绝')

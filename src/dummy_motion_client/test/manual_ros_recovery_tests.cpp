@@ -1,6 +1,8 @@
 #include "dummy_motion_client/manual_ros_recovery.hpp"
 #include <cassert>
 #include <cstdio>
+#include "../../dummy_ros_control/test/owned_message_fixtures.hpp"
+#include "typed_management_fixture.hpp"
 using namespace dummy_motion_client;
 int main() {
   ManualRecoveryIdentity expected;
@@ -12,211 +14,197 @@ int main() {
   expected.bundle.firmware_hash = expected.bundle.contract_hash =
       expected.bundle.model_hash = expected.bundle.profile_hash =
           expected.bundle.policy_hash = hash;
-  dummy_wire::DummyDeviceStatusV2 status;
-  dummy_wire::DummyJointStateV2 state;
-  status.set_schema_major(2);
-  state.set_schema_major(2);
-  status.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
+  auto status=owned_fixture::status();
+  auto state=owned_fixture::state();
+  auto status_source=typed_management_fixture::source(),state_source=status_source;
   std::uint8_t device_wire[16]{};
   device_wire[0] = 1;
-  status.set_device_id(device_wire);
-  state.set_device_id(device_wire);
-  status.set_boot_epoch(7);
-  state.set_boot_epoch(7);
-  status.set_profile_id(201);
-  state.set_profile_id(201);
-  status.set_reference_epoch(1);
-  state.set_reference_epoch(1);
-  status.set_reference_kind(1);
-  status.set_configured_mask(63);
-  state.set_configured_mask(63);
-  state.set_raw_position_valid_mask(63);
-  state.set_position_valid_mask(63);
-  state.set_velocity_valid_mask(63);
-  status.set_core_state(9);
-  state.set_core_state(9);
-  status.set_first_failure_reason(0x1067);
-  state.set_first_failure_reason(0);
-  status.set_failure_source(0x1067);
-  status.set_release_committed(true);
-  status.set_cleanup_state(3);
+  status.domain_device_id().emplace().assign(device_wire,16U);
+  state.domain_device_id().emplace().assign(device_wire,16U);
+
+
+  status.profile_id()=201;
+  state.profile_id()=201;
+  status.reference_epoch()=1;
+  state.reference_epoch()=1;
+  status.reference_kind()=1;
+  status.configured_mask()=63;
+
+  for(auto& joint:*state.joints())joint.raw_position_valid_quality()=(63U&(1U<<*joint.joint_id()))!=0U;
+  for(auto& joint:*state.joints())joint.position_valid_quality()=(63U&(1U<<*joint.joint_id()))!=0U;
+  for(auto& joint:*state.joints())joint.velocity_valid_quality()=(63U&(1U<<*joint.joint_id()))!=0U;
+  status.core_state()=9;
+  state.core_state()=9;
+  status.first_failure_reason()=0x1067;
+  state.first_failure_reason()=0;
+  status.failure_source()=0x1067;
+  status.release_committed()=true;
+  status.cleanup_state()=3;
   std::uint8_t hash_wire[32]{};
   hash_wire[0] = 42;
-  status.set_firmware_sha256(hash_wire);
-  status.set_contract_sha256(hash_wire);
-  status.set_model_sha256(hash_wire);
-  status.set_profile_sha256(hash_wire);
-  status.set_compiled_policy_sha256(hash_wire);
+  status.firmware_sha256().emplace().assign(hash_wire,32U);
+  status.contract_sha256().emplace().assign(hash_wire,32U);
+  status.model_sha256().emplace().assign(hash_wire,32U);
+  status.profile_sha256().emplace().assign(hash_wire,32U);
+  status.compiled_policy_sha256().emplace().assign(hash_wire,32U);
   std::string error;
   auto valid = [&](ManualRecoveryShape shape =
                        ManualRecoveryShape::kKnownRestTimeoutFault) {
-    return validate_manual_recovery(status, state, expected, 1000000, 990000,
+    return validate_manual_recovery(status, state, status_source,state_source,expected, 1000000, 990000,
                                     750000, shape, error);
   };
   assert(valid());
   // run5真实故障不属于4199旧模式，不能绕过原页证明。
-  status.set_release_committed(false);
-  status.set_first_failure_reason(13);
-  status.set_failure_source(4196);
-  state.set_first_failure_reason(13);
-  status.set_can_failed_mask(63);
-  state.set_can_failed_mask(63);
-  status.set_transaction_phase(4);
-  state.set_transaction_phase(4);
-  status.set_attempt_kind(DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_RELEASE);
-  status.set_run_id(59);
-  status.set_attempt_id(59);
-  status.set_parent_run_id(58);
-  status.set_group_count(1);
+  status.release_committed()=false;
+  status.first_failure_reason()=13;
+  status.failure_source()=4196;
+  state.first_failure_reason()=13;
+  status.can_failed_mask()=63;
+  state.can_failed_mask()=63;
+  status.transaction_phase()=4;
+  state.transaction_phase()=4;
+  status.attempt_kind()=static_cast<std::uint8_t>(dp::protocol::dummy::AttemptKind::RELEASE);
+  status.run_id()=59;
+  status.attempt_id()=59;
+  status.parent_run_id()=58;
+  status.group_count()=1;
   assert(!valid());
   assert(validate_manual_recovery(
-      status, state, expected, 1000000, 990000, 750000,
+      status, state, status_source,state_source,expected, 1000000, 990000, 750000,
       ManualRecoveryShape::kInterruptedRestFault, error));
-  status.set_release_committed(true);
-  status.set_first_failure_reason(0x1067);
-  status.set_failure_source(0x1067);
-  state.set_first_failure_reason(0);
-  status.set_can_failed_mask(0);
-  state.set_can_failed_mask(0);
+  status.release_committed()=true;
+  status.first_failure_reason()=0x1067;
+  status.failure_source()=0x1067;
+  state.first_failure_reason()=0;
+  status.can_failed_mask()=0;
+  state.can_failed_mask()=0;
   auto original = status;
   auto original_state = state;
   for (int bad = 0; bad < 20; ++bad) {
     status = original;
-    state = original_state;
+    state = original_state;status_source.boot_id=state_source.boot_id=7;
     if (bad == 0)
-      status.set_boot_epoch(8);
+      status_source.boot_id=8;
     if (bad == 1)
-      state.set_boot_epoch(8);
+      state_source.boot_id=8;
     if (bad == 2)
-      status.set_reference_epoch(2);
+      status.reference_epoch()=2;
     if (bad == 3)
-      status.set_session_id(3);
+      status.session_id()=3;
     if (bad == 4)
-      state.set_session_id(3);
+      state.session_id()=3;
     if (bad == 5)
-      status.set_real_motion_permitted(true);
+      status.real_motion_permitted()=true;
     if (bad == 6)
-      status.set_permit_remaining_us(1);
+      status.permit_remaining_us()=1;
     if (bad == 7)
-      status.set_release_committed(false);
+      status.release_committed()=false;
     if (bad == 8)
-      status.set_cleanup_state(2);
+      status.cleanup_state()=2;
     if (bad == 9)
-      status.set_evidence_lost(true);
+      status.evidence_lost()=true;
     if (bad == 10)
-      status.set_first_failure_reason(0x100a);
+      status.first_failure_reason()=0x100a;
     if (bad == 11)
-      state.set_first_failure_reason(0x100a);
+      state.first_failure_reason()=0x100a;
     if (bad == 12)
-      state.set_raw_position_valid_mask(31);
+      for(auto& joint:*state.joints())joint.raw_position_valid_quality()=(31U&(1U<<*joint.joint_id()))!=0U;
     if (bad == 13)
-      state.set_core_state(4);
+      state.core_state()=4;
     if (bad == 14)
-      status.set_reference_kind(0);
+      status.reference_kind()=0;
     if (bad == 15)
-      status.set_motion_epoch(2);
+      status.motion_epoch()=2;
     if (bad == 16)
-      status.set_failure_source(0x100a);
+      status.failure_source()=0x100a;
     if (bad == 17)
-      state.set_first_failure_reason(0x1067);
+      state.first_failure_reason()=0x1067;
     if (bad == 18)
-      state.set_can_failed_mask(1);
+      state.can_failed_mask()=1;
     if (bad == 19)
-      status.set_can_failed_mask(1);
+      status.can_failed_mask()=1;
     assert(!valid());
   }
   status = original;
-  state = original_state;
+  state = original_state;status_source.boot_id=state_source.boot_id=7;
   assert(!validate_manual_recovery(
-      status, state, expected, 1000000, 749999, 750000,
+      status, state, status_source,state_source,expected, 1000000, 749999, 750000,
       ManualRecoveryShape::kKnownRestTimeoutFault, error));
   assert(!validate_manual_recovery(
-      status, state, expected, 2000000, 1990000, 999999,
+      status, state, status_source,state_source,expected, 2000000, 1990000, 999999,
       ManualRecoveryShape::kKnownRestTimeoutFault, error));
   std::uint32_t can_ages[6]{};
   can_ages[2] = 250001;
-  state.set_can_rx_age_us(can_ages);
+  for(auto& joint:*state.joints())joint.can_rx_age_us()=can_ages[*joint.joint_id()];
   assert(!valid());
   state = original_state;
   hash_wire[0] = 43;
-  status.set_firmware_sha256(hash_wire);
+  status.firmware_sha256().emplace().assign(hash_wire,32U);
   assert(!valid());
   status = original;
-  status.set_core_state(2);
-  state.set_core_state(2);
-  status.set_first_failure_reason(0);
+  status.core_state()=2;
+  state.core_state()=2;
+  status.first_failure_reason()=0;
   assert(valid(ManualRecoveryShape::kRetainedDisabledIdle));
   assert(!valid());
-  // 独立构造公共Codec原件；seed/逐页链与故障绑定都必须成立。
+  // 独立构造中央规范记录原件；seed/逐页链与故障绑定都必须成立。
   status = original;
-  state = original_state;
-  status.set_release_committed(false);
-  status.set_first_failure_reason(13);
-  status.set_failure_source(4196);
-  state.set_first_failure_reason(13);
-  status.set_can_failed_mask(63);
-  state.set_can_failed_mask(63);
-  status.set_transaction_phase(4);
-  state.set_transaction_phase(4);
-  status.set_attempt_kind(DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_RELEASE);
-  status.set_run_id(59);
-  status.set_attempt_id(59);
-  status.set_parent_run_id(58);
-  status.set_group_count(1);
-  status.set_final_state(0);
-  status.set_motion_epoch(118);
-  state.set_motion_epoch(118);
-  status.set_management_epoch(181);
-  state.set_management_epoch(181);
-  state.set_freshness_ticket(99);
+  state = original_state;status_source.boot_id=state_source.boot_id=7;
+  status.release_committed()=false;
+  status.first_failure_reason()=13;
+  status.failure_source()=4196;
+  state.first_failure_reason()=13;
+  status.can_failed_mask()=63;
+  state.can_failed_mask()=63;
+  status.transaction_phase()=4;
+  state.transaction_phase()=4;
+  status.attempt_kind()=static_cast<std::uint8_t>(dp::protocol::dummy::AttemptKind::RELEASE);
+  status.run_id()=59;
+  status.attempt_id()=59;
+  status.parent_run_id()=58;
+  status.group_count()=1;
+  status.final_state()=0;
+  status.motion_epoch()=118;
+  state.motion_epoch()=118;
+  status.management_epoch()=181;
+  state.management_epoch()=181;
+  state.freshness_ticket()=99;
   std::uint8_t client_wire[16]{};
   client_wire[0] = 9;
-  ManageRequest grant;
-  grant.set_schema_major(2);
-  grant.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  grant.set_request_id(1);
-  grant.set_request_seq(1);
-  grant.set_operation(2);
-  grant.set_device_id(device_wire);
-  grant.set_client_instance_id(client_wire);
-  grant.set_expected_boot_epoch(7);
-  grant.set_expected_profile_id(201);
-  grant.set_expected_session_id(3);
-  grant.set_expected_reference_epoch(1);
-  grant.set_configured_mask(63);
-  grant.set_compiled_policy_sha256(hash_wire);
+  auto grant=owned_fixture::request();
+  grant.request_id()=1;
+  grant.request_seq()=1;
+  grant.operation()=2;
+  grant.domain_device_id().emplace().assign(device_wire,16U);
+  grant.client_instance_id().emplace().assign(client_wire,16U);
+  grant.expected_boot_epoch()=7;
+  grant.expected_profile_id()=201;
+  grant.expected_session_id()=3;
+  grant.expected_reference_epoch()=1;
+  grant.configured_mask()=63;
+  grant.compiled_policy_sha256().emplace().assign(hash_wire,32U);
   // hash_wire先前被负例改为43；原件应绑定42。
   hash_wire[0] = 42;
-  grant.set_compiled_policy_sha256(hash_wire);
+  grant.compiled_policy_sha256().emplace().assign(hash_wire,32U);
   auto begin = grant;
-  begin.set_expected_motion_epoch(115);
-  begin.set_operation(17);
-  begin.set_request_id(2);
-  begin.set_request_seq(2);
-  std::vector<std::uint8_t> raw{'D', 'P', 'R', 'A', 'W', '0', '1', 0};
-  auto record = [&](unsigned kind, std::uint64_t session, std::uint64_t run,
-                    unsigned seq, const auto &bytes) {
-    auto le = [&](std::uint64_t value, unsigned n) {
-      for (unsigned i = 0; i < n; ++i)
-        raw.push_back(std::uint8_t(value >> (8 * i)));
-    };
-    le(kind, 1);
-    le(bytes.size(), 2);
-    le(1000000, 8);
-    le(7, 8);
-    le(session, 8);
-    le(run, 8);
-    le(seq, 4);
-    raw.insert(raw.end(), bytes.begin(), bytes.end());
+  begin.expected_motion_epoch()=115;
+  begin.operation()=17;
+  begin.request_id()=2;
+  begin.request_seq()=2;
+  using namespace dummy_ros_control;
+  std::vector<std::uint8_t> raw(kCaptureMagic.begin(),kCaptureMagic.end());
+  auto record=[&](unsigned kind,std::uint64_t session,std::uint64_t run,unsigned seq,const auto& bytes){
+    auto actual_source=status_source;
+    if(kind==4U){actual_source.boot_id=99;actual_source.device.bytes[0]=8;}
+    CaptureRecordHeader header{static_cast<CaptureRecordKind>(kind),static_cast<std::uint16_t>(bytes.size()),1000000,actual_source,session,run,seq};
+    const auto encoded=encode_capture_header(header);raw.insert(raw.end(),encoded.begin(),encoded.end());raw.insert(raw.end(),bytes.begin(),bytes.end());
   };
-  auto request_bytes = [&](const auto &r) {
-    std::vector<std::uint8_t> bytes(
-        dummy_wire::DummyManageV2RequestCodec::kEncodedSize);
-    assert(dummy_wire::DummyManageV2RequestCodec::encode(
-               r, bytes.data(), bytes.size()) == dummy_wire::CodecResult::kOk);
-    return bytes;
+  auto encode=[](const auto& value,dp::protocol::canonical::Purpose purpose=dp::protocol::canonical::Purpose::kRecord){
+    using Traits=dp::protocol::canonical::Traits<std::decay_t<decltype(value)>>;
+    std::vector<std::uint8_t> bytes(Traits::kMaxEncodedSize);std::size_t written=0;
+    assert(Traits::encode(value,bytes.data(),bytes.size(),&written,purpose));bytes.resize(written);return bytes;
   };
+  auto request_bytes=encode;
   record(4, 3, 0, 0, request_bytes(grant));
   record(4, 3, 0, 0, request_bytes(begin));
   auto page_bytes = [&](auto p, std::uint64_t run) {
@@ -233,65 +221,46 @@ int main() {
     auto previous = recovery_sha(seed);
     std::uint8_t digest_wire[32];
     std::copy(previous.begin(), previous.end(), digest_wire);
-    p.set_previous_chain_sha256(digest_wire);
-    std::vector<std::uint8_t> bytes(
-        dummy_wire::DummyAttemptEvidenceV2Codec::kEncodedSize);
-    assert(dummy_wire::DummyAttemptEvidenceV2Codec::encode(
-               p, bytes.data(), bytes.size()) == dummy_wire::CodecResult::kOk);
-    std::vector<std::uint8_t> material(previous.begin(), previous.end());
-    material.insert(material.end(), bytes.begin(),
-                    bytes.begin() + dummy_wire::DummyAttemptEvidenceV2Codec::
-                                        kOffset_previous_chain_sha256);
-    material.push_back(0);
-    auto digest = recovery_sha(material);
-    std::copy(digest.begin(), digest.end(), digest_wire);
-    p.set_chain_sha256(digest_wire);
-    assert(dummy_wire::DummyAttemptEvidenceV2Codec::encode(
-               p, bytes.data(), bytes.size()) == dummy_wire::CodecResult::kOk);
-    return bytes;
+    p.previous_chain_sha256().emplace().assign(digest_wire,32U);
+    auto hash_bytes=encode(p,dp::protocol::canonical::Purpose::kEvidenceHash);
+    std::vector<std::uint8_t> material(previous.begin(),previous.end());material.insert(material.end(),hash_bytes.begin(),hash_bytes.end());
+    const auto digest=recovery_sha(material);std::copy(digest.begin(),digest.end(),digest_wire);p.chain_sha256().emplace().assign(digest_wire,32U);
+    return encode(p);
   };
-  dummy_wire::DummyAttemptEvidenceV2 parent;
-  parent.set_schema_major(2);
-  parent.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  parent.set_run_id(58);
-  parent.set_motion_epoch(115);
-  parent.set_attempt_id(58);
-  parent.set_attempt_kind(1);
-  parent.set_category(4);
-  parent.set_final(true);
-  parent.set_final_state(3);
-  parent.set_terminal_reason(14);
+  auto parent=owned_fixture::evidence();
+  parent.run_id()=58;
+  parent.motion_epoch()=115;
+  parent.attempt_id()=58;
+  parent.attempt_kind()=1;
+  parent.category()=4;
+  parent.final()=true;
+  parent.final_state()=3;
+  parent.terminal_reason()=14;
   record(1, 3, 58, 0, page_bytes(parent, 58));
   auto page = parent;
-  page.set_run_id(59);
-  page.set_attempt_id(59);
-  page.set_attempt_kind(DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_ATTEMPT_KIND_RELEASE);
-  page.set_parent_run_id(58);
-  page.set_group_id(14143);
-  page.set_motion_epoch(118);
-  page.set_category(3);
-  page.set_expected_mask(63);
-  page.set_submitted_mask(63);
-  page.set_sent_mask(63);
-  page.set_group_count(1);
-  page.set_final_state(0);
-  page.set_terminal_reason(0);
-  page.set_first_failure_source(4196);
-  page.set_first_failure_axis_mask(63);
+  page.run_id()=59;
+  page.attempt_id()=59;
+  page.attempt_kind()=static_cast<std::uint8_t>(dp::protocol::dummy::AttemptKind::RELEASE);
+  page.parent_run_id()=58;
+  page.group_id()=14143;
+  page.motion_epoch()=118;
+  page.category()=3;
+  page.expected_mask()=63;
+  page.submitted_mask()=63;
+  page.sent_mask()=63;
+  page.group_count()=1;
+  page.final_state()=0;
+  page.terminal_reason()=0;
+  page.first_failure_source()=4196;
+  page.first_failure_axis_mask()=63;
   std::uint64_t times[6];
   std::fill(std::begin(times), std::end(times), 1);
-  page.set_queued_at_us(times);
-  page.set_taken_at_us(times);
-  page.set_submitted_at_us(times);
-  page.set_sent_at_us(times);
+  page.queued_at_us().emplace().assign(times,6U);
+  page.taken_at_us().emplace().assign(times,6U);
+  page.submitted_at_us().emplace().assign(times,6U);
+  page.sent_at_us().emplace().assign(times,6U);
   record(1, 3, 59, 0, page_bytes(page, 59));
-  std::vector<std::uint8_t> sb(
-      dummy_wire::DummyDeviceStatusV2Codec::kEncodedSize),
-      jb(dummy_wire::DummyJointStateV2Codec::kEncodedSize);
-  assert(dummy_wire::DummyDeviceStatusV2Codec::encode(
-             status, sb.data(), sb.size()) == dummy_wire::CodecResult::kOk);
-  assert(dummy_wire::DummyJointStateV2Codec::encode(
-             state, jb.data(), jb.size()) == dummy_wire::CodecResult::kOk);
+  const auto sb=encode(status),jb=encode(state);
   record(3, 0, 59, 0, sb);
   record(2, 0, 59, 0, jb);
   ManualInterruptedRestProof proof;
@@ -304,22 +273,22 @@ int main() {
   assert(proof.session == 3 && proof.run == 59 && proof.motion == 118 &&
          proof.group == 14143 && proof.next_sequence == 1);
   auto release = grant;
-  release.set_operation(10);
-  release.set_request_id(100);
-  release.set_request_seq(proof.next_management_sequence);
-  release.set_expected_motion_epoch(118);
-  release.set_expected_management_epoch(181);
-  release.set_freshness_ticket(99);
-  assert(interrupted_release_request_matches(release, proof, status, state));
-  release.set_expected_motion_epoch(117);
-  assert(!interrupted_release_request_matches(release, proof, status, state));
-  release.set_expected_motion_epoch(118);
-  release.set_expected_session_id(0);
-  assert(!interrupted_release_request_matches(release, proof, status, state));
-  release.set_expected_session_id(3);
+  release.operation()=10;
+  release.request_id()=100;
+  release.request_seq()=proof.next_management_sequence;
+  release.expected_motion_epoch()=118;
+  release.expected_management_epoch()=181;
+  release.freshness_ticket()=99;
+  assert(interrupted_release_request_matches(release, proof, status, state,status_source,state_source));
+  release.expected_motion_epoch()=117;
+  assert(!interrupted_release_request_matches(release, proof, status, state,status_source,state_source));
+  release.expected_motion_epoch()=118;
+  release.expected_session_id()=0;
+  assert(!interrupted_release_request_matches(release, proof, status, state,status_source,state_source));
+  release.expected_session_id()=3;
   client_wire[0] = 8;
-  release.set_client_instance_id(client_wire);
-  assert(!interrupted_release_request_matches(release, proof, status, state));
+  release.client_instance_id().emplace().assign(client_wire,16U);
+  assert(!interrupted_release_request_matches(release, proof, status, state,status_source,state_source));
   auto bad_identity = expected;
   bad_identity.boot = 8;
   assert(
@@ -328,12 +297,8 @@ int main() {
   wrong_sha[0] ^= 1;
   assert(
       !validate_interrupted_rest_raw(raw, wrong_sha, expected, proof, error));
-  for (auto index :
-       {std::size_t(0), std::size_t(8),
-        std::size_t(
-            8 + 39 + request_bytes(grant).size() + 39 +
-            request_bytes(begin).size() + 39 +
-            dummy_wire::DummyAttemptEvidenceV2Codec::kOffset_chain_sha256)}) {
+  const auto parent_last_byte=8+3*kCaptureHeaderSize+request_bytes(grant).size()+request_bytes(begin).size()+page_bytes(parent,58).size()-1;
+  for(auto index:{std::size_t(0),std::size_t(8),parent_last_byte}){
     auto damaged = raw;
     damaged[index] ^= 1;
     assert(!validate_interrupted_rest_raw(damaged, recovery_sha(damaged),
@@ -343,81 +308,65 @@ int main() {
   auto encode_chained = [&](auto p, const auto &previous) {
     std::uint8_t digest[32];
     std::copy(previous.begin(), previous.end(), digest);
-    p.set_previous_chain_sha256(digest);
-    std::vector<std::uint8_t> bytes(
-        dummy_wire::DummyAttemptEvidenceV2Codec::kEncodedSize);
-    if (dummy_wire::DummyAttemptEvidenceV2Codec::encode(
-            p, bytes.data(), bytes.size()) != dummy_wire::CodecResult::kOk)
-      return std::vector<std::uint8_t>{};
-    std::vector<std::uint8_t> material(previous.begin(), previous.end());
-    material.insert(material.end(), bytes.begin(),
-                    bytes.begin() + dummy_wire::DummyAttemptEvidenceV2Codec::
-                                        kOffset_previous_chain_sha256);
-    material.push_back(p.evidence_lost() ? 1 : 0);
-    const auto chain = recovery_sha(material);
-    std::copy(chain.begin(), chain.end(), digest);
-    p.set_chain_sha256(digest);
-    if (dummy_wire::DummyAttemptEvidenceV2Codec::encode(
-            p, bytes.data(), bytes.size()) != dummy_wire::CodecResult::kOk)
-      return std::vector<std::uint8_t>{};
-    return bytes;
+    p.previous_chain_sha256().emplace().assign(digest,32U);
+    const auto bytes=encode(p,dp::protocol::canonical::Purpose::kEvidenceHash);
+    std::vector<std::uint8_t> material(previous.begin(),previous.end());material.insert(material.end(),bytes.begin(),bytes.end());
+    const auto chain=recovery_sha(material);std::copy(chain.begin(),chain.end(),digest);p.chain_sha256().emplace().assign(digest,32U);
+    return p;
   };
   auto new_disable = page;
-  new_disable.set_evidence_seq(1);
-  new_disable.set_group_id(14144);
-  new_disable.set_motion_epoch(119);
-  new_disable.set_group_count(2);
+  new_disable.evidence_seq()=1;
+  new_disable.group_id()=14144;
+  new_disable.motion_epoch()=119;
+  new_disable.group_count()=2;
   for (int bad = 0; bad < 8; ++bad) {
     InterruptedRestReleaseEvidence evidence(proof);
     auto wrong = new_disable;
     if (bad == 0)
-      wrong.set_sent_mask(31);
+      wrong.sent_mask()=31;
     if (bad == 1)
-      wrong.set_failed_mask(1);
+      wrong.failed_mask()=1;
     if (bad == 2)
-      wrong.set_evidence_lost(true);
+      wrong.evidence_lost()=true;
     if (bad == 3)
-      wrong.set_evidence_seq(2);
+      wrong.evidence_seq()=2;
     if (bad == 4)
-      wrong.set_motion_epoch(118);
+      wrong.motion_epoch()=118;
     if (bad == 5)
-      wrong.set_category(2);
+      wrong.category()=2;
     if (bad == 6)
-      wrong.set_parent_run_id(57);
+      wrong.parent_run_id()=57;
     if (bad == 7)
-      wrong.set_release_committed(true);
+      wrong.release_committed()=true;
     assert(
-        !evidence.consume(encode_chained(wrong, proof.chain), 2000000, error));
+        !evidence.consume(encode_chained(wrong, proof.chain),status_source,2000000, error));
     assert(!evidence.terminal_seen);
   }
   InterruptedRestReleaseEvidence evidence(proof);
-  assert(evidence.consume(encode_chained(new_disable, proof.chain), 2000000,
+  assert(evidence.consume(encode_chained(new_disable, proof.chain),status_source,2000000,
                           error));
   assert(evidence.disable_seen && !evidence.terminal_seen);
   auto terminal = page;
-  terminal.set_evidence_seq(2);
-  terminal.set_category(4);
-  terminal.set_group_id(0);
-  terminal.set_group_count(2);
-  terminal.set_expected_mask(0);
-  terminal.set_submitted_mask(0);
-  terminal.set_sent_mask(0);
-  terminal.set_final_state(
-      DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_FINAL_STATE_FAULT_LATCHED_AND_RELEASED);
-  terminal.set_release_committed(true);
+  terminal.evidence_seq()=2;
+  terminal.category()=4;
+  terminal.group_id()=0;
+  terminal.group_count()=2;
+  terminal.expected_mask()=0;
+  terminal.submitted_mask()=0;
+  terminal.sent_mask()=0;
+  terminal.final_state()=
+      static_cast<std::uint8_t>(dp::protocol::dummy::FinalState::FAULT_LATCHED_AND_RELEASED);
+  terminal.release_committed()=true;
   std::fill(std::begin(times), std::end(times), 0);
-  terminal.set_queued_at_us(times);
-  terminal.set_taken_at_us(times);
-  terminal.set_submitted_at_us(times);
-  terminal.set_sent_at_us(times);
+  terminal.queued_at_us().emplace().assign(times,6U);
+  terminal.taken_at_us().emplace().assign(times,6U);
+  terminal.submitted_at_us().emplace().assign(times,6U);
+  terminal.sent_at_us().emplace().assign(times,6U);
   auto no_release = terminal;
-  no_release.set_release_committed(false);
-  assert(!evidence.consume(encode_chained(no_release, evidence.proof.chain),
-                           2001000, error));
+  no_release.release_committed()=false;
+  assert(!evidence.consume(encode_chained(no_release, evidence.proof.chain),status_source,2001000, error));
   assert(!evidence.terminal_seen);
-  assert(evidence.consume(encode_chained(terminal, evidence.proof.chain),
-                          2002000, error));
+  assert(evidence.consume(encode_chained(terminal, evidence.proof.chain),status_source,2002000, error));
   assert(evidence.terminal_seen);
-  assert(!evidence.consume(encode_chained(terminal, evidence.proof.chain),
-                           2003000, error));
+  assert(!evidence.consume(encode_chained(terminal, evidence.proof.chain),status_source,2003000, error));
 }

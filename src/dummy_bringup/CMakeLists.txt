@@ -15,6 +15,7 @@ get_filename_component(_dummy_protocol_release "${_dummy_protocol_include}" DIRE
 if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(manual_panel_root_deployment test/test_manual_panel_root_deployment.py)
   ament_add_pytest_test(manual_ros_control_launch test/test_manual_ros_control_launch.py)
   foreach(test_name IN ITEMS manual_panel_ros_backend manual_panel_ros_runtime manual_panel_ros_qt manual_panel_ros_execution manual_panel_ros_event_flow)
     ament_add_pytest_test(${test_name} test/test_${test_name}.py
@@ -45,6 +46,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(manual_scene_obstacles test/test_manual_scene_obstacles.py)
   ament_add_pytest_test(manual_moveit_service_topology test/test_manual_moveit_service_topology.py)
   ament_add_pytest_test(manual_panel_messages test/test_manual_panel_messages.py)
+  ament_add_pytest_test(manual_panel_root test/test_manual_panel_root.py)
+  ament_add_pytest_test(manual_panel_fresh test/test_manual_panel_fresh.py)
 # 这些入口引用仓库 scripts/dummy/tests 中的应用集成回归；相对路径按本包源码目录解析。
   ament_add_pytest_test(ros_six_axis_movej ../../scripts/dummy/tests/test_ros_six_axis_movej.py)
   ament_add_pytest_test(application_e2e ../../scripts/dummy/tests/test_application_e2e.py)
@@ -68,6 +71,9 @@ install(FILES "${DPSDKHostSDK_ROBOT_BUNDLE_DIR}/model/model.yaml"
   DESTINATION share/${PROJECT_NAME}/model)
 install(FILES ../../scripts/dummy/join_real_6dof_evidence.py
   ../../scripts/dummy/selected_protocol.py
+  ../../scripts/dummy/current_root_records.py
+  ../../scripts/dummy/application_e2e.py
+  ../../scripts/dummy/build_real_6dof_context.py
   DESTINATION share/${PROJECT_NAME}/panel_runtime/scripts/dummy)
 install(DIRECTORY "${_dummy_protocol_release}/"
   DESTINATION share/${PROJECT_NAME}/panel_runtime/scripts/dummy/protocol)
@@ -76,6 +82,7 @@ install(DIRECTORY "${_dummy_protocol_release}/"
 install(PROGRAMS
   scripts/manual_panel_config.py
   scripts/manual_panel_ros_backend.py
+  scripts/manual_panel_root.py
   scripts/manual_panel_runtime.py
   scripts/deploy_manual_panel.py
   scripts/render_manual_panel_config.py

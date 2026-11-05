@@ -14,6 +14,7 @@
 #include "dummy_motion_client/manual_panel_profile.hpp"
 #include "dummy_motion_client/native_goal_validation.hpp"
 #include "dummy_motion_client/panel_feedback.hpp"
+#include "dummy_ros_control/message_presence.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/diagnostic_journal.hpp"
 #include "dummy_ros_control/diagnostic_json.hpp"
@@ -66,7 +67,12 @@ ExecutionPositionCheck check_execution_positions(
   return result;
 }
 
-namespace wire=dp::iface;
+using dummy_ros_control::message_fields_present;
+using dummy_ros_control::configured_joint_mask;
+using dummy_ros_control::position_valid_joint_mask;
+using dummy_ros_control::velocity_valid_joint_mask;
+using dummy_ros_control::raw_position_joint_mask;
+using dummy_ros_control::joint_for_id;
 using Follow=control_msgs::action::FollowJointTrajectory;
 using GoalHandle=rclcpp_action::ServerGoalHandle<Follow>;
 using Controller=dummy_ros_control::GuardedJointTrajectoryController;
@@ -122,7 +128,7 @@ bool clean_cancel_terminal(const RawTerminalIdentity &terminal,
  * @return bool；同boot/session/reference、run及motion恰+1，双Hold、全轴SENT和严格首页成立。
  */
 bool timeline_completed_refresh_hold_confirmed(
-    const wire::DummyDeviceStatusV2 &status,const wire::DummyJointStateV2 &state,
+    const dummy_ref::messages::Status &status,const dummy_ref::messages::State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source,
     const TimelineIdentity &prior,const RawTerminalIdentity &terminal,
     const RawFirstPageWritten &successor,bool raw_capture_enabled,
     std::uint8_t raw_failure,std::uint8_t axis_mask) noexcept {
@@ -136,22 +142,22 @@ bool timeline_completed_refresh_hold_confirmed(
      !terminal.motion_complete || terminal.evidence_lost ||
      terminal.release_committed || terminal.first_failure_source!=0U ||
      terminal.first_failure_axis_mask!=0U) return false;
-  const TimelineIdentity next{status.boot_epoch(),status.session_id(),
-      status.reference_epoch(),status.motion_epoch(),status.run_id()};
+  const TimelineIdentity next{status_source.boot_id,*status.session_id(),
+      *status.reference_epoch(),*status.motion_epoch(),*status.run_id()};
   return next.boot==prior.boot && next.session==prior.session &&
     next.reference_epoch==prior.reference_epoch &&
     next.run_id==prior.run_id+1U && next.motion_epoch==prior.motion_epoch+1U &&
-    status.attempt_kind()==1U && status.parent_run_id()==0U &&
-    status.final_state()==0U && !status.motion_complete() &&
-    !status.evidence_lost() &&
-    status.core_state()==wire_value(WireCoreState::kHold) &&
-    state.boot_epoch()==next.boot && state.session_id()==next.session &&
-    state.reference_epoch()==next.reference_epoch &&
-    state.motion_epoch()==next.motion_epoch &&
-    state.management_epoch()==status.management_epoch() &&
-    state.core_state()==wire_value(WireCoreState::kHold) && state.hold_ready() &&
-    state.can_submitted_mask()==axis_mask && state.can_sent_mask()==axis_mask &&
-    state.can_failed_mask()==0U && verified_refresh_successor(successor,next);
+    *status.attempt_kind()==1U && *status.parent_run_id()==0U &&
+    *status.final_state()==0U && !*status.motion_complete() &&
+    !*status.evidence_lost() &&
+    *status.core_state()==wire_value(WireCoreState::kHold) &&
+    state_source.boot_id==next.boot && *state.session_id()==next.session &&
+    *state.reference_epoch()==next.reference_epoch &&
+    *state.motion_epoch()==next.motion_epoch &&
+    *state.management_epoch()==*status.management_epoch() &&
+    *state.core_state()==wire_value(WireCoreState::kHold) && *state.hold_ready() &&
+    *state.can_submitted_mask()==axis_mask && *state.can_sent_mask()==axis_mask &&
+    *state.can_failed_mask()==0U && verified_refresh_successor(successor,next);
 }
 
 /**
@@ -164,23 +170,23 @@ bool timeline_completed_refresh_hold_confirmed(
  * @param axis_mask 只支持完整63。
  * @return bool；同run/参考，motion恰+1，final7、双Hold和全配置轴提交/SENT。
  */
-bool timeline_cancel_hold_confirmed(const wire::DummyDeviceStatusV2 &status,
-                                    const wire::DummyJointStateV2 &state,
+bool timeline_cancel_hold_confirmed(const dummy_ref::messages::Status &status,
+                                    const dummy_ref::messages::State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source,
                                     const TimelineIdentity &run,
                                     const RawTerminalIdentity &raw_terminal,
                                     std::uint8_t axis_mask) noexcept {
   return axis_mask==63U && run.motion_epoch!=UINT32_MAX &&
-    status.boot_epoch()==run.boot && status.session_id()==run.session &&
-    status.reference_epoch()==run.reference_epoch && status.run_id()==run.run_id &&
-    status.motion_epoch()==run.motion_epoch+1U &&
-    state.boot_epoch()==run.boot && state.session_id()==run.session &&
-    state.reference_epoch()==run.reference_epoch &&
-    state.motion_epoch()==status.motion_epoch() &&
-    status.attempt_kind()==1U && status.parent_run_id()==0U &&
-    status.final_state()==7U && !status.motion_complete() && !status.evidence_lost() &&
-    status.core_state()==wire_value(WireCoreState::kHold) &&
-    state.core_state()==wire_value(WireCoreState::kHold) && state.hold_ready() &&
-    state.can_submitted_mask()==axis_mask && state.can_sent_mask()==axis_mask &&
+    status_source.boot_id==run.boot && *status.session_id()==run.session &&
+    *status.reference_epoch()==run.reference_epoch && *status.run_id()==run.run_id &&
+    *status.motion_epoch()==run.motion_epoch+1U &&
+    state_source.boot_id==run.boot && *state.session_id()==run.session &&
+    *state.reference_epoch()==run.reference_epoch &&
+    *state.motion_epoch()==*status.motion_epoch() &&
+    *status.attempt_kind()==1U && *status.parent_run_id()==0U &&
+    *status.final_state()==7U && !*status.motion_complete() && !*status.evidence_lost() &&
+    *status.core_state()==wire_value(WireCoreState::kHold) &&
+    *state.core_state()==wire_value(WireCoreState::kHold) && *state.hold_ready() &&
+    *state.can_submitted_mask()==axis_mask && *state.can_sent_mask()==axis_mask &&
     clean_cancel_terminal(raw_terminal,run);
 }
 
@@ -385,7 +391,7 @@ void clear_failed_lease_renewal(std::atomic<int> &request, std::atomic<bool> &bu
                                 std::atomic<bool> &reserved, std::atomic<bool> &started,
                                 std::atomic<int> &explicit_status,
                                 bool owns_busy=true) noexcept {
-  int renewal=static_cast<int>(wire_value(ManageOperation::kRenewLease));
+  int renewal=static_cast<int>(wire_value(ManageOperation::RENEW_LEASE));
   request.compare_exchange_strong(renewal,0);
   explicit_status=0;
   started=false;
@@ -485,7 +491,7 @@ bool queue_lease_renewal(std::atomic<int> &request, std::atomic<bool> &busy,
   }
   int no_request=0;
   if(request.compare_exchange_strong(no_request,
-       static_cast<int>(wire_value(ManageOperation::kRenewLease)))) return true;
+       static_cast<int>(wire_value(ManageOperation::RENEW_LEASE)))) return true;
   if(!running) busy=false;
   reserved=false;
   return false;
@@ -511,7 +517,7 @@ bool withdraw_queued_running_renewal(std::atomic<int> &request,
     bool bounded_intent, std::atomic<int> &explicit_status) noexcept {
   if(!reserved.load() || !running.load() || started.load() || owns_busy ||
      renewal_inflight || !bounded_intent) return false;
-  int renewal=static_cast<int>(wire_value(ManageOperation::kRenewLease));
+  int renewal=static_cast<int>(wire_value(ManageOperation::RENEW_LEASE));
   if(!request.compare_exchange_strong(renewal,0)) return false;
   reserved=false; running=false; started=false;
   int pending=1;
@@ -543,7 +549,7 @@ bool take_confirmed_lease_renewal(std::atomic<int> &explicit_status,
                                   ManageOperation last_operation) noexcept {
   int confirmed=2;
   return status_available && operation_complete && hold &&
-    last_operation==ManageOperation::kRenewLease &&
+    last_operation==ManageOperation::RENEW_LEASE &&
     explicit_status.compare_exchange_strong(confirmed,0);
 }
 
@@ -572,9 +578,9 @@ const char *bootstrap_status_message(BootstrapPhase phase, const char *error,
  * @param state 已验证State。
  * @return bool；时间、释放根和原页证明仍由外层负责。
  */
-bool released_idle_observation(const wire::DummyDeviceStatusV2 &status,
-                               const wire::DummyJointStateV2 &state) noexcept {
-  return released_idle_status_confirmed(status,state);
+bool released_idle_observation(const dummy_ref::messages::Status &status,
+                               const dummy_ref::messages::State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source) noexcept {
+  return released_idle_status_confirmed(status,state,status_source,state_source);
 }
 
 /**
@@ -583,13 +589,13 @@ bool released_idle_observation(const wire::DummyDeviceStatusV2 &status,
  * @param state State值。
  * @return bool；不独立检查device/profile/hash或新鲜度。
  */
-bool bootstrap_authority_coherent(const wire::DummyDeviceStatusV2 &status,
-                                  const wire::DummyJointStateV2 &state) noexcept {
-  return state.boot_epoch()==status.boot_epoch() &&
-    state.session_id()==status.session_id() &&
-    state.reference_epoch()==status.reference_epoch() &&
-    state.motion_epoch()==status.motion_epoch() &&
-    state.management_epoch()==status.management_epoch();
+bool bootstrap_authority_coherent(const dummy_ref::messages::Status &status,
+                                  const dummy_ref::messages::State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source) noexcept {
+  return state_source.boot_id==status_source.boot_id &&
+    *state.session_id()==*status.session_id() &&
+    *state.reference_epoch()==*status.reference_epoch() &&
+    *state.motion_epoch()==*status.motion_epoch() &&
+    *state.management_epoch()==*status.management_epoch();
 }
 
 /**
@@ -598,9 +604,9 @@ bool bootstrap_authority_coherent(const wire::DummyDeviceStatusV2 &status,
  * @param state State值。
  * @return bool，不自动继承旧Hold资格。
  */
-bool refresh_observation_coherent(const wire::DummyDeviceStatusV2 &status,
-                                  const wire::DummyJointStateV2 &state) noexcept {
-  return bootstrap_authority_coherent(status,state);
+bool refresh_observation_coherent(const dummy_ref::messages::Status &status,
+                                  const dummy_ref::messages::State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source) noexcept {
+  return bootstrap_authority_coherent(status,state,status_source,state_source);
 }
 
 /**
@@ -618,8 +624,8 @@ bool refresh_observation_coherent(const wire::DummyDeviceStatusV2 &status,
  * @return bool；run/motion恰+1，同boot/session/reference且双Hold一致，首/终证据符合。
  */
 bool timeline_cancel_refresh_hold_confirmed(
-    const wire::DummyDeviceStatusV2 &status,
-    const wire::DummyJointStateV2 &state,
+    const dummy_ref::messages::Status &status,
+    const dummy_ref::messages::State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source,
     const TimelineIdentity &run,
     const RawTerminalIdentity &terminal,
     const RawFirstPageWritten &successor,
@@ -631,20 +637,20 @@ bool timeline_cancel_refresh_hold_confirmed(
      cancel_receipt->operation_id==0U || run.run_id==0U ||
      run.run_id==UINT64_MAX || run.motion_epoch==UINT32_MAX ||
      !clean_cancel_terminal(terminal,run)) return false;
-  const TimelineIdentity next{status.boot_epoch(),status.session_id(),
-      status.reference_epoch(),status.motion_epoch(),status.run_id()};
+  const TimelineIdentity next{status_source.boot_id,*status.session_id(),
+      *status.reference_epoch(),*status.motion_epoch(),*status.run_id()};
   return next.boot==run.boot && next.session==run.session &&
     next.reference_epoch==run.reference_epoch &&
     next.motion_epoch==run.motion_epoch+1U &&
     next.run_id==run.run_id+1U &&
-    status.core_state()==wire_value(WireCoreState::kHold) &&
-    status.attempt_kind()==1U && status.parent_run_id()==0U &&
-    status.final_state()==0U && !status.motion_complete() &&
-    !status.evidence_lost() &&
-    refresh_observation_coherent(status,state) &&
-    state.core_state()==wire_value(WireCoreState::kHold) &&
-    state.hold_ready() && state.can_submitted_mask()==axis_mask &&
-    state.can_sent_mask()==axis_mask &&
+    *status.core_state()==wire_value(WireCoreState::kHold) &&
+    *status.attempt_kind()==1U && *status.parent_run_id()==0U &&
+    *status.final_state()==0U && !*status.motion_complete() &&
+    !*status.evidence_lost() &&
+    refresh_observation_coherent(status,state,status_source,state_source) &&
+    *state.core_state()==wire_value(WireCoreState::kHold) &&
+    *state.hold_ready() && *state.can_submitted_mask()==axis_mask &&
+    *state.can_sent_mask()==axis_mask &&
     verified_refresh_successor(successor,next);
 }
 
@@ -670,7 +676,7 @@ struct ReleaseAvailability {
 
 // 首次SetPermit仍走原准备流程；只有已使能后的显式任务入口重开窗口。
 inline bool explicit_manual_permit_restarts_window(bool manual,bool enabled,ManageOperation operation) noexcept {
-  return manual && enabled && operation==ManageOperation::kSetPermit;
+  return manual && enabled && operation==ManageOperation::INSTALL_PERMIT;
 }
 
 // Native未消费许可只复用；新许可须等待上一真实目标封口，不能由轮询或续租安装。
@@ -739,26 +745,26 @@ manual_coordinator_tick_required(bool started,
 
 template <typename Status, typename State>
 bool readonly_released_idle_observation(const Status &status,
-                                        const State &state) noexcept {
-  const auto idle = status.reference_epoch() == 0U ? 1U : 2U;
-  return status.boot_epoch() != 0U &&
-         status.boot_epoch() == state.boot_epoch() &&
-         status.session_id() == 0U && state.session_id() == 0U &&
-         status.reference_epoch() == state.reference_epoch() &&
-         status.motion_epoch() == state.motion_epoch() &&
-         status.management_epoch() == state.management_epoch() &&
-         status.core_state() == idle && state.core_state() == idle &&
-         !status.real_motion_permitted() && status.permit_remaining_us() == 0U;
+                                        const State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source) noexcept {
+  const auto idle = *status.reference_epoch() == 0U ? 1U : 2U;
+  return status_source.boot_id != 0U &&
+         status_source.boot_id == state_source.boot_id &&
+         *status.session_id() == 0U && *state.session_id() == 0U &&
+         *status.reference_epoch() == *state.reference_epoch() &&
+         *status.motion_epoch() == *state.motion_epoch() &&
+         *status.management_epoch() == *state.management_epoch() &&
+         *status.core_state() == idle && *state.core_state() == idle &&
+         !*status.real_motion_permitted() && *status.permit_remaining_us() == 0U;
 }
 
 // 仅固定manual部署的调用者使用；空owner的保留参考必须有真实释放记录与有效绝对位置。
 template <class Status, class State>
 bool retained_manual_reference_reusable(const Status &status,
-                                        const State &state) noexcept {
-  return readonly_released_idle_observation(status, state) &&
-         status.reference_epoch() != 0U && status.reference_kind() == 1U &&
-         status.release_committed() && !status.evidence_lost() &&
-         state.position_valid_mask() == 63U;
+                                        const State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source) noexcept {
+  return readonly_released_idle_observation(status,state,status_source,state_source) &&
+         *status.reference_epoch() != 0U && *status.reference_kind() == 1U &&
+         *status.release_committed() && !*status.evidence_lost() &&
+         position_valid_joint_mask(state) == 63U;
 }
 
 inline bool readonly_release_samples_fresh(std::uint64_t status_at,
@@ -806,7 +812,7 @@ bool queue_disable_and_release(const std::atomic<bool> &available,
   int no_request=0;
   if(!available.load() || !stage.compare_exchange_strong(inactive,1) ||
      !request.compare_exchange_strong(
-       no_request,static_cast<int>(wire_value(ManageOperation::kDisableAndRelease)))) {
+       no_request,static_cast<int>(wire_value(ManageOperation::DISABLE_AND_RELEASE)))) {
     stage=0;
     busy=false;
     return false;
@@ -1249,11 +1255,11 @@ bool enable_gate_with_port_authority(ActionGate &gate, GuardedPort &port,
                                      const Authorization &authorization,
                                      std::uint64_t now) {
   const auto &identity=authorization.identity;
-  if(identity.expected_boot_epoch()!=port.identity.boot ||
-     identity.expected_session_id()!=port.identity.session ||
-     identity.expected_reference_epoch()!=port.identity.reference_epoch ||
+  if(*identity.expected_boot_epoch()!=port.identity.boot ||
+     *identity.expected_session_id()!=port.identity.session ||
+     *identity.expected_reference_epoch()!=port.identity.reference_epoch ||
      !gate.enable(authorization,now)) return false;
-  port.identity.motion_epoch=identity.expected_motion_epoch();
+  port.identity.motion_epoch=*identity.expected_motion_epoch();
   return true;
 }
 
@@ -1388,12 +1394,12 @@ class DeviceActionGate final : public rclcpp::Node {
     const auto request_nonce=(static_cast<std::uint64_t>(random())<<32U) | random();
     client_=std::make_unique<WireManagementClient>(*transport_,static_cast<std::uint64_t>(session),
                                                    request_nonce);
-    ManageRequest bootstrap_identity{};
+    auto bootstrap_identity=dummy_ref::messages::make_manage_request();
     std::uint8_t device[16]{}, client_id[16]{};
     std::copy(parameters_.device.begin(),parameters_.device.end(),device);
     std::copy(parameters_.client.begin(),parameters_.client.end(),client_id);
-    bootstrap_identity.set_device_id(device); bootstrap_identity.set_client_instance_id(client_id);
-    bootstrap_identity.set_expected_session_id(static_cast<std::uint64_t>(session));
+    bootstrap_identity.domain_device_id().emplace().assign(device,16U); bootstrap_identity.client_instance_id().emplace().assign(client_id,16U);
+    bootstrap_identity.expected_session_id()=static_cast<std::uint64_t>(session);
     /**
      * @brief 功能开发会话使用30秒保守租期模型，动作permit单独给定；gate的2秒握手期限与bootstrap释放5秒、底层Stop预算不是同一计时器。
      */
@@ -1407,10 +1413,10 @@ class DeviceActionGate final : public rclcpp::Node {
       manual_reference_ = std::make_unique<ManualReferenceCoordinator>(
           *bootstrap_, manual_deployment_->reference);
     panel_status_publisher_ =
-        create_publisher<dpsdk_interfaces::msg::DummyDeviceStatusV2>(
+        create_publisher<dpsdk_interfaces::msg::DummyDeviceStatus>(
             "~/device_status", rclcpp::QoS(10));
     panel_state_publisher_ =
-        create_publisher<dpsdk_interfaces::msg::DummyJointStateV2>(
+        create_publisher<dpsdk_interfaces::msg::DummyJointState>(
             "~/device_state", rclcpp::QoS(10));
     panel_feedback_timer_ = create_wall_timer(
         std::chrono::milliseconds(20), [this] { publish_panel_feedback(); });
@@ -1422,8 +1428,7 @@ class DeviceActionGate final : public rclcpp::Node {
             auto admission = cancel_admission_.try_control();
             const bool reuse =
                 admission &&
-                retained_manual_reference_reusable(panel_status_,
-                                                   panel_state_) &&
+                retained_manual_reference_reusable(panel_status_,panel_state_,panel_status_source_,panel_state_source_) &&
                 readonly_release_samples_fresh(
                     panel_status_received_us_, panel_state_received_us_,
                     management_now_us(), state_max_age_us_);
@@ -1444,7 +1449,7 @@ class DeviceActionGate final : public rclcpp::Node {
               return;
             }
             manual_request_boot_ = latest_bootstrap_.boot_epoch;
-            manual_request_sequence_ = panel_state_.state_seq();
+            manual_request_sequence_ = *panel_state_.state_seq();
             manual_request_reference_ = latest_bootstrap_.reference_epoch;
             manual_request_reuse_ = reuse;
             manual_calibration_requested_ = true;
@@ -1594,10 +1599,10 @@ class DeviceActionGate final : public rclcpp::Node {
                          std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
           auto admission=cancel_admission_.try_control();
           if(!admission) {
-            response->message=operation==ManageOperation::kSetPermit ? "PERMIT_NOT_QUEUED" :
+            response->message=operation==ManageOperation::INSTALL_PERMIT ? "PERMIT_NOT_QUEUED" :
               "Operation unavailable or another management request is pending";return;
           }
-          bool available=operation==ManageOperation::kSetPermit ?
+          bool available=operation==ManageOperation::INSTALL_PERMIT ?
             permit_operation_available_.load() : explicit_operation_available_.load();
           const bool explicit_manual_permit=explicit_manual_permit_restarts_window(manual_reference_mode_,enabled_,operation);
           if(explicit_manual_permit) {
@@ -1612,14 +1617,14 @@ class DeviceActionGate final : public rclcpp::Node {
                                      static_cast<int>(wire_value(operation)),available);
           if(response->success && explicit_manual_permit) manual_explicit_permit_restart_=true;
           response->message=response->success ? "Operation queued; poll bootstrap_status for final result" :
-            (operation==ManageOperation::kSetPermit ? "PERMIT_NOT_QUEUED" :
+            (operation==ManageOperation::INSTALL_PERMIT ? "PERMIT_NOT_QUEUED" :
               "Operation unavailable or another management request is pending");
         }));
     };
-    add_operation_service("~/select_control_mode",ManageOperation::kSelectMode);
-    add_operation_service("~/grant_session",ManageOperation::kGrantSession);
-    add_operation_service("~/capture_bench_reference",ManageOperation::kCaptureReference);
-    add_operation_service("~/set_bench_permit",ManageOperation::kSetPermit);
+    add_operation_service("~/select_control_mode",ManageOperation::SELECT_CONTROL_MODE);
+    add_operation_service("~/grant_session",ManageOperation::GRANT_SESSION);
+    add_operation_service("~/capture_bench_reference",ManageOperation::CAPTURE_REFERENCE);
+    add_operation_service("~/set_bench_permit",ManageOperation::INSTALL_PERMIT);
     /**
      * @brief 续租服务持try admission预留单槽，Hold续租拥有busy、RUN续租借goal busy；queued回应不是session已延长，需bootstrap_status确认。
      */
@@ -1689,11 +1694,11 @@ class DeviceActionGate final : public rclcpp::Node {
           }
           if (manual_reference_mode_ && observation_ready_.load() &&
               !observation_lost_ &&
-              panel_status_.boot_epoch() == latest_bootstrap_.boot_epoch &&
+              panel_status_source_.boot_id == latest_bootstrap_.boot_epoch &&
               !enabled_ && !busy_.load() && management_request_.load() == 0 &&
               !manual_calibration_requested_.load() &&
               bootstrap_->release_slot_available() && readonly_fresh &&
-              readonly_released_idle_observation(panel_status_, panel_state_)) {
+              readonly_released_idle_observation(panel_status_,panel_state_,panel_status_source_,panel_state_source_)) {
             readonly_release_confirmed_ = true;
             release_stage_ = 3;
             admission_prerequisites_ = false;
@@ -1710,8 +1715,8 @@ class DeviceActionGate final : public rclcpp::Node {
              goal_boot_==latest_bootstrap_.boot_epoch && goal_session_==expected_session_id_ &&
              expected_session_id_!=0 && readonly_fresh && observation_ready_.load() && !observation_lost_ &&
              !evidence_incomplete_.load() && release_stage_.load()==0 && transport_->ready() &&
-             bootstrap_authority_coherent(panel_status_,panel_state_) &&
-             panel_status_.session_id()==expected_session_id_ &&
+             bootstrap_authority_coherent(panel_status_,panel_state_,panel_status_source_,panel_state_source_) &&
+             *panel_status_.session_id()==expected_session_id_ &&
              manual_release_intent_.begin(latest_bootstrap_,release_now,20000000U) &&
              cancel_requests_.request(active_)) {
             manual_cancel_before_release_=true;admission_prerequisites_=false;ready_=false;
@@ -1720,20 +1725,20 @@ class DeviceActionGate final : public rclcpp::Node {
           // 同锁重核管理槽；合法在途只排清理意图，不能抢发D10或丢弃意图。
           if (manual_reference_mode_) {
             const bool manual_quiet =
-                bootstrap_authority_coherent(panel_status_, panel_state_) &&
-                ((panel_status_.core_state() ==
+                bootstrap_authority_coherent(panel_status_,panel_state_,panel_status_source_,panel_state_source_) &&
+                ((*panel_status_.core_state() ==
                       wire_value(WireCoreState::kHold) &&
-                  panel_state_.core_state() ==
+                  *panel_state_.core_state() ==
                       wire_value(WireCoreState::kHold)) ||
-                 (panel_status_.core_state() ==
-                      (panel_status_.reference_epoch() == 0U ? 1U : 2U) &&
-                  panel_state_.core_state() == panel_status_.core_state()));
+                 (*panel_status_.core_state() ==
+                      (*panel_status_.reference_epoch() == 0U ? 1U : 2U) &&
+                  *panel_state_.core_state() == *panel_status_.core_state()));
             release_available_ =
                 release_stage_.load() == 0 && readonly_fresh &&
                 observation_ready_.load() && !busy_.load() &&
                 management_request_.load() == 0 &&
                 !manual_calibration_requested_.load() &&
-                panel_status_.session_id() == expected_session_id_ &&
+                *panel_status_.session_id() == expected_session_id_ &&
                 manual_quiet && transport_->ready() &&
                 (bootstrap_->release_slot_available() ||
                  bootstrap_->management_operation_pending());
@@ -2020,14 +2025,14 @@ class DeviceActionGate final : public rclcpp::Node {
      return true;
    }
    bool
-   observed_release_idle(const wire::DummyDeviceStatusV2 &status,
-                         const wire::DummyJointStateV2 &state) const noexcept {
+   observed_release_idle(const dummy_ref::messages::Status &status,
+                         const dummy_ref::messages::State &state,const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source) const noexcept {
      if (readonly_release_confirmed_)
-       return readonly_released_idle_observation(status, state);
+       return readonly_released_idle_observation(status,state,status_source,state_source);
      return manual_reference_mode_ && manual_release_reference_ != 0U
                 ? retained_reference_released_idle_observation(
-                      status, state, manual_release_reference_)
-                : released_idle_observation(status, state);
+                      status,state,manual_release_reference_,status_source,state_source)
+                : released_idle_observation(status,state,status_source,state_source);
    }
    // 控制缓存只在准入锁可得时复制；诊断发布和其水位不依赖控制准入。
    void publish_panel_feedback() {
@@ -2039,6 +2044,7 @@ class DeviceActionGate final : public rclcpp::Node {
          control.available = true;
          control.status = panel_status_;
          control.state = panel_state_;
+         control.status_source=panel_status_source_;control.state_source=panel_state_source_;
          control.status_received_us = panel_status_received_us_;
          control.state_received_us = panel_state_received_us_;
        }
@@ -2046,15 +2052,15 @@ class DeviceActionGate final : public rclcpp::Node {
      // 仅发布timer串行拥有水位；诊断不回填控制/释放缓存，也不延寿原接收锚。
      const auto selected = select_panel_feedback(
          control,
-         {diagnostic.status.data(), diagnostic.status.size(), diagnostic.status_received_us},
-         {diagnostic.state.data(), diagnostic.state.size(), diagnostic.state_received_us},
+         {&diagnostic.status,diagnostic.status_source,diagnostic.status_received_us},
+         {&diagnostic.state,diagnostic.state_source,diagnostic.state_received_us},
          management_now_us(), state_max_age_us_,
          dummy_ref::host::kManualReferenceStatusMaxAgeUs,
          panel_status_published_us_, panel_state_published_us_);
      if (selected.status)
-       panel_status_publisher_->publish(panel_status_message(*selected.status));
+       panel_status_publisher_->publish(panel_status_message(*selected.status,selected.status_source));
      if (selected.state)
-       panel_state_publisher_->publish(panel_state_message(*selected.state));
+       panel_state_publisher_->publish(panel_state_message(*selected.state,selected.state_source));
    }
   /**
    * @brief 在已有准入scope下预约一次Hold或RUN续租。
@@ -2095,22 +2101,23 @@ class DeviceActionGate final : public rclcpp::Node {
       observation_lost_=result==ObservationContinuity::Result::kLost;
       return result==ObservationContinuity::Result::kReady;
     };
-    if(!observed || observed->state.empty() || observed->status.empty()) {
+    if(!observed || !observed->state_received_us || !observed->status_received_us) {
       const auto identities=port_.diagnostics.context();
       port_.diagnostics.reject(dummy_ros_control::DiagnosticReason::kObservationRejected,{},identities.second,now,"empty_observation");
       port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_REJECTED_EMPTY");
       return wait_for_observation(observed.value_or(DeviceObservation{}),false);
     }
-    wire::DummyDeviceStatusV2 status; wire::DummyJointStateV2 state;
-    if(wire::DummyDeviceStatusV2Codec::decode(observed->status.data(),observed->status.size(),&status)!=wire::CodecResult::kOk ||
-       wire::DummyJointStateV2Codec::decode(observed->state.data(),observed->state.size(),&state)!=wire::CodecResult::kOk) {
+    const auto& status=observed->status;const auto& state=observed->state;
+    const auto status_source=observed->status_source;const auto state_source=observed->state_source;
+    if(!message_fields_present(status) ||
+       !message_fields_present(state)) {
       const auto identities=port_.diagnostics.context();
       port_.diagnostics.reject(dummy_ros_control::DiagnosticReason::kObservationRejected,{},identities.second,now,"decode");
       port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_REJECTED_CODEC");
       observation_lost_=true; return false;
     }
     port_.diagnostics.publish_context(
-      {state.boot_epoch(),state.session_id(),state.reference_epoch(),state.motion_epoch(),state.state_seq(),state.management_epoch(),true},
+      {state_source.boot_id,*state.session_id(),*state.reference_epoch(),*state.motion_epoch(),*state.state_seq(),*state.management_epoch(),true},
       {port_.identity.boot,port_.identity.session,port_.identity.reference_epoch,port_.identity.motion_epoch,
        dummy_ros_control::wire_producer_sequence(last_update_),0U,port_.identity.boot!=0U});
     /**
@@ -2142,60 +2149,60 @@ class DeviceActionGate final : public rclcpp::Node {
      * @brief Status五hash与本地已验证bundle/activation对比，LIMITED另钉boot；不是只凭profile号或设备名字放行。
      */
     DeviceStatusIdentity status_identity{};
-    std::copy(std::begin(status.contract_sha256()),std::end(status.contract_sha256()),status_identity.contract_hash.begin());
-    std::copy(std::begin(status.model_sha256()),std::end(status.model_sha256()),status_identity.model_hash.begin());
-    std::copy(std::begin(status.profile_sha256()),std::end(status.profile_sha256()),status_identity.profile_hash.begin());
-    std::copy(std::begin(status.compiled_policy_sha256()),std::end(status.compiled_policy_sha256()),status_identity.policy_hash.begin());
-    std::copy(std::begin(status.firmware_sha256()),std::end(status.firmware_sha256()),status_identity.firmware_hash.begin());
-    if(!std::equal(parameters_.device.begin(),parameters_.device.end(),status.device_id()) ||
-       status.profile_id()!=parameters_.profile || status.configured_mask()!=parameters_.mask ||
+    std::copy(status.contract_sha256()->begin(),status.contract_sha256()->end(),status_identity.contract_hash.begin());
+    std::copy(status.model_sha256()->begin(),status.model_sha256()->end(),status_identity.model_hash.begin());
+    std::copy(status.profile_sha256()->begin(),status.profile_sha256()->end(),status_identity.profile_hash.begin());
+    std::copy(status.compiled_policy_sha256()->begin(),status.compiled_policy_sha256()->end(),status_identity.policy_hash.begin());
+    std::copy(status.firmware_sha256()->begin(),status.firmware_sha256()->end(),status_identity.firmware_hash.begin());
+    if(!std::equal(parameters_.device.begin(),parameters_.device.end(),status.domain_device_id()->begin()) ||
+       *status.profile_id()!=parameters_.profile || *status.configured_mask()!=parameters_.mask ||
        !status_matches_bundle_identity(device_profile_,status_identity)) return reject("HASH");
     if(device_profile_.no_load_basis==NoLoadBasis::kFunctionalLimited &&
-       status.boot_epoch()!=device_profile_.limited_boot_epoch) return reject("LIMITED_BOOT");
-    if (state.boot_epoch() == status.boot_epoch() &&
-        state.profile_id() == parameters_.profile &&
-        state.configured_mask() == parameters_.mask &&
+       status_source.boot_id!=device_profile_.limited_boot_epoch) return reject("LIMITED_BOOT");
+    if (state_source.boot_id == status_source.boot_id &&
+        *state.profile_id() == parameters_.profile &&
+        configured_joint_mask(state) == parameters_.mask &&
         std::equal(parameters_.device.begin(), parameters_.device.end(),
-                   state.device_id())) {
-      panel_status_ = status;
-      panel_state_ = state;
+                   state.domain_device_id()->begin())) {
+      panel_status_ = status;panel_status_source_=status_source;
+      panel_state_ = state;panel_state_source_=state_source;
       panel_status_received_us_ = observed->status_received_us;
       panel_state_received_us_ = observed->state_received_us;
     }
-    if(status.boot_epoch()==0 || !status.motion_supported() ||
-       status.core_state()==wire_value(WireCoreState::kFault)) return reject("MOTION");
-    if ((status.session_id()!=0U && status.control_mode()==0U) ||
-       (status.reference_epoch()!=0U && status.reference_kind()==0U) ||
-       (status.real_motion_permitted() != (status.permit_remaining_us()!=0U))) return reject("AUTHORITY");
+    if(status_source.boot_id==0 || !*status.motion_supported() ||
+       *status.core_state()==wire_value(WireCoreState::kFault)) return reject("MOTION");
+    if ((*status.session_id()!=0U && *status.control_mode()==0U) ||
+       (*status.reference_epoch()!=0U && *status.reference_kind()==0U) ||
+       (*status.real_motion_permitted() != (*status.permit_remaining_us()!=0U))) return reject("AUTHORITY");
     const bool releasing=release_stage_.load()!=0;
-    if(enabled_ && (status.boot_epoch()!=port_.identity.boot ||
-       (!releasing && (status.session_id()!=port_.identity.session ||
-                       status.reference_epoch()!=port_.identity.reference_epoch))))
+    if(enabled_ && (status_source.boot_id!=port_.identity.boot ||
+       (!releasing && (*status.session_id()!=port_.identity.session ||
+                       *status.reference_epoch()!=port_.identity.reference_epoch))))
       return reject("AUTHORITY_CHANGED");
-    if(latest_bootstrap_.boot_epoch!=0U && status.boot_epoch()!=latest_bootstrap_.boot_epoch)
+    if(latest_bootstrap_.boot_epoch!=0U && status_source.boot_id!=latest_bootstrap_.boot_epoch)
       return reject("BOOT_CHANGED");
-    if(state.boot_epoch()!=status.boot_epoch() || state.profile_id()!=parameters_.profile ||
-       state.configured_mask()!=parameters_.mask ||
-       !std::equal(parameters_.device.begin(),parameters_.device.end(),state.device_id()))
+    if(state_source.boot_id!=status_source.boot_id || *state.profile_id()!=parameters_.profile ||
+       configured_joint_mask(state)!=parameters_.mask ||
+       !std::equal(parameters_.device.begin(),parameters_.device.end(),state.domain_device_id()->begin()))
       return reject("STATE_IDENTITY");
     /**
      * @brief State年龄用原宿主接收µs；now采样早于刚收到消息时按0年龄。源produced偏移/队列年龄已由DeviceTransport核对，本层不拿ROS时间减设备时间。
      */
     const bool state_fresh=observed->state_received_us!=0U &&
       (now<=observed->state_received_us || now-observed->state_received_us<=state_max_age_us_);
-    const bool state_fault=state.core_state()==wire_value(WireCoreState::kFault);
+    const bool state_fault=*state.core_state()==wire_value(WireCoreState::kFault);
     if(state_fresh && state_fault) return reject("STATE_FAULT");
     /**
      * @brief 运行阶段四元组稳定要求随gate状态收紧：已ready/正在执行时motion不可任意+1；过渡仅允许接口定义的单步，不因新epoch就自动授权。
      */
     if(enabled_ && !releasing && state_fresh &&
        !state_authority_is_valid(
-         {state.boot_epoch(),state.session_id(),state.reference_epoch(),state.motion_epoch()},
+         {state_source.boot_id,*state.session_id(),*state.reference_epoch(),*state.motion_epoch()},
          {port_.identity.boot,port_.identity.session,port_.identity.reference_epoch,
           port_.identity.motion_epoch},state_fault,gate_->ready() || port_.executing))
       return reject("STATE_AUTHORITY_CHANGED");
     const bool released_idle =
-        releasing && observed_release_idle(status, state);
+        releasing && observed_release_idle(status,state,status_source,state_source);
     if (readonly_release_confirmed_ && !released_idle)
       return reject("READONLY_RELEASE_AUTHORITY_CHANGED");
     const bool release_status_fresh=observed->status_received_us!=0U &&
@@ -2205,78 +2212,78 @@ class DeviceActionGate final : public rclcpp::Node {
      * @brief 显式D10捕获原tuple后，仅接受同operation形状的Stopping Status/Idle State有限过渡；这时返回等待而不当身份失联或已释放。
      */
     const auto transition=release_transition_origin_.observation(
-      {status.boot_epoch(),status.session_id(),status.reference_epoch(),status.motion_epoch()},
-      {state.boot_epoch(),state.session_id(),state.reference_epoch(),state.motion_epoch()},
-      status.management_epoch(),state.management_epoch(),
-      status.core_state(),state.core_state(),
+      {status_source.boot_id,*status.session_id(),*status.reference_epoch(),*status.motion_epoch()},
+      {state_source.boot_id,*state.session_id(),*state.reference_epoch(),*state.motion_epoch()},
+      *status.management_epoch(),*state.management_epoch(),
+      *status.core_state(),*state.core_state(),
       release_stage_.load());
     if (release_idle_transition_pending(transition, *observed, now, state_max_age_us_,
             dummy_ref::host::kManualReferenceStatusMaxAgeUs,
             manual_reference_mode_ ? manual_release_reference_ : 0U) &&
-        !status.real_motion_permitted() && status.permit_remaining_us()==0U &&
-        state.freshness_ticket()!=0U &&
-        (state.raw_position_valid_mask() & parameters_.mask)==parameters_.mask) {
+        !*status.real_motion_permitted() && *status.permit_remaining_us()==0U &&
+        *state.freshness_ticket()!=0U &&
+        (raw_position_joint_mask(state) & parameters_.mask)==parameters_.mask) {
       release_transition_pending_=true;
       return false;
     }
     const bool unconfirmed_idle=releasing &&
-      status.core_state()==wire_value(WireCoreState::kUnreferencedIdle) &&
-      state.core_state()==wire_value(WireCoreState::kUnreferencedIdle) && !released_idle;
+      *status.core_state()==wire_value(WireCoreState::kUnreferencedIdle) &&
+      *state.core_state()==wire_value(WireCoreState::kUnreferencedIdle) && !released_idle;
     /**
      * @brief 启动要求双tuple一致；已enabled的持续State由worker/gate核身份，释放则额外要求Status按同state预算fresh及management相同，不借旧Status完成释放。
      */
     const bool coherent=!unconfirmed_idle && (!releasing || release_status_fresh) &&
-      (!releasing || state.management_epoch()==status.management_epoch()) &&
-      state.freshness_ticket()!=0U &&
-      (released_idle || (state.raw_position_valid_mask() & parameters_.mask)==parameters_.mask) &&
-      (releasing ? (state.session_id()==status.session_id() &&
-                    state.reference_epoch()==status.reference_epoch()) :
-                   (enabled_ || bootstrap_authority_coherent(status,state)));
+      (!releasing || *state.management_epoch()==*status.management_epoch()) &&
+      *state.freshness_ticket()!=0U &&
+      (released_idle || (raw_position_joint_mask(state) & parameters_.mask)==parameters_.mask) &&
+      (releasing ? (*state.session_id()==*status.session_id() &&
+                    *state.reference_epoch()==*status.reference_epoch()) :
+                   (enabled_ || bootstrap_authority_coherent(status,state,status_source,state_source)));
     if(!wait_for_observation(*observed,coherent)) {
       port_.diagnostics.detail("DEVICE_BOOTSTRAP_INPUT_WAITING_FOR_COHERENT_OBSERVATION");
       return false;
     }
     if(enabled_ && !releasing) {
-      port_.identity.boot=status.boot_epoch(); port_.identity.session=status.session_id();
-      port_.identity.reference_epoch=status.reference_epoch();
-      if(port_.identity.ticket!=state.freshness_ticket()) {
-        port_.identity.ticket=state.freshness_ticket();
+      port_.identity.boot=status_source.boot_id; port_.identity.session=*status.session_id();
+      port_.identity.reference_epoch=*status.reference_epoch();
+      if(port_.identity.ticket!=*state.freshness_ticket()) {
+        port_.identity.ticket=*state.freshness_ticket();
         if(port_.publishing) dummy_ros_control::set_command_identity(port_.identity);
       }
       /**
        * @brief 实际State与worker排空分别送ActionGate：wire管理成功不含实际位置，两者缺一不能伪造prime/Complete握手。
        */
-      gate_->observe_state(observed->state.data(),observed->state.size(),now);
+      gate_->observe_state(state,state_source,now);
       if(const auto worker=transport_->hold_drain_snapshot()) gate_->observe_hold_drain(*worker,now);
     }
     /**
      * @brief bootstrap快照组合Status的模式/许可/hash与State的motion/管理/ticket；通过上面分阶段门控后发布。enabled过渡不要求两topic每字段同帧，不能将组合值当作跨topic原子事务。
      */
-    latest_bootstrap_={status.boot_epoch(),status.session_id(),status.reference_epoch(),state.motion_epoch(),
-      state.management_epoch(),state.freshness_ticket(),parameters_.profile,parameters_.mask,true,
-      status.motion_supported(),status.control_mode(),status.reference_kind(),status.real_motion_permitted(),
-      status.permit_remaining_us(),status.core_state(),state.core_state()};
-    latest_bootstrap_.run_id=status.run_id();
-    std::copy(std::begin(status.firmware_sha256()),std::end(status.firmware_sha256()),latest_bootstrap_.firmware_sha256.begin());
-    std::copy(std::begin(status.contract_sha256()),std::end(status.contract_sha256()),latest_bootstrap_.contract_sha256.begin());
-    std::copy(std::begin(status.model_sha256()),std::end(status.model_sha256()),latest_bootstrap_.model_sha256.begin());
-    std::copy(std::begin(status.profile_sha256()),std::end(status.profile_sha256()),latest_bootstrap_.profile_sha256.begin());
-    timeline_identity_={status.boot_epoch(),status.session_id(),status.reference_epoch(),
-                        state.motion_epoch(),status.run_id()};
+    latest_bootstrap_={status_source.boot_id,*status.session_id(),*status.reference_epoch(),*state.motion_epoch(),
+      *state.management_epoch(),*state.freshness_ticket(),parameters_.profile,parameters_.mask,true,
+      *status.motion_supported(),*status.control_mode(),*status.reference_kind(),*status.real_motion_permitted(),
+      *status.permit_remaining_us(),*status.core_state(),*state.core_state()};
+    latest_bootstrap_.run_id=*status.run_id();
+    std::copy(status.firmware_sha256()->begin(),status.firmware_sha256()->end(),latest_bootstrap_.firmware_sha256.begin());
+    std::copy(status.contract_sha256()->begin(),status.contract_sha256()->end(),latest_bootstrap_.contract_sha256.begin());
+    std::copy(status.model_sha256()->begin(),status.model_sha256()->end(),latest_bootstrap_.model_sha256.begin());
+    std::copy(status.profile_sha256()->begin(),status.profile_sha256()->end(),latest_bootstrap_.profile_sha256.begin());
+    timeline_identity_={status_source.boot_id,*status.session_id(),*status.reference_epoch(),
+                        *state.motion_epoch(),*status.run_id()};
     timeline_refresh_closure_.reset();
     /**
      * @brief 原run完成需motion_complete/final6、双Hold、下一Begin屏障；启用raw时还核相同终页flush身份。该布尔随后再与双fresh/coherent合取。
      */
-    const bool completed_hold=status.run_id()==timeline_run_id_ &&
-      status.attempt_kind()==1U && status.parent_run_id()==0U &&
-      status.final_state()==6U && status.motion_complete() &&
-      !status.evidence_lost() &&
-      status.core_state()==wire_value(WireCoreState::kHold) &&
-      state.core_state()==wire_value(WireCoreState::kHold) && state.hold_ready() &&
+    const bool completed_hold=*status.run_id()==timeline_run_id_ &&
+      *status.attempt_kind()==1U && *status.parent_run_id()==0U &&
+      *status.final_state()==6U && *status.motion_complete() &&
+      !*status.evidence_lost() &&
+      *status.core_state()==wire_value(WireCoreState::kHold) &&
+      *state.core_state()==wire_value(WireCoreState::kHold) && *state.hold_ready() &&
       transport_->post_complete_begin_ready() &&
       (!transport_->raw_evidence_capture_enabled() ||
        raw_terminal_matches(transport_->raw_terminal_flushed(),
-         status.boot_epoch(),status.session_id(),status.run_id()));
+         status_source.boot_id,*status.session_id(),*status.run_id()));
     const TimelineIdentity canceled_run{goal_boot_,goal_session_,
       goal_before_identity_.reference_epoch,timeline_run_motion_epoch_,timeline_run_id_};
     const auto cancel_terminal=transport_->raw_terminal_flushed();
@@ -2284,7 +2291,7 @@ class DeviceActionGate final : public rclcpp::Node {
     const auto cancel_receipt=gate_->confirmed_cancel_receipt();
     const bool raw_capture=transport_->raw_evidence_capture_enabled();
     const auto raw_failure=transport_->raw_evidence_failure();
-    const bool canceled_hold=timeline_cancel_hold_confirmed(status,state,
+    const bool canceled_hold=timeline_cancel_hold_confirmed(status,state,status_source,state_source,
       {goal_boot_,goal_session_,timeline_identity_.reference_epoch,
        timeline_run_motion_epoch_,timeline_run_id_},
       cancel_terminal,parameters_.mask);
@@ -2295,21 +2302,21 @@ class DeviceActionGate final : public rclcpp::Node {
       active_ && active_->is_canceling() &&
       goal_run_id_!=0U && goal_run_id_==timeline_run_id_;
     const bool canceled_refresh_hold=cancel_gate_ready &&
-      timeline_cancel_refresh_hold_confirmed(status,state,canceled_run,
+      timeline_cancel_refresh_hold_confirmed(status,state,status_source,state_source,canceled_run,
         cancel_terminal,cancel_successor,cancel_receipt,raw_capture,
         raw_failure,parameters_.mask);
     const TimelineIdentity completed_run{goal_boot_,goal_session_,
       goal_before_identity_.reference_epoch,timeline_run_motion_epoch_,timeline_run_id_};
     const bool completed_refresh_hold=goal_run_id_!=0U &&
       goal_run_id_==timeline_run_id_ &&
-      timeline_completed_refresh_hold_confirmed(status,state,completed_run,
+      timeline_completed_refresh_hold_confirmed(status,state,status_source,state_source,completed_run,
         cancel_terminal,cancel_successor,raw_capture,raw_failure,parameters_.mask);
     if(!cancel_refresh_diagnostic_logged_ && timeline_ && timeline_goal_open_ &&
        timeline_after_ && timeline_run_id_!=UINT64_MAX &&
        goal_run_id_!=0U && goal_run_id_==timeline_run_id_ &&
        active_ && active_->is_canceling() &&
-       status.run_id()==timeline_run_id_+1U &&
-       status.core_state()==wire_value(WireCoreState::kHold) &&
+       *status.run_id()==timeline_run_id_+1U &&
+       *status.core_state()==wire_value(WireCoreState::kHold) &&
        !canceled_refresh_hold) {
       cancel_refresh_diagnostic_logged_=true;
       port_.diagnostics.detail(
@@ -2331,16 +2338,16 @@ class DeviceActionGate final : public rclcpp::Node {
         static_cast<unsigned long long>(canceled_run.boot),
         static_cast<unsigned long long>(canceled_run.session),canceled_run.reference_epoch,
         canceled_run.motion_epoch,static_cast<unsigned long long>(goal_run_id_),
-        static_cast<unsigned long long>(status.run_id()),
-        static_cast<unsigned long long>(status.boot_epoch()),
-        static_cast<unsigned long long>(status.session_id()),status.reference_epoch(),
-        status.motion_epoch(),status.core_state(),status.attempt_kind(),
-        static_cast<unsigned long long>(status.parent_run_id()),status.final_state(),
-        status.motion_complete(),status.evidence_lost(),
-        static_cast<unsigned long long>(state.boot_epoch()),
-        static_cast<unsigned long long>(state.session_id()),state.reference_epoch(),
-        state.motion_epoch(),state.management_epoch(),status.management_epoch(),
-        state.core_state(),state.hold_ready(),state.can_submitted_mask(),state.can_sent_mask(),
+        static_cast<unsigned long long>(*status.run_id()),
+        static_cast<unsigned long long>(status_source.boot_id),
+        static_cast<unsigned long long>(*status.session_id()),*status.reference_epoch(),
+        *status.motion_epoch(),*status.core_state(),*status.attempt_kind(),
+        static_cast<unsigned long long>(*status.parent_run_id()),*status.final_state(),
+        *status.motion_complete(),*status.evidence_lost(),
+        static_cast<unsigned long long>(state_source.boot_id),
+        static_cast<unsigned long long>(*state.session_id()),*state.reference_epoch(),
+        *state.motion_epoch(),*state.management_epoch(),*status.management_epoch(),
+        *state.core_state(),*state.hold_ready(),*state.can_submitted_mask(),*state.can_sent_mask(),
         static_cast<unsigned long long>(cancel_terminal.run_id),
         static_cast<unsigned long long>(cancel_terminal.boot_epoch),
         static_cast<unsigned long long>(cancel_terminal.session_id),cancel_terminal.attempt_kind,
@@ -2360,12 +2367,12 @@ class DeviceActionGate final : public rclcpp::Node {
         cancel_successor.chain_valid,cancel_successor.full_six,
         cancel_successor.strict_refresh_successor,
         verified_refresh_successor(cancel_successor,
-          {status.boot_epoch(),status.session_id(),status.reference_epoch(),
-           status.motion_epoch(),status.run_id()}),
+          {status_source.boot_id,*status.session_id(),*status.reference_epoch(),
+           *status.motion_epoch(),*status.run_id()}),
         static_cast<unsigned long long>(cancel_receipt ? cancel_receipt->request_id : 0U),
         static_cast<unsigned long long>(cancel_receipt ? cancel_receipt->operation_id : 0U),
         cancel_receipt.has_value(),raw_capture,raw_failure,release_status_fresh,state_fresh,
-        refresh_observation_coherent(status,state),
+        refresh_observation_coherent(status,state,status_source,state_source),
         static_cast<unsigned long long>(observed->status_received_us),
         static_cast<unsigned long long>(observed->state_received_us),
         static_cast<unsigned long long>(now),static_cast<unsigned>(gate_->terminal()),
@@ -2377,15 +2384,15 @@ class DeviceActionGate final : public rclcpp::Node {
      */
     if(timeline_ && timeline_goal_open_ && timeline_after_ &&
        release_status_fresh && state_fresh &&
-       refresh_observation_coherent(status,state) &&
+       refresh_observation_coherent(status,state,status_source,state_source) &&
        (completed_hold || completed_refresh_hold || canceled_hold || canceled_refresh_hold)) {
       timeline_goal_hold_confirmed_=true;
       timeline_goal_hold_identity_=(completed_refresh_hold || canceled_refresh_hold) ?
-        TimelineIdentity{goal_boot_,goal_session_,status.reference_epoch(),
-          status.motion_epoch(),timeline_run_id_} : timeline_identity_;
+        TimelineIdentity{goal_boot_,goal_session_,*status.reference_epoch(),
+          *status.motion_epoch(),timeline_run_id_} : timeline_identity_;
     }
     if(timeline_ && timeline_goal_open_ && timeline_after_ &&
-       status.run_id()!=timeline_run_id_) {
+       *status.run_id()!=timeline_run_id_) {
       const bool raw_capture_enabled=transport_->raw_evidence_capture_enabled();
       const auto raw_terminal=transport_->raw_terminal_flushed();
       const auto successor_page=transport_->raw_first_page_written();
@@ -2394,14 +2401,14 @@ class DeviceActionGate final : public rclcpp::Node {
       const bool successor_page_verified=raw_capture_enabled &&
         verified_refresh_successor(successor_page,timeline_identity_);
       const bool status_hold=release_status_fresh &&
-        status.core_state()==wire_value(WireCoreState::kHold);
-      const bool observation_coherent=refresh_observation_coherent(status,state);
+        *status.core_state()==wire_value(WireCoreState::kHold);
+      const bool observation_coherent=refresh_observation_coherent(status,state,status_source,state_source);
       const bool state_hold=state_fresh &&
-        state.core_state()==wire_value(WireCoreState::kHold) &&
-        state.hold_ready() && observation_coherent;
-      const bool refresh_status=status.attempt_kind()==1U &&
-        status.parent_run_id()==0U && status.final_state()==0U &&
-        !status.evidence_lost();
+        *state.core_state()==wire_value(WireCoreState::kHold) &&
+        *state.hold_ready() && observation_coherent;
+      const bool refresh_status=*status.attempt_kind()==1U &&
+        *status.parent_run_id()==0U && *status.final_state()==0U &&
+        !*status.evidence_lost();
       /**
        * @brief 返回的是原goal已确认Hold身份，后继run只作为封口证人；最终Succeeded/Canceled/Aborted时间线不得凭新refresh run冒充原目标。
        */
@@ -2415,11 +2422,11 @@ class DeviceActionGate final : public rclcpp::Node {
          */
         if(timeline_refresh_wait_started_us_==0U)
           timeline_refresh_wait_started_us_=observed->status_received_us;
-        const TimelineIdentity candidate{status.boot_epoch(),status.session_id(),
-          status.reference_epoch(),status.motion_epoch(),status.run_id()};
-        const bool refresh_status=status.attempt_kind()==1U && status.parent_run_id()==0U &&
-          status.final_state()==0U && !status.evidence_lost() &&
-          status.core_state()==wire_value(WireCoreState::kHold);
+        const TimelineIdentity candidate{status_source.boot_id,*status.session_id(),
+          *status.reference_epoch(),*status.motion_epoch(),*status.run_id()};
+        const bool refresh_status=*status.attempt_kind()==1U && *status.parent_run_id()==0U &&
+          *status.final_state()==0U && !*status.evidence_lost() &&
+          *status.core_state()==wire_value(WireCoreState::kHold);
         /**
          * @brief 已知同值refresh等待独立State期间保留旧已证goal身份，清当前Hold观察并返回false；原终页和双coherent Hold仍必须最终到齐。
          */
@@ -2472,17 +2479,17 @@ class DeviceActionGate final : public rclcpp::Node {
             successor_page.final,successor_page.evidence_lost,
             successor_page.strict_refresh_successor,successor_page.chain_valid,
             successor_page.full_six,release_status_fresh,state_fresh,observation_coherent,
-            status.core_state(),state.core_state(),
-            status_hold,state_hold,refresh_status,status.attempt_kind(),
-            static_cast<unsigned long long>(status.parent_run_id()),status.final_state(),
-            status.evidence_lost(),status.group_count(),state.hold_ready(),
-            static_cast<unsigned long long>(status.run_id()),
-            static_cast<unsigned long long>(status.boot_epoch()),
-            static_cast<unsigned long long>(status.session_id()),status.reference_epoch(),
-            status.motion_epoch(),status.management_epoch(),
-            static_cast<unsigned long long>(state.boot_epoch()),
-            static_cast<unsigned long long>(state.session_id()),state.reference_epoch(),
-            state.motion_epoch(),state.management_epoch(),
+            *status.core_state(),*state.core_state(),
+            status_hold,state_hold,refresh_status,*status.attempt_kind(),
+            static_cast<unsigned long long>(*status.parent_run_id()),*status.final_state(),
+            *status.evidence_lost(),*status.group_count(),*state.hold_ready(),
+            static_cast<unsigned long long>(*status.run_id()),
+            static_cast<unsigned long long>(status_source.boot_id),
+            static_cast<unsigned long long>(*status.session_id()),*status.reference_epoch(),
+            *status.motion_epoch(),*status.management_epoch(),
+            static_cast<unsigned long long>(state_source.boot_id),
+            static_cast<unsigned long long>(*state.session_id()),*state.reference_epoch(),
+            *state.motion_epoch(),*state.management_epoch(),
             static_cast<unsigned long long>(timeline_goal_hold_identity_.run_id),
             static_cast<unsigned long long>(timeline_goal_hold_identity_.boot),
             static_cast<unsigned long long>(timeline_goal_hold_identity_.session),
@@ -2506,18 +2513,18 @@ class DeviceActionGate final : public rclcpp::Node {
      */
     const bool begin_observed=trusted_begin_observation(
       goal_before_identity_,timeline_identity_,
-      state.core_state()==wire_value(WireCoreState::kRunning),
+      *state.core_state()==wire_value(WireCoreState::kRunning),
       gate_->phase()==Phase::kRunning);
     if(active_ && goal_run_id_==0U && begin_observed)
       goal_run_id_=timeline_identity_.run_id;
-    timeline_status_core_state_=status.core_state();
-    timeline_state_core_state_=state.core_state();
+    timeline_status_core_state_=*status.core_state();
+    timeline_state_core_state_=*state.core_state();
     timeline_hold_observed_=timeline_goal_hold_confirmed_ && state_fresh &&
       release_status_fresh &&
-      refresh_observation_coherent(status,state) &&
-      status.core_state()==wire_value(WireCoreState::kHold) &&
-      state.core_state()==wire_value(WireCoreState::kHold) && state.hold_ready() &&
-      (status.run_id()==timeline_run_id_ || timeline_refresh_closure_.has_value());
+      refresh_observation_coherent(status,state,status_source,state_source) &&
+      *status.core_state()==wire_value(WireCoreState::kHold) &&
+      *state.core_state()==wire_value(WireCoreState::kHold) && *state.hold_ready() &&
+      (*status.run_id()==timeline_run_id_ || timeline_refresh_closure_.has_value());
     if(timeline_ && timeline_goal_open_) {
       if(!timeline_after_ && begin_observed) {
         record_timeline(TimelineEvent::Kind::kAfterBegin,now);
@@ -2529,15 +2536,15 @@ class DeviceActionGate final : public rclcpp::Node {
        * @brief Feedback时间线每个新State序号一条，保存设备各轴feedback_seq与CAN年龄；事件时间用该State原宿主接收锚，而非处理拍刷新。
        */
       if(timeline_after_ && !timeline_terminal_ &&
-         status.run_id()==timeline_run_id_ &&
-         state.state_seq()!=timeline_feedback_state_seq_) {
+         *status.run_id()==timeline_run_id_ &&
+         *state.state_seq()!=timeline_feedback_state_seq_) {
         auto event=timeline_event(TimelineEvent::Kind::kFeedback,observed->state_received_us);
         event.feedback_seq=std::array<std::uint32_t,6>{};
         event.feedback_age_us=std::array<std::uint32_t,6>{};
-        std::copy(std::begin(state.feedback_seq()),std::end(state.feedback_seq()),event.feedback_seq.begin());
-        std::copy(std::begin(state.can_rx_age_us()),std::end(state.can_rx_age_us()),event.feedback_age_us.begin());
+        for(const auto& joint:*state.joints())if(joint.feedback_seq())event.feedback_seq[*joint.joint_id()]=*joint.feedback_seq();
+        for(const auto& joint:*state.joints())if(joint.can_rx_age_us())event.feedback_age_us[*joint.joint_id()]=*joint.can_rx_age_us();
         if(!timeline_->record(event)) evidence_incomplete_=true;
-        timeline_feedback_state_seq_=state.state_seq();
+        timeline_feedback_state_seq_=*state.state_seq();
       }
       if(timeline_terminal_ && !timeline_hold_ && timeline_hold_observed_ &&
          (timeline_identity_.run_id==timeline_run_id_ || timeline_refresh_closure_) &&
@@ -2552,7 +2559,7 @@ class DeviceActionGate final : public rclcpp::Node {
     if (timeline_ && goal_timeline_release_required(timeline_has_goal_) &&
         !readonly_release_confirmed_ &&
         release_stage_.load() == 3 && !timeline_release_recorded_ &&
-        observed_release_idle(status, state)) {
+        observed_release_idle(status,state,status_source,state_source)) {
       const auto receipt=bootstrap_ ? bootstrap_->confirmed_release() : std::nullopt;
       if(receipt) {
         auto event=timeline_event(TimelineEvent::Kind::kRelease,now);
@@ -2578,19 +2585,19 @@ class DeviceActionGate final : public rclcpp::Node {
           manual_reference_->phase() != ManualReferencePhase::kReady) {
         Position raw{}, position{};
         for (std::size_t axis = 0; axis < 6; ++axis) {
-          raw[axis] = state.raw_motor_position_rev()[axis] *
+          raw[axis] = *joint_for_id(state,axis)->raw_motor_position_rev() *
                       6.2831853071795864769 *
                       manual_deployment_->direction[axis] /
                       manual_deployment_->gear_ratio[axis];
-          position[axis] = state.position_rad()[axis];
+          position[axis] = (joint_for_id(state,axis)->position_rad()?*joint_for_id(state,axis)->position_rad():0.0);
         }
         manual_reference_->observe_raw(latest_bootstrap_, raw,
-                                       state.state_seq(),
+                                       *state.state_seq(),
                                        observed->state_received_us);
-        if ((state.position_valid_mask() & parameters_.mask) ==
+        if ((position_valid_joint_mask(state) & parameters_.mask) ==
             parameters_.mask)
           manual_reference_->observe(latest_bootstrap_, position,
-                                     state.state_seq(),
+                                     *state.state_seq(),
                                      observed->state_received_us);
       }
     }
@@ -2598,49 +2605,49 @@ class DeviceActionGate final : public rclcpp::Node {
     const auto gate_phase=gate_->phase();
     const auto gate_terminal=gate_->terminal();
     const bool transport_ready=transport_->ready();
-    const bool authority_coherent=bootstrap_authority_coherent(status,state);
+    const bool authority_coherent=bootstrap_authority_coherent(status,state,status_source,state_source);
     /**
      * @brief 新的RUN续租需真实双Running、同goal/run、端口实际执行且生产最近、transport可用、实际permit与双fresh；不是看到已有session就无限续。
      */
     const RunLeaseEligibility run_lease_inputs{
-      enabled_ && status.core_state()==wire_value(WireCoreState::kRunning),
-      state.core_state()==wire_value(WireCoreState::kRunning),
+      enabled_ && *status.core_state()==wire_value(WireCoreState::kRunning),
+      *state.core_state()==wire_value(WireCoreState::kRunning),
       authority_coherent,
-      active_ && goal_run_id_!=0U && status.run_id()==goal_run_id_,
+      active_ && goal_run_id_!=0U && *status.run_id()==goal_run_id_,
       port_.executing && port_control_ready && gate_phase==Phase::kRunning &&
         gate_terminal==Terminal::kNone,
       last_control_update_us_!=0U && now>=last_control_update_us_ &&
         now-last_control_update_us_<=state_max_age_us_,
-      transport_ready && status.real_motion_permitted() &&
+      transport_ready && *status.real_motion_permitted() &&
         state_fresh && release_status_fresh};
     // 完成冻结可与同轮RUN续租预约相遇；不为Completing授予新续租权限。
-    ManageRequest completion_live;
-    completion_live.set_operation(wire_value(ManageOperation::kComplete));
-    completion_live.set_expected_boot_epoch(status.boot_epoch());
-    completion_live.set_expected_session_id(status.session_id());
-    completion_live.set_expected_reference_epoch(status.reference_epoch());
-    completion_live.set_expected_motion_epoch(state.motion_epoch());
-    completion_live.set_expected_management_epoch(state.management_epoch());
-    completion_live.set_expected_profile_id(status.profile_id());
-    completion_live.set_configured_mask(status.configured_mask());
-    completion_live.set_device_id(status.device_id());
+    auto completion_live=dummy_ref::messages::make_manage_request();
+    completion_live.operation()=wire_value(ManageOperation::COMPLETE_MOTION);
+    completion_live.expected_boot_epoch()=status_source.boot_id;
+    completion_live.expected_session_id()=*status.session_id();
+    completion_live.expected_reference_epoch()=*status.reference_epoch();
+    completion_live.expected_motion_epoch()=*state.motion_epoch();
+    completion_live.expected_management_epoch()=*state.management_epoch();
+    completion_live.expected_profile_id()=*status.profile_id();
+    completion_live.configured_mask()=*status.configured_mask();
+    completion_live.domain_device_id().emplace().assign(status.domain_device_id()->begin(),16U);
     std::uint8_t completion_client[16]{};
     std::copy(parameters_.client.begin(),parameters_.client.end(),completion_client);
-    completion_live.set_client_instance_id(completion_client);
+    completion_live.client_instance_id().emplace().assign(completion_client,16U);
     /**
      * @brief 冻结完成想撤尚未发RUN续租时，额外要求双消息六轴提交/SENT/有效位及gate有界末采样完成意图。此处不让Completing开启新续租。
      */
     const bool completion_ack=run_lease_inputs.status_running && run_lease_inputs.state_running &&
       run_lease_inputs.status_state_coherent && run_lease_inputs.same_goal_run &&
       run_lease_inputs.producer_recent && run_lease_inputs.transport_ready &&
-      status.can_submitted_mask()==parameters_.mask && status.can_sent_mask()==parameters_.mask &&
-      status.can_failed_mask()==0U && state.can_submitted_mask()==parameters_.mask &&
-      state.can_sent_mask()==parameters_.mask && state.can_failed_mask()==0U &&
-      state.position_valid_mask()==parameters_.mask && state.velocity_valid_mask()==parameters_.mask &&
-      state.raw_position_valid_mask()==parameters_.mask &&
-      gate_->bounded_completion_intent(completion_live,state.committed_producer_seq(),now);
+      *status.can_submitted_mask()==parameters_.mask && *status.can_sent_mask()==parameters_.mask &&
+      *status.can_failed_mask()==0U && *state.can_submitted_mask()==parameters_.mask &&
+      *state.can_sent_mask()==parameters_.mask && *state.can_failed_mask()==0U &&
+      position_valid_joint_mask(state)==parameters_.mask && velocity_valid_joint_mask(state)==parameters_.mask &&
+      raw_position_joint_mask(state)==parameters_.mask &&
+      gate_->bounded_completion_intent(completion_live,*state.committed_producer_seq(),now);
     auto cancel_live=completion_live;
-    cancel_live.set_operation(wire_value(ManageOperation::kCancel));
+    cancel_live.operation()=wire_value(ManageOperation::CANCEL_MOTION);
     const bool cancel_intent=run_lease_inputs.status_running && run_lease_inputs.state_running &&
       run_lease_inputs.status_state_coherent && run_lease_inputs.same_goal_run &&
       run_lease_inputs.producer_recent && run_lease_inputs.transport_ready &&
@@ -2690,23 +2697,23 @@ class DeviceActionGate final : public rclcpp::Node {
           static_cast<unsigned long long>(last_control_update_us_),
           static_cast<unsigned long long>(observed->status_received_us),
           static_cast<unsigned long long>(observed->state_received_us),
-          enabled_,static_cast<unsigned>(status.core_state()),
-          static_cast<unsigned>(state.core_state()),authority_coherent,
+          enabled_,static_cast<unsigned>(*status.core_state()),
+          static_cast<unsigned>(*state.core_state()),authority_coherent,
           active_!=nullptr,static_cast<unsigned long long>(goal_run_id_),
-          static_cast<unsigned long long>(status.run_id()),
-          static_cast<unsigned long long>(status.boot_epoch()),
-          static_cast<unsigned long long>(state.boot_epoch()),
-          static_cast<unsigned long long>(status.session_id()),
-          static_cast<unsigned long long>(state.session_id()),
-          static_cast<unsigned>(status.reference_epoch()),
-          static_cast<unsigned>(state.reference_epoch()),
-          static_cast<unsigned>(status.motion_epoch()),
-          static_cast<unsigned>(state.motion_epoch()),
-          static_cast<unsigned>(status.management_epoch()),
-          static_cast<unsigned>(state.management_epoch()),
+          static_cast<unsigned long long>(*status.run_id()),
+          static_cast<unsigned long long>(status_source.boot_id),
+          static_cast<unsigned long long>(state_source.boot_id),
+          static_cast<unsigned long long>(*status.session_id()),
+          static_cast<unsigned long long>(*state.session_id()),
+          static_cast<unsigned>(*status.reference_epoch()),
+          static_cast<unsigned>(*state.reference_epoch()),
+          static_cast<unsigned>(*status.motion_epoch()),
+          static_cast<unsigned>(*state.motion_epoch()),
+          static_cast<unsigned>(*status.management_epoch()),
+          static_cast<unsigned>(*state.management_epoch()),
           port_.executing,port_control_ready,static_cast<unsigned>(gate_phase),
           static_cast<unsigned>(gate_terminal),transport_ready,
-          status.real_motion_permitted(),release_status_fresh,state_fresh);
+          *status.real_motion_permitted(),release_status_fresh,state_fresh);
       }
       bootstrap_->invalidate("RUN_LEASE_PRODUCER_LOST");
     }
@@ -2718,9 +2725,9 @@ class DeviceActionGate final : public rclcpp::Node {
       explicit_operation_available_=false;
       const auto operation=static_cast<ManageOperation>(requested);
       int queued_release=1;
-      if(operation!=ManageOperation::kDisableAndRelease ||
+      if(operation!=ManageOperation::DISABLE_AND_RELEASE ||
          release_stage_.compare_exchange_strong(queued_release,2)) {
-        if(operation==ManageOperation::kDisableAndRelease) {
+        if(operation==ManageOperation::DISABLE_AND_RELEASE) {
           port_.disable(); port_.cancel();
         }
         const bool renewal_binding_ready=!renewal_running_.load() || run_lease_active;
@@ -2728,15 +2735,15 @@ class DeviceActionGate final : public rclcpp::Node {
          * @brief 显式D10/续租/普通bootstrap操作分开进入对应状态机；失败清各自预约并封锁，SetPermit成功受理另建立一次性传播latch。
          */
         const bool started =
-            operation == ManageOperation::kDisableAndRelease
+            operation == ManageOperation::DISABLE_AND_RELEASE
                 ? (manual_reference_mode_ ? (manual_release_waiting_ = true)
                                           : begin_release(now))
-            : operation == ManageOperation::kRenewLease
+            : operation == ManageOperation::RENEW_LEASE
                 ? (renewal_binding_ready &&
                    bootstrap_->start_renew_lease(latest_bootstrap_,
                                                  requested_lease_us_, now))
                 : ((!manual_explicit_permit_restart_.exchange(false) ||
-                    (operation==ManageOperation::kSetPermit && !active_ &&
+                    (operation==ManageOperation::INSTALL_PERMIT && !active_ &&
                      !manual_cancel_before_release_ && !renewal_reserved_.load() &&
                      observation_ready_.load() && !observation_lost_ &&
                      readonly_release_samples_fresh(panel_status_received_us_,panel_state_received_us_,now,state_max_age_us_) &&
@@ -2744,7 +2751,7 @@ class DeviceActionGate final : public rclcpp::Node {
                    bootstrap_->start_operation(latest_bootstrap_,operation,now));
         if(!started) {
           port_.diagnostics.detail("EXPLICIT_MANAGEMENT_OPERATION_REJECTED operation=%d",requested);
-          if(operation==ManageOperation::kRenewLease) {
+          if(operation==ManageOperation::RENEW_LEASE) {
             bootstrap_->invalidate("LEASE_RENEWAL_REJECTED");
             clear_failed_lease_renewal(management_request_,busy_,renewal_reserved_,
                                        renewal_started_,explicit_renewal_status_,
@@ -2752,19 +2759,19 @@ class DeviceActionGate final : public rclcpp::Node {
             renewal_running_=false;
             renew_available_=false; admission_prerequisites_=false; ready_=false;
           }
-          if (operation == ManageOperation::kSetPermit &&
+          if (operation == ManageOperation::INSTALL_PERMIT &&
               manual_reference_mode_)
             bootstrap_->invalidate("MANUAL_PERMIT_RESTORE_REJECTED");
-          if(operation==ManageOperation::kDisableAndRelease) release_stage_=4;
-        } else if(operation==ManageOperation::kRenewLease) renewal_started_=true;
-        else if(operation==ManageOperation::kSetPermit)
+          if(operation==ManageOperation::DISABLE_AND_RELEASE) release_stage_=4;
+        } else if(operation==ManageOperation::RENEW_LEASE) renewal_started_=true;
+        else if(operation==ManageOperation::INSTALL_PERMIT)
           permit_refresh_latch_.begin(latest_bootstrap_.boot_epoch,latest_bootstrap_.session_id);
       }
     }
-    port_.identity.boot=status.boot_epoch(); port_.identity.session=status.session_id();
-    port_.identity.reference_epoch=status.reference_epoch();
-    if(port_.identity.ticket!=state.freshness_ticket()) {
-      port_.identity.ticket=state.freshness_ticket();
+    port_.identity.boot=status_source.boot_id; port_.identity.session=*status.session_id();
+    port_.identity.reference_epoch=*status.reference_epoch();
+    if(port_.identity.ticket!=*state.freshness_ticket()) {
+      port_.identity.ticket=*state.freshness_ticket();
       if(port_.publishing) dummy_ros_control::set_command_identity(port_.identity);
     }
     enable_available_ =
@@ -2786,15 +2793,15 @@ class DeviceActionGate final : public rclcpp::Node {
           (bootstrap_->ready() || bootstrap_->operation_complete()) &&
           transport_->ready()));
     single_enable_available_=!releasing && !enabled_ && bootstrap_ && bootstrap_->operation_complete() &&
-      bootstrap_->last_operation()==ManageOperation::kSetPermit && transport_->ready();
+      bootstrap_->last_operation()==ManageOperation::INSTALL_PERMIT && transport_->ready();
     if(enable_available_ && enable_requested_.exchange(false)) bootstrap_->start(latest_bootstrap_,now);
     const bool lease_hold=enabled_ &&
-      status.core_state()==wire_value(WireCoreState::kHold) &&
-      state.core_state()==wire_value(WireCoreState::kHold) && state.hold_ready() &&
-      status.session_id()==state.session_id() &&
-      status.reference_epoch()==state.reference_epoch() &&
-      status.motion_epoch()==state.motion_epoch() &&
-      status.management_epoch()==state.management_epoch();
+      *status.core_state()==wire_value(WireCoreState::kHold) &&
+      *state.core_state()==wire_value(WireCoreState::kHold) && *state.hold_ready() &&
+      *status.session_id()==*state.session_id() &&
+      *status.reference_epoch()==*state.reference_epoch() &&
+      *status.motion_epoch()==*state.motion_epoch() &&
+      *status.management_epoch()==*state.management_epoch();
     /**
      * @brief Hold续租要求下一Begin屏障及空闲；RUN续租必须原始生产资格，并都处在Bootstrap有限lead/reserve窗口。预约本身先关ready，防goal与续租抢单槽。
      */
@@ -2811,7 +2818,7 @@ class DeviceActionGate final : public rclcpp::Node {
      */
     release_available_ = release_operation_available(
         {releasing, release_status_fresh && state_fresh,
-         state.management_epoch() == status.management_epoch(),
+         *state.management_epoch() == *status.management_epoch(),
          (device_profile_.functional_development_basis ||
           manual_reference_mode_),
          enabled_, gate_->ready(), gate_->permit_refresh_allowed(),
@@ -2819,17 +2826,17 @@ class DeviceActionGate final : public rclcpp::Node {
          bootstrap_ &&
              (bootstrap_->ready() || bootstrap_->operation_complete() ||
               (manual_reference_mode_ && bootstrap_->release_slot_available())),
-         status.core_state() == wire_value(WireCoreState::kHold),
-         state.core_state() == wire_value(WireCoreState::kHold),
+         *status.core_state() == wire_value(WireCoreState::kHold),
+         *state.core_state() == wire_value(WireCoreState::kHold),
          transport_->ready(), manual_reference_mode_,
-         status.session_id() != 0U &&
-             status.session_id() == expected_session_id_,
-         bootstrap_authority_coherent(status, state) &&
-             ((status.core_state() == wire_value(WireCoreState::kHold) &&
-               state.core_state() == wire_value(WireCoreState::kHold)) ||
-              (status.core_state() ==
-                   (status.reference_epoch() == 0U ? 1U : 2U) &&
-               state.core_state() == status.core_state()))});
+         *status.session_id() != 0U &&
+             *status.session_id() == expected_session_id_,
+         bootstrap_authority_coherent(status,state,status_source,state_source) &&
+             ((*status.core_state() == wire_value(WireCoreState::kHold) &&
+               *state.core_state() == wire_value(WireCoreState::kHold)) ||
+              (*status.core_state() ==
+                   (*status.reference_epoch() == 0U ? 1U : 2U) &&
+               *state.core_state() == *status.core_state()))});
     return true;
   }
   /**
@@ -2948,7 +2955,7 @@ class DeviceActionGate final : public rclcpp::Node {
     if(enabled_ && permit_refresh_latch_.eligible(latest_bootstrap_.boot_epoch,
                                                  latest_bootstrap_.session_id) &&
        bootstrap_->operation_complete() &&
-       bootstrap_->last_operation()==ManageOperation::kSetPermit) {
+       bootstrap_->last_operation()==ManageOperation::INSTALL_PERMIT) {
       if(const auto authorization=bootstrap_->authorization())
         if(gate_->renew_permit(*authorization))
           permit_refresh_latch_.applied();
@@ -3131,16 +3138,16 @@ class DeviceActionGate final : public rclcpp::Node {
       transport_->ready() && transport_->raw_evidence_failure()==0U && bootstrap_->release_slot_available() &&
       manual_reference_->phase()==ManualReferencePhase::kReady &&
       readonly_release_samples_fresh(panel_status_received_us_,panel_state_received_us_,now,state_max_age_us_) &&
-      bootstrap_authority_coherent(panel_status_,panel_state_) &&
-      expected_session_id_!=0 && panel_status_.session_id()==expected_session_id_ &&
-      panel_status_.reference_epoch()==manual_reference_->qualified_reference_epoch() &&
-      panel_status_.core_state()==4U && panel_state_.core_state()==4U && panel_state_.hold_ready();
+      bootstrap_authority_coherent(panel_status_,panel_state_,panel_status_source_,panel_state_source_) &&
+      expected_session_id_!=0 && *panel_status_.session_id()==expected_session_id_ &&
+      *panel_status_.reference_epoch()==manual_reference_->qualified_reference_epoch() &&
+      *panel_status_.core_state()==4U && *panel_state_.core_state()==4U && *panel_state_.hold_ready();
     const bool sealed=timeline_goal_hold_confirmed_ && timeline_hold_ &&
       (!timeline_ || timeline_->drained()) && transport_->post_complete_begin_ready() &&
       transport_->raw_evidence_capture_enabled() &&
       raw_terminal_matches(transport_->raw_terminal_flushed(),goal_boot_,goal_session_,goal_run_id_);
     return manual_task_permit_decision(eligible,gate_->ready(),
-      panel_status_.real_motion_permitted(),panel_status_.permit_remaining_us(),
+      *panel_status_.real_motion_permitted(),*panel_status_.permit_remaining_us(),
       gate_->permit_refresh_allowed(),sealed);
   }
 
@@ -3273,15 +3280,15 @@ class DeviceActionGate final : public rclcpp::Node {
         const auto receipt=transport_->raw_terminal_flushed();
         const auto cleanup=transport_->raw_cleanup_observation();
         const auto sampled_after_read=management_now_us();
-        wire::DummyDeviceStatusV2 cleanup_status{};
-        const bool status_decoded=wire::DummyDeviceStatusV2Codec::decode(cleanup.status.data(),cleanup.status.size(),&cleanup_status)==wire::CodecResult::kOk;
+        const auto& cleanup_status=cleanup.status;
+        const bool status_decoded=message_fields_present(cleanup_status);
         DeviceStatusIdentity cleanup_identity{};
         if(status_decoded) {
-          std::copy(std::begin(cleanup_status.contract_sha256()),std::end(cleanup_status.contract_sha256()),cleanup_identity.contract_hash.begin());
-          std::copy(std::begin(cleanup_status.model_sha256()),std::end(cleanup_status.model_sha256()),cleanup_identity.model_hash.begin());
-          std::copy(std::begin(cleanup_status.profile_sha256()),std::end(cleanup_status.profile_sha256()),cleanup_identity.profile_hash.begin());
-          std::copy(std::begin(cleanup_status.compiled_policy_sha256()),std::end(cleanup_status.compiled_policy_sha256()),cleanup_identity.policy_hash.begin());
-          std::copy(std::begin(cleanup_status.firmware_sha256()),std::end(cleanup_status.firmware_sha256()),cleanup_identity.firmware_hash.begin());
+          std::copy(cleanup_status.contract_sha256()->begin(),cleanup_status.contract_sha256()->end(),cleanup_identity.contract_hash.begin());
+          std::copy(cleanup_status.model_sha256()->begin(),cleanup_status.model_sha256()->end(),cleanup_identity.model_hash.begin());
+          std::copy(cleanup_status.profile_sha256()->begin(),cleanup_status.profile_sha256()->end(),cleanup_identity.profile_hash.begin());
+          std::copy(cleanup_status.compiled_policy_sha256()->begin(),cleanup_status.compiled_policy_sha256()->end(),cleanup_identity.policy_hash.begin());
+          std::copy(cleanup_status.firmware_sha256()->begin(),cleanup_status.firmware_sha256()->end(),cleanup_identity.firmware_hash.begin());
         }
         if(transport_->raw_evidence_capture_enabled() && transport_->raw_evidence_failure()==0U && status_decoded &&
            status_matches_bundle_identity(device_profile_,cleanup_identity) &&
@@ -3577,13 +3584,14 @@ class DeviceActionGate final : public rclcpp::Node {
                 manual_request_reference_ = 0;
   bool manual_request_reuse_ = false;
   std::string manual_error_;
-  wire::DummyDeviceStatusV2 panel_status_;
-  wire::DummyJointStateV2 panel_state_;
+  dummy_ref::messages::Status panel_status_;
+  dummy_ref::messages::State panel_state_;
+  dp::comm::SourceId panel_status_source_{},panel_state_source_{};
   std::uint64_t panel_status_received_us_ = 0, panel_state_received_us_ = 0;
   std::uint64_t panel_status_published_us_ = 0, panel_state_published_us_ = 0;
-  rclcpp::Publisher<dpsdk_interfaces::msg::DummyDeviceStatusV2>::SharedPtr
+  rclcpp::Publisher<dpsdk_interfaces::msg::DummyDeviceStatus>::SharedPtr
       panel_status_publisher_;
-  rclcpp::Publisher<dpsdk_interfaces::msg::DummyJointStateV2>::SharedPtr
+  rclcpp::Publisher<dpsdk_interfaces::msg::DummyJointState>::SharedPtr
       panel_state_publisher_;
   rclcpp::TimerBase::SharedPtr panel_feedback_timer_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr

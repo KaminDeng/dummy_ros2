@@ -9,6 +9,8 @@
 #include <string>
 #include "dummy_motion_client/action_gate.hpp"
 #include "dummy_motion_client/management_client.hpp"
+#include "dummy_ros_control/message_presence.hpp"
+#include "dummy_ros_control/device_management_channel.hpp"
 namespace dummy_motion_client {
 /**
  * @brief 明确端点、16字节设备/客户端ID、profile和配置mask；mask仅1或63，参数校验不等同在线能力bootstrap。
@@ -20,20 +22,14 @@ struct DpManagementParameters {
   std::uint8_t mask=0;
 };
 /**
- * @brief State/Status拥有字节副本及宿主接收µs；rejected_ack_*为设备拒绝独立水位。raw_cleanup_producer_valid仅清理lane源时序可信，不能给正常控制准入。
+ * @brief State/Status直接使用同一个Owned+Source交接容器及宿主接收µs；rejected_ack_*为设备拒绝独立水位。非零state_received_us表示清理lane源时序可信，不能给正常控制准入。
  */
-struct DeviceObservation {
-  std::vector<std::uint8_t> state, status;
-  std::uint64_t state_received_us=0, status_received_us=0;
-  std::uint64_t rejected_ack_boot_epoch=0, rejected_ack_session_id=0, rejected_ack_received_us=0;
-  std::uint32_t rejected_ack_reference_epoch=0, rejected_ack_motion_epoch=0,
-                rejected_ack_sequence=0;
-  bool raw_cleanup_producer_valid=false;
-};
+using DeviceObservation=dummy_ros_control::DeviceManagementObservation;
 /** @brief
- * 独立worker收到的原页codec字节及原Host接收微秒，不含身份/验链/释放裁决。 */
+ * 独立worker收到的实际Owned证据页、Source及原Host接收微秒，不含身份/验链/释放裁决。 */
 struct RawAttemptEvidence {
-  std::vector<std::uint8_t> bytes;
+  dummy_ref::messages::Evidence value{};
+  dp::comm::SourceId source{};
   std::uint64_t received_us = 0U;
 };
 /**
@@ -118,7 +114,6 @@ inline bool raw_fault_cleanup_matches(const RawTerminalIdentity &terminal,const 
     std::uint64_t boot,std::uint64_t session,std::uint64_t run,std::uint32_t active_epoch,
     std::uint32_t profile,std::uint8_t mask,const std::array<std::uint8_t,16> &device,std::uint64_t now,
     std::uint64_t state_max_age_us=250000U) noexcept {
-  namespace wire=dummy_wire;
   if(!raw_first_page_matches(first,boot,session,run,terminal.attempt_motion_epoch) || !first.chain_valid ||
      !first.full_six || !first.strict_refresh_successor || first.evidence_lost || first.attempt_kind!=1U || first.category!=1U ||
      first.evidence_seq!=0U || !first.final || first.expected_mask!=63U || first.submitted_mask!=63U || first.sent_mask!=63U || first.failed_mask!=0U)return false;
@@ -131,33 +126,31 @@ inline bool raw_fault_cleanup_matches(const RawTerminalIdentity &terminal,const 
      active_epoch-terminal.attempt_motion_epoch>1U || terminal.fault_stop_motion_epoch!=active_epoch+1U ||
      terminal.terminal_group_count==0U || !terminal.terminal_received_us ||
      !std::any_of(terminal.terminal_chain.begin(),terminal.terminal_chain.end(),[](auto x){return x!=0U;}))return false;
-  if(!observation.raw_cleanup_producer_valid || !observation.state_received_us || !observation.status_received_us ||
+  if(!observation.state_received_us || !observation.status_received_us ||
      observation.state_received_us<terminal.terminal_received_us || observation.status_received_us<terminal.terminal_received_us ||
      observation.state_received_us>now || observation.status_received_us>now ||
      now-observation.state_received_us>state_max_age_us || now-observation.status_received_us>1000000U)return false;
-  wire::DummyJointStateV2 state{};wire::DummyDeviceStatusV2 status{};
-  if(wire::DummyJointStateV2Codec::decode(observation.state.data(),observation.state.size(),&state)!=wire::CodecResult::kOk ||
-     wire::DummyDeviceStatusV2Codec::decode(observation.status.data(),observation.status.size(),&status)!=wire::CodecResult::kOk)return false;
-  if(state.schema_major()!=2U || state.schema_minor()!=dummy_wire_schema::kSchemaMinor || status.schema_major()!=2U || status.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
-     state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=0U || status.session_id()!=0U ||
-     state.reference_epoch()!=0U || status.reference_epoch()!=0U || state.core_state()!=9U || status.core_state()!=9U ||
-     state.motion_epoch()!=terminal.fault_stop_motion_epoch || status.motion_epoch()!=terminal.fault_stop_motion_epoch ||
-     state.management_epoch()!=status.management_epoch() || state.profile_id()!=profile || status.profile_id()!=profile ||
-     state.configured_mask()!=mask || status.configured_mask()!=mask ||
-     !std::equal(device.begin(),device.end(),state.device_id()) || !std::equal(device.begin(),device.end(),status.device_id()) ||
-     status.run_id()!=run || status.attempt_id()!=run || status.attempt_kind()!=1U || status.parent_run_id()!=0U ||
-     status.final_state()!=4U || status.evidence_lost() || status.motion_complete() || !status.release_committed() ||
-     status.real_motion_permitted() || status.permit_remaining_us()!=0U ||
-     status.failure_source()!=terminal.first_failure_source || status.failure_axis_mask()!=mask ||
-     status.group_count()!=terminal.terminal_group_count)return false;
-  const bool status_has_chain=std::any_of(std::begin(status.evidence_chain_sha256()),std::end(status.evidence_chain_sha256()),[](auto b){return b!=0U;});
+  const auto& state=observation.state;const auto& status=observation.status;
+  if(!dummy_ros_control::message_fields_present(state) || !dummy_ros_control::message_fields_present(status))return false;
+  if(     observation.state_source.boot_id!=boot || observation.status_source.boot_id!=boot || (*state.session_id())!=0U || (*status.session_id())!=0U ||
+     (*state.reference_epoch())!=0U || (*status.reference_epoch())!=0U || (*state.core_state())!=9U || (*status.core_state())!=9U ||
+     (*state.motion_epoch())!=terminal.fault_stop_motion_epoch || (*status.motion_epoch())!=terminal.fault_stop_motion_epoch ||
+     (*state.management_epoch())!=(*status.management_epoch()) || (*state.profile_id())!=profile || (*status.profile_id())!=profile ||
+     dummy_ros_control::configured_joint_mask(state)!=mask || (*status.configured_mask())!=mask ||
+     !std::equal(device.begin(),device.end(),(*state.domain_device_id()).begin()) || !std::equal(device.begin(),device.end(),(*status.domain_device_id()).begin()) ||
+     (*status.run_id())!=run || (*status.attempt_id())!=run || (*status.attempt_kind())!=1U || (*status.parent_run_id())!=0U ||
+     (*status.final_state())!=4U || (*status.evidence_lost()) || (*status.motion_complete()) || !(*status.release_committed()) ||
+     (*status.real_motion_permitted()) || (*status.permit_remaining_us())!=0U ||
+     (*status.failure_source())!=terminal.first_failure_source || (*status.failure_axis_mask())!=mask ||
+     (*status.group_count())!=terminal.terminal_group_count)return false;
+  const bool status_has_chain=std::any_of(std::begin((*status.evidence_chain_sha256())),std::end((*status.evidence_chain_sha256())),[](auto b){return b!=0U;});
   // 当前MCU session清零后的Motion fault状态不导出chain；权威始终是上方完整验证+真实flush的原terminal。
   // 非零Status chain绝不允许不匹配；零只在上述完整fault4/root/epoch/clearAuthority同shape下成立。
-  if(status_has_chain && !std::equal(terminal.terminal_chain.begin(),terminal.terminal_chain.end(),status.evidence_chain_sha256()))return false;
-  return std::equal(terminal.identity_hashes[0].begin(),terminal.identity_hashes[0].end(),status.contract_sha256()) &&
-    std::equal(terminal.identity_hashes[1].begin(),terminal.identity_hashes[1].end(),status.model_sha256()) &&
-    std::equal(terminal.identity_hashes[2].begin(),terminal.identity_hashes[2].end(),status.profile_sha256()) &&
-    std::equal(terminal.identity_hashes[3].begin(),terminal.identity_hashes[3].end(),status.firmware_sha256());
+  if(status_has_chain && !std::equal(terminal.terminal_chain.begin(),terminal.terminal_chain.end(),(*status.evidence_chain_sha256()).begin()))return false;
+  return std::equal(terminal.identity_hashes[0].begin(),terminal.identity_hashes[0].end(),(*status.contract_sha256()).begin()) &&
+    std::equal(terminal.identity_hashes[1].begin(),terminal.identity_hashes[1].end(),(*status.model_sha256()).begin()) &&
+    std::equal(terminal.identity_hashes[2].begin(),terminal.identity_hashes[2].end(),(*status.profile_sha256()).begin()) &&
+    std::equal(terminal.identity_hashes[3].begin(),terminal.identity_hashes[3].end(),(*status.firmware_sha256()).begin());
 }
 
 /**
@@ -293,15 +286,16 @@ class ReleaseTransitionOrigin {
  * @return bool；release_committed来自Status。
  */
 template <typename Status, typename State>
-bool released_idle_status_confirmed(const Status &status, const State &state) noexcept {
-  return status.boot_epoch()!=0U && status.boot_epoch()==state.boot_epoch() &&
-    status.motion_epoch()==state.motion_epoch() &&
-    status.management_epoch()==state.management_epoch() &&
-    status.core_state()==1U && state.core_state()==1U &&
-    status.session_id()==0U && state.session_id()==0U &&
-    status.reference_epoch()==0U && state.reference_epoch()==0U &&
-    status.release_committed() && !status.real_motion_permitted() &&
-    status.permit_remaining_us()==0U;
+bool released_idle_status_confirmed(const Status &status, const State &state,
+    const dp::comm::SourceId& status_source,const dp::comm::SourceId& state_source) noexcept {
+  return status_source.boot_id!=0U && status_source.boot_id==state_source.boot_id &&
+    (*status.motion_epoch())==(*state.motion_epoch()) &&
+    (*status.management_epoch())==(*state.management_epoch()) &&
+    (*status.core_state())==1U && (*state.core_state())==1U &&
+    (*status.session_id())==0U && (*state.session_id())==0U &&
+    (*status.reference_epoch())==0U && (*state.reference_epoch())==0U &&
+    (*status.release_committed()) && !(*status.real_motion_permitted()) &&
+    (*status.permit_remaining_us())==0U;
 }
 /**
  * @brief manual释放保留同boot绝对参考的双Idle形状。
@@ -311,17 +305,18 @@ bool released_idle_status_confirmed(const Status &status, const State &state) no
 template <typename Status, typename State>
 bool retained_reference_released_idle_observation(
     const Status &status, const State &state,
-    std::uint32_t expected_reference) noexcept {
-  return expected_reference != 0U && status.boot_epoch() != 0U &&
-         status.boot_epoch() == state.boot_epoch() &&
-         status.motion_epoch() == state.motion_epoch() &&
-         status.management_epoch() == state.management_epoch() &&
-         status.core_state() == 2U && state.core_state() == 2U &&
-         status.session_id() == 0U && state.session_id() == 0U &&
-         status.reference_epoch() == expected_reference &&
-         state.reference_epoch() == expected_reference &&
-         status.release_committed() && !status.real_motion_permitted() &&
-         status.permit_remaining_us() == 0U;
+    std::uint32_t expected_reference,const dp::comm::SourceId& status_source,
+    const dp::comm::SourceId& state_source) noexcept {
+  return expected_reference != 0U && status_source.boot_id != 0U &&
+         status_source.boot_id == state_source.boot_id &&
+         (*status.motion_epoch()) == (*state.motion_epoch()) &&
+         (*status.management_epoch()) == (*state.management_epoch()) &&
+         (*status.core_state()) == 2U && (*state.core_state()) == 2U &&
+         (*status.session_id()) == 0U && (*state.session_id()) == 0U &&
+         (*status.reference_epoch()) == expected_reference &&
+         (*state.reference_epoch()) == expected_reference &&
+         (*status.release_committed()) && !(*status.real_motion_permitted()) &&
+         (*status.permit_remaining_us()) == 0U;
 }
 /**
  * @brief 只容许明确释放stage2时的Status Stopping/State Idle乱序过渡。
@@ -476,7 +471,7 @@ class DpManagementTransport final : public ManagementTransport {
       std::uint64_t session,std::uint32_t reference) const noexcept;
   /**
    * @brief 读取writer写出后的故障清理原始观测。
-   * raw_cleanup_producer_valid由非零可信State接收锚导出；此lane不恢复正常admission/控制资格。
+   * 可信State接收锚直接保留原接收时刻；此lane不恢复正常admission/控制资格。
    * @return DeviceObservation值；只在共享模式可用，默认空不可当有效状态。
    */
   DeviceObservation raw_cleanup_observation() const noexcept;
@@ -492,7 +487,7 @@ class DpManagementTransport final : public ManagementTransport {
    * 匿名vector为原codec请求。主槽有未取消请求时拒绝，不排无界队列；锁忙admission最多100ms、2ms退避/50次，owner/ready失效或槽被占则失败。返回句柄不是设备Received，销毁只取消本地等待。
    * @return 唯一句柄或空；共享主锁忙时可返回尚在有限admission的SharedHandle。
    */
-  std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &) override;
+  std::unique_ptr<RequestHandle> send(const ManageRequest &) override;
   /**
    * @brief 共享模式从同worker序号空间预留，独立模式保持建议值。
    * @param proposed 建议序号。

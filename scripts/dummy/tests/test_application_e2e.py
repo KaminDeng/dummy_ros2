@@ -14,6 +14,7 @@ import struct
 from time import perf_counter
 
 import pytest
+from scripts.dummy.tests.current_root_fixture import wire,replace as replace_root,chain as chain_root,chain_hash,previous_hash,canonical,corrupt_chain,PRODUCER_SOURCE,REQUESTER_SOURCE
 
 
 MODULE = Path(__file__).resolve().parents[1] / "application_e2e.py"
@@ -47,10 +48,9 @@ def manage(kind, when, *, operation=0, request_id=1, run=0, session=3,
            queried_operation_id=0, motion_epoch=0, expected_motion_epoch=0,
            request_seq=None,
            motion_complete=None, release_committed=None):
-    name = "DummyManageV2Request" if kind == 4 else "DummyManageV2Response"
-    raw = bytearray(LAYOUT["payloads"][name]["encoded_size"])
+    name = "DummyManageRequest" if kind == 4 else "DummyManageResponse"
     values = {"schema_major": 2, "schema_minor": 5, "client_instance_id": client,
-              "device_id": "22" * 16, "request_id": request_id,
+              "domain_device_id": "22" * 16, "request_id": request_id,
               "request_seq": request_id if request_seq is None else request_seq,
               "operation": operation,
               "queried_operation_id": queried_operation_id,
@@ -65,19 +65,11 @@ def manage(kind, when, *, operation=0, request_id=1, run=0, session=3,
                                    if release_committed is None else release_committed,
               "boot_epoch": 2, "session_id": session, "profile_id": 201,
               "run_id": run, "motion_epoch": motion_epoch}
-    codes = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
-             "float64": "d", "bool": "B"}
-    for field in LAYOUT["payloads"][name]["fields"]:
-        value = values.get(field["name"])
-        if value is None:
-            continue
-        if field["count"] > 1:
-            value = list(bytes.fromhex(value) if isinstance(value, str) else value)
-        else:
-            value = [value]
-        struct.pack_into("<" + codes[field["type"]] * field["count"], raw,
-                         field["offset"], *value)
-    return {"kind": kind, "when": when, "boot": 2,
+    from scripts.dummy import selected_protocol as protocol
+    allowed={field['name'] for field in protocol._reader().fields(protocol._type(name))}
+    raw=wire(name,**{key:value for key,value in values.items() if key in allowed})
+    source=REQUESTER_SOURCE if kind==4 else PRODUCER_SOURCE
+    return {"kind": kind, "when": when, "boot": source["boot_id"], "source":dict(source),
             "session": 3 if kind == 4 else session,
             "run": 0 if kind == 4 else run,
             "seq": (request_id if request_seq is None else request_seq)
@@ -118,26 +110,19 @@ def pages(identity, *, run, session, boot=2, epoch=2, kind=1, parent=0,
     result = []
     for seq in range(len(group_ids) + 1):
         terminal = seq == len(group_ids)
-        raw = bytearray(372)
-        struct.pack_into("<HHQIQII", raw, 0, 2, 5, run, seq,
-                         0 if terminal else group_ids[seq], 0 if terminal else seq + 1,
-                         (epoch if terminal_epoch is None else terminal_epoch) if terminal
-                         else group_epochs[seq])
-        raw[32:38] = bytes((4, 0, 0, 0, 0, 1)) if terminal else bytes(
-            (categories[seq], 63, 63, 63, 0, 1))
-        if not terminal and categories[seq] == 2:
-            struct.pack_into("<H", raw, 38, safety_failure_source)
-        struct.pack_into("<IQB QBBB H", raw, 281,
-                         len(group_ids) if terminal else group_counts[seq],
-                         run if attempt_id is None else attempt_id, kind, parent,
-                         int(terminal and final_state == 6),
-                         int(terminal and final_state in (2, 8)),
-                         final_state if terminal else 0, 0)
-        raw[307:339] = previous
-        digest = hashlib.sha256(previous + raw[:307] + raw[371:372]).digest()
-        raw[339:371] = digest
-        result.append({"raw_hex": raw.hex(), "boot_epoch": boot, "session_id": session})
-        previous = digest
+        raw=wire("DummyAttemptEvidence",run_id=run,evidence_seq=seq,
+            group_id=0 if terminal else group_ids[seq],producer_seq=0 if terminal else seq+1,
+            motion_epoch=(epoch if terminal_epoch is None else terminal_epoch) if terminal else group_epochs[seq],
+            category=4 if terminal else categories[seq],expected_mask=0 if terminal else 63,
+            submitted_mask=0 if terminal else 63,sent_mask=0 if terminal else 63,failed_mask=0,final=1,
+            first_failure_source=safety_failure_source if not terminal and categories[seq]==2 else 0,
+            group_count=len(group_ids) if terminal else group_counts[seq],attempt_id=run if attempt_id is None else attempt_id,
+            attempt_kind=kind,parent_run_id=parent,motion_complete=terminal and final_state==6,
+            release_committed=terminal and final_state in (2,8),final_state=final_state if terminal else 0)
+        raw=chain_root(raw,previous);digest=chain_hash(raw)
+        result.append({"raw_hex":raw.hex(),"boot_epoch":boot,"session_id":session,
+                       "source":{**PRODUCER_SOURCE,'boot_id':boot}})
+        previous=digest
     return result
 
 
@@ -149,7 +134,9 @@ def evidence():
     identity = {name: "11" * width for name, width in
                 (("client_id", 16), ("contract_hash", 32), ("model_hash", 32),
                  ("profile_hash", 32), ("firmware_hash", 32))}
-    identity["device_id"] = "22" * 16
+    identity["domain_device_id"] = "22" * 16
+    identity["producer_source"] = dict(PRODUCER_SOURCE)
+    identity["requester_source"] = dict(REQUESTER_SOURCE)
     result = {
         "source": "ros_moveit_jtc_usb_ref_can",
         "profile_id": 201,
@@ -158,7 +145,7 @@ def evidence():
         "environment": {"producer_lag_us": 1000, "producer_lag_budget_us": 10000},
         "goals": [{
             "goal_id": "a" * 32, "action_status": "SUCCEEDED", "result_error_code": 0,
-            "device_id": identity["device_id"],
+            "domain_device_id": identity["domain_device_id"],
             "run_id": 4, "session_id": 3, "boot_epoch": 2, "motion_epoch": 2,
             "target_rad": [0.01, -0.02, 1.59, -0.01, 0.02, -0.03],
             "feedback_rad": [0.01, -0.02, 1.59, -0.01, 0.02, -0.03],
@@ -218,7 +205,7 @@ def test_six_axis_evidence_passes(evidence):
 # @param evidence evidence fixture返回的可变合成证据字典；每例独立，不来自设备采集。
 # @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 def test_other_device_goal_cannot_share_application_evidence(evidence):
-    evidence["goals"][0]["device_id"] = "33" * 16
+    evidence["goals"][0]["domain_device_id"] = "33" * 16
     with pytest.raises(ValueError, match="device"):
         application_e2e.validate_evidence(evidence)
 
@@ -230,10 +217,8 @@ def test_other_device_goal_cannot_share_application_evidence(evidence):
 def test_other_device_management_receipt_cannot_share_application_evidence(evidence):
     for item in evidence["management_records"][:2]:
         raw = bytearray(bytes.fromhex(item["raw_hex"]))
-        name = "DummyManageV2Request" if item["kind"] == 4 else "DummyManageV2Response"
-        offset = next(field["offset"] for field in
-            LAYOUT["payloads"][name]["fields"] if field["name"] == "device_id")
-        raw[offset:offset + 16] = bytes.fromhex("33" * 16)
+        name = "DummyManageRequest" if item["kind"] == 4 else "DummyManageResponse"
+        raw=replace_root(name,raw,domain_device_id="33"*16)
         item["raw_hex"] = raw.hex()
     with pytest.raises(ValueError, match="management record identity"):
         application_e2e.validate_evidence(evidence)
@@ -476,7 +461,7 @@ def test_active_release_rejects_mutated_query_retry(evidence):
     retrying_release_query(evidence)
     retry = evidence["management_records"][-2]
     raw = bytearray.fromhex(retry["raw_hex"])
-    raw[-1] ^= 1
+    raw=replace_root("DummyManageRequest",raw,configured_mask=63)
     retry["raw_hex"] = raw.hex()
     with pytest.raises(ValueError, match="duplicate management request identity"):
         application_e2e.validate_evidence(evidence)
@@ -553,10 +538,7 @@ def test_committed_management_requires_confirmed_receipt(evidence, operation, re
     index = 1 if operation == 8 else 3
     response = evidence["management_records"][index]
     raw = bytearray.fromhex(response["raw_hex"])
-    offset = next(field["offset"] for field in
-                  LAYOUT["payloads"]["DummyManageV2Response"]["fields"]
-                  if field["name"] == "receipt")
-    raw[offset] = receipt
+    raw=replace_root("DummyManageResponse",raw,receipt=receipt)
     response["raw_hex"] = raw.hex()
     with pytest.raises(ValueError, match="receipt|identity"):
         application_e2e.validate_evidence(evidence)
@@ -571,10 +553,7 @@ def test_committed_management_requires_confirmed_receipt(evidence, operation, re
 def test_committed_management_accepts_confirmed_receipt_codes(evidence, receipt):
     response = evidence["management_records"][-1]
     raw = bytearray.fromhex(response["raw_hex"])
-    offset = next(field["offset"] for field in
-                  LAYOUT["payloads"]["DummyManageV2Response"]["fields"]
-                  if field["name"] == "receipt")
-    raw[offset] = receipt
+    raw=replace_root("DummyManageResponse",raw,receipt=receipt)
     response["raw_hex"] = raw.hex()
     application_e2e.validate_evidence(evidence)
 
@@ -586,7 +565,7 @@ def test_committed_management_accepts_confirmed_receipt_codes(evidence, receipt)
 # @param value 该字段的参数化错误值。
 # @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 @pytest.mark.parametrize("field,value", [
-    ("device_id", "33" * 16),
+    ("domain_device_id", "33" * 16),
     ("expected_boot_epoch", 9),
     ("expected_session_id", 9),
     ("expected_reference_epoch", 9),
@@ -598,18 +577,8 @@ def test_committed_management_accepts_confirmed_receipt_codes(evidence, receipt)
 def test_release_query_must_preserve_original_request_identity(evidence, field, value):
     active_release(evidence)
     query = manage(4, 6600, operation=12, request_id=3, queried_operation_id=2)
-    raw = bytearray.fromhex(query["raw_hex"])
-    layout = next(item for item in LAYOUT["payloads"]["DummyManageV2Request"]["fields"]
-                  if item["name"] == field)
-    if layout["count"] > 1:
-        raw[layout["offset"]:layout["offset"] + layout["count"]] = bytes.fromhex(value)
-    else:
-        struct.pack_into("<" + {"uint8": "B", "uint16": "H", "uint32": "I",
-                                "uint64": "Q"}[layout["type"]], raw, layout["offset"], value)
-    query["raw_hex"] = raw.hex()
-    if field == "expected_boot_epoch":
-        query["boot"] = value
-    elif field == "expected_session_id":
+    query["raw_hex"] = replace_root("DummyManageRequest",bytes.fromhex(query["raw_hex"]),**{field:value}).hex()
+    if field == "expected_session_id":
         query["session"] = value
     evidence["management_records"][-1:] = [
         query, manage(5, 6700, request_id=3, run=5, session=0, operation_id=2)]
@@ -895,7 +864,7 @@ def test_page_chain_rejects_invalid_digest_after_many_valid_groups(evidence):
     attempt = {"evidence_pages": pages(identity, run=4, session=3,
                                          group_ids=list(range(1, 65)))}
     raw = bytearray.fromhex(attempt["evidence_pages"][-2]["raw_hex"])
-    raw[40] ^= 1
+    raw = bytearray(corrupt_chain(raw))
     attempt["evidence_pages"][-2]["raw_hex"] = raw.hex()
     with pytest.raises(ValueError, match="invalid evidence chain"):
         application_e2e._validate_pages(
@@ -913,7 +882,7 @@ def test_wire_chain_seed_includes_zero_initialized_tail(evidence):
     seed += b"".join(bytes.fromhex(identity[name]) for name in
                      ("contract_hash", "model_hash", "profile_hash", "firmware_hash"))
     raw = bytes.fromhex(evidence["goals"][0]["evidence_pages"][0]["raw_hex"])
-    assert raw[307:339] == hashlib.sha256(seed.ljust(192, b"\0")).digest()
+    assert previous_hash(raw) == hashlib.sha256(seed.ljust(192, b"\0")).digest()
 
 
 ##
@@ -1031,13 +1000,13 @@ def test_raw_chain_gap_duplicate_tamper_or_wrong_session_rejected(evidence, muta
 def test_raw_group_count_must_match_terminal_even_with_valid_chain(evidence):
     records = evidence["goals"][0]["evidence_pages"]
     first = bytearray.fromhex(records[0]["raw_hex"])
-    struct.pack_into("<I", first, 281, 2)
-    first[339:371] = hashlib.sha256(first[307:339] + first[:307] + first[371:372]).digest()
+    first = replace_root("DummyAttemptEvidence",first,group_count=2)
+    first=replace_root("DummyAttemptEvidence",first,chain_sha256=hashlib.sha256(previous_hash(first) + canonical(first)).digest())
     records[0]["raw_hex"] = first.hex()
     terminal = bytearray.fromhex(records[1]["raw_hex"])
-    terminal[307:339] = first[339:371]
-    terminal[339:371] = hashlib.sha256(
-        terminal[307:339] + terminal[:307] + terminal[371:372]).digest()
+    terminal=replace_root("DummyAttemptEvidence",terminal,previous_chain_sha256=chain_hash(first))
+    terminal=replace_root("DummyAttemptEvidence",terminal,chain_sha256=hashlib.sha256(
+        previous_hash(terminal) + canonical(terminal)).digest())
     records[1]["raw_hex"] = terminal.hex()
     with pytest.raises(ValueError, match="group count"):
         application_e2e.validate_evidence(evidence)
@@ -1062,13 +1031,13 @@ def test_raw_attempt_id_must_match_run_even_with_valid_chain(evidence):
 def test_partial_raw_can_sent_mask_rejected_even_when_json_claims_full(evidence):
     records = evidence["goals"][0]["evidence_pages"]
     first = bytearray.fromhex(records[0]["raw_hex"])
-    first[35] = 62
-    first[339:371] = hashlib.sha256(first[307:339] + first[:307] + first[371:372]).digest()
+    first = bytearray(replace_root("DummyAttemptEvidence",first,sent_mask=62))
+    first=replace_root("DummyAttemptEvidence",first,chain_sha256=hashlib.sha256(previous_hash(first) + canonical(first)).digest())
     records[0]["raw_hex"] = first.hex()
     terminal = bytearray.fromhex(records[1]["raw_hex"])
-    terminal[307:339] = first[339:371]
-    terminal[339:371] = hashlib.sha256(
-        terminal[307:339] + terminal[:307] + terminal[371:372]).digest()
+    terminal=replace_root("DummyAttemptEvidence",terminal,previous_chain_sha256=chain_hash(first))
+    terminal=replace_root("DummyAttemptEvidence",terminal,chain_sha256=hashlib.sha256(
+        previous_hash(terminal) + canonical(terminal)).digest())
     records[1]["raw_hex"] = terminal.hex()
     with pytest.raises(ValueError, match="six-axis CAN"):
         application_e2e.validate_evidence(evidence)
@@ -1702,7 +1671,7 @@ def test_canceled_chain_rejects_incomplete_raw_proof(evidence, mutation):
         del goal["timeline"][4]["cancel_request_id"]
     elif mutation == "missing_stop_axis":
         raw = bytearray.fromhex(goal["evidence_pages"][1]["raw_hex"])
-        raw[34] = 1
+        raw = bytearray(replace_root("DummyAttemptEvidence",raw,submitted_mask=1))
         goal["evidence_pages"][1]["raw_hex"] = raw.hex()
     elif mutation == "missing_cancel_terminal":
         goal["evidence_pages"].pop()
@@ -1785,37 +1754,17 @@ def test_malformed_evidence_fails_as_validation_error(evidence, field, value):
         application_e2e.validate_evidence(evidence)
 
 
-def test_current_selected_schema_five_keeps_full_evidence_validation(evidence):
+def test_current_canonical_root_roundtrip_keeps_full_evidence_validation(evidence):
     """当前页由公共encode构造，独立SHA链及管理准入仍执行完整正向门。"""
-    from scripts.dummy.selected_protocol import current_layout, decode, evidence_parts
-
-    def values_for(layout, fields):
-        result = {}
-        for name, value in fields.items():
-            field = layout.field(name)
-            result[name] = (bytes.fromhex(value) if field.array and field.type == 'uint8'
-                            else bool(value) if field.type == 'bool' else value)
-        result['schema_minor'] = layout.constant('SCHEMA_MINOR')
-        return result
-
+    from scripts.dummy.selected_protocol import decode, evidence_parts
     for record in evidence['management_records']:
-        name = 'DummyManageV2Request' if record['kind'] == 4 else 'DummyManageV2Response'
-        layout = current_layout(name)
-        values = values_for(layout, decode(name, bytes.fromhex(record['raw_hex'])))
-        record['raw_hex'] = layout.encode(values).hex()
-    layout = current_layout('DummyAttemptEvidenceV2')
-    for attempt in [*evidence['goals'], evidence['release']]:
-        seed = struct.pack('<QQ', attempt['run_id'], attempt['boot_epoch']) + bytes.fromhex(evidence['identity']['client_id'])
-        seed += b''.join(bytes.fromhex(evidence['identity'][name]) for name in
-                         ('contract_hash', 'model_hash', 'profile_hash', 'firmware_hash'))
-        previous = hashlib.sha256(seed.ljust(192, b'\0')).digest()
+        name='DummyManageRequest' if record['kind']==4 else 'DummyManageResponse'
+        record['raw_hex']=wire(name,**decode(name,bytes.fromhex(record['raw_hex']))).hex()
+    for attempt in [*evidence['goals'],evidence['release']]:
+        seed=struct.pack('<QQ',attempt['run_id'],attempt['boot_epoch'])+bytes.fromhex(evidence['identity']['client_id'])
+        seed+=b''.join(bytes.fromhex(evidence['identity'][name]) for name in ('contract_hash','model_hash','profile_hash','firmware_hash'))
+        previous=hashlib.sha256(seed.ljust(192,b'\0')).digest()
         for page in attempt['evidence_pages']:
-            values = values_for(layout, decode('DummyAttemptEvidenceV2', bytes.fromhex(page['raw_hex'])))
-            values['previous_chain_sha256'] = previous
-            raw = layout.encode(values)
-            parts = evidence_parts(raw)
-            digest = hashlib.sha256(previous + parts['prefix'] + parts['lost']).digest()
-            values['chain_sha256'] = digest
-            page['raw_hex'] = layout.encode(values).hex()
-            previous = digest
+            raw=wire('DummyAttemptEvidence',**decode('DummyAttemptEvidence',bytes.fromhex(page['raw_hex'])))
+            raw=chain_root(raw,previous);page['raw_hex']=raw.hex();previous=chain_hash(raw)
     assert application_e2e.validate_evidence(evidence) is None

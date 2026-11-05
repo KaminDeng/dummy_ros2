@@ -84,7 +84,7 @@ struct UpdateRejection {
   Position candidate{},prime{},previous{};
 };
 struct Authorization {
-  ManageRequest identity{};
+  ManageRequest identity=dummy_ref::messages::make_manage_request();
   bool session=false, reference=false, permit=false;
 };
 /**
@@ -200,7 +200,7 @@ class ActionGate {
    * @param now 调用方提供的新鲜接收/观察宿主µs。
    * @return false拒绝载荷；true表示该帧被门控消费，可能因此进入故障/停止。
    */
-  bool observe_state(const std::uint8_t *bytes, std::size_t size, std::uint64_t now);
+  bool observe_state(const dummy_ref::messages::State& state,const dp::comm::SourceId& source,std::uint64_t now);
   /**
    * @brief 登记真实控制update产生的有限目标代/线序号。
    * 匿名Position为此次rad目标。非Running阶段的每个采样及Running尚未sampled的首个采样须与prime_q在1e-9 rad内；只有Running阶段独立核profile上下界，所有阶段都核有限值。登记证明控制器生产该目标，不证明网络/CAN已发送。
@@ -388,7 +388,7 @@ class ActionGate {
   bool positions_only_trajectory_=false;
   UpdateRejection update_rejection_{};
   Phase phase_=Phase::kIdle; Terminal terminal_=Terminal::kNone;
-  ManageOperation operation_=ManageOperation::kEnable;
+  ManageOperation operation_=ManageOperation::PREPARE_HOLD;
   /**
    * @brief request为当前管理根ID，deadline为宿主绝对µs，generation为内部控制代；0 request不总是空闲，可能正等待匹配续租。
    */

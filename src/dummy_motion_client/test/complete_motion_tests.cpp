@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 /**
  * @file complete_motion_tests.cpp
  * @brief 核J1完成屏障、同值抑制prime的排空证据及全部到达排列。
@@ -17,10 +18,10 @@
  */
 void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned invalid=0U) {
   using namespace action_test;
-  namespace wire=dp::iface;
+
   Harness h;
-  Authorization auth; auth.session=auth.reference=auth.permit=true;
-  auth.identity.set_expected_session_id(1U); auth.identity.set_configured_mask(1U);
+  Authorization auth;auth.identity=owned_fixture::request();auth.identity.expected_boot_epoch()=0; auth.session=auth.reference=auth.permit=true;
+  auth.identity.expected_session_id()=1U; auth.identity.configured_mask()=1U;
   require(h.gate.enable(auth,1U)); ++h.epoch;
   h.gate.observe(h.response(),2U);
   require(h.gate.record_update(h.gate.generation(),h.epoch,1U,Position{}));
@@ -31,12 +32,12 @@ void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned inva
   h.gate.observe(h.response(true,12780U),14U);
   ++h.epoch;
   h.gate.observe(h.response(false,12784U),15U);
-  wire::DummyJointStateV2 state;
-  state.set_schema_major(2U); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor); state.set_state_seq(1U); state.set_session_id(1U);
-  state.set_motion_epoch(h.epoch); state.set_core_state(wire_value(WireCoreState::kHold));
-  state.set_hold_ready(true); state.set_committed_producer_seq(12784U);
-  state.set_configured_mask(1U); state.set_position_valid_mask(1U);
-  state.set_can_submitted_mask(1U); state.set_can_sent_mask(1U);
+  auto state=owned_fixture::state();dp::comm::SourceId state_source{};
+    state.state_seq()=1U; state.session_id()=1U;
+  state.motion_epoch()=h.epoch; state.core_state()=wire_value(WireCoreState::kHold);
+  state.hold_ready()=true; state.committed_producer_seq()=12784U;
+  for(auto& joint:*state.joints())joint.configured_quality()=(1U&(1U<<*joint.joint_id()))!=0U; for(auto& joint:*state.joints())joint.position_valid_quality()=(1U&(1U<<*joint.joint_id()))!=0U;
+  state.can_submitted_mask()=1U; state.can_sent_mask()=1U;
   HoldDrainEvidence processed{0U,1U,12785U,0U,h.epoch,12784U};
   processed.disposition=1U; processed.quiescent=true;
   processed.observed_us=16U; processed.max_state_age_us=250000U;
@@ -54,12 +55,12 @@ void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned inva
     case 6: ++processed.motion_epoch; break;
     case 7: processed.processed_generation=12784U; break;
     case 8: processed.position[0]=0.2; break;
-    case 9: state.set_can_sent_mask(0U); break;
-    case 10: state.set_can_submitted_mask(0U); break;
+    case 9: state.can_sent_mask()=0U; break;
+    case 10: state.can_submitted_mask()=0U; break;
     case 11: processed.committed_seq=12786U; break;
     case 12: processed.max_state_age_us=1U; break;
-    case 13: { double wrong[6]={0.2,0,0,0,0,0}; state.set_position_rad(wrong); break; }
-    case 14: state.set_hold_ready(false); break;
+    case 13: { double wrong[6]={0.2,0,0,0,0,0}; for(auto& joint:*state.joints())joint.position_rad()=wrong[*joint.joint_id()]; break; }
+    case 14: state.hold_ready()=false; break;
     case 16: processed.tolerance[0]=std::numeric_limits<double>::quiet_NaN(); break;
     case 17: processed.tolerance[0]=-0.01; break;
     default: break;
@@ -69,9 +70,7 @@ void completion_with_suppressed_prime(std::array<unsigned,4> order,unsigned inva
     if(event==0U)
       require(h.gate.record_update(h.gate.generation(),h.epoch,12785U,Position{},12785U));
     if(event==1U) {
-      std::array<std::uint8_t,wire::DummyJointStateV2Codec::kEncodedSize> bytes{};
-      require(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
-      require(h.gate.observe_state(bytes.data(),bytes.size(),now));
+      require(h.gate.observe_state(state,state_source,now));
     }
     if(event==2U) {
       h.gate.observe_hold_drain(processed,now);

@@ -8,7 +8,9 @@
  */
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include "dp_comm/dp_comm.hpp"
-#include "dummy_ref/wire_contract.hpp"
+#include "dummy_ref/root_transport.hpp"
+#include "dummy_ref/root_platform_identity.hpp"
+#include "dummy_ros_control/message_presence.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/diagnostic_json.hpp"
@@ -25,10 +27,9 @@
 #include <thread>
 namespace dummy_motion_client {
 /**
- * @brief 生成wire codec别名；Service使用定长raw管理服务，避免把ROS消息结构体内存当载荷。
+ * @brief 直接使用中央生成的管理服务及Owned请求、响应。
  */
-namespace wire=dp::iface;
-using Service=dp::protocol::services::DummyManageV2;
+using Service=dummy_ref::root::Manage;
 namespace {
 /**
  * @brief 本地拒绝类别：未ready、无channel、长度错、锁忙、queued占槽和codec失败；不是设备fault/result编号。
@@ -39,28 +40,25 @@ enum class AdmissionReason : std::size_t {
 /**
  * @brief 记录准入失败的固定诊断，未安装scope时按类别限64次同步stderr。
  * @param reason 本地准入原因。
- * @param bytes 原管理请求字节，尝试解码仅为提取日志身份/请求ID。
+ * @param request 实际Owned管理请求，日志只读完整字段组及请求ID。
  * @note 有scope写journal而不格式化stderr；无scope的失败路径含I/O，不能将所有send调用称为硬实时无I/O。
  */
-void log_admission(AdmissionReason reason,const std::vector<std::uint8_t> &bytes) noexcept {
+void log_admission(AdmissionReason reason,const ManageRequest& request) noexcept {
+  const bool valid=dummy_ros_control::message_fields_present(request);
   if(auto* journal=dummy_ros_control::current_host_diagnostics) {
-    Service::Request request;
-    const bool valid=wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&request)==wire::CodecResult::kOk;
-    const dummy_ros_control::DiagnosticIdentity expected{request.expected_boot_epoch(),request.expected_session_id(),
-      request.expected_reference_epoch(),request.expected_motion_epoch(),request.request_seq(),request.expected_management_epoch(),valid};
+    dummy_ros_control::DiagnosticIdentity expected{};
+    if(valid)expected={*request.expected_boot_epoch(),*request.expected_session_id(),
+      *request.expected_reference_epoch(),*request.expected_motion_epoch(),*request.request_seq(),*request.expected_management_epoch(),true};
     journal->reject(dummy_ros_control::DiagnosticReason::kManagementRejected,{},expected,management_now_us(),
       "management_admission",static_cast<std::uint32_t>(reason));
-    journal->detail("MANAGE_ADMISSION_DIAG reason=%u bytes=%zu",static_cast<unsigned>(reason),bytes.size());
-    return;
+    journal->detail("MANAGE_ADMISSION_DIAG reason=%u request_id=%llu",unsigned(reason),static_cast<unsigned long long>(valid ? *request.request_id() : 0U));return;
   }
   static std::atomic<unsigned> counts[static_cast<std::size_t>(AdmissionReason::kCount)]{};
-  constexpr const char *names[]={"not_ready","no_channel","wrong_size","lock_busy","queued","decode_failed"};
+  constexpr const char* names[]={"not_ready","no_channel","wrong_size","lock_busy","queued","decode_failed"};
   const auto index=static_cast<std::size_t>(reason);
-  if(counts[index].fetch_add(1,std::memory_order_relaxed)>=64U) return;
-  Service::Request request;
-  const bool decoded=wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&request)==wire::CodecResult::kOk;
-  std::fprintf(stderr,"MANAGE_ADMISSION_DIAG reason=%s request_id=%llu bytes=%zu\n",
-      names[index],static_cast<unsigned long long>(decoded ? request.request_id() : 0U),bytes.size());
+  if(counts[index].fetch_add(1,std::memory_order_relaxed)>=64U)return;
+  std::fprintf(stderr,"MANAGE_ADMISSION_DIAG reason=%s request_id=%llu\n",names[index],
+      static_cast<unsigned long long>(valid ? *request.request_id() : 0U));
 }
 }  // namespace
 /**
@@ -109,7 +107,7 @@ struct DpManagementTransport::Impl {
      * @throws std::runtime_error 请求failed/canceled、owner/channel失效、准入超时或槽占用。
      * @note try_lock不等共享主锁，但shared_ptr/vector可能分配或有内部同步，不能当零分配硬实时API。
      */
-    std::optional<std::vector<std::uint8_t>> poll() override {
+    std::optional<ManagementResponse> poll() override {
       if(pending->failed || pending->canceled) throw std::runtime_error("shared manage_v2 request failed");
       if(!admitted) {
         const auto channel=admission_channel.lock();
@@ -144,7 +142,7 @@ struct DpManagementTransport::Impl {
       }
       if(delivered || !pending->complete.load(std::memory_order_acquire)) return {};
       delivered=true;
-      return std::vector<std::uint8_t>(pending->response.begin(),pending->response.end());
+      return ManagementResponse{pending->response,pending->response_source};
     }
     /**
      * @brief 共享拥有请求及响应字节；complete由worker在字节填完后release发布，poll以acquire读取。
@@ -183,7 +181,7 @@ struct DpManagementTransport::Impl {
      * @brief 该专用mutex保护响应optional的写入/移动，poll仅try_lock，回调使用普通lock_guard。
      */
     std::mutex mutex;
-    std::optional<std::vector<std::uint8_t>> response;
+    std::optional<ManagementResponse> response;
     /**
      * @brief 本地撤销/传输失败标志；不描述设备操作终态。
      */
@@ -208,7 +206,7 @@ struct DpManagementTransport::Impl {
      * @throws std::runtime_error worker报告传输失败。
      * @note 本方法未独立检查canceled，撤销主要通过句柄析构和worker消费完成。
      */
-    std::optional<std::vector<std::uint8_t>> poll() override {
+    std::optional<ManagementResponse> poll() override {
       if(pending->failed) throw std::runtime_error("manage_v2 transport request failed");
       std::unique_lock<std::mutex> lock(pending->mutex,std::try_to_lock);
       if(!lock || !pending->response) return {};
@@ -287,65 +285,28 @@ struct DpManagementTransport::Impl {
    * @param context 非空Pending，由active shared_ptr保持存活。
    * @note 匿名ResponseInfo当前不用；失败置failed，成功mutex内发布response vector。
    */
-  static void reply(dp::comm::Result result,const Service::Response *response,
-                    const dp::comm::ResponseInfo &,void *context) {
-    auto &pending=*static_cast<Pending *>(context);
-    if(result!=dp::comm::Result::kOk || !response) { pending.failed=true; return; }
-    std::vector<std::uint8_t> bytes(wire::DummyManageV2ResponseCodec::kEncodedSize);
-    if(wire::DummyManageV2ResponseCodec::encode(*response,bytes.data(),bytes.size())!=wire::CodecResult::kOk) {
-      pending.failed=true; return;
-    }
-    std::lock_guard<std::mutex> lock(pending.mutex); pending.response=std::move(bytes);
-  }
-  /**
-   * @brief 复制借用消息，做最小schema/device/profile/mask过滤后缓存原codec字节。
-   * @tparam Message State或Status生成类型。
-   * @tparam Codec 对应wire codec。
-   * @tparam IsState true写State缓存，false写Status。
-   * @param borrowed 仅回调期有效，必须copy_to而非保存借用地址。
-   * @param context 本独立Impl。
-   * @note 接收锚取缓存写入时的Host steady µs；本路径不核源produced年龄、epoch授权或能力hash，不等同DeviceTransport接纳State。
-   */
-  template<typename Message,typename Codec,bool IsState>
-  static void receive(dp::comm::BorrowedMessage<Message> borrowed,void *context) {
-    Message value; if(borrowed.copy_to(&value)!=dp::comm::Result::kOk) return;
-    auto &self=*static_cast<Impl *>(context);
-    if(value.schema_major()!=2 || value.schema_minor()!=dummy_ref::protocol::kSchemaMinor ||
-       value.profile_id()!=self.parameters.profile || value.configured_mask()!=self.parameters.mask ||
-       !std::equal(self.parameters.device.begin(),self.parameters.device.end(),value.device_id())) return;
-    std::vector<std::uint8_t> bytes(Codec::kEncodedSize);
-    if(Codec::encode(value,bytes.data(),bytes.size())!=wire::CodecResult::kOk) return;
+  /** @brief TypedSdk先验证来源，回调仅复制生成Owned值及SourceId，不缓存ReceiveInfo借用。 */
+  template<class Message,bool IsState>
+  static void receive(const Message& value,const dp::comm::ReceiveInfo& info,void* context) {
+    auto& self=*static_cast<Impl*>(context);
+    if(!dummy_ros_control::message_fields_present(value) || !info.source().boot_id ||
+       *value.profile_id()!=self.parameters.profile ||
+       !std::equal(self.parameters.device.begin(),self.parameters.device.end(),value.domain_device_id()->begin()))return;
+    if constexpr(IsState) {
+      if(dummy_ros_control::configured_joint_mask(value)!=self.parameters.mask)return;
+    } else if(*value.configured_mask()!=self.parameters.mask)return;
+    const auto received=management_now_us();
     std::lock_guard<std::mutex> lock(self.mutex);
-    if constexpr(IsState) { self.observation.state=std::move(bytes); self.observation.state_received_us=management_now_us(); }
-    else { self.observation.status=std::move(bytes); self.observation.status_received_us=management_now_us(); }
+    if constexpr(IsState){self.observation.state=value;self.observation.state_source=info.source();self.observation.state_received_us=received;}
+    else {self.observation.status=value;self.observation.status_source=info.source();self.observation.status_received_us=received;}
   }
-  /** @brief
-   * 原页仅在固定设备路由上做schema/codec守卫；原身份、序号/链及SENT由调用方独立验收。
-   */
-  static void receive_evidence(
-      dp::comm::BorrowedMessage<wire::DummyAttemptEvidenceV2> borrowed,
-      void *context) {
-    const auto received_us = management_now_us();
-    wire::DummyAttemptEvidenceV2 page;
-    if (borrowed.copy_to(&page) != dp::comm::Result::kOk ||
-        page.schema_major() != 2U ||
-        page.schema_minor() != dummy_ref::protocol::kSchemaMinor)
-      return;
-    RawAttemptEvidence sample;
-    sample.received_us = received_us;
-    sample.bytes.resize(wire::DummyAttemptEvidenceV2Codec::kEncodedSize);
-    if (wire::DummyAttemptEvidenceV2Codec::encode(page, sample.bytes.data(),
-                                                  sample.bytes.size()) !=
-        wire::CodecResult::kOk)
-      return;
-    auto &self = *static_cast<Impl *>(context);
+  /** @brief 最多16个真实生成证据值；摘要及事务裁决由调用者独立核验。 */
+  static void receive_evidence(const dummy_ref::messages::Evidence& value,const dp::comm::ReceiveInfo& info,void* context) {
+    auto& self=*static_cast<Impl*>(context);
+    if(!info.source().boot_id)return;
     std::lock_guard<std::mutex> lock(self.mutex);
-    if (self.evidence_overflow.load(std::memory_order_acquire) ||
-        self.attempt_evidence.size() >= 16U) {
-      self.evidence_overflow = true;
-      return;
-    }
-    self.attempt_evidence.push_back(std::move(sample));
+    if(self.evidence_overflow || self.attempt_evidence.size()>=16U){self.evidence_overflow=true;return;}
+    self.attempt_evidence.push_back({value,info.source(),management_now_us()});
   }
   /**
    * @brief 独立worker建立StaticOnly Context、管理client和State/Status订阅，串行处理单槽。
@@ -354,36 +315,33 @@ struct DpManagementTransport::Impl {
   void run() noexcept {
     std::shared_ptr<Pending> active;
     try {
-      dp::comm::StaticStorage storage(
-          {1, 0, 3, 0, 8,
-           DP_PROTOCOL_PRODUCT_POSIX_DUMMY_REF_ROS_SDK_RUNTIME_MESSAGE_BYTES,
-           96, 0, 1, 1, 1});
-      const dp::comm::TransportConfig config{"client",parameters.endpoint.c_str(),"","device_action_gate"};
+      dummy_ref::root::HostTransport owner;
+      owner.domain_device=parameters.device;
+      const auto target_device=dummy_ref::root::configured_ref_device();
+      if(dummy_ref::root::configure_platform_identity(owner,target_device)!=dp::comm::Result::kOk)
+        throw std::runtime_error("Root identity");
+      dp::comm::StaticStorage storage({1U,0U,3U,0U,8U,dummy_ref::root::kMessageBytes,173U,1U,2U,2U,1U});
+      dp::comm::TransportConfig config{"peer",parameters.endpoint.c_str(),"","device_action_gate"};
+      config.root_device=&owner.session.source.device;
       auto initialized=dp::comm::Context::init(storage,{dp::comm::MemoryMode::kStaticOnly,&config,nullptr});
-      if(!initialized.has_value()) throw std::runtime_error("dp_comm init");
+      if(!initialized.has_value())throw std::runtime_error("dp_comm init");
       auto context=std::move(initialized).take_value();
-      dp::comm::NodeOptions options{}; options.product_name="dummy_robot"; options.node_name="action_gate";
-      std::copy(parameters.client.begin(),parameters.client.end(),options.device_id.bytes);
-      auto made=context.create_node(options); if(!made.has_value()) throw std::runtime_error("dp_comm node");
+      dp::comm::NodeOptions options{};options.product_name="dummy_robot";options.node_name="action_gate";
+      options.device_id=owner.session.source.device;
+      auto made=context.create_node(options);if(!made.has_value())throw std::runtime_error("dp_comm node");
       auto node=std::move(made).take_value();
-      const char *hex="0123456789abcdef"; std::string route="/dpsdk/dummy_robot/";
-      for(auto byte:parameters.device) { route+=hex[byte>>4]; route+=hex[byte&15]; }
-      route+="/ref_control/";
-      auto created=node.create_client<Service>((route+DP_PROTOCOL_TOPIC_DUMMY_MANAGE_ENDPOINT).c_str());
-      auto states=node.create_subscription<wire::DummyJointStateV2>((route+DP_PROTOCOL_TOPIC_DUMMY_STATE_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_STATE, DUMMY_ROS_SDK),
-          receive<wire::DummyJointStateV2,wire::DummyJointStateV2Codec,true>,this);
-      auto statuses=node.create_subscription<wire::DummyDeviceStatusV2>((route+DP_PROTOCOL_TOPIC_DUMMY_STATUS_ENDPOINT).c_str(), DUMMY_REF_SELECTED_QOS(DUMMY_STATUS, DUMMY_ROS_SDK),
-          receive<wire::DummyDeviceStatusV2,wire::DummyDeviceStatusV2Codec,false>,this);
-      auto evidences = node.create_subscription<wire::DummyAttemptEvidenceV2>(
-          (route + DP_PROTOCOL_TOPIC_DUMMY_ATTEMPT_EVIDENCE_ENDPOINT).c_str(),
-          DUMMY_REF_SELECTED_QOS(DUMMY_ATTEMPT_EVIDENCE, DUMMY_ROS_SDK),
-          receive_evidence, this);
-      if (!created.has_value() || !states.has_value() ||
-          !statuses.has_value() || !evidences.has_value())
-        throw std::runtime_error("dp_comm entities");
-      auto client=std::move(created).take_value(); auto state=std::move(states).take_value();
-      auto status = std::move(statuses).take_value();
-      auto evidence = std::move(evidences).take_value();
+      if(owner.attach(node)!=dp::comm::Result::kOk)throw std::runtime_error("Root attach");
+      auto& sdk=*owner.sdk;
+      auto created=sdk.client<Service>(dummy_ref::root::selected::dp_protocol_dummy_ManageRequest::kLogicalKey);
+      auto state=sdk.subscribe<dummy_ref::messages::State>(dummy_ref::root::selected::dp_protocol_dummy_JointState::kLogicalKey,
+          receive<dummy_ref::messages::State,true>,this);
+      auto status=sdk.subscribe<dummy_ref::messages::Status>(dummy_ref::root::selected::dp_protocol_dummy_DeviceStatus::kLogicalKey,
+          receive<dummy_ref::messages::Status,false>,this);
+      auto evidence=sdk.subscribe<dummy_ref::messages::Evidence>(dummy_ref::root::selected::dp_protocol_dummy_AttemptEvidence::kLogicalKey,
+          receive_evidence,this);
+      if(!created.has_value() || state.result()!=dp::comm::Result::kOk || status.result()!=dp::comm::Result::kOk ||
+         evidence.result()!=dp::comm::Result::kOk)throw std::runtime_error("Root entities");
+      auto client=std::move(created).take_value();
       dp::comm::StaticExecutor executor;
       if(executor.add_node(node)!=dp::comm::Result::kOk || node.activate()!=dp::comm::Result::kOk)
         throw std::runtime_error("dp_comm activation");
@@ -391,7 +349,8 @@ struct DpManagementTransport::Impl {
       /**
        * @brief 原生请求句柄声明在client/node/context/storage之后，保证反向析构先结束请求借用，所有操作同worker。
        */
-      std::optional<dp::comm::RequestHandle<Service>> native;
+      std::optional<dp::comm::TypedOperation<Service>> native;
+      dp::comm::SourceId request_source{};
       connected=true;
       while(running) {
         if(active && active->canceled) { native.reset(); active.reset(); }
@@ -402,18 +361,22 @@ struct DpManagementTransport::Impl {
            * @brief 新单槽取出后替换旧本地等待句柄，active继续持有回调context；不声称远端旧mutation因此撤回。
            */
           native.reset(); active=std::move(next);
-          auto request = client.async_request(
-              active->request, reply, active.get(),
-              dp::comm::Duration::from_milliseconds(1000),
-              dummy_ros_control::management_rpc_correlation_id(active->request),
-              dummy_ros_control::management_rpc_idempotency_key(
-                  active->request));
-          if(!request.has_value()) active->failed=true;
-          else native.emplace(std::move(request).take_value());
+          const auto target=owner.target(dummy_ref::root::selected::dp_protocol_dummy_ManageRequest::kServiceId);
+          if(!target){active->failed=true;continue;}
+          auto request=client.call_async(active->request,dp::comm::Duration::from_milliseconds(1000));
+          if(request.result()!=dp::comm::Result::kOk)active->failed=true;
+          else {request_source=*target;native.emplace(std::move(request));}
         }
         const auto spun=executor.spin_some(dp::comm::Duration::from_milliseconds(2));
         if(spun!=dp::comm::Result::kOk && spun!=dp::comm::Result::kBusy)
           throw std::runtime_error("dp_comm spin result "+std::to_string(static_cast<unsigned>(spun)));
+        if(native && active && !active->canceled){
+          dummy_ref::messages::ManageResponse response;
+          const auto result=native->poll(response);
+          if(result==dp::comm::Result::kOk){
+            std::lock_guard<std::mutex> lock(active->mutex);active->response=ManagementResponse{response,request_source};native.reset();
+          } else if(result!=dp::comm::Result::kNotReady && result!=dp::comm::Result::kBusy){active->failed=true;native.reset();}
+        }
       }
     } catch(const std::exception &error) {
       fprintf(stderr,"device management transport: %s\n",error.what());
@@ -580,7 +543,7 @@ RawTerminalIdentity DpManagementTransport::raw_terminal_flushed() const noexcept
 }
 /**
  * @brief 读取经过writer与cleanup generation屏障的故障清理专用原始观测。
- * @return 独立模式/无channel为空；可信State接收锚非零才置raw_cleanup_producer_valid。
+ * @return 独立模式/无channel为空；可信State接收锚非零表示源时序已核验。
  * @note 此lane不恢复正常admission、session/参考/permit或运动资格。
  */
 bool DpManagementTransport::request_owner_safety_stop(std::uint64_t boot,std::uint64_t session,std::uint32_t reference) noexcept {
@@ -618,20 +581,12 @@ DpManagementTransport::diagnostic_observation() const noexcept {
   const auto channel = impl_->shared_channel();
   if (!channel)
     return {};
-  const auto value = channel->diagnostic_observation();
-  DeviceObservation out;
-  out.state.assign(value.state.begin(), value.state.end());
-  out.status.assign(value.status.begin(), value.status.end());
-  out.state_received_us = value.state_received_us;
-  out.status_received_us = value.status_received_us;
-  return out;
+  return channel->diagnostic_observation();
 }
 DeviceObservation DpManagementTransport::raw_cleanup_observation() const noexcept {
   if(impl_->connection!=Connection::kDeviceWorker)return {};
   const auto channel=impl_->shared_channel();if(!channel)return {};
-  const auto v=channel->raw_cleanup_observation();
-  DeviceObservation out;out.state.assign(v.state.begin(),v.state.end());out.status.assign(v.status.begin(),v.status.end());
-  out.state_received_us=v.state_received_us;out.status_received_us=v.status_received_us;out.raw_cleanup_producer_valid=v.state_received_us!=0U;return out;
+  return channel->raw_cleanup_observation();
 }
 /**
  * @brief 复制共享writer首非终原页回执。
@@ -649,72 +604,45 @@ RawFirstPageWritten DpManagementTransport::raw_first_page_written() const noexce
       value.chain_valid,value.full_six,value.strict_refresh_successor};
 }
 /**
- * @brief 复制完整wire请求到所选有限单槽或返回受预算约束的共享准入句柄。
- * @param bytes 原请求codec字节，调用返回后不保留其vector指针。
+ * @brief 复制实际Owned请求到所选有限单槽或返回受预算约束的共享准入句柄。
+ * @param request 实际生成Owned请求，调用期间复制到唯一待处理槽。
  * @return 独占本地等待句柄或空；共享主锁忙可返回尚未入queued的SharedHandle。
  * @note queued已有未取消请求立即拒绝，不形成无界队列。句柄存在不等于设备Received，更不等于COMMITTED。
  */
-std::unique_ptr<ManagementTransport::RequestHandle> DpManagementTransport::send(const std::vector<std::uint8_t> &bytes) {
-  if(!ready()) { log_admission(AdmissionReason::kNotReady,bytes); return {}; }
-  if(impl_->connection==Connection::kDeviceWorker) {
+std::unique_ptr<ManagementTransport::RequestHandle> DpManagementTransport::send(const ManageRequest& request) {
+  if(!dummy_ros_control::message_fields_present(request)){log_admission(AdmissionReason::kDecodeFailed,request);return {};}
+  if(!ready()){log_admission(AdmissionReason::kNotReady,request);return {};}
+  if(impl_->connection==Connection::kDeviceWorker){
     const auto channel=impl_->shared_channel();
-    if(!channel) { log_admission(AdmissionReason::kNoChannel,bytes); return {}; }
-    if(bytes.size()!=wire::DummyManageV2RequestCodec::kEncodedSize) {
-      log_admission(AdmissionReason::kWrongSize,bytes); return {};
-    }
-    Service::Request attempted;
-    if(wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&attempted)!=wire::CodecResult::kOk)return {};
-    // QueryResult为只读；其他实际尝试过的管理操作均保守取消“从未控制”资格。
-    constexpr std::uint16_t kQueryResultOperation=12U;
-    if(attempted.operation()!=kQueryResultOperation)channel->note_management_attempt(attempted.expected_boot_epoch());
-    auto pending=std::make_shared<dummy_ros_control::DeviceManagementRequest>();
-    std::copy(bytes.begin(),bytes.end(),pending->request.begin());
+    if(!channel){log_admission(AdmissionReason::kNoChannel,request);return {};}
+    if(*request.operation()!=12U)channel->note_management_attempt(*request.expected_boot_epoch());
+    auto pending=std::make_shared<dummy_ros_control::DeviceManagementRequest>();pending->request=request;
     std::unique_lock<std::mutex> lock(channel->mutex,std::try_to_lock);
-    if(!lock) {
-      log_admission(AdmissionReason::kLockBusy,bytes);
-      Service::Request decoded;
-      if(wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&decoded)!=wire::CodecResult::kOk ||
-         decoded.schema_major()!=2U || decoded.schema_minor()!=dummy_ref::protocol::kSchemaMinor || decoded.request_id()==0U) return {};
+    if(!lock){
+      log_admission(AdmissionReason::kLockBusy,request);
       return std::make_unique<Impl::SharedHandle>(std::move(pending),channel,impl_->admission_owner,management_now_us());
     }
-    if(channel->queued && !channel->queued->canceled) {
-      lock.unlock();
-      log_admission(AdmissionReason::kQueued,bytes); return {};
-    }
-    channel->queued=pending; return std::make_unique<Impl::SharedHandle>(std::move(pending));
+    if(channel->queued && !channel->queued->canceled){log_admission(AdmissionReason::kQueued,request);return {};}
+    channel->queued=pending;return std::make_unique<Impl::SharedHandle>(std::move(pending));
   }
-  auto pending=std::make_shared<Impl::Pending>();
-  if(wire::DummyManageV2RequestCodec::decode(bytes.data(),bytes.size(),&pending->request)!=wire::CodecResult::kOk) {
-    log_admission(AdmissionReason::kDecodeFailed,bytes); return {};
-  }
+  auto pending=std::make_shared<Impl::Pending>();pending->request=request;
   std::unique_lock<std::mutex> lock(impl_->mutex,std::try_to_lock);
-  if(!lock) { log_admission(AdmissionReason::kLockBusy,bytes); return {}; }
-  if(impl_->queued && !impl_->queued->canceled) {
-    lock.unlock();
-    log_admission(AdmissionReason::kQueued,bytes); return {};
-  }
-  impl_->queued=pending; return std::make_unique<Impl::Handle>(std::move(pending));
+  if(!lock){log_admission(AdmissionReason::kLockBusy,request);return {};}
+  if(impl_->queued && !impl_->queued->canceled){log_admission(AdmissionReason::kQueued,request);return {};}
+  impl_->queued=pending;return std::make_unique<Impl::Handle>(std::move(pending));
 }
+
 /**
  * @brief try_lock复制最新观测，锁忙/共享离线时可返回旧缓存。
- * @return 拥有字节快照或空；返回缓存不刷新接收时刻，应按原锚重新判年龄。
+ * @return 拥有实际Owned及Source快照或空；返回缓存不刷新接收时刻，应按原锚重新判年龄。
  * @note 独立缓存缺完整源时钟和权限校验；共享观测也须由上层组合具体准入条件。
  */
 std::optional<DeviceObservation> DpManagementTransport::observe() {
   if(impl_->connection==Connection::kDeviceWorker) {
     const auto channel=impl_->shared_channel(); if(!channel || !channel->ready) return impl_->last_observation;
     std::unique_lock<std::mutex> lock(channel->mutex,std::try_to_lock); if(!lock) return impl_->last_observation;
-    const auto &source=channel->observation; DeviceObservation result;
-    if(source.state_received_us) result.state.assign(source.state.begin(),source.state.end());
-    if(source.status_received_us) result.status.assign(source.status.begin(),source.status.end());
-    result.state_received_us=source.state_received_us; result.status_received_us=source.status_received_us;
-    result.rejected_ack_boot_epoch=source.rejected_ack_boot_epoch;
-    result.rejected_ack_session_id=source.rejected_ack_session_id;
-    result.rejected_ack_reference_epoch=source.rejected_ack_reference_epoch;
-    result.rejected_ack_motion_epoch=source.rejected_ack_motion_epoch;
-    result.rejected_ack_sequence=source.rejected_ack_sequence;
-    result.rejected_ack_received_us=source.rejected_ack_received_us;
-    impl_->last_observation=result; return result;
+    impl_->last_observation=channel->observation;
+    return impl_->last_observation;
   }
   std::unique_lock<std::mutex> lock(impl_->mutex,std::try_to_lock);
   if(!lock) return impl_->last_observation;

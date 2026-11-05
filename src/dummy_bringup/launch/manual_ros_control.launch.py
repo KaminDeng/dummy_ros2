@@ -1,11 +1,12 @@
 """当前manual-home部署的ROS链：inactive通信，参考/REST后由C++协调激活。"""
 import hashlib
+import importlib.util
 import json
 import secrets
 import tempfile
 from pathlib import Path
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, EmitEvent
 from launch.event_handlers import OnProcessExit
@@ -97,7 +98,12 @@ def start(context):
     generated = Path(tempfile.mkdtemp(prefix="dummy-manual-ros-"))
     controllers = generated / "controllers.yaml"
     controllers.write_text(yaml.safe_dump(controller_parameters()))
-    limits = {"joint_limits": {j["name"]: {"has_velocity_limits": True, "max_velocity": 1.0995574287564276, "has_acceleration_limits": True, "max_acceleration": 4.0} for j in cfg["joints"]}}
+    # 同一公共数值边界供面板规划与独立ROS规划复用；设备/控制器仍严格校验4.0。
+    helper_path = Path(get_package_prefix('dummy_bringup')) / 'lib/dummy_bringup/manual_panel_config.py'
+    helper_spec = importlib.util.spec_from_file_location('manual_panel_config', helper_path)
+    helper = importlib.util.module_from_spec(helper_spec)
+    helper_spec.loader.exec_module(helper)
+    limits = {"joint_limits": {j["name"]: {"has_velocity_limits": True, "max_velocity": 1.0995574287564276, "has_acceleration_limits": True, "max_acceleration": helper.planning_acceleration_limit(4.0)} for j in cfg["joints"]}}
     (generated / "joint_limits.yaml").write_text(yaml.safe_dump(limits))
     moveit = (MoveItConfigsBuilder("dummy-ros2", package_name="dummy_moveit_config")
       .robot_description(file_path=str(share / "config/dummy_ref_real_6dof.urdf.xacro"), mappings=mappings)

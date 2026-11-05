@@ -1,109 +1,113 @@
-"""ROS离线工具只消费当前受管协议发布。"""
+"""当前中央 Root 发布的 DPC1 记录接口；不把网络Root或历史raw-fixed当记录读。"""
+from collections.abc import Mapping
 from functools import lru_cache
+import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
+from types import MappingProxyType
 
 ROOT = Path(__file__).resolve().parents[2]
-_TYPES = {'uint8': 'B', 'uint16': 'H', 'uint32': 'I', 'uint64': 'Q', 'float64': 'd', 'bool': 'B'}
 
 
 @lru_cache(maxsize=1)
 def _reader():
-    local_release = Path(__file__).resolve().parent / 'protocol'
-    release = (local_release if (local_release / 'manifest.json').is_file()
-               else os.environ.get('DPSDK_PROTOCOL_RELEASE'))
+    local = Path(__file__).resolve().parent / 'protocol'
+    selected = (local if (local / 'release_manifest.json').is_file() else
+                os.environ.get('DPSDK_PROTOCOL_RELEASE') or os.environ.get('DPSDK_PROTOCOL_GENERATED_ROOT'))
+    if not selected:
+        raise ValueError('请指定当前Root发布DPSDK_PROTOCOL_RELEASE或实际生成目录DPSDK_PROTOCOL_GENERATED_ROOT；历史DPRAW01须显式历史reader')
+    root = Path(selected).resolve()
+    release = (root / 'release_manifest.json').is_file()
     if release:
-        root = Path(release)
-        module_path = root / 'include/dp_protocol_layout_reader.py'
-        spec = importlib.util.spec_from_file_location('dpsdk_selected_layout_reader', module_path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        # 发布包是只读输入；不用SourceFileLoader，避免产生未登记的pycache。
-        exec(compile(module_path.read_bytes(), str(module_path), "exec"), module.__dict__)
-        return module, root, False
-    source = Path(os.environ.get('DPSDK_PROTOCOL_SOURCE_ROOT', ROOT.parent / 'dpsdk/libraries/dp_protocol'))
-    if not (source / 'tools/dp_protocol_core/layout_reader.py').is_file():
-        raise ValueError('请设置DPSDK_PROTOCOL_RELEASE或DPSDK_PROTOCOL_SOURCE_ROOT选择中央协议')
-    sys.path.insert(0, str(source / 'tools'))
-    from dp_protocol_core import layout_reader
-    return layout_reader, source, True
+        path = root / 'python/dp_protocol_canonical_record_reader.py'
+        manifest = json.loads((root / 'release_manifest.json').read_text())
+        if manifest['files'].get(path.relative_to(root).as_posix()) != hashlib.sha256(path.read_bytes()).hexdigest():
+            raise ValueError('当前发布canonical reader SHA不符')
+    else:
+        source = Path(os.environ.get('DPSDK_PROTOCOL_SOURCE_ROOT', ROOT.parent/'dpsdk/libraries/dp_protocol'))
+        path = source / 'tools/dp_protocol_core/canonical_record_reader.py'
+    name = '_selected_canonical_' + hashlib.sha256(str(path).encode()).hexdigest()[:16]
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec); sys.modules[name] = module
+    # 发布目录只读；不写pycache，不执行隐式生成或改所选协议。
+    exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    return module.SchemaCodec.from_directory(root)
 
 
-def _interface(name):
-    if name in ('DummyManageV2Request', 'DummyManageV2Response'):
-        return 'dpsdk_interfaces/srv/DummyManageV2', 'request' if name.endswith('Request') else 'response'
-    return 'dpsdk_interfaces/msg/' + name, 'message'
+def _type(name):
+    codec = _reader()
+    if name in codec.descriptors:
+        return name
+    for fqn in codec.descriptors:
+        parts = fqn.split('.')
+        alias = ''.join(part.title() for part in parts[2:-1]) + parts[-1]
+        if name == alias:
+            return fqn
+    raise ValueError('当前Root选择没有类型: ' + name)
+
+
+def _json_value(value):
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def decode(name, raw):
+    """返回真实嵌套字段；None为缺失，不增加boot/flat joints等旧DTO别名。"""
+    return _json_value(_reader().decode_record(_type(name), raw))
+
+
+def encode(name, fields):
+    """规范记录fixture/离线工具编码；输入字节字段须提供bytes，非网络发送API。"""
+    return _reader().encode_record(_type(name), fields)
+
+
+def evidence_parts(raw):
+    """SHA输入严格为previous32+完整中央EvidenceHash目的记录，不置零链字段。"""
+    name = _type('DummyAttemptEvidence')
+    fields = _reader().decode_record(name, raw)
+    previous, chain, lost = fields['previous_chain_sha256'], fields['chain_sha256'], fields['evidence_lost']
+    if previous is None or chain is None or len(previous) != 32 or len(chain) != 32 or lost is None:
+        raise ValueError('证据链字段缺失或长度非法')
+    return {'canonical': _reader().canonical_hash_record(name, raw), 'previous': previous,
+            'chain': chain, 'lost': lost, 'fields':_json_value(fields)}
+
+
+class _RecordLayout:
+    """只读真实schema元数据；变长DPC1没有固定offset或encoded_size。"""
+    def __init__(self, name):
+        self.name = name; self.fqn = _type(name)
+        self.interface_id = _reader().descriptors[self.fqn]['type_id']
+        self.fields = MappingProxyType({field['name']: MappingProxyType(field)
+                                       for field in _reader().fields(self.fqn)})
+    def decode(self, raw):
+        return _reader().decode_record(self.fqn, raw)
+    def encode(self, values):
+        return _reader().encode_record(self.fqn, values)
 
 
 @lru_cache(maxsize=None)
 def current_layout(name):
-    """进程启动时固定所选版本；逐页只decode，不重复扫描源码摘要。"""
-    module, root, source = _reader()
-    fqn, section = _interface(name)
-    if source:
-        return module.load_source_raw_fixed_layout(root, fqn, section=section, selection={
-            'protocol_set': 'dummy', 'profile': 'profile_full', 'codec': 'raw-fixed'})
-    return module.load_raw_fixed_layout(root, fqn, section=section)
-
-
-def _schema(raw):
-    # 共同版本前缀的offset/width也来自中央所选字段，不在工具保存<HH字段表。
-    layout = current_layout('DummyDeviceStatusV2')
-    values = []
-    for name in ('schema_major', 'schema_minor'):
-        field = layout.field(name)
-        if len(raw) < field.offset + field.size:
-            raise ValueError('invalid wire schema prefix')
-        values.append(int.from_bytes(raw[field.offset:field.offset + field.size], 'little'))
-    return tuple(values)
-
-
-def decode(name, raw):
-    schema = _schema(raw)
-    layout = current_layout(name)
-    if schema != (layout.constant('SCHEMA_MAJOR'), layout.constant('SCHEMA_MINOR')):
-        raise ValueError(f'invalid {name} schema')
-    result = layout.decode(raw)
-    return {name: value.hex() if isinstance(value, bytes) else list(value) if isinstance(value, tuple) else value
-            for name, value in result.items()}
-
-
-def evidence_parts(raw):
-    """返回独立SHA算法所需的规范字段片段；不在本层替代验链或来源准入。"""
-    name = 'DummyAttemptEvidenceV2'
-    fields = decode(name, raw)
-    layout = current_layout(name)
-    prefix_offset = layout.field('previous_chain_sha256').offset
-    lost = layout.slice(raw, 'evidence_lost')
-    return {'prefix': raw[:prefix_offset], 'previous': bytes.fromhex(fields['previous_chain_sha256']),
-            'chain': bytes.fromhex(fields['chain_sha256']), 'lost': lost, 'fields': fields}
-
-
-# 通用metadata消费者读取公共对象的惰性只读视图，不保存字段副本。
-from collections.abc import Mapping
-from types import MappingProxyType
+    return _RecordLayout(name)
 
 
 class _CurrentPayloads(Mapping):
-    _names = ('DummyDeviceStatusV2', 'DummyJointCommandV2', 'DummyJointStateV2',
-              'DummyAttemptEvidenceV2', 'DummyManageV2Request', 'DummyManageV2Response')
-
     def __getitem__(self, name):
         layout = current_layout(name)
-        fields = tuple(MappingProxyType({'name': field.name, 'type': field.type,
-                                        'count': field.count, 'offset': field.offset, 'size': field.size})
-                       for field in layout.fields.values())
-        return MappingProxyType({'encoded_size': layout.size, 'interface_id': layout.interface_id,
-                                 'fields': fields})
-
+        return MappingProxyType({'type_id': layout.interface_id, 'format': 'DPC1',
+                                 'fields': tuple(layout.fields.values())})
     def __iter__(self):
-        return iter(self._names)
-
+        return iter(''.join(part.title() for part in fqn.split('.')[2:-1]) + fqn.split('.')[-1]
+                    for fqn in _reader().descriptors)
     def __len__(self):
-        return len(self._names)
+        return len(_reader().descriptors)
 
 
-LAYOUT = MappingProxyType({'payloads': _CurrentPayloads()})
-TYPES = MappingProxyType(_TYPES)
+LAYOUT = MappingProxyType({'payloads': _CurrentPayloads(), 'format': 'DPC1'})

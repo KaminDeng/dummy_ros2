@@ -96,7 +96,6 @@ RViz的 `Collision Enabled: false` 只是不显示碰撞几何，不关闭MoveIt
 | `motion_speed_max_deg_s` / `motion_speed_default_deg_s` | 面板最大/初始关节速度63/60°每秒；不能和末端mm/s混用。 |
 | `motion_acceleration_max_rad_s2` / `motion_acceleration_default_rad_s2` | 最大/初始关节加速度均4rad/s²，不是电机rev/s²寄存器值。 |
 | `inward_recovery_enabled` | 选择向内恢复支持；实际恢复仍受参考、身份、方向及设备状态约束。 |
-| `wire_schema_major` / `wire_schema_minor` | 预期协议2.5，与Native/固件/解码器须相符；不是ROS发行版号。 |
 | `calibration_mode` | 当前manual_limits人工双限位参考流程，不能从字段存在推断已完成标定。 |
 | `calibration_pose_deg` | 人工参考姿态[0,-73,180,0,0,0]度，区别于工作REST。 |
 | `manual_limit_reference_enabled` | 选择人工限位参考能力；启动不会自动写入参考。 |
@@ -113,3 +112,5 @@ RViz的 `Collision Enabled: false` 只是不显示碰撞几何，不关闭MoveIt
 真实六轴Xacro的 `stop_confirmation_timeout_us` 默认字符串0与当前transport非零解析规则
 存在静态接口差异：模板显式输出0并不能触发“省略参数时”的默认回退。
 不要把launch允许0的输入校验当成下游已接受该配置；现有入口还提供显式300000µs预算。
+
+当前部署从正式 Root 发布清单校验元数据与 DPC1 reader，输出 `protocol_codec=flatbuffers`、实际记录解码能力及 `dummy.accepted-state.dpc1` 日志格式。当前网络 Root 没有旧业务 schema_major/minor；读取历史固定布局必须另行明确选择历史发布。

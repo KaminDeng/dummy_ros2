@@ -180,7 +180,7 @@ class BootstrapCoordinator {
    */
   bool release_request_inflight() const noexcept {
     return phase_==BootstrapPhase::kReleasePending && request_id_!=0U &&
-        last_operation_==ManageOperation::kDisableAndRelease;
+        last_operation_==ManageOperation::DISABLE_AND_RELEASE;
   }
   /**
    * @brief 查询是否有未结束的RenewLease管理根。
@@ -188,7 +188,7 @@ class BootstrapCoordinator {
    */
   bool renewal_request_inflight() const noexcept {
     return phase_==BootstrapPhase::kRenewLease && request_id_!=0U &&
-        last_operation_==ManageOperation::kRenewLease;
+        last_operation_==ManageOperation::RENEW_LEASE;
   }
   /**
    * @brief 读取宿主bootstrap阶段。
@@ -313,7 +313,7 @@ class BootstrapCoordinator {
   std::optional<ConfirmedRelease> confirmed_release_;
   std::uint32_t issued_management_epoch_ = 0;
   std::string error_;
-  ManageOperation last_operation_ = ManageOperation::kSelectMode;
+  ManageOperation last_operation_ = ManageOperation::SELECT_CONTROL_MODE;
   bool automatic_ = true;
   bool operator_confirmed_ = false;
   bool strict_evidence_ = false;

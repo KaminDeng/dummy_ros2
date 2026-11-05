@@ -4,6 +4,8 @@ import copy
 import math
 import time
 import uuid
+from manual_panel_root import (source_identity,control_identity,reference_identity,
+    joint_values,quality_mask,valid_state,valid_status)
 
 
 # Count actual DDS service/publisher instances, never node-name list entries.
@@ -160,10 +162,13 @@ class RosBackend:
             return True
         return False
 
-    def _observe_release(self, *, terminal=False):
+    def _observe_release(self, *, terminal=False, fault_confirmed=False):
         if getattr(self.transport, 'owns_control_node', False):
             if self._release_observation is None:
                 self._release_observation = self.transport.release_checkpoint()
+            if fault_confirmed:
+                # 仅精确的C++物理故障释放回执允许Fault双消息；不改变原业务失败。
+                self._release_observation['fault_confirmed'] = True
             if terminal and self._release_deadline is None:
                 # 设备流程自行释放的首个终态没有GUI释放请求，建立一次只读确认预算。
                 self._release_deadline = time.monotonic() + 20.0
@@ -213,13 +218,15 @@ class RosBackend:
             if self._accept_local_retirement(response):
                 return
             message = response.message
-            release_intent = not self.can_close and (self.operation == 'release' or self._release_deadline is not None or self._cleanup_retirement_pending)
+            release_intent = ((not self.can_close or self._cleanup_retirement_pending) and
+                (self.operation == 'release' or self._release_deadline is not None or self._cleanup_retirement_pending))
             physical_release = ((response.success and message in ('RELEASED_IDLE', 'RELEASED_FAULT', 'FAULT_CLEANUP_CONFIRMED')) or
                                 message in ('EVIDENCE_INCOMPLETE;RELEASED_IDLE', 'EVIDENCE_INCOMPLETE;RELEASED_FAULT'))
             # 原释放期限只封锁写请求；迟到的权威只读确认仍可退休owner，原证据错误不改成成功。
             if release_intent and physical_release:
-                already_released = self.released
-                self._observe_release(terminal=True)
+                already_released = self.released and not self._cleanup_retirement_pending
+                self._observe_release(terminal=True, fault_confirmed=message in (
+                    'RELEASED_FAULT', 'EVIDENCE_INCOMPLETE;RELEASED_FAULT', 'FAULT_CLEANUP_CONFIRMED'))
                 self.released = True
                 self.manual_ready = False
                 self.admitting = False
@@ -241,8 +248,10 @@ class RosBackend:
                 self.admitting = False
                 self.released = message.endswith((' cleanup=RELEASED_IDLE', ' cleanup=RELEASED_FAULT'))
                 self.manual_ready = False
-                # 本次C++任务已主动进入cleanup；终态错误保留，只等后续权威只读释放确认。
-                self._cleanup_retirement_pending = message.endswith(' cleanup=UNCONFIRMED')
+                # 业务失败与物理退休独立；即使cleanup已释放，owned观察者仍须新鲜双消息。
+                self._cleanup_retirement_pending = self.released or message.endswith(' cleanup=UNCONFIRMED')
+                if self._cleanup_retirement_pending:
+                    self._observe_release(terminal=True)
                 self.operation = None
                 self.callback('failed', message)
             elif response.success and (message == 'BASELINE_PASSED' or message.startswith('BASELINE_PASSED ')) and self.operation == 'auto':
@@ -253,8 +262,10 @@ class RosBackend:
                 self.admitting = False
                 self.released = message.endswith((' cleanup=RELEASED_IDLE', ' cleanup=RELEASED_FAULT'))
                 self.manual_ready = False
-                # 本次C++任务已主动进入cleanup；终态错误保留，只等后续权威只读释放确认。
-                self._cleanup_retirement_pending = message.endswith(' cleanup=UNCONFIRMED')
+                # 业务失败与物理退休独立；即使cleanup已释放，owned观察者仍须新鲜双消息。
+                self._cleanup_retirement_pending = self.released or message.endswith(' cleanup=UNCONFIRMED')
+                if self._cleanup_retirement_pending:
+                    self._observe_release(terminal=True)
                 self.operation = None
                 self.callback('failed', message)
             else:
@@ -319,35 +330,37 @@ class RosTransport:
     def release_checkpoint(self):
         state = self.latest_state
         return dict(at=time.monotonic(), seq=getattr(state, 'state_seq', 0),
-            identity=None if state is None else tuple(
-                tuple(getattr(state, k)) if k == 'device_id' else getattr(state, k)
-                for k in ('device_id', 'profile_id', 'boot_epoch', 'reference_epoch')))
+            identity=None if state is None or not valid_state(state) else reference_identity(state))
 
     def release_observed(self, checkpoint):
         if checkpoint is None or checkpoint['identity'] is None:
             return False
         state, status = self.latest_state, self.latest_status
         now = time.monotonic()
-        if state is None or status is None or self.feedback_max_age_ms is None or self.status_max_age_ms is None:
+        if state is None or status is None or not valid_state(state) or not valid_status(status) or self.feedback_max_age_ms is None or self.status_max_age_ms is None:
             return False
         if not (checkpoint['at'] < self.state_at <= now and checkpoint['at'] < self.status_at <= now and
                 now-self.state_at <= self.feedback_max_age_ms/1000 and
                 now-self.status_at <= self.status_max_age_ms/1000):
             return False
         for msg in (state, status):
-            identity = tuple(tuple(getattr(msg, k)) if k == 'device_id' else getattr(msg, k)
-                for k in ('device_id', 'profile_id', 'boot_epoch', 'reference_epoch'))
-            if (identity != checkpoint['identity'] or msg.session_id != 0 or msg.core_state != 2 or
-                    msg.first_failure_reason):
+            if reference_identity(msg) != checkpoint['identity'] or msg.session_id != 0:
                 return False
-        return (state.state_seq > checkpoint['seq'] and status.release_committed and
-                not status.real_motion_permitted and status.permit_remaining_us == 0 and not status.evidence_lost)
+        idle = (state.core_state == status.core_state == 2 and
+                state.first_failure_reason == status.first_failure_reason == 0 and not status.evidence_lost)
+        # 故障不等于运动成功；仅已权威确认释放后，匹配的Fault失能双消息可退休自有进程。
+        # State只报告管理事务故障；adapter故障可仅在Status非零，State的0不代表清故障。
+        fault = (checkpoint.get('fault_confirmed', False) and state.core_state == status.core_state == 9 and
+                 status.first_failure_reason != 0 and state.first_failure_reason in (0, status.first_failure_reason) and
+                 state.motion_epoch == status.motion_epoch and state.management_epoch == status.management_epoch)
+        return ((idle or fault) and state.state_seq > checkpoint['seq'] and status.release_committed and
+                not status.real_motion_permitted and status.permit_remaining_us == 0)
 
     def _init_entities(self, node, on_status, on_state):
         from std_srvs.srv import Trigger
         from rcl_interfaces.srv import GetParameters
         from rcl_interfaces.msg import ParameterType
-        from dpsdk_interfaces.msg import DummyDeviceStatusV2, DummyJointStateV2
+        from dpsdk_interfaces.msg import DummyDeviceStatus, DummyJointState
         from control_msgs.action import FollowJointTrajectory
         from rclpy.action import ActionClient
         from unique_identifier_msgs.msg import UUID
@@ -379,21 +392,21 @@ class RosTransport:
         self._submission = None
         self.retry_timer = node.create_timer(.05, self._poll_trajectory_retry)
         def status_received(value):
-            if self.closed or self.control_graph_error():
+            if self.closed or self.control_graph_error() or not valid_status(value):
                 return
             self.latest_status, self.status_at = value, time.monotonic()
             on_status(value)
         def state_received(value):
-            if self.closed or self.control_graph_error():
+            if self.closed or self.control_graph_error() or not valid_state(value):
                 return
             old = self.latest_state
-            if old is not None and old.boot_epoch == value.boot_epoch and value.state_seq <= old.state_seq:
+            if old is not None and source_identity(old) == source_identity(value) and value.state_seq <= old.state_seq:
                 return
             self.latest_state, self.state_at = value, time.monotonic()
             on_state(value)
-        self.subscriptions = [node.create_subscription(DummyDeviceStatusV2,
+        self.subscriptions = [node.create_subscription(DummyDeviceStatus,
             '/device_action_gate/device_status', status_received, 10),
-            node.create_subscription(DummyJointStateV2, '/device_action_gate/device_state', state_received, 10)]
+            node.create_subscription(DummyJointState, '/device_action_gate/device_state', state_received, 10)]
         self.action = ActionClient(node, FollowJointTrajectory, '/arm_controller/follow_joint_trajectory')
         self.goal = None
 
@@ -524,22 +537,21 @@ class RosTransport:
     def _fresh_retry_binding(self, require_permit=True):
         state, status = getattr(self, 'latest_state', None), getattr(self, 'latest_status', None)
         state_age, status_age = getattr(self, 'feedback_max_age_ms', None), getattr(self, 'status_max_age_ms', None)
-        if state is None or status is None or state_age is None or status_age is None:
+        if state is None or status is None or not valid_state(state) or not valid_status(status) or state_age is None or status_age is None:
             return None
         now = time.monotonic()
         if not (0 <= now-self.state_at <= state_age/1000. and 0 <= now-self.status_at <= status_age/1000.):
             return None
-        fields = ('profile_id', 'boot_epoch', 'session_id', 'reference_epoch', 'motion_epoch')
-        if tuple(state.device_id) != tuple(status.device_id) or any(getattr(state, key) != getattr(status, key) for key in fields):
+        fields = ('profile_id', 'session_id', 'reference_epoch', 'motion_epoch')
+        if source_identity(state) != source_identity(status) or any(getattr(state, key) != getattr(status, key) for key in fields):
             return None
-        if (not state.boot_epoch or not state.session_id or not state.reference_epoch or
+        if (not source_identity(state)[1] or not state.session_id or not state.reference_epoch or
                 state.core_state != 4 or status.core_state != 4 or not state.hold_ready or
-                state.position_valid_mask != 63 or state.velocity_valid_mask != 63 or
-                any(age > state_age*1000 for age in state.can_rx_age_us) or
+                quality_mask(state,'position_valid_quality') != 63 or quality_mask(state,'velocity_valid_quality') != 63 or
+                any(age > state_age*1000 for age in joint_values(state,'can_rx_age_us')) or
                 (require_permit and (not status.real_motion_permitted or status.permit_remaining_us <= 0)) or status.evidence_lost):
             return None
-        return (tuple(state.device_id), state.profile_id, state.boot_epoch, state.session_id,
-                state.reference_epoch, state.motion_epoch)
+        return control_identity(state)
 
     def _permit_covers_trajectory(self, context):
         try:
@@ -580,8 +592,7 @@ class RosTransport:
                 return
             state, status = self.latest_state, self.latest_status
             if state is not None:
-                identity = (tuple(state.device_id), state.profile_id, state.boot_epoch,
-                            state.session_id, state.reference_epoch, state.motion_epoch)
+                identity = control_identity(state)
                 if identity != context['binding']:
                     self._submission_failed(context, 'ROS许可安装的原身份已改变')
                     return
@@ -605,10 +616,8 @@ class RosTransport:
             elif stage == 'permit_install':
                 state, status = self.latest_state, self.latest_status
                 if (state is None or status is None or
-                        (tuple(state.device_id), state.profile_id, state.boot_epoch,
-                         state.session_id, state.reference_epoch, state.motion_epoch) != context['binding'] or
-                        (tuple(status.device_id), status.profile_id, status.boot_epoch,
-                         status.session_id, status.reference_epoch, status.motion_epoch) != context['binding']):
+                        control_identity(state) != context['binding'] or
+                        control_identity(status) != context['binding']):
                     self._submission_failed(context, 'ROS许可安装的原身份已改变')
                 elif not value.success:
                     if value.message == 'PERMIT_NOT_QUEUED':
@@ -635,8 +644,7 @@ class RosTransport:
                 if state is None or status is None:
                     self._submission_failed(context, 'ROS起步缺少原绑定反馈')
                     return
-                identity = (tuple(state.device_id), state.profile_id, state.boot_epoch,
-                            state.session_id, state.reference_epoch, state.motion_epoch)
+                identity = control_identity(state)
                 if identity != context['binding']:
                     self._submission_failed(context, 'ROS起步等待的原身份已改变')
                     return
@@ -683,15 +691,14 @@ class RosTransport:
         state, status = self.latest_state, self.latest_status
         if self.closed or self.goal is None or self._submission is not submission or submission['stage'] != 'active':
             return None
-        if state is None or status is None or self.status_max_age_ms is None or self.feedback_max_age_ms is None:
+        if state is None or status is None or not valid_state(state) or not valid_status(status) or self.status_max_age_ms is None or self.feedback_max_age_ms is None:
             return None
         now = time.monotonic()
         if require_fresh and not (0 <= now-self.state_at <= self.feedback_max_age_ms/1000. and
                 0 <= now-self.status_at <= self.status_max_age_ms/1000.):
             return None
         def identity(value):
-            return (tuple(value.device_id), value.profile_id, value.boot_epoch,
-                    value.session_id, value.reference_epoch, value.motion_epoch)
+            return control_identity(value)
         binding = identity(state)
         if (binding != identity(status) or binding[:5] != submission['binding'][:5] or
                 state.core_state != 5 or status.core_state != 5 or
@@ -728,7 +735,7 @@ class RosTransport:
                     self.feedback_max_age_ms, self.status_max_age_ms,
                     getattr(state, 'session_id', None), getattr(status, 'session_id', None),
                     getattr(state, 'motion_epoch', None), getattr(status, 'motion_epoch', None),
-                    getattr(state, 'boot_epoch', None), getattr(status, 'boot_epoch', None),
+                    source_identity(state)[1] if state is not None else None, source_identity(status)[1] if status is not None else None,
                     getattr(state, 'reference_epoch', None), getattr(status, 'reference_epoch', None),
                     getattr(state, 'core_state', None), getattr(status, 'core_state', None),
                     getattr(status, 'real_motion_permitted', None), getattr(status, 'evidence_lost', None)))
@@ -836,8 +843,7 @@ class RosTransport:
         if state is None:
             callback('failed', 'ROS起步缺少原绑定State')
             return False
-        context['binding'] = (tuple(state.device_id), state.profile_id, state.boot_epoch,
-                              state.session_id, state.reference_epoch, state.motion_epoch)
+        context['binding'] = control_identity(state)
         context['stage'] = 'permit_ready'
         self._submission = context
         return True

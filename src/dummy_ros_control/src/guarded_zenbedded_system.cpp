@@ -10,7 +10,7 @@
 #include <limits>
 #include <string>
 
-#include "dummy_ref/wire_validation.hpp"
+#include "dummy_ros_control/message_presence.hpp"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -231,29 +231,28 @@ bool GuardedZenbeddedSystem::ingest_state(
  * @param expectation 已经建立源时钟域关系的期望。
  * @return 解码与ingest都成功为true；无效速度置NaN。
  */
-bool GuardedZenbeddedSystem::ingest_wire_state(
-    const std::uint8_t *bytes, std::size_t size,
-    const StateExpectation &expectation) noexcept {
-  namespace wire = dp::iface;
-  wire::DummyJointStateV2 decoded;
-  if (wire::DummyJointStateV2Codec::decode(bytes, size, &decoded) != wire::CodecResult::kOk)
-    return false;
+bool GuardedZenbeddedSystem::ingest_message_state(
+    const dummy_ref::messages::State& message,const dp::comm::SourceId& source,
+    const StateExpectation& expectation) noexcept {
+  if(!message_fields_present(message))return false;
   JointStateSnapshot snapshot{};
-  snapshot.envelope.boot = decoded.boot_epoch();
-  snapshot.envelope.profile = decoded.profile_id();
-  snapshot.envelope.state_seq = decoded.state_seq();
-  snapshot.envelope.produced_at_us = decoded.produced_at_us();
-  snapshot.envelope.configured_mask = decoded.configured_mask();
-  snapshot.envelope.position_valid_mask = decoded.position_valid_mask();
-  snapshot.envelope.velocity_valid_mask = decoded.velocity_valid_mask();
-  for (std::size_t index = 0; index < snapshot.position.size(); ++index) {
-    snapshot.position[index] = decoded.position_rad()[index];
-    snapshot.velocity[index] =
-        (decoded.velocity_valid_mask() & (1U << index)) != 0U
-            ? decoded.estimated_velocity_rad_s()[index]
-            : std::numeric_limits<double>::quiet_NaN();
+  snapshot.envelope.boot=source.boot_id;
+  snapshot.envelope.profile=*message.profile_id();
+  snapshot.envelope.state_seq=*message.state_seq();
+  snapshot.envelope.produced_at_us=*message.produced_at_us();
+  snapshot.envelope.configured_mask=configured_joint_mask(message);
+  snapshot.envelope.position_valid_mask=position_valid_joint_mask(message);
+  snapshot.position.fill(std::numeric_limits<double>::quiet_NaN());
+  snapshot.velocity.fill(std::numeric_limits<double>::quiet_NaN());
+  for(const auto& joint:*message.joints()) {
+    const auto axis=*joint.joint_id();
+    if(*joint.position_valid_quality())snapshot.position[axis]=*joint.position_rad();
+    if(*joint.velocity_valid_quality()) {
+      snapshot.envelope.velocity_valid_mask|=static_cast<std::uint8_t>(1U<<axis);
+      snapshot.velocity[axis]=*joint.estimated_velocity_rad_s();
+    }
   }
-  return ingest_state(snapshot, expectation);
+  return ingest_state(snapshot,expectation);
 }
 
 /**

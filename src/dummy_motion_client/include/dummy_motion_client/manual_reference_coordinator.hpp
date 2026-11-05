@@ -77,7 +77,7 @@ private:
   ManualReferenceOptions options_;
   BootstrapSnapshot snapshot_{}, binding_{};
   ManualReferencePhase phase_ = ManualReferencePhase::kReadOnly;
-  ManageOperation operation_ = ManageOperation::kSelectMode;
+  ManageOperation operation_ = ManageOperation::SELECT_CONTROL_MODE;
   std::uint64_t deadline_ = 0, operation_deadline_ = 0, rest_anchor_ = 0,
                 quiet_deadline_ = 0, last_received_ = 0;
   dummy_ref::host::RestSettleWindow window_{};

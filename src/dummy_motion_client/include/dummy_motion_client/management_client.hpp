@@ -5,53 +5,44 @@
  */
 #pragma once
 #include <array>
-#include "dp_protocol_constants.h"
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <type_traits>
 #include <vector>
-#include "dummy_ros_control/wire_types.hpp"
+#include "dummy_ref/message_contract.hpp"
+#include "dp_comm/receive_info.hpp"
+#include <utility>
 #include "dummy_motion_client/bench_permit.hpp"
 
 namespace dummy_motion_client {
 /**
  * @brief ManageRequest为生成的wire请求类型，Position为六轴rad容器；身份字段/序号与角度不共用单位。
  */
-using ManageRequest = dummy_wire::DummyManageV2Request;
+using ManageRequest = dummy_ref::messages::ManageRequest;
+using ManagementResponse = std::pair<dummy_ref::messages::ManageResponse,dp::comm::SourceId>;
 using Position = std::array<double, 6>;
-// Dummy wire-major-v2 stable values.
+// 管理枚举唯一来自中央FBS生成。
 /**
  * @brief 稳定wire管理编号；Enable对应PrepareHold，Begin/Complete/Cancel改变动作阶段，RenewLease仅续session而非permit。
  */
-enum class ManageOperation : std::uint16_t {
-  kGetStatus=0, kSelectMode=1, kGrantSession=2, kCaptureReference=3,
-  kClearReference=4, kSetPermit=5, kEnable=6, kBegin=7, kComplete=8,
-  kCancel=9, kDisableAndRelease=10, kClearFault=11, kQuery=12,
-  kConfirmManualHome=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_CONFIRM_MANUAL_HOME,
-  kBeginQualification=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_BEGIN_QUALIFICATION,
-  kValidateRest=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_VALIDATE_REST,
-  kCompleteQualification=DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_COMPLETE_QUALIFICATION,
-  kRenewLease=20
-};
+using ManageOperation=dp::protocol::dummy::ManagementOperation;
 /**
  * @brief 设备core_state常用值，区别于宿主ActionGate::Phase；Idle/EnablingHold/Hold/Running/Fault各需实际消息确认。
  */
-enum class WireCoreState : std::uint16_t {
-  kUnreferencedIdle=1, kIdle=2, kEnablingHold=3, kHold=4, kRunning=5, kFault=9
-};
+using WireCoreState=dp::protocol::dummy::CoreState;
 /**
  * @brief 设备receipt编号：Queued/Replayed表RPC接纳层级，Busy不是已开始操作。
  */
-enum class WireReceipt : std::uint8_t { kQueued=1, kReplayed=2, kBusy=4 };
+using WireReceipt=dp::protocol::dummy::Receipt;
 /**
  * @brief wire result编号；Pending=23表示需继续查，不可当成功。
  */
-enum class WireResult : std::uint16_t { kOk=0, kPending=23 };
+using WireResult=dp::protocol::dummy::ResultCode;
 /**
  * @brief 设备事务阶段：Received/Prepared/Committed/Failed与ROS Action终态分开。
  */
-enum class WireTransactionPhase : std::uint8_t { kIdle=0, kReceived=1, kPrepared=2, kCommitted=3, kFailed=4 };
+using WireTransactionPhase=dp::protocol::dummy::TransactionPhase;
 /**
  * @brief 将强类型wire枚举转换为其底层整数。
  * @param value 枚举值。
@@ -126,10 +117,10 @@ class ManagementClient {
    */
   virtual RenewalCompletion renewal_completion(std::uint64_t) const { return RenewalCompletion::kFailed; }
 };
-// Bind this port to the selected device's manage_v2 endpoint. A handle owns the
+// Bind this port to the selected device's Root管理 endpoint. A handle owns the
 // native request until its reply or explicit destruction. Poll never blocks.
 /**
- * @brief 将固定wire请求绑定到选定manage_v2端点的传输抽象。
+ * @brief 将固定wire请求绑定到选定Root管理端点的传输抽象。
  * 提供单个本地等待句柄，不授予session/动作许可。poll不等待网络，但实现可能分配字节容器及使用try_lock，因此不声称硬实时无分配。
  */
 class ManagementTransport {
@@ -147,7 +138,7 @@ class ManagementTransport {
      * @brief 取一次完整响应字节或返回无进展。
      * @return optional拥有字节副本；失败可抛runtime_error，具体实现一次响应不重复交付。
      */
-    virtual std::optional<std::vector<std::uint8_t>> poll()=0;
+    virtual std::optional<ManagementResponse> poll()=0;
   };
   /**
    * @brief 允许经基类析构传输实现；具体实现负责线程join。
@@ -158,7 +149,7 @@ class ManagementTransport {
    * 匿名vector为调用期借用请求字节；实现必须复制或拥有必要内容后返回，不保存临时vector指针。
    * @return 唯一等待句柄或空；有句柄也可能尚在有限本地admission，不能当设备已收到。
    */
-  virtual std::unique_ptr<RequestHandle> send(const std::vector<std::uint8_t> &)=0;
+  virtual std::unique_ptr<RequestHandle> send(const ManageRequest &)=0;
   /**
    * @brief 为共享请求序号空间预留序号。
    * @param proposed 调用者建议的非零序号。

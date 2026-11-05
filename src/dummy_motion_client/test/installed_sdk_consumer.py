@@ -24,13 +24,15 @@ with tempfile.TemporaryDirectory(prefix='dummy-sdk-consumer-') as temporary:
 project(installed_ros_consumer LANGUAGES CXX)
 find_package(dummy_motion_client CONFIG REQUIRED)
 add_executable(consumer main.cpp)
+target_compile_options(consumer PRIVATE -UNDEBUG)
 target_link_libraries(consumer PRIVATE dummy_motion_client::dummy_dp_management)
 ''')
     environment=os.environ.copy()
-    prefixes=[sdk,ros/'dummy_ros_control',ros/'dummy_motion_client',Path('/opt/ros/jazzy')]
+    prefixes=[sdk,ros/'dummy_ros_control',ros/'dummy_motion_client',ros/'dpsdk_interfaces',ros/'dummy_motion_interfaces',Path('/opt/ros/jazzy')]
     environment['CMAKE_PREFIX_PATH']=':'.join(map(str,prefixes))
     environment['AMENT_PREFIX_PATH']=':'.join(map(str,prefixes[1:]))
-    environment['LD_LIBRARY_PATH']=str(ros/'dummy_ros_control/lib')+':/opt/ros/jazzy/lib'
+    libraries=[ros/'dummy_ros_control/lib',ros/'dpsdk_interfaces/lib',ros/'dummy_motion_interfaces/lib']
+    environment['LD_LIBRARY_PATH']=':'.join(map(str,libraries))+':'+environment.get('LD_LIBRARY_PATH','/opt/ros/jazzy/lib')
     environment.pop('DPSDK_ROOT',None)
     wrapper=['bwrap','--ro-bind','/','/','--dev','/dev','--proc','/proc','--bind',str(root),str(root),
         '--tmpfs',str(args.sdk_source.resolve()),'--tmpfs',str(args.ros_source.resolve()),
@@ -48,7 +50,7 @@ target_link_libraries(consumer PRIVATE dummy_motion_client::dummy_dp_management)
             '-DPython3_EXECUTABLE=/usr/bin/python3'],env=environment,check=True)
     run(['cmake','-S',str(project),'-B',str(root/'build'),'-G','Ninja',
         '-DPython3_EXECUTABLE=/usr/bin/python3'])
-    run(['cmake','--build',str(root/'build')])
+    run(['cmake','--build',str(root/'build'),'--parallel','22'])
     run([str(root/'build/consumer')])
     library=ros/'dummy_ros_control/lib/libdummy_guarded_zenbedded_system.so'
     run(['/usr/bin/python3','-c','import ctypes,sys;ctypes.CDLL(sys.argv[1])',str(library)])

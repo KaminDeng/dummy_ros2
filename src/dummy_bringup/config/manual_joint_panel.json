@@ -130,8 +130,6 @@
   "motion_acceleration_max_rad_s2": 4.0,
   "motion_acceleration_default_rad_s2": 4.0,
   "inward_recovery_enabled": true,
-  "wire_schema_major": 2,
-  "wire_schema_minor": 5,
   "calibration_mode": "manual_limits",
   "calibration_pose_deg": [
     0,

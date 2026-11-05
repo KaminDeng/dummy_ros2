@@ -10,8 +10,8 @@
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <csignal>
-#include <dpsdk_interfaces/msg/dummy_device_status_v2.hpp>
-#include <dpsdk_interfaces/msg/dummy_joint_state_v2.hpp>
+#include <dpsdk_interfaces/msg/dummy_device_status.hpp>
+#include <dpsdk_interfaces/msg/dummy_joint_state.hpp>
 #include <dummy_ref/manual_reference_policy.hpp>
 #include <filesystem>
 #include <fstream>
@@ -33,8 +33,39 @@
 namespace dummy_motion_client {
 using Trigger = std_srvs::srv::Trigger;
 using Fjt = control_msgs::action::FollowJointTrajectory;
-using Status = dpsdk_interfaces::msg::DummyDeviceStatusV2;
-using State = dpsdk_interfaces::msg::DummyJointStateV2;
+using Status = dpsdk_interfaces::msg::DummyDeviceStatus;
+using State = dpsdk_interfaces::msg::DummyJointState;
+/** @brief ROS投影保留SDK真实Source固定struct，不从业务消息合成boot。 */
+template<class Message>std::uint64_t source_boot(const Message& value) noexcept {return std::uint64_t(value.source.boot_lo)|(std::uint64_t(value.source.boot_hi)<<32U);}
+template<class Left,class Right>bool same_domain(const Left& left,const Right& right) noexcept {return left.size()==16U && right.size()==16U && std::equal(left.begin(),left.end(),right.begin());}
+const dpsdk_interfaces::msg::DummyJointStateRecord& axis(const State& state,std::size_t id){
+  if(state.has_joints)for(const auto& joint:state.joints)if(joint.has_joint_id && joint.joint_id==id)return joint;
+  throw std::runtime_error("missing canonical joint record");
+}
+template<class Predicate>std::uint8_t quality_mask(const State& state,Predicate predicate) noexcept {
+  std::uint8_t mask=0U;if(state.has_joints)for(const auto& joint:state.joints)if(joint.has_joint_id && joint.joint_id<6U && predicate(joint))mask|=static_cast<std::uint8_t>(1U<<joint.joint_id);return mask;
+}
+double position(const State& state,std::size_t id){const auto& joint=axis(state,id);if(!joint.has_position_rad)throw std::runtime_error("missing canonical joint position");return joint.position_rad;}
+std::array<double,6> positions(const State& state){std::array<double,6> out;for(std::size_t i=0;i<6;++i)out[i]=position(state,i);return out;}
+bool ros_fields_present(const State& value){
+  if(!(value.has_session_id && value.has_reference_epoch && value.has_motion_epoch && value.has_management_epoch && value.has_profile_id && value.has_produced_at_us && value.has_freshness_ticket && value.has_committed_producer_seq && value.has_admitted_producer_seq && value.has_operation_id && value.has_transaction_phase && value.has_first_failure_reason && value.has_operation_deadline_us && value.has_can_submitted_mask && value.has_can_sent_mask && value.has_can_failed_mask && value.has_core_state && value.has_hold_ready && value.has_joints && value.has_state_seq && value.has_domain_device_id && value.joints.size()==6U && value.domain_device_id.size()==16U))return false;
+  std::uint8_t mask=0U;
+  for(const auto& joint:value.joints){
+    if(!joint.has_joint_id || joint.joint_id>=6U || (mask&(1U<<joint.joint_id)) ||
+       !joint.has_configured_quality || !joint.configured_quality || !joint.has_position_valid_quality ||
+       !joint.has_velocity_valid_quality || !joint.has_raw_position_valid_quality || !joint.has_hold_valid_quality ||
+       !joint.has_feedback_seq || !joint.has_can_rx_age_us ||
+       (joint.position_valid_quality && (!joint.has_position_rad || !std::isfinite(joint.position_rad))) ||
+       (joint.velocity_valid_quality && (!joint.has_estimated_velocity_rad_s || !std::isfinite(joint.estimated_velocity_rad_s))) ||
+       (joint.raw_position_valid_quality && (!joint.has_raw_motor_position_rev || !std::isfinite(joint.raw_motor_position_rev))))return false;
+    mask|=static_cast<std::uint8_t>(1U<<joint.joint_id);
+  }
+  return mask==63U;
+}
+bool ros_fields_present(const Status& value){
+  if(!(value.has_session_id && value.has_reference_epoch && value.has_motion_epoch && value.has_management_epoch && value.has_profile_id && value.has_core_state && value.has_control_mode && value.has_reference_kind && value.has_configured_mask && value.has_motion_supported && value.has_real_motion_permitted && value.has_permit_remaining_us && value.has_capabilities && value.has_operation_id && value.has_transaction_phase && value.has_first_failure_reason && value.has_operation_deadline_us && value.has_committed_producer_seq && value.has_can_submitted_mask && value.has_can_sent_mask && value.has_can_failed_mask && value.has_command_reject_count && value.has_can_error_count && value.has_deadline_miss_count && value.has_contract_sha256 && value.has_model_sha256 && value.has_profile_sha256 && value.has_firmware_sha256 && value.has_board_name_ascii && value.has_compiled_policy_sha256 && value.has_position_min_rad && value.has_position_max_rad && value.has_velocity_max_rad_s && value.has_acceleration_max_rad_s && value.has_control_period_us && value.has_state_publish_period_us && value.has_feedback_period_us && value.has_mailbox_turnover && value.has_tx_event_overflow && value.has_rx_overflow && value.has_bus_off && value.has_run_id && value.has_attempt_id && value.has_final_state && value.has_failure_source && value.has_failure_axis_mask && value.has_cleanup_state && value.has_can_queue_to_submit_us && value.has_can_submit_to_sent_us && value.has_group_count && value.has_evidence_chain_sha256 && value.has_evidence_lost && value.has_attempt_kind && value.has_parent_run_id && value.has_motion_complete && value.has_release_committed && value.has_domain_device_id && value.contract_sha256.size()==32U && value.model_sha256.size()==32U && value.profile_sha256.size()==32U && value.firmware_sha256.size()==32U && value.board_name_ascii.size()==16U && value.compiled_policy_sha256.size()==32U && value.position_min_rad.size()==6U && value.position_max_rad.size()==6U && value.velocity_max_rad_s.size()==6U && value.acceleration_max_rad_s.size()==6U && value.feedback_period_us.size()==6U && value.can_queue_to_submit_us.size()==6U && value.can_submit_to_sent_us.size()==6U && value.evidence_chain_sha256.size()==32U && value.domain_device_id.size()==16U))return false;
+  return true;
+}
 using Plan = moveit_msgs::srv::GetMotionPlan;
 using Scene = moveit_msgs::srv::GetPlanningScene;
 using Apply = moveit_msgs::srv::ApplyPlanningScene;
@@ -176,26 +207,28 @@ public:
     status_sub_ =
         create_subscription<Status>("/device_action_gate/device_status", 10,
                                     [this](Status::SharedPtr value) {
+                                      if(!ros_fields_present(*value))return;
                                       status_ = *value;
                                       status_at_ = steady_us();
                                     });
     state_sub_ = create_subscription<State>(
         "/device_action_gate/device_state", 10, [this](State::SharedPtr value) {
-          if (state_at_ && value->boot_epoch == state_.boot_epoch &&
+          if(!ros_fields_present(*value))return;
+          if (state_at_ && source_boot(*value) == source_boot(state_) &&
               std::int32_t(value->state_seq - state_.state_seq) <= 0)
             return;
           const auto received = steady_us();
           for (unsigned i = 0; i < 6; ++i)
-            if (!state_at_ || value->boot_epoch != state_.boot_epoch ||
-                value->feedback_seq[i] != state_.feedback_seq[i])
+            if (!state_at_ || source_boot(*value) != source_boot(state_) ||
+                axis(*value,i).feedback_seq != axis(state_,i).feedback_seq)
               axis_at_[i] = received;
-          if (state_at_ && value->boot_epoch == state_.boot_epoch) {
+          if (state_at_ && source_boot(*value) == source_boot(state_)) {
             bool still = true;
             for (unsigned i = 0; i < 6; ++i) {
-              if (value->feedback_seq[i] == state_.feedback_seq[i])
+              if (axis(*value,i).feedback_seq == axis(state_,i).feedback_seq)
                 still = false;
-              if (std::abs(value->raw_motor_position_rev[i] -
-                           state_.raw_motor_position_rev[i]) > 0.0005)
+              if (std::abs(axis(*value,i).raw_motor_position_rev -
+                           axis(state_,i).raw_motor_position_rev) > 0.0005)
                 still = false;
             }
             stationary_samples_ = still ? stationary_samples_ + 1 : 0;
@@ -233,18 +266,18 @@ private:
     const auto now = steady_us();
     for (unsigned i = 0; i < 6; ++i)
       if (!axis_at_[i] || now - axis_at_[i] > age_us_ ||
-          state_.can_rx_age_us[i] > age_us_)
+          axis(state_,i).can_rx_age_us > age_us_)
         return false;
     return state_at_ && status_at_ && now - state_at_ <= age_us_ &&
            now - status_at_ <= status_age_us_ &&
-           state_.device_id == status_.device_id && state_.boot_epoch &&
-           state_.boot_epoch == status_.boot_epoch &&
+           same_domain(state_.domain_device_id,status_.domain_device_id) && source_boot(state_) &&
+           source_boot(state_) == source_boot(status_) &&
            (!boot_ ||
-            (boot_ == state_.boot_epoch && device_ == state_.device_id));
+            (boot_ == source_boot(state_) && same_domain(device_,state_.domain_device_id)));
   }
   bool moving_ready() const {
-    return controllers_active_ && fresh() && state_.position_valid_mask == 63 &&
-           state_.velocity_valid_mask == 63 && state_.session_id &&
+    return controllers_active_ && fresh() && quality_mask(state_,[](const auto& joint){return joint.has_position_valid_quality && joint.position_valid_quality;}) == 63 &&
+           quality_mask(state_,[](const auto& joint){return joint.has_velocity_valid_quality && joint.velocity_valid_quality;}) == 63 && state_.session_id &&
            state_.profile_id == status_.profile_id &&
            state_.session_id == status_.session_id && state_.reference_epoch &&
            state_.reference_epoch == status_.reference_epoch &&
@@ -254,7 +287,7 @@ private:
   bool waiting_for_next_permit() const {
     return controllers_active_ && fresh() && state_.core_state == 4 &&
             status_.core_state == 4 && state_.hold_ready &&
-            state_.position_valid_mask == 63 && state_.velocity_valid_mask == 63 &&
+            quality_mask(state_,[](const auto& joint){return joint.has_position_valid_quality && joint.position_valid_quality;}) == 63 && quality_mask(state_,[](const auto& joint){return joint.has_velocity_valid_quality && joint.velocity_valid_quality;}) == 63 &&
             state_.session_id == manual_session_ && status_.session_id == manual_session_ &&
             state_.profile_id == status_.profile_id &&
             state_.reference_epoch == expected_reference_ &&
@@ -330,7 +363,7 @@ private:
     detail_ = text;
     RCLCPP_INFO(get_logger(), "%s: %s", event.c_str(), text.c_str());
     if (report_) {
-      report_ << steady_us() << ' ' << event << " boot=" << state_.boot_epoch
+      report_ << steady_us() << ' ' << event << " boot=" << source_boot(state_)
               << " session=" << state_.session_id << " seq=" << state_.state_seq
               << " operation=" << status_.operation_id
               << " run=" << status_.run_id << ' ' << text << '\n';
@@ -388,28 +421,28 @@ private:
     if (flow_.stage() != BaselineStage::kRelease && boot_ && !fresh()) {
       // 只等待本节点DDS缓存追上；等待期间不发新动作。USB/逐轴CAN的250ms保护仍由唯一设备worker执行。
       bool local_delivery_wait = manual_ready_ && state_at_ && status_at_ &&
-          state_.boot_epoch == boot_ && status_.boot_epoch == boot_ &&
-          state_.device_id == device_ && status_.device_id == device_ &&
+          source_boot(state_) == boot_ && source_boot(status_) == boot_ &&
+          same_domain(state_.domain_device_id,device_) && same_domain(status_.domain_device_id,device_) &&
           state_.session_id == manual_session_ && status_.session_id == manual_session_ &&
           state_.reference_epoch == expected_reference_ && status_.reference_epoch == expected_reference_ &&
           state_.profile_id == status_.profile_id && !status_.evidence_lost &&
-          state_.position_valid_mask == 63 && state_.velocity_valid_mask == 63 &&
+          quality_mask(state_,[](const auto& joint){return joint.has_position_valid_quality && joint.position_valid_quality;}) == 63 && quality_mask(state_,[](const auto& joint){return joint.has_velocity_valid_quality && joint.velocity_valid_quality;}) == 63 &&
           state_.core_state != 9 && status_.core_state != 9 &&
           now - state_at_ <= age_us_ + 2000000 &&
           now - status_at_ <= status_age_us_ + 2000000;
       for (unsigned i = 0; i < 6; ++i)
         local_delivery_wait = local_delivery_wait && axis_at_[i] &&
-            now - axis_at_[i] <= age_us_ + 2000000 && state_.can_rx_age_us[i] <= age_us_;
+            now - axis_at_[i] <= age_us_ + 2000000 && axis(state_,i).can_rx_age_us <= age_us_;
       if (local_delivery_wait)
         return;
       // 首次失鲜保留独立接收锚/轴推进/CAN年龄，不能把DDS停发误称设备源停发。
       std::string detail="state_age_us="+std::to_string(state_at_?now-state_at_:UINT64_MAX)+
         " status_age_us="+std::to_string(status_at_?now-status_at_:UINT64_MAX)+
-        " state_seq="+std::to_string(state_.state_seq)+" boot="+std::to_string(state_.boot_epoch)+
-        " status_boot="+std::to_string(status_.boot_epoch)+" expected_boot="+std::to_string(boot_)+
-        " device_match="+std::to_string(state_.device_id==status_.device_id && device_==state_.device_id);
+        " state_seq="+std::to_string(state_.state_seq)+" boot="+std::to_string(source_boot(state_))+
+        " status_boot="+std::to_string(source_boot(status_))+" expected_boot="+std::to_string(boot_)+
+        " device_match="+std::to_string(same_domain(state_.domain_device_id,status_.domain_device_id) && same_domain(device_,state_.domain_device_id));
       for(unsigned i=0;i<6;++i)detail+=" axis"+std::to_string(i)+"_progress_age_us="+
-        std::to_string(axis_at_[i]?now-axis_at_[i]:UINT64_MAX)+" can_age_us="+std::to_string(state_.can_rx_age_us[i]);
+        std::to_string(axis_at_[i]?now-axis_at_[i]:UINT64_MAX)+" can_age_us="+std::to_string(axis(state_,i).can_rx_age_us);
       record("FRESHNESS_FAILED",detail);
       fail("设备身份改变或源反馈停止进展");
     }
@@ -451,7 +484,7 @@ private:
     if (goal_ && entry_ != BaselineStage::kRelease) {
       if (fresh() && std::int32_t(state_.state_seq - goal_seq_) > 0) {
         for (unsigned i = 0; i < 6; ++i)
-          if (std::abs(state_.position_rad[i] - before_[i]) > 0.0005)
+          if (std::abs(position(state_,i) - before_[i]) > 0.0005)
             feedback_moved_ = true;
         if (state_.core_state == 5 && status_.core_state == 5 && status_.run_id)
           goal_running_ = true;
@@ -553,7 +586,7 @@ private:
   void calibrate() {
     // 初始静止只用于提交资格运动的准入；17退让期间允许真实位置变化。
     if (!management_requested_ &&
-        (!fresh() || state_.raw_position_valid_mask != 63 || stationary_samples_ < 3)) {
+        (!fresh() || quality_mask(state_,[](const auto& joint){return joint.has_raw_position_valid_quality && joint.raw_position_valid_quality;}) != 63 || stationary_samples_ < 3)) {
       if (steady_us() - step_started_ > 5000000)
         fail("没有独立新鲜六轴静止反馈");
       return;
@@ -563,8 +596,8 @@ private:
       return;
     }
     if (!boot_) {
-      boot_ = state_.boot_epoch;
-      device_ = state_.device_id;
+      boot_ = source_boot(state_);
+      std::copy(state_.domain_device_id.begin(),state_.domain_device_id.end(),device_.begin());
       expected_reference_ = state_.reference_epoch;
       reference_bound_ = expected_reference_ != 0;
     }
@@ -584,7 +617,7 @@ private:
       trigger("manual_reference_status", [this](const auto &response) {
         if (response.success &&
             response.message.find("READY") != std::string::npos) {
-          if (!fresh() || state_.position_valid_mask != 63 ||
+          if (!fresh() || quality_mask(state_,[](const auto& joint){return joint.has_position_valid_quality && joint.position_valid_quality;}) != 63 ||
               !state_.reference_epoch)
             return;
           if (reference_bound_ &&
@@ -606,7 +639,7 @@ private:
       if (result_waiting_) {
         if (confirm_goal()) {
           rest_aligning_ = false;
-          origin_ = state_.position_rad;
+          origin_ = positions(state_);
           record("REST_ALIGNMENT_CONFIRMED", "公开MoveIt/FJT归位后开始1度基线");
           advance();
         }
@@ -695,7 +728,7 @@ private:
               return;
             }
           }
-          origin_ = state_.position_rad;
+          origin_ = positions(state_);
           record("HOLD_CONFIRMED", response.message);
           // SDK/REF只退让危险侧，保留参考时的安全J2/J3可能不同于模型REST。
           // 自动基线先经公开规划/执行归位；手动准备不增加任何自动运动。
@@ -733,7 +766,7 @@ private:
                    a = std::min(acceleration_[i], 0.1);
       if (v <= 0 || a <= 0)
         throw std::runtime_error("无有效部署动态上限");
-      const double delta = std::abs(target[i] - state_.position_rad[i]);
+      const double delta = std::abs(target[i] - position(state_,i));
       seconds =
           std::max(seconds, std::max(2 * delta / v, 3 * std::sqrt(delta / a)));
     }
@@ -750,7 +783,7 @@ private:
     if (trajectory.joint_names != names_ || trajectory.points.empty() ||
         !moving_ready())
       return false;
-    auto previous = state_.position_rad;
+    auto previous = positions(state_);
     std::array<double, 6> previous_velocity{}, previous_acceleration{};
     double prior_time = 0;
     unsigned index = 0;
@@ -842,10 +875,10 @@ private:
       return;
     }
     const auto same_identity = [this]() {
-      return moving_ready() && state_.device_id == renewal_state_.device_id &&
-          status_.device_id == renewal_status_.device_id &&
+      return moving_ready() && state_.domain_device_id == renewal_state_.domain_device_id &&
+          status_.domain_device_id == renewal_status_.domain_device_id &&
           state_.profile_id == renewal_state_.profile_id && status_.profile_id == renewal_status_.profile_id &&
-          state_.boot_epoch == renewal_state_.boot_epoch && status_.boot_epoch == renewal_status_.boot_epoch &&
+          source_boot(state_) == source_boot(renewal_state_) && source_boot(status_) == source_boot(renewal_status_) &&
           state_.session_id == renewal_state_.session_id && status_.session_id == renewal_status_.session_id &&
           state_.reference_epoch == renewal_state_.reference_epoch && status_.reference_epoch == renewal_status_.reference_epoch &&
           state_.motion_epoch == renewal_state_.motion_epoch && status_.motion_epoch == renewal_status_.motion_epoch &&
@@ -911,7 +944,7 @@ private:
       tolerance.position = 0.001;
       request.goal_tolerance.push_back(tolerance);
     }
-    before_ = state_.position_rad;
+    before_ = positions(state_);
     target_ = target;
     goal_seq_ = state_.state_seq;
     feedback_moved_ = false;
@@ -1058,9 +1091,9 @@ private:
       fail("到位确认时原owner/reference改变");
       return false;
     }
-    if (!result_waiting_ || !fresh() || state_.position_valid_mask != 63 ||
-        state_.velocity_valid_mask != 63 || status_.evidence_lost ||
-        state_.device_id != renewal_state_.device_id || status_.device_id != renewal_status_.device_id ||
+    if (!result_waiting_ || !fresh() || quality_mask(state_,[](const auto& joint){return joint.has_position_valid_quality && joint.position_valid_quality;}) != 63 ||
+        quality_mask(state_,[](const auto& joint){return joint.has_velocity_valid_quality && joint.velocity_valid_quality;}) != 63 || status_.evidence_lost ||
+        state_.domain_device_id != renewal_state_.domain_device_id || status_.domain_device_id != renewal_status_.domain_device_id ||
         state_.profile_id != renewal_state_.profile_id || status_.profile_id != renewal_status_.profile_id ||
         state_.session_id != renewal_state_.session_id || status_.session_id != renewal_status_.session_id ||
         state_.reference_epoch != renewal_state_.reference_epoch || status_.reference_epoch != renewal_status_.reference_epoch ||
@@ -1075,17 +1108,17 @@ private:
     std::ostringstream evidence;
     evidence << std::setprecision(10);
     for (unsigned i = 0; i < 6; ++i) {
-      if (std::abs(state_.estimated_velocity_rad_s[i]) > 0.002)
+      if (std::abs(axis(state_,i).estimated_velocity_rad_s) > 0.002)
         return false;
       if (!cancel_test_ &&
-          std::abs(state_.position_rad[i] - target_[i]) > 0.001)
+          std::abs(position(state_,i) - target_[i]) > 0.001)
         return false;
-      if (std::abs(state_.position_rad[i] - before_[i]) > 0.0005)
+      if (std::abs(position(state_,i) - before_[i]) > 0.0005)
         moved = true;
       evidence << " axis=" << i << " target=" << target_[i]
-               << " actual=" << state_.position_rad[i]
-               << " delta=" << state_.position_rad[i] - before_[i]
-               << " error=" << state_.position_rad[i] - target_[i];
+               << " actual=" << position(state_,i)
+               << " delta=" << position(state_,i) - before_[i]
+               << " error=" << position(state_,i) - target_[i];
     }
     if (!cancel_test_ && !moved && !feedback_moved_) {
       fail("Action成功但没有源反馈位移证据");
@@ -1212,8 +1245,8 @@ private:
     plan.max_velocity_scaling_factor = std::min(0.1, scaling);
     plan.max_acceleration_scaling_factor = std::min(0.1, scaling);
     plan.start_state.joint_state.name = names_;
-    plan.start_state.joint_state.position.assign(state_.position_rad.begin(),
-                                                 state_.position_rad.end());
+    const auto actual=positions(state_);
+    plan.start_state.joint_state.position.assign(actual.begin(),actual.end());
     moveit_msgs::msg::Constraints constraint;
     for (unsigned i = 0; i < 6; ++i) {
       moveit_msgs::msg::JointConstraint joint;
@@ -1232,7 +1265,7 @@ private:
       req = std::make_shared<Plan::Request>(*obstacle_probe_request_);
       const auto &start = req->motion_plan_request.start_state.joint_state.position;
       for (unsigned i = 0; i < 6; ++i)
-        if (std::abs(state_.position_rad[i] - start[i]) > 0.001) {
+        if (std::abs(position(state_,i) - start[i]) > 0.001) {
           fail("圆柱只读规划探针期间实际起点漂移");
           return;
         }
@@ -1316,7 +1349,7 @@ private:
           }
           // 只降低已规划路径速度；按整段时间等比例缩放，保留所有路点。
           double scale = 1;
-          auto previous = state_.position_rad;
+          auto previous = positions(state_);
           std::array<double, 6> previous_velocity{}, previous_acceleration{};
           double previous_t = 0;
           for (const auto &p : trajectory.points) {
@@ -1582,7 +1615,7 @@ private:
         advance();
       return;
     }
-    auto target = bounded_baseline_target(state_.position_rad, lower_, upper_,
+    auto target = bounded_baseline_target(positions(state_), lower_, upper_,
                                           velocity_, acceleration_, 0);
     if (!target.valid) {
       fail("取消用例没有安全目标");
@@ -1647,7 +1680,7 @@ private:
             state_.management_epoch==status_.management_epoch && state_.operation_id==status_.operation_id &&
             state_.reference_epoch==expected_reference_ &&
             status_.reference_epoch==expected_reference_ && !state_.hold_ready &&
-            state_.raw_position_valid_mask==63 && !state_.can_failed_mask && !status_.can_failed_mask &&
+            quality_mask(state_,[](const auto& joint){return joint.has_raw_position_valid_quality && joint.raw_position_valid_quality;})==63 && !state_.can_failed_mask && !status_.can_failed_mask &&
             !status_.real_motion_permitted && !status_.permit_remaining_us && status_.release_committed &&
             status_.cleanup_state==3 && !status_.evidence_lost;
         if(response.message=="EVIDENCE_INCOMPLETE;RELEASED_FAULT" && dual_fault) {

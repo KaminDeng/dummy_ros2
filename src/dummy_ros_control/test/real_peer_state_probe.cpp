@@ -12,7 +12,7 @@
 #include <iostream>
 #include <thread>
 
-#include "dummy_ref/wire_validation.hpp"
+#include "dummy_ros_control/message_presence.hpp"
 #include "dummy_ros_control/device_management_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
@@ -23,7 +23,7 @@
  * 调用约定：endpoint profile_id configured_mask [missing_axis]。mask只支持1/63，missing_axis为0或配置内1..6轴；strtoul只提供当前代码的数字转换，不是严格全字符串语法验证。
  * @param argc 命令行参数个数（含程序名）。
  * @param argv 命令行字符串数组，具体位置见上述调用约定。
- * @return 0 观察值符合所选条件；2 参数数量错误；3 数值/轴掩码不符；4 启动失败；5 未取得观测；6 解码失败；7 条件不符。
+ * @return 0 观察值符合所选条件；2 参数数量错误；3 数值/轴掩码不符；4 启动失败；5 未取得观测；6 完整字段组缺失；7 条件不符。
  */
 int main(int argc, char **argv) {
   if (argc != 4 && argc != 5) return 2;
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
   std::optional<dummy_ros_control::DeviceManagementObservation> observation;
   const auto channel = dummy_ros_control::DeviceTransport::management_channel(parameters);
   /**
-   * @brief channel互斥锁内复制原始观测；收到State和Status之后才保留副本。
+   * @brief channel互斥锁内复制实际Owned与Source观测；收到State和Status之后才保留副本。
    * 缺轴模式继续等core_state=9且对应raw位清零；到期限仍由末尾valid判断失败，不能仅因收过消息就算通过。
    */
   while (std::chrono::steady_clock::now() < deadline) {
@@ -88,14 +88,11 @@ int main(int argc, char **argv) {
     }
     if (observation && missing_axis == 0U) break;
     if (observation && missing_axis != 0U) {
-      namespace wire = dp::iface;
-      wire::DummyJointStateV2 state;
-      wire::DummyDeviceStatusV2 status;
-      if (wire::DummyJointStateV2Codec::decode(observation->state.data(), observation->state.size(), &state) ==
-              wire::CodecResult::kOk &&
-          wire::DummyDeviceStatusV2Codec::decode(observation->status.data(), observation->status.size(), &status) ==
-              wire::CodecResult::kOk && status.core_state() == 9U &&
-          (state.raw_position_valid_mask() & (1U << (missing_axis - 1U))) == 0U) break;
+      const auto& state=observation->state;
+      const auto& status=observation->status;
+      if (dummy_ros_control::message_fields_present(state) &&
+          dummy_ros_control::message_fields_present(status) && (*status.core_state())==9U &&
+          (dummy_ros_control::raw_position_joint_mask(state) & (1U << (missing_axis-1U)))==0U) break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
@@ -111,32 +108,27 @@ int main(int argc, char **argv) {
     transport.stop();
     return 5;
   }
-  namespace wire = dp::iface;
-  wire::DummyJointStateV2 state;
-  wire::DummyDeviceStatusV2 status;
-  if (wire::DummyJointStateV2Codec::decode(observation->state.data(), observation->state.size(), &state) !=
-          wire::CodecResult::kOk ||
-      wire::DummyDeviceStatusV2Codec::decode(observation->status.data(), observation->status.size(), &status) !=
-          wire::CodecResult::kOk)
-    return 6;
+  const auto& state=observation->state;
+  const auto& status=observation->status;
+  if(!dummy_ros_control::message_fields_present(state)||!dummy_ros_control::message_fields_present(status))return 6;
   const auto missing_mask = missing_axis == 0U ? 0U : static_cast<std::uint8_t>(1U << (missing_axis - 1U));
   /**
    * @brief 冷态要求配置轴raw全有效、reference位置全无效、session=0。
    * 缺轴模式要求Fault、缺轴raw位无效且配置mask保持；JSON auto_degraded=false是固定报告字段，不能单独证明所有降级路径。
    */
-  const bool cold_valid = (state.raw_position_valid_mask() & mask) == mask &&
-      (state.position_valid_mask() & mask) == 0U && state.session_id() == 0U;
-  const bool fault_valid = missing_axis != 0U && status.core_state() == 9U &&
-      (state.raw_position_valid_mask() & missing_mask) == 0U && state.configured_mask() == mask;
-  const bool valid = state.profile_id() == profile && status.profile_id() == profile &&
-      state.configured_mask() == mask && status.configured_mask() == mask &&
+  const bool cold_valid = (dummy_ros_control::raw_position_joint_mask(state) & mask) == mask &&
+      (dummy_ros_control::position_valid_joint_mask(state) & mask) == 0U && (*state.session_id()) == 0U;
+  const bool fault_valid = missing_axis != 0U && (*status.core_state()) == 9U &&
+      (dummy_ros_control::raw_position_joint_mask(state) & missing_mask) == 0U && dummy_ros_control::configured_joint_mask(state) == mask;
+  const bool valid = (*state.profile_id()) == profile && (*status.profile_id()) == profile &&
+      dummy_ros_control::configured_joint_mask(state) == mask && (*status.configured_mask()) == mask &&
       (missing_axis == 0U ? cold_valid : fault_valid);
   std::cout << "{\"profile_id\":" << profile << ",\"configured_mask\":"
             << static_cast<unsigned>(mask) << ",\"raw_valid_mask\":"
-            << static_cast<unsigned>(state.raw_position_valid_mask())
-            << ",\"position_valid_mask\":" << static_cast<unsigned>(state.position_valid_mask())
-            << ",\"session_id\":" << state.session_id()
-            << ",\"core_state\":" << status.core_state()
+            << static_cast<unsigned>(dummy_ros_control::raw_position_joint_mask(state))
+            << ",\"position_valid_mask\":" << static_cast<unsigned>(dummy_ros_control::position_valid_joint_mask(state))
+            << ",\"session_id\":" << (*state.session_id())
+            << ",\"core_state\":" << (*status.core_state())
             << ",\"missing_axis\":" << static_cast<unsigned>(missing_axis)
             << ",\"auto_degraded\":false}\n";
   std::cout.flush();

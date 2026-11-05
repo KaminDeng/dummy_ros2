@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 /**
  * @file direct_hold_handoff_tests.cpp
  * @brief 证据闭合helper与direct Hold/JTC命令生产权交接测试。
@@ -129,26 +130,26 @@ int main(int argc,char **argv) {
    * 身份boot7/session8/ref9/motion17/run8；取消后Hold采用motion18，但仍须同run8的干净final7 raw及安全Hold18证明。
    */
   const TimelineIdentity canceled_run{7U,8U,9U,17U,8U};
-  wire::DummyDeviceStatusV2 canceled_status{};
-  wire::DummyJointStateV2 canceled_state{};
-  canceled_status.set_boot_epoch(7U);
-  canceled_status.set_session_id(8U);
-  canceled_status.set_reference_epoch(9U);
-  canceled_status.set_motion_epoch(18U);
-  canceled_status.set_run_id(8U);
-  canceled_status.set_attempt_kind(1U);
-  canceled_status.set_parent_run_id(0U);
-  canceled_status.set_final_state(7U);
-  canceled_status.set_motion_complete(false);
-  canceled_status.set_core_state(wire_value(WireCoreState::kHold));
-  canceled_state.set_boot_epoch(7U);
-  canceled_state.set_session_id(8U);
-  canceled_state.set_reference_epoch(9U);
-  canceled_state.set_motion_epoch(18U);
-  canceled_state.set_core_state(wire_value(WireCoreState::kHold));
-  canceled_state.set_hold_ready(true);
-  canceled_state.set_can_submitted_mask(63U);
-  canceled_state.set_can_sent_mask(63U);
+  auto canceled_status=owned_fixture::status();dp::comm::SourceId canceled_status_source{};
+  auto canceled_state=owned_fixture::state();dp::comm::SourceId canceled_state_source{};
+  canceled_status_source.boot_id=7U;
+  canceled_status.session_id()=8U;
+  canceled_status.reference_epoch()=9U;
+  canceled_status.motion_epoch()=18U;
+  canceled_status.run_id()=8U;
+  canceled_status.attempt_kind()=1U;
+  canceled_status.parent_run_id()=0U;
+  canceled_status.final_state()=7U;
+  canceled_status.motion_complete()=false;
+  canceled_status.core_state()=wire_value(WireCoreState::kHold);
+  canceled_state_source.boot_id=7U;
+  canceled_state.session_id()=8U;
+  canceled_state.reference_epoch()=9U;
+  canceled_state.motion_epoch()=18U;
+  canceled_state.core_state()=wire_value(WireCoreState::kHold);
+  canceled_state.hold_ready()=true;
+  canceled_state.can_submitted_mask()=63U;
+  canceled_state.can_sent_mask()=63U;
   RawTerminalIdentity terminal{7U,8U,8U,0U,1U,7U,0U,0U,
                                false,false,false,true,18U,true};
   /**
@@ -156,26 +157,26 @@ int main(int argc,char **argv) {
    * 内部canceled_hold回调无实物副作用：将当前Status/State、先前身份及raw终态交给timeline_cancel_hold_confirmed，返回证据是否闭合。
    */
   const auto canceled_hold=[&] {
-    return timeline_cancel_hold_confirmed(canceled_status,canceled_state,canceled_run,
+    return timeline_cancel_hold_confirmed(canceled_status,canceled_state,canceled_status_source,canceled_state_source,canceled_run,
                                           terminal,63U);
   };
   if(!canceled_hold()) return 40;
-  canceled_status.set_run_id(7U);
+  canceled_status.run_id()=7U;
   if(canceled_hold()) return 41;
-  canceled_status.set_run_id(8U);
-  canceled_status.set_final_state(6U);
-  canceled_status.set_motion_complete(true);
+  canceled_status.run_id()=8U;
+  canceled_status.final_state()=6U;
+  canceled_status.motion_complete()=true;
   if(canceled_hold()) return 51;
-  canceled_status.set_final_state(7U);
-  canceled_status.set_motion_complete(false);
-  canceled_status.set_motion_epoch(17U);
-  canceled_state.set_motion_epoch(17U);
+  canceled_status.final_state()=7U;
+  canceled_status.motion_complete()=false;
+  canceled_status.motion_epoch()=17U;
+  canceled_state.motion_epoch()=17U;
   if(canceled_hold()) return 42;
-  canceled_status.set_motion_epoch(18U);
-  canceled_state.set_motion_epoch(18U);
-  canceled_state.set_can_sent_mask(31U);
+  canceled_status.motion_epoch()=18U;
+  canceled_state.motion_epoch()=18U;
+  canceled_state.can_sent_mask()=31U;
   if(canceled_hold()) return 43;
-  canceled_state.set_can_sent_mask(63U);
+  canceled_state.can_sent_mask()=63U;
   terminal.run_id=7U;
   if(canceled_hold()) return 44;
   terminal.run_id=8U;
@@ -186,12 +187,12 @@ int main(int argc,char **argv) {
   terminal.safety_hold_valid=false;
   if(canceled_hold()) return 93;
   terminal.safety_hold_valid=true;
-  canceled_status.set_motion_complete(true);
+  canceled_status.motion_complete()=true;
   if(canceled_hold()) return 52;
-  canceled_status.set_motion_complete(false);
-  canceled_state.set_can_submitted_mask(31U);
+  canceled_status.motion_complete()=false;
+  canceled_state.can_submitted_mask()=31U;
   if(canceled_hold()) return 53;
-  canceled_state.set_can_submitted_mask(63U);
+  canceled_state.can_submitted_mask()=63U;
   if(timeline_terminal_decision(Terminal::kCanceled,true,false,false,true,false,false)
        !=TimelineSuccessDecision::kWait) return 46;
   if(timeline_terminal_decision(Terminal::kCanceled,true,false,true,true,false,false)
@@ -242,12 +243,12 @@ int main(int argc,char **argv) {
       first_page.strict_refresh_successor=true;
   RawTerminalIdentity clean_cancel{7U,8U,8U,0U,1U,7U,0U,0U,
                                    false,false,false,true,18U,true};
-  wire::DummyDeviceStatusV2 successor_status=canceled_status;
-  successor_status.set_run_id(9U);
-  successor_status.set_final_state(0U);
-  successor_status.set_management_epoch(25U);
-  wire::DummyJointStateV2 successor_state=canceled_state;
-  successor_state.set_management_epoch(25U);
+  auto successor_status=canceled_status;auto successor_status_source=canceled_status_source;
+  successor_status.run_id()=9U;
+  successor_status.final_state()=0U;
+  successor_status.management_epoch()=25U;
+  auto successor_state=canceled_state;auto successor_state_source=canceled_state_source;
+  successor_state.management_epoch()=25U;
   first_page.motion_epoch=18U;
   const CancelReceipt cancel_receipt{101U,202U};
   /**
@@ -259,7 +260,7 @@ int main(int argc,char **argv) {
    * 内部回调无参数并返回bool：把当前继任Status/State、旧raw、首页及CancelReceipt101/202交真实helper，核旧Hold Status缺失的严格闭合替代。
    */
   const auto missing_status_hold=[&] {
-    return timeline_cancel_refresh_hold_confirmed(successor_status,successor_state,
+    return timeline_cancel_refresh_hold_confirmed(successor_status,successor_state,successor_status_source,successor_state_source,
       canceled_run,clean_cancel,first_page,cancel_receipt,true,0U,63U);
   };
   if(!missing_status_hold()) return 74;
@@ -284,35 +285,35 @@ int main(int argc,char **argv) {
   clean_cancel.safety_hold_motion_epoch=17U;
   if(missing_status_hold()) return 91;
   clean_cancel.safety_hold_motion_epoch=18U;
-  if(timeline_cancel_refresh_hold_confirmed(successor_status,successor_state,
+  if(timeline_cancel_refresh_hold_confirmed(successor_status,successor_state,successor_status_source,successor_state_source,
        canceled_run,clean_cancel,first_page,std::nullopt,true,0U,63U)) return 77;
-  if(timeline_cancel_refresh_hold_confirmed(successor_status,successor_state,
+  if(timeline_cancel_refresh_hold_confirmed(successor_status,successor_state,successor_status_source,successor_state_source,
        canceled_run,clean_cancel,first_page,cancel_receipt,true,1U,63U)) return 78;
-  successor_status.set_run_id(10U);
+  successor_status.run_id()=10U;
   if(missing_status_hold()) return 79;
-  successor_status.set_run_id(9U);
-  successor_state.set_motion_epoch(17U);
+  successor_status.run_id()=9U;
+  successor_state.motion_epoch()=17U;
   if(missing_status_hold()) return 80;
-  successor_state.set_motion_epoch(18U);
+  successor_state.motion_epoch()=18U;
   first_page.motion_epoch=17U;
   if(missing_status_hold()) return 81;
   first_page.motion_epoch=18U;
   first_page.chain_valid=false;
   if(missing_status_hold()) return 87;
   first_page.chain_valid=true;
-  successor_status.set_reference_epoch(10U);
-  successor_state.set_reference_epoch(10U);
+  successor_status.reference_epoch()=10U;
+  successor_state.reference_epoch()=10U;
   if(missing_status_hold()) return 88;
-  successor_status.set_reference_epoch(9U);
-  successor_state.set_reference_epoch(9U);
-  successor_status.set_run_id(8U);
-  successor_status.set_final_state(7U);
+  successor_status.reference_epoch()=9U;
+  successor_state.reference_epoch()=9U;
+  successor_status.run_id()=8U;
+  successor_status.final_state()=7U;
   if(missing_status_hold()) return 89;
-  successor_status.set_run_id(9U);
-  successor_status.set_final_state(0U);
-  successor_state.set_can_sent_mask(31U);
+  successor_status.run_id()=9U;
+  successor_status.final_state()=0U;
+  successor_state.can_sent_mask()=31U;
   if(missing_status_hold()) return 82;
-  successor_state.set_can_sent_mask(63U);
+  successor_state.can_sent_mask()=63U;
   if(!missing_status_hold()) return 83;
   first_page.motion_epoch=17U;
   if(!dummy_motion_client::verified_refresh_successor(first_page,run9)) return 35;
@@ -334,28 +335,28 @@ int main(int argc,char **argv) {
        refresh_status_us,refresh_status_us,state_age_budget_us) ||
      dummy_motion_client::timeline_refresh_wait_allowed(run9,run8,true,false,
        refresh_status_us,refresh_status_us,state_age_budget_us)) return 30;
-  dummy_motion_client::wire::DummyDeviceStatusV2 refresh_status{};
-  dummy_motion_client::wire::DummyJointStateV2 refresh_state{};
-  refresh_status.set_boot_epoch(7U);
-  refresh_status.set_session_id(8U);
-  refresh_status.set_reference_epoch(9U);
-  refresh_status.set_motion_epoch(17U);
-  refresh_status.set_management_epoch(25U);
-  refresh_state.set_boot_epoch(7U);
-  refresh_state.set_session_id(8U);
-  refresh_state.set_reference_epoch(9U);
-  refresh_state.set_motion_epoch(17U);
-  refresh_state.set_management_epoch(25U);
-  if(!dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state)) return 21;
-  refresh_status.set_motion_epoch(18U);
-  if(dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state)) return 22;
-  refresh_status.set_motion_epoch(17U);
-  refresh_status.set_management_epoch(26U);
-  if(dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state)) return 23;
-  refresh_status.set_management_epoch(25U);
-  refresh_status.set_session_id(10U);
-  if(dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state)) return 24;
-  refresh_status.set_session_id(8U);
+  auto refresh_status=owned_fixture::status();dp::comm::SourceId refresh_status_source{};
+  auto refresh_state=owned_fixture::state();dp::comm::SourceId refresh_state_source{};
+  refresh_status_source.boot_id=7U;
+  refresh_status.session_id()=8U;
+  refresh_status.reference_epoch()=9U;
+  refresh_status.motion_epoch()=17U;
+  refresh_status.management_epoch()=25U;
+  refresh_state_source.boot_id=7U;
+  refresh_state.session_id()=8U;
+  refresh_state.reference_epoch()=9U;
+  refresh_state.motion_epoch()=17U;
+  refresh_state.management_epoch()=25U;
+  if(!dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state,refresh_status_source,refresh_state_source)) return 21;
+  refresh_status.motion_epoch()=18U;
+  if(dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state,refresh_status_source,refresh_state_source)) return 22;
+  refresh_status.motion_epoch()=17U;
+  refresh_status.management_epoch()=26U;
+  if(dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state,refresh_status_source,refresh_state_source)) return 23;
+  refresh_status.management_epoch()=25U;
+  refresh_status.session_id()=10U;
+  if(dummy_motion_client::refresh_observation_coherent(refresh_status,refresh_state,refresh_status_source,refresh_state_source)) return 24;
+  refresh_status.session_id()=8U;
   const auto verified_refresh=dummy_motion_client::timeline_refresh_closure_identity(
     run9,run8,true,true,true,true,true,true);
   if(!verified_refresh || verified_refresh->run_id!=8U ||
@@ -399,17 +400,17 @@ int main(int argc,char **argv) {
   const TimelineIdentity run32{run31.boot,run31.session,run31.reference_epoch,
                                run31.motion_epoch,32U};
   constexpr std::uint64_t run32_status_us=1000000ULL;
-  wire::DummyDeviceStatusV2 run32_status{};
-  run32_status.set_boot_epoch(run32.boot);
-  run32_status.set_session_id(run32.session);
-  run32_status.set_reference_epoch(run32.reference_epoch);
-  run32_status.set_motion_epoch(run32.motion_epoch);
-  run32_status.set_run_id(run32.run_id);
-  run32_status.set_group_count(1U);
-  run32_status.set_attempt_kind(1U);
-  run32_status.set_core_state(wire_value(WireCoreState::kHold));
+  auto run32_status=owned_fixture::status();dp::comm::SourceId run32_status_source{};
+  run32_status_source.boot_id=run32.boot;
+  run32_status.session_id()=run32.session;
+  run32_status.reference_epoch()=run32.reference_epoch;
+  run32_status.motion_epoch()=run32.motion_epoch;
+  run32_status.run_id()=run32.run_id;
+  run32_status.group_count()=1U;
+  run32_status.attempt_kind()=1U;
+  run32_status.core_state()=wire_value(WireCoreState::kHold);
   RawFirstPageWritten run32_page{};
-  if(run32_status.group_count()!=1U ||
+  if(*run32_status.group_count()!=1U ||
      verified_refresh_successor(run32_page,run32) ||
      timeline_refresh_closure_identity(run32,run31,true,true,
        verified_refresh_successor(run32_page,run32),true,true,true) ||
@@ -434,27 +435,27 @@ int main(int argc,char **argv) {
                                        1U,2U,1U};
   const TimelineIdentity completed_successor{completed_run.boot,completed_run.session,
                                              completed_run.reference_epoch,3U,2U};
-  wire::DummyDeviceStatusV2 completed_status{};
-  completed_status.set_boot_epoch(completed_successor.boot);
-  completed_status.set_session_id(completed_successor.session);
-  completed_status.set_reference_epoch(completed_successor.reference_epoch);
-  completed_status.set_motion_epoch(completed_successor.motion_epoch);
-  completed_status.set_management_epoch(7U);
-  completed_status.set_run_id(completed_successor.run_id);
-  completed_status.set_attempt_kind(1U);
-  completed_status.set_parent_run_id(0U);
-  completed_status.set_final_state(0U);
-  completed_status.set_core_state(wire_value(WireCoreState::kHold));
-  wire::DummyJointStateV2 completed_state{};
-  completed_state.set_boot_epoch(completed_successor.boot);
-  completed_state.set_session_id(completed_successor.session);
-  completed_state.set_reference_epoch(completed_successor.reference_epoch);
-  completed_state.set_motion_epoch(completed_successor.motion_epoch);
-  completed_state.set_management_epoch(7U);
-  completed_state.set_core_state(wire_value(WireCoreState::kHold));
-  completed_state.set_hold_ready(true);
-  completed_state.set_can_submitted_mask(63U);
-  completed_state.set_can_sent_mask(63U);
+  auto completed_status=owned_fixture::status();dp::comm::SourceId completed_status_source{};
+  completed_status_source.boot_id=completed_successor.boot;
+  completed_status.session_id()=completed_successor.session;
+  completed_status.reference_epoch()=completed_successor.reference_epoch;
+  completed_status.motion_epoch()=completed_successor.motion_epoch;
+  completed_status.management_epoch()=7U;
+  completed_status.run_id()=completed_successor.run_id;
+  completed_status.attempt_kind()=1U;
+  completed_status.parent_run_id()=0U;
+  completed_status.final_state()=0U;
+  completed_status.core_state()=wire_value(WireCoreState::kHold);
+  auto completed_state=owned_fixture::state();dp::comm::SourceId completed_state_source{};
+  completed_state_source.boot_id=completed_successor.boot;
+  completed_state.session_id()=completed_successor.session;
+  completed_state.reference_epoch()=completed_successor.reference_epoch;
+  completed_state.motion_epoch()=completed_successor.motion_epoch;
+  completed_state.management_epoch()=7U;
+  completed_state.core_state()=wire_value(WireCoreState::kHold);
+  completed_state.hold_ready()=true;
+  completed_state.can_submitted_mask()=63U;
+  completed_state.can_sent_mask()=63U;
   const RawTerminalIdentity completed_terminal{completed_run.boot,completed_run.session,
     completed_run.run_id,0U,1U,6U,0U,0U,false,true,false,true,0U,false};
   RawFirstPageWritten completed_page{};
@@ -477,10 +478,10 @@ int main(int argc,char **argv) {
    * @par 场景与断言
    * 内部completed_refresh_hold回调以status/state/prior/terminal/page值为参数，返回timeline_completed_refresh_hold_confirmed结果；不修改真实场景或执行设备。
    */
-  const auto completed_refresh_hold=[&](const wire::DummyDeviceStatusV2 &status,
-      const wire::DummyJointStateV2 &state,const TimelineIdentity &prior,
+  const auto completed_refresh_hold=[&](const dummy_ref::messages::Status &status,
+      const dummy_ref::messages::State &state,const TimelineIdentity &prior,
       const RawTerminalIdentity &terminal,const RawFirstPageWritten &page) {
-    return timeline_completed_refresh_hold_confirmed(status,state,prior,terminal,page,
+    return timeline_completed_refresh_hold_confirmed(status,state,completed_status_source,completed_state_source,prior,terminal,page,
       true,0U,63U);
   };
   const bool completed_prior_hold=completed_refresh_hold(completed_status,completed_state,
@@ -491,9 +492,9 @@ int main(int argc,char **argv) {
      !timeline_refresh_closure_identity(completed_successor,inferred_prior_hold,
        completed_prior_hold,true,
        verified_refresh_successor(completed_page,completed_successor),true,true,true)) return 101;
-  if(timeline_completed_refresh_hold_confirmed(completed_status,completed_state,
+  if(timeline_completed_refresh_hold_confirmed(completed_status,completed_state,completed_status_source,completed_state_source,
        completed_run,completed_terminal,completed_page,false,0U,63U) ||
-     timeline_completed_refresh_hold_confirmed(completed_status,completed_state,
+     timeline_completed_refresh_hold_confirmed(completed_status,completed_state,completed_status_source,completed_state_source,
        completed_run,completed_terminal,completed_page,true,1U,63U)) return 115;
   /**
    * @par 场景与断言
@@ -544,15 +545,15 @@ int main(int argc,char **argv) {
   if(completed_refresh_hold(completed_status,completed_state,completed_run,
        completed_terminal,missing_page)) return 114;
   auto stale_status=completed_status;
-  stale_status.set_motion_epoch(2U);
+  stale_status.motion_epoch()=2U;
   if(completed_refresh_hold(stale_status,completed_state,completed_run,
        completed_terminal,completed_page)) return 108;
   auto fault_status=completed_status;
-  fault_status.set_evidence_lost(true);
+  fault_status.evidence_lost()=true;
   if(completed_refresh_hold(fault_status,completed_state,completed_run,
        completed_terminal,completed_page)) return 109;
   fault_status=completed_status;
-  fault_status.set_motion_complete(true);
+  fault_status.motion_complete()=true;
   if(completed_refresh_hold(fault_status,completed_state,completed_run,
        completed_terminal,completed_page)) return 116;
   run32_page.boot_epoch=run32.boot;

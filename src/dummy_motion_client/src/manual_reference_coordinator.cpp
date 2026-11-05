@@ -25,8 +25,8 @@ bool ManualReferenceCoordinator::issue(ManageOperation operation,
   }
   operation_ = operation;
   waiting_ = true;
-  if (operation == ManageOperation::kValidateRest ||
-      operation == ManageOperation::kCompleteQualification) {
+  if (operation == ManageOperation::VALIDATE_REST ||
+      operation == ManageOperation::COMPLETE_QUALIFICATION) {
     if (quiet_deadline_ == 0)
       quiet_deadline_ =
           now + std::min(options_.operation_timeout_us, deadline_ - now);
@@ -94,7 +94,7 @@ bool ManualReferenceCoordinator::start(const ConfirmedManualStart &confirm,
   }
   deadline_ = now + options_.total_timeout_us;
   phase_ = ManualReferencePhase::kSelectMode;
-  return issue(ManageOperation::kSelectMode, now);
+  return issue(ManageOperation::SELECT_CONTROL_MODE, now);
 }
 void ManualReferenceCoordinator::observe(const BootstrapSnapshot &s,
                                          const Position &p, std::uint32_t seq,
@@ -199,15 +199,15 @@ void ManualReferenceCoordinator::tick(std::uint64_t now) {
       return;
     }
     switch (operation_) {
-    case ManageOperation::kSelectMode:
+    case ManageOperation::SELECT_CONTROL_MODE:
       if (snapshot_.control_mode == 0 || snapshot_.session_id != 0) {
         waiting_ = true;
         return;
       }
       phase_ = ManualReferencePhase::kGrantSession;
-      issue(ManageOperation::kGrantSession, now);
+      issue(ManageOperation::GRANT_SESSION, now);
       return;
-    case ManageOperation::kGrantSession:
+    case ManageOperation::GRANT_SESSION:
       if (snapshot_.session_id == 0) {
         waiting_ = true;
         return;
@@ -215,7 +215,7 @@ void ManualReferenceCoordinator::tick(std::uint64_t now) {
       phase_ = ManualReferencePhase::kCaptureAbsolute;
       clear_window();
       return;
-    case ManageOperation::kConfirmManualHome:
+    case ManageOperation::CONFIRM_MANUAL_HOME:
       if (snapshot_.reference_epoch == 0 || snapshot_.reference_kind != 1) {
         waiting_ = true;
         return;
@@ -224,23 +224,23 @@ void ManualReferenceCoordinator::tick(std::uint64_t now) {
       raw_window_ = false;
       clear_window();
       return;
-    case ManageOperation::kBeginQualification:
+    case ManageOperation::BEGIN_QUALIFICATION:
       motion_ = snapshot_.motion_epoch;
       rest_anchor_ = now;
       clear_window();
       return;
-    case ManageOperation::kValidateRest:
+    case ManageOperation::VALIDATE_REST:
       if (!window_ready())
         return;
-      issue(ManageOperation::kCompleteQualification, now);
+      issue(ManageOperation::COMPLETE_QUALIFICATION, now);
       return;
-    case ManageOperation::kCompleteQualification:
+    case ManageOperation::COMPLETE_QUALIFICATION:
       qualified_reference_epoch_ = reference_;
       if (!window_ready())
         return;
-      issue(ManageOperation::kSetPermit, now);
+      issue(ManageOperation::INSTALL_PERMIT, now);
       return;
-    case ManageOperation::kSetPermit:
+    case ManageOperation::INSTALL_PERMIT:
       if (bootstrap_.authorization())
         phase_ = ManualReferencePhase::kReady;
       return;
@@ -252,7 +252,7 @@ void ManualReferenceCoordinator::tick(std::uint64_t now) {
   if (phase_ == ManualReferencePhase::kCaptureAbsolute) {
     if (raw_window_) {
       if (window_ready())
-        issue(ManageOperation::kConfirmManualHome, now, confirmed_);
+        issue(ManageOperation::CONFIRM_MANUAL_HOME, now, confirmed_);
       return;
     }
     if (snapshot_.reference_epoch == 0 || snapshot_.reference_kind != 1 ||
@@ -269,7 +269,7 @@ void ManualReferenceCoordinator::tick(std::uint64_t now) {
           q <= options_.position_max[axis] - options_.working_margin_rad + options_.hold_tolerance_rad;
     }
     if (ordinary_resume) {
-      issue(ManageOperation::kSetPermit, now);
+      issue(ManageOperation::INSTALL_PERMIT, now);
       return;
     }
     if (!freeze_rest_plan()) {
@@ -279,24 +279,24 @@ void ManualReferenceCoordinator::tick(std::uint64_t now) {
     reference_ = snapshot_.reference_epoch;
     phase_ = ManualReferencePhase::kRestQualification;
     clear_window();
-    issue(ManageOperation::kBeginQualification, now);
+    issue(ManageOperation::BEGIN_QUALIFICATION, now);
     return;
   }
   if (phase_ == ManualReferencePhase::kRestQualification && window_ready() &&
       sequence_ != retry_sequence_) {
-    if (operation_ == ManageOperation::kBeginQualification &&
+    if (operation_ == ManageOperation::BEGIN_QUALIFICATION &&
         now >= rest_anchor_ && now - rest_anchor_ >= rest_duration_us_)
-      issue(ManageOperation::kValidateRest, now, confirmed_);
-    else if (operation_ == ManageOperation::kValidateRest) {
+      issue(ManageOperation::VALIDATE_REST, now, confirmed_);
+    else if (operation_ == ManageOperation::VALIDATE_REST) {
       if (bootstrap_.manual_policy_denied())
-        issue(ManageOperation::kValidateRest, now, confirmed_);
+        issue(ManageOperation::VALIDATE_REST, now, confirmed_);
       else
-        issue(ManageOperation::kCompleteQualification, now);
-    } else if (operation_ == ManageOperation::kCompleteQualification) {
+        issue(ManageOperation::COMPLETE_QUALIFICATION, now);
+    } else if (operation_ == ManageOperation::COMPLETE_QUALIFICATION) {
       if (bootstrap_.manual_policy_denied())
-        issue(ManageOperation::kCompleteQualification, now);
+        issue(ManageOperation::COMPLETE_QUALIFICATION, now);
       else
-        issue(ManageOperation::kSetPermit, now);
+        issue(ManageOperation::INSTALL_PERMIT, now);
     }
   }
 }

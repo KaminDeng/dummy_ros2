@@ -13,6 +13,18 @@ from pathlib import Path
 
 
 ##
+# @brief 给规划器的加速度上限留数值舍入余量，设备严格限值保持不变。
+# @param device_limit 设备策略的有限正加速度上限，单位rad/s²。
+# @return 规划上限；最多内收1e-6 rad/s²，不修改速度、到位或安全验收门。
+# @details TOTG在4.0边界可输出4.0000000001，使合法意图被严格设备校验拒绝。
+# 余量施加于规划输入，不能在收到轨迹后掩盖超限或改写原轨迹。
+def planning_acceleration_limit(device_limit):
+    if isinstance(device_limit, bool) or not isinstance(device_limit, (int, float)) or not math.isfinite(device_limit) or device_limit <= 0:
+        raise ValueError('设备加速度上限必须为有限正数')
+    return device_limit - min(1e-6, device_limit * 1e-6)
+
+
+##
 # @brief 确定当前用户的面板部署根目录。
 # 目录定位本身不会创建目录；部署脚本在此创建 releases 和 current 符号链接。
 # @return Path：XDG_DATA_HOME 下的 dummy_ros/manual_panel；未设置时使用 ~/.local/share。
@@ -140,8 +152,9 @@ def load_panel_config(config_path, backend, description_xacro=''):
 # @param config 已载入的配置，必须包含 decoder_directory。
 # @return callable：部署内 join_real_6dof_evidence.py 的 _decode 函数。
 def load_decoder(config):
-    path = Path(config['decoder_directory'])/'join_real_6dof_evidence.py'
-    spec = importlib.util.spec_from_file_location('dummy_manual_panel_decoder', path)
-    module = importlib.util.module_from_spec(spec)
+    # Native stdout携当前DPC1业务记录；不按DPRAW03网络抓包偏移重建旧DTO。
+    path=Path(config['decoder_directory'])/'selected_protocol.py'
+    spec=importlib.util.spec_from_file_location('dummy_manual_panel_current_protocol',path)
+    module=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module._decode
+    return module.decode

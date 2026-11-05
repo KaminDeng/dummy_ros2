@@ -1,7 +1,7 @@
 """离线生成真实六轴 ROS 证据上下文的契约测试。"""
 ##
 # @file test_build_real_6dof_context.py
-# @brief 合成DPRAW01/CSV/Action文件的context构建、时钟窗口和取消过渡绑定回归。
+# @brief 合成DPRAW02/CSV/Action文件的context构建、时钟窗口和取消过渡绑定回归。
 #
 # 所有记录均用wire/record在临时文件人工生成，未采集ROS/USB/设备。Host接收when与Source produced_at_us均为µs但不同域；lag取receive−produced偏移的跨度，不是绝对时钟同步或单向延迟。基础夹具仅测context，不等完整应用证据；旧window用1s State容差，dense专用严格250ms。
 
@@ -12,6 +12,7 @@ from pathlib import Path
 import struct
 
 import pytest
+from scripts.dummy.tests.current_root_fixture import wire,replace as replace_root,chain as chain_root,chain_hash,previous_hash,canonical,PRODUCER_SOURCE,REQUESTER_SOURCE
 
 from scripts.dummy import build_real_6dof_context as builder
 from scripts.dummy import join_real_6dof_evidence as joiner
@@ -22,26 +23,10 @@ from scripts.dummy import join_real_6dof_evidence as joiner
 # @param name LAYOUT payload消息类型名。
 # @param values 字段名到值字典，数组hex先转bytes，其它按字段类型小端写入。
 # @return 固定encoded_size的原wire bytes。
-def wire(name, **values):
-    layout = joiner.LAYOUT["payloads"][name]
-    raw = bytearray(layout["encoded_size"])
-    types = {"uint8": "B", "uint16": "H", "uint32": "I", "uint64": "Q",
-             "float64": "d", "bool": "B"}
-    for field in layout["fields"]:
-        value = {"schema_major": 2, "schema_minor": 5, **values}.get(field["name"])
-        if value is None:
-            continue
-        if field["count"] > 1:
-            value = bytes.fromhex(value) if isinstance(value, str) else value
-        else:
-            value = [value]
-        struct.pack_into("<" + types[field["type"]] * field["count"], raw,
-                         field["offset"], *value)
-    return bytes(raw)
 
 
 ##
-# @brief 把kind/长度/Host接收µs/外层boot/session/run/seq与payload拼成一条DPRAW01记录，不加文件magic。
+# @brief 把kind/长度/Host接收µs/外层boot/session/run/seq与payload拼成一条DPRAW02记录，不加文件magic。
 # @param kind DPRAW种类：1 Evidence、2 State、3 Status、4 Manage请求、5响应。
 # @param when 本条Host接收/记录单调时间µs，不是Source生产时间。
 # @param boot 外层boot epoch，默认场景为2。
@@ -49,10 +34,11 @@ def wire(name, **values):
 # @param run 设备attempt/RUN ID，和ROS goal UUID不同。
 # @param seq DPRAW外层序号；含义随kind为request_seq/evidence_seq等。
 # @param payload 待拼接的原wire bytes，不自动校验其内层身份。
-# @return header+payload bytes，可拼入DPRAW01文件。
+# @return header+payload bytes，可拼入DPRAW02文件。
 def record(kind, when, boot, session, run, seq, payload):
-    return joiner.RECORD_HEADER.pack(kind, len(payload), when, boot, session,
-                                     run, seq) + payload
+    source=REQUESTER_SOURCE if kind==4 else {**PRODUCER_SOURCE,'boot_id':boot}
+    return joiner.RECORD_HEADER.pack(kind,len(payload),when,source['boot_id'],session,run,seq,
+        bytes.fromhex(source['device']),source['context_id'])+payload
 
 
 ##
@@ -66,14 +52,14 @@ def capture(tmp_path):
     action = tmp_path / "action.json"
     action.write_text('{"scope":"ROS_ACTION_ONLY"}\n')
     client = "11" * 16
-    request = wire("DummyManageV2Request", client_instance_id=client,
+    request = wire("DummyManageRequest", client_instance_id=client,
                    expected_boot_epoch=2, expected_session_id=3, request_seq=1)
-    response = wire("DummyManageV2Response", client_instance_id=client,
+    response = wire("DummyManageResponse", client_instance_id=client,
                     boot_epoch=2, session_id=3)
-    states = [wire("DummyJointStateV2", boot_epoch=2, session_id=3,
+    states = [wire("DummyJointState", boot_epoch=2, session_id=3,
                    produced_at_us=produced) for produced in (1090, 1180)]
     raw = tmp_path / "raw.bin"
-    raw.write_bytes(b"DPRAW01\0" +
+    raw.write_bytes(b"DPRAW02\0" +
                     record(4, 95, 2, 3, 0, 1, request) +
                     record(2, 100, 2, 3, 0, 0, states[0]) +
                     record(5, 150, 2, 3, 0, 0, response) +
@@ -132,7 +118,7 @@ def test_rejects_mismatched_client_without_output(capture):
 def test_rejects_empty_state_stream(capture):
     raw = capture[1]
     records = joiner._raw_records(raw.read_bytes())
-    raw.write_bytes(b"DPRAW01\0" + b"".join(record(
+    raw.write_bytes(b"DPRAW02\0" + b"".join(record(
         item["kind"], item["when"], item["boot"], item["session"],
         item["run"], item["seq"], item["raw"])
         for item in records if item["kind"] != 2))
@@ -149,7 +135,7 @@ def test_rejects_nonmonotonic_receive_times(capture):
     raw = capture[1]
     records = joiner._raw_records(raw.read_bytes())
     reordered = [records[0], records[2], records[1], records[3]]
-    raw.write_bytes(b"DPRAW01\0" + b"".join(record(
+    raw.write_bytes(b"DPRAW02\0" + b"".join(record(
         item["kind"], item["when"], item["boot"], item["session"],
         item["run"], item["seq"], item["raw"]) for item in reordered))
     with pytest.raises(ValueError, match="nonmonotonic"):
@@ -164,13 +150,13 @@ def test_rejects_nonmonotonic_receive_times(capture):
 def test_rejects_nonmonotonic_state_production_times(capture):
     raw = capture[1]
     records = joiner._raw_records(raw.read_bytes())
-    earlier = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
+    earlier = wire("DummyJointState", boot_epoch=2, session_id=3,
                    produced_at_us=1080)
-    raw.write_bytes(b"DPRAW01\0" + b"".join(record(
+    raw.write_bytes(b"DPRAW02\0" + b"".join(record(
         item["kind"], item["when"], item["boot"], item["session"],
         item["run"], item["seq"], earlier if index == 3 else item["raw"])
         for index, item in enumerate(records)))
-    with pytest.raises(ValueError, match="nonmonotonic DPRAW01 State"):
+    with pytest.raises(ValueError, match="nonmonotonic DPRAW02 State"):
         build(capture)
     assert not capture[3].exists()
 
@@ -198,11 +184,11 @@ def test_first_high_offset_still_counts_full_observed_span(capture):
     raw = capture[1]
     records = joiner._raw_records(raw.read_bytes())
     states = [(20000, 10000), (30000, 25000), (40000, 31000)]
-    raw.write_bytes(b"DPRAW01\0" + b"".join(record(
+    raw.write_bytes(b"DPRAW02\0" + b"".join(record(
         item["kind"], item["when"], item["boot"], item["session"],
         item["run"], item["seq"], item["raw"])
         for item in records if item["kind"] in (4, 5)) + b"".join(
-        record(2, when, 2, 3, 0, 0, wire("DummyJointStateV2",
+        record(2, when, 2, 3, 0, 0, wire("DummyJointState",
             boot_epoch=2, session_id=3, produced_at_us=produced))
         for when, produced in states))
     context = build(capture)
@@ -311,28 +297,28 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
     action = tmp_path / "action.json"
     action.write_text('{"scope":"ROS_ACTION_ONLY"}\n')
     client = "11" * 16
-    request = wire("DummyManageV2Request", client_instance_id=client,
-                   device_id="22" * 16,
+    request = wire("DummyManageRequest", client_instance_id=client,
+                   domain_device_id="22" * 16,
                    expected_boot_epoch=2, expected_session_id=3,
                    request_seq=1)
-    release_request = wire("DummyManageV2Request", client_instance_id=client,
-                           device_id="22" * 16,
+    release_request = wire("DummyManageRequest", client_instance_id=client,
+                           domain_device_id="22" * 16,
                            expected_boot_epoch=2, expected_session_id=3,
                            request_seq=2, request_id=9, operation=10)
-    response = wire("DummyManageV2Response", client_instance_id=client,
-                    device_id="22" * 16,
+    response = wire("DummyManageResponse", client_instance_id=client,
+                    domain_device_id="22" * 16,
                     boot_epoch=2, session_id=0,
                     request_id=11 if queried_reply else 9, operation_id=10,
                     run_id=8, transaction_phase=3, result_code=0,
                     release_committed=1)
-    query_request = wire("DummyManageV2Request", client_instance_id=client,
+    query_request = wire("DummyManageRequest", client_instance_id=client,
                          expected_boot_epoch=2, expected_session_id=3,
                          request_seq=3, request_id=11, operation=12,
                          queried_operation_id=9)
-    terminal = wire("DummyAttemptEvidenceV2", run_id=8, attempt_id=8,
+    terminal = wire("DummyAttemptEvidence", run_id=8, attempt_id=8,
                     category=4, final=1, final_state=8, release_committed=1)
-    status = wire("DummyDeviceStatusV2", boot_epoch=2, session_id=0,
-                  device_id="22" * 16, reference_epoch=0,
+    status = wire("DummyDeviceStatus", boot_epoch=2, session_id=0,
+                  domain_device_id="22" * 16, reference_epoch=0,
                   motion_epoch=3 if second_goal else 1,
                   run_id=8, core_state=1, release_committed=1, operation_id=10,
                   final_state=8, attempt_kind=3)
@@ -341,9 +327,9 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
                                                  2700000, 3300000, 3900000,
                                                  4500000), offsets)):
         session = 0 if when >= 3800000 else 3
-        state = wire("DummyJointStateV2", boot_epoch=3 if other_boot and index == 3 else 2,
+        state = wire("DummyJointState", boot_epoch=3 if other_boot and index == 3 else 2,
                      session_id=session, produced_at_us=when + 100000 - offset,
-                     device_id=("33" if other_device and index == 3 else "22") * 16,
+                     domain_device_id=("33" if other_device and index == 3 else "22") * 16,
                      reference_epoch=0 if session == 0 else 1,
                      motion_epoch=(99 if other_epoch and index == 3 else
                                    3 if second_goal and session == 0 else
@@ -362,7 +348,7 @@ def window_capture(tmp_path, offsets=(400000, 0, 100, 200, 300, 400, 400000),
     if idle:
         events.append((3, 3800000, 2, 0, 8, 0, status))
     raw = tmp_path / "raw.bin"
-    raw.write_bytes(b"DPRAW01\0" + b"".join(
+    raw.write_bytes(b"DPRAW02\0" + b"".join(
         record(*event) for event in sorted(events, key=lambda event: event[1])))
     return timeline, raw, action, tmp_path / "context.json"
 
@@ -423,46 +409,46 @@ def canceled_window_capture(tmp_path, *, early_stop_epoch=False, stop_page=True,
             stop_epoch = item["when"] >= 2100000 or (
                 early_stop_epoch and item["when"] == 1800000)
             if item["session"] == 3 and stop_epoch:
-                payload = wire("DummyJointStateV2", **{
+                payload = wire("DummyJointState", **{
                     **fields, "motion_epoch": 2})
             elif item["session"] == 0:
-                payload = wire("DummyJointStateV2", **{
+                payload = wire("DummyJointState", **{
                     **fields, "motion_epoch": 3})
         elif item["kind"] == 3:
-            payload = wire("DummyDeviceStatusV2", **{
+            payload = wire("DummyDeviceStatus", **{
                 **item["fields"], "motion_epoch": 3})
         rewritten.append(record(item["kind"], item["when"], item["boot"],
                                 item["session"], item["run"], item["seq"], payload))
-    cancel = wire("DummyManageV2Request", client_instance_id="11" * 16,
-                  device_id="22" * 16, expected_boot_epoch=2,
+    cancel = wire("DummyManageRequest", client_instance_id="11" * 16,
+                  domain_device_id="22" * 16, expected_boot_epoch=2,
                   expected_session_id=3, expected_motion_epoch=1,
                   request_seq=7, request_id=7, operation=9)
     rewritten.append(record(4, 2000000, 2, 3, 0, 7, cancel))
-    receipt = wire("DummyManageV2Response", client_instance_id="11" * 16,
-                   device_id="22" * 16, request_id=7, operation_id=7,
+    receipt = wire("DummyManageResponse", client_instance_id="11" * 16,
+                   domain_device_id="22" * 16, request_id=7, operation_id=7,
                    boot_epoch=2, session_id=3, run_id=7, motion_epoch=2,
                    receipt=1, transaction_phase=3, result_code=0)
     rewritten.append(record(5, 2200000, 2, 3, 7, 0, receipt))
     if stop_page:
-        stop = wire("DummyAttemptEvidenceV2", run_id=7, attempt_id=7,
+        stop = wire("DummyAttemptEvidence", run_id=7, attempt_id=7,
                     attempt_kind=1, category=2, motion_epoch=2,
                     evidence_seq=1)
         rewritten.append(record(1, 2100000, 2, 3, 7, 1, stop))
     if ambiguous_stop_epoch or ambiguous_only:
-        state = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
-                     device_id="22" * 16, reference_epoch=1,
+        state = wire("DummyJointState", boot_epoch=2, session_id=3,
+                     domain_device_id="22" * 16, reference_epoch=1,
                      motion_epoch=2, core_state=4, produced_at_us=2149900)
         rewritten.append(record(2, 2050000, 2, 3, 0, 0, state))
     if stale_after_page:
-        state = wire("DummyJointStateV2", boot_epoch=2, session_id=3,
-                     device_id="22" * 16, reference_epoch=1,
+        state = wire("DummyJointState", boot_epoch=2, session_id=3,
+                     domain_device_id="22" * 16, reference_epoch=1,
                      motion_epoch=1, core_state=4, produced_at_us=2449900)
         rewritten.append(record(2, 2350000, 2, 3, 0, 0, state))
     if ambiguous_only:
         rewritten = [item for item in rewritten if not (
             joiner.RECORD_HEADER.unpack_from(item)[0] == 2 and
             joiner.RECORD_HEADER.unpack_from(item)[2] == 1800000)]
-    raw.write_bytes(b"DPRAW01\0" + b"".join(sorted(
+    raw.write_bytes(b"DPRAW02\0" + b"".join(sorted(
         rewritten, key=lambda raw_record: joiner.RECORD_HEADER.unpack_from(raw_record)[2])))
     return capture
 
@@ -564,7 +550,7 @@ def test_window_gate_accepts_release_receipt_before_terminal_page(tmp_path, quer
         3500000 if item["kind"] == 5 and item["fields"].get("release_committed") else
         item["when"], item["boot"], item["session"], item["run"], item["seq"], item["raw"])
         for item in records]
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(sorted(
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(sorted(
         reordered, key=lambda raw_record: joiner.RECORD_HEADER.unpack_from(raw_record)[2])))
     assert build_window(capture)["producer_lag_us"] == 400
 
@@ -581,7 +567,7 @@ def test_window_gate_rejects_release_receipt_before_request(tmp_path):
         item["fields"].get("release_committed") else item["when"],
         item["boot"], item["session"], item["run"], item["seq"], item["raw"])
         for item in records]
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(sorted(
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(sorted(
         reordered, key=lambda raw_record: joiner.RECORD_HEADER.unpack_from(raw_record)[2])))
     with pytest.raises(ValueError, match="Release proof"):
         build_window(capture)
@@ -594,10 +580,10 @@ def test_window_gate_rejects_release_receipt_before_request(tmp_path):
 def test_window_gate_rejects_uncommitted_release_terminal(tmp_path):
     capture = window_capture(tmp_path)
     records = joiner._raw_records(capture[1].read_bytes())
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(record(
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(record(
         item["kind"], item["when"], item["boot"], item["session"],
         item["run"], item["seq"],
-        wire("DummyAttemptEvidenceV2", run_id=8, attempt_id=8,
+        wire("DummyAttemptEvidence", run_id=8, attempt_id=8,
              category=4, final=1, final_state=8, release_committed=0)
         if item["kind"] == 1 else item["raw"]) for item in records))
     with pytest.raises(ValueError, match="Release proof"):
@@ -611,7 +597,7 @@ def test_window_gate_rejects_uncommitted_release_terminal(tmp_path):
 def test_window_gate_rejects_sparse_state_coverage(tmp_path):
     capture = window_capture(tmp_path)
     records = joiner._raw_records(capture[1].read_bytes())
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(record(
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(record(
         item["kind"], item["when"], item["boot"], item["session"],
         item["run"], item["seq"], item["raw"]) for item in records
         if item["kind"] != 2 or item["when"] in (700000, 1300000,
@@ -708,12 +694,12 @@ def begun_cancel_capture(tmp_path):
         for field in ("motion_epoch", "expected_motion_epoch"):
             if field in fields:
                 fields[field] = {0: 0, 1: 104, 2: 105, 3: 106}[fields[field]]
-        name = {1: "DummyAttemptEvidenceV2", 2: "DummyJointStateV2",
-                3: "DummyDeviceStatusV2", 4: "DummyManageV2Request",
-                5: "DummyManageV2Response"}[item["kind"]]
+        name = {1: "DummyAttemptEvidence", 2: "DummyJointState",
+                3: "DummyDeviceStatus", 4: "DummyManageRequest",
+                5: "DummyManageResponse"}[item["kind"]]
         rewritten.append(record(item["kind"], item["when"], item["boot"],
                                 item["session"], item["run"], item["seq"], wire(name, **fields)))
-    raw.write_bytes(b"DPRAW01\0" + b"".join(rewritten))
+    raw.write_bytes(b"DPRAW02\0" + b"".join(rewritten))
     return capture
 
 
@@ -750,11 +736,11 @@ def test_cancel_window_rejects_ambiguous_or_unbound_after_begin(tmp_path, mutati
         for item in joiner._raw_records(raw.read_bytes()):
             payload = item["raw"]
             if item["kind"] == 4 and item["fields"]["operation"] == 9:
-                payload = wire("DummyManageV2Request", **{
+                payload = wire("DummyManageRequest", **{
                     **item["fields"], "expected_motion_epoch": 103})
             rewritten.append(record(item["kind"], item["when"], item["boot"],
                                     item["session"], item["run"], item["seq"], payload))
-        raw.write_bytes(b"DPRAW01\0" + b"".join(rewritten))
+        raw.write_bytes(b"DPRAW02\0" + b"".join(rewritten))
     timeline.write_text("\n".join(lines) + "\n")
     with pytest.raises(ValueError): build_window(capture)
 
@@ -774,16 +760,16 @@ def test_cancel_window_keeps_exact_terminal_receipt_binding(tmp_path, field, val
     for item in joiner._raw_records(raw.read_bytes()):
         payload = item["raw"]
         if item["kind"] == 5 and item["fields"]["operation_id"] == 7:
-            payload = wire("DummyManageV2Response", **{**item["fields"], field: value})
+            payload = wire("DummyManageResponse", **{**item["fields"], field: value})
         rewritten.append(record(item["kind"], item["when"], item["boot"],
                                 item["session"], item["run"], item["seq"], payload))
-    raw.write_bytes(b"DPRAW01\0" + b"".join(rewritten))
+    raw.write_bytes(b"DPRAW02\0" + b"".join(rewritten))
     with pytest.raises(ValueError, match="Stop CAN page"):
         build_window(capture)
 
 
 ##
-# @brief 读取DPRAW01，逐record调用transform后按Host接收时间排序并覆写本临时raw；不校验transform正确性。
+# @brief 读取DPRAW02，逐record调用transform后按Host接收时间排序并覆写本临时raw；不校验transform正确性。
 # @param capture (timeline路径, raw路径, action路径, 输出context路径)临时夹具。
 # @param transform 逐解析record返回完整重新打包bytes的回调。
 # @return None；只重写临时capture raw文件。
@@ -791,7 +777,7 @@ def _rewrite_records(capture, transform):
     rewritten = []
     for item in joiner._raw_records(capture[1].read_bytes()):
         rewritten.append(transform(item))
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(sorted(
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(sorted(
         rewritten, key=lambda value: joiner.RECORD_HEADER.unpack_from(value)[2])))
 
 
@@ -848,17 +834,17 @@ def test_release_early_idle_still_requires_this_request_and_clean_identity(tmp_p
             elif mutation == "session": fields["session_id"] = 3; session = 3
             elif mutation == "phase": fields["motion_epoch"] = 9
             elif mutation == "permit": fields["permit_remaining_us"] = 1
-            payload = wire("DummyDeviceStatusV2", **fields)
+            payload = wire("DummyDeviceStatus", **fields)
         if item["kind"] == 5 and mutation == "receipt_pending":
-            payload = wire("DummyManageV2Response", **{**item["fields"], "transaction_phase": 2})
+            payload = wire("DummyManageResponse", **{**item["fields"], "transaction_phase": 2})
         return record(item["kind"], when, boot, session, item["run"], item["seq"], payload)
     _rewrite_records(capture, transform)
     if mutation == "no_terminal":
         raw = capture[1]
-        raw.write_bytes(b"DPRAW01\0" + b"".join(record(x["kind"], x["when"], x["boot"],
+        raw.write_bytes(b"DPRAW02\0" + b"".join(record(x["kind"], x["when"], x["boot"],
             x["session"], x["run"], x["seq"], x["raw"]) for x in joiner._raw_records(raw.read_bytes())
             if x["kind"] != 1))
-    with pytest.raises(ValueError, match="Release"):
+    with pytest.raises(ValueError, match="Release|Source identity"):
         build_window(capture)
 
 
@@ -908,11 +894,11 @@ def dense_cancel_capture(tmp_path):
             cancel_fields = {**item["fields"], "expected_reference_epoch": 1,
                              "expected_motion_epoch": 104, "expected_management_epoch": 142,
                              "expected_profile_id": 201, "configured_mask": 63}
-            payload = wire("DummyManageV2Request", **cancel_fields)
+            payload = wire("DummyManageRequest", **cancel_fields)
         elif item["kind"] == 3:
             # Only the later Release Idle Status supplies the immutable digest tuple.
             # Fast canceled goals need not publish any same-run HOLD Status.
-            payload = wire("DummyDeviceStatusV2", **{
+            payload = wire("DummyDeviceStatus", **{
                 **item["fields"], **hashes, "profile_id": 201, "configured_mask": 63})
         events.append(record(item["kind"], item["when"], item["boot"],
                              item["session"], item["run"], item["seq"], payload))
@@ -931,16 +917,16 @@ def dense_cancel_capture(tmp_path):
             evidence_seq=1, category=4, motion_epoch=103, group_count=1,
             final=1, final_state=7, motion_complete=0, release_committed=0))):
         fields = {**fields, "previous_chain_sha256": chain.hex()}
-        payload = wire("DummyAttemptEvidenceV2", **fields)
-        chain = hashlib.sha256(chain + payload[:307] + payload[371:372]).digest()
-        payload = wire("DummyAttemptEvidenceV2", **fields, chain_sha256=chain.hex())
+        payload = wire("DummyAttemptEvidence", **fields)
+        chain = hashlib.sha256(chain + canonical(payload)).digest()
+        payload = wire("DummyAttemptEvidence", **fields, chain_sha256=chain.hex())
         events.append(record(1, when, 2, 3, 7, fields["evidence_seq"], payload))
     assert cancel_fields is not None
-    query = wire("DummyManageV2Request", **{**cancel_fields, "operation": 12,
+    query = wire("DummyManageRequest", **{**cancel_fields, "operation": 12,
                  "request_id": 8, "request_seq": 8, "queried_operation_id": 7})
     events.append(record(4, 2360000, 2, 3, 0, 8, query))
-    receipt = wire("DummyManageV2Response", client_instance_id="11" * 16,
-                   device_id="22" * 16, request_id=8, operation_id=508,
+    receipt = wire("DummyManageResponse", client_instance_id="11" * 16,
+                   domain_device_id="22" * 16, request_id=8, operation_id=508,
                    boot_epoch=2, session_id=3, reference_epoch=1, motion_epoch=105,
                    management_epoch=143, profile_id=201, run_id=7, receipt=1,
                    transaction_phase=3, result_code=0)
@@ -951,8 +937,8 @@ def dense_cancel_capture(tmp_path):
                   104 if when < 2000000 else 105)
         stopping = 2000000 <= when <= 2300000
         core = 1 if session == 0 else 7 if stopping else 5 if motion == 104 else 4
-        state = wire("DummyJointStateV2", boot_epoch=2, session_id=session,
-                     device_id="22" * 16, reference_epoch=0 if session == 0 else 1,
+        state = wire("DummyJointState", boot_epoch=2, session_id=session,
+                     domain_device_id="22" * 16, reference_epoch=0 if session == 0 else 1,
                      motion_epoch=motion, management_epoch=143 if motion >= 105 else 142,
                      profile_id=201, configured_mask=63, core_state=core,
                      operation_id=501 if stopping or motion < 105 else 508,
@@ -961,7 +947,7 @@ def dense_cancel_capture(tmp_path):
                      raw_position_valid_mask=63, can_rx_age_us=[1000] * 6,
                      state_seq=index + 1, produced_at_us=when + 100000 - (index % 5) * 100)
         events.append(record(2, when, 2, session, 0, index + 1, state))
-    raw.write_bytes(b"DPRAW01\0" + b"".join(sorted(
+    raw.write_bytes(b"DPRAW02\0" + b"".join(sorted(
         events, key=lambda value: joiner.RECORD_HEADER.unpack_from(value)[2])))
     return capture
 
@@ -996,9 +982,9 @@ def _alter_dense_transition(capture, changes):
         fields = dict(item["fields"])
         if item["kind"] == 2 and 2000000 <= item["when"] <= 2300000:
             fields.update(changes)
-        name = {1: "DummyAttemptEvidenceV2", 2: "DummyJointStateV2",
-                3: "DummyDeviceStatusV2", 4: "DummyManageV2Request",
-                5: "DummyManageV2Response"}[item["kind"]]
+        name = {1: "DummyAttemptEvidence", 2: "DummyJointState",
+                3: "DummyDeviceStatus", 4: "DummyManageRequest",
+                5: "DummyManageResponse"}[item["kind"]]
         return record(item["kind"], item["when"],
                       fields.get("boot_epoch", item["boot"]),
                       fields.get("session_id", item["session"]),
@@ -1025,13 +1011,13 @@ def _alter_dense_pages(capture, category, changes):
             if fields["category"] == category:
                 fields.update(changes)
             fields["previous_chain_sha256"] = previous.hex()
-            payload = wire("DummyAttemptEvidenceV2", **fields)
-            previous = hashlib.sha256(previous + payload[:307] + payload[371:372]).digest()
+            payload = wire("DummyAttemptEvidence", **fields)
+            previous = hashlib.sha256(previous + canonical(payload)).digest()
             fields["chain_sha256"] = previous.hex()
-            payload = wire("DummyAttemptEvidenceV2", **fields)
+            payload = wire("DummyAttemptEvidence", **fields)
         rewritten.append(record(item["kind"], item["when"], item["boot"],
                                 item["session"], item["run"], item["seq"], payload))
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(rewritten))
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(rewritten))
 
 
 ##
@@ -1050,7 +1036,7 @@ def test_dense_cancel_ready_hold_state_with_old_operation_fills_coverage(tmp_pat
 # @param changes 要覆写的字段字典，作用范围由helper明确限制。
 # @return None；成功/拒绝用assert/pytest.raises断言，不产生设备执行凭据。
 @pytest.mark.parametrize("changes", [
-    {"boot_epoch": 3}, {"session_id": 4}, {"device_id": "33" * 16},
+    {"boot_epoch": 3}, {"session_id": 4}, {"domain_device_id": "33" * 16},
     {"reference_epoch": 2}, {"motion_epoch": 104}, {"management_epoch": 142},
     {"profile_id": 202}, {"configured_mask": 31}, {"core_state": 5},
     {"position_valid_mask": 0}, {"velocity_valid_mask": 31},
@@ -1087,7 +1073,7 @@ def test_dense_cancel_wrong_receipt_cannot_authorize_transition(tmp_path, change
         if item["kind"] == 5 and item["fields"]["request_id"] == 8:
             fields = {**item["fields"], **changes}
             return record(5, item["when"], item["boot"], item["session"],
-                          fields["run_id"], 0, wire("DummyManageV2Response", **fields))
+                          fields["run_id"], 0, wire("DummyManageResponse", **fields))
         return record(item["kind"], item["when"], item["boot"],
                       item["session"], item["run"], item["seq"], item["raw"])
     _rewrite_records(capture, transform)
@@ -1146,7 +1132,7 @@ def test_dense_cancel_corrupt_sha_cannot_authorize_transition(tmp_path):
 def test_dense_cancel_missing_full_proof_cannot_authorize_transition(tmp_path):
     capture = dense_cancel_capture(tmp_path)
     records = joiner._raw_records(capture[1].read_bytes())
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(record(
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(record(
         x["kind"], x["when"], x["boot"], x["session"], x["run"], x["seq"], x["raw"])
         for x in records if not (x["kind"] == 1 and x["run"] == 7)))
     with pytest.raises(ValueError):
@@ -1164,8 +1150,8 @@ def test_dense_cancel_ambiguous_static_identity_quad_cannot_authorize_transition
     status = next(x for x in records if x["kind"] == 3)
     fields = {**status["fields"], "contract_sha256": "55" * 32}
     # Both Status observations are later unrelated Release Idle observations.
-    extra = record(3, 3850000, 2, 0, 8, 0, wire("DummyDeviceStatusV2", **fields))
-    capture[1].write_bytes(b"DPRAW01\0" + b"".join(sorted(
+    extra = record(3, 3850000, 2, 0, 8, 0, wire("DummyDeviceStatus", **fields))
+    capture[1].write_bytes(b"DPRAW02\0" + b"".join(sorted(
         [record(x["kind"], x["when"], x["boot"], x["session"], x["run"], x["seq"], x["raw"])
          for x in records] + [extra], key=lambda x: joiner.RECORD_HEADER.unpack_from(x)[2])))
     with pytest.raises(ValueError):
@@ -1199,9 +1185,9 @@ def _alter_dense_cancel_binding(capture, *, mask=None, profile=None, reference=N
             fields["expected_profile_id" if wanted else "profile_id"] = profile
         if reference is not None and (wanted or receipt):
             fields["expected_reference_epoch" if wanted else "reference_epoch"] = reference
-        name = {1: "DummyAttemptEvidenceV2", 2: "DummyJointStateV2",
-                3: "DummyDeviceStatusV2", 4: "DummyManageV2Request",
-                5: "DummyManageV2Response"}[item["kind"]]
+        name = {1: "DummyAttemptEvidence", 2: "DummyJointState",
+                3: "DummyDeviceStatus", 4: "DummyManageRequest",
+                5: "DummyManageResponse"}[item["kind"]]
         return record(item["kind"], item["when"], item["boot"], item["session"],
                       item["run"], item["seq"], wire(name, **fields))
     _rewrite_records(capture, transform)
@@ -1258,13 +1244,13 @@ def _cancel_disabling_after_verified_release_request(tmp_path,mutation=None,rele
   if mutation=='noIdle'and row['session']==0 and row['kind']in(2,3):fields['core_state']=4
   if mutation=='sent31'and row['kind']==1 and fields.get('category')==2:fields['sent_mask']=31
   if mutation=='chain'and row['kind']==1 and fields.get('category')==2:fields['chain_sha256']='ff'*32
-  name={1:'DummyAttemptEvidenceV2',2:'DummyJointStateV2',3:'DummyDeviceStatusV2',4:'DummyManageV2Request',5:'DummyManageV2Response'}[row['kind']]
+  name={1:'DummyAttemptEvidence',2:'DummyJointState',3:'DummyDeviceStatus',4:'DummyManageRequest',5:'DummyManageResponse'}[row['kind']]
   return record(row['kind'],when,boot,session,row['run'],row['seq'],wire(name,**fields))
  _rewrite_records(c,transform)
  records=joiner._raw_records(c[1].read_bytes());root=next(r['fields']for r in records if r['kind']==4 and r['fields']['operation']==10)
- query=wire('DummyManageV2Request',**{**root,'operation':12,'request_id':11,'request_seq':11,'queried_operation_id':9})
+ query=wire('DummyManageRequest',**{**root,'operation':12,'request_id':11,'request_seq':11,'queried_operation_id':9})
  rows=[record(r['kind'],r['when'],r['boot'],r['session'],r['run'],r['seq'],r['raw'])for r in records if not(mutation=='noTypedDisable'and r['kind']==4 and r['fields']['operation']==10)]
- rows.append(record(4,3305000,2,3,0,11,query));c[1].write_bytes(b'DPRAW01\0'+b''.join(sorted(rows,key=lambda b:joiner.RECORD_HEADER.unpack_from(b)[2])))
+ rows.append(record(4,3305000,2,3,0,11,query));c[1].write_bytes(b'DPRAW02\0'+b''.join(sorted(rows,key=lambda b:joiner.RECORD_HEADER.unpack_from(b)[2])))
  return c
 
 ##

@@ -5,7 +5,7 @@
 #
 # 不启动ROS/设备；重新读取SHA固定的源快照，按Host接收时刻及位置包络匹配反馈，并调用application_e2e作最终全链检查。
 # 只消费当前公共布局；所有正证据仍需独立资格流程。
-"""将同一次 ROS Gate 时间线与 DeviceTransport DPRAW01 原始流离线关联。"""
+"""将同一次 ROS Gate 时间线与 DeviceTransport DPRAW02 当前Root原始流离线关联。"""
 
 import argparse
 from bisect import bisect_left, bisect_right
@@ -33,14 +33,32 @@ _selected_protocol = sys.modules[_protocol_name]
 decode_selected = _selected_protocol.decode
 evidence_parts = _selected_protocol.evidence_parts
 LAYOUT = _selected_protocol.LAYOUT
-TYPES = _selected_protocol.TYPES
 
+
+# 同部署目录加载，避免同名模块缓存串到另一份发布。
+import importlib.util as _root_import
+import sys as _root_sys
+_root_path=Path(__file__).with_name('current_root_records.py')
+_root_name='_current_root_'+str(_root_path.resolve()).encode().hex()
+if _root_name not in _root_sys.modules:
+    _root_spec=_root_import.spec_from_file_location(_root_name,_root_path)
+    _root_module=_root_import.module_from_spec(_root_spec)
+    _root_sys.modules[_root_name]=_root_module
+    _root_spec.loader.exec_module(_root_module)
+_root_helpers=_root_sys.modules[_root_name]
+_root_boot=_root_helpers.root_boot
+_root_field=_root_helpers.root_field
+_joint_values=_root_helpers.joint_values
+_quality_mask=_root_helpers.quality_mask
+_validate_source=_root_helpers.validate_source
+_capture_sources=_root_helpers.capture_sources
+_target_boot=_root_helpers.target_boot
 
 ROOT = Path(__file__).resolve().parents[2]
 ##
-# @brief DPRAW头39字节，按小端kind/size/Host when/boot/session/run/seq解包。
+# @brief DPRAW02头59字节，按小端kind/size/Host when/boot/session/run/seq解包。
 # when为Host传输steady µs，消息produced/CAN时间为设备Source域；STATUS_MAX_AGE_US为1,000,000µs关联上限。
-RECORD_HEADER = struct.Struct("<B H Q Q Q Q I")
+RECORD_HEADER = struct.Struct("<B H Q Q Q Q I 16s I")
 STATUS_MAX_AGE_US = 1000000
 
 
@@ -203,39 +221,29 @@ class _IndexedRecords(tuple):
 # @return _IndexedRecords；magic、截断、kind、wire schema或元数据/时刻回退不符拒绝。
 # kind1页、2State、3Status、4管理请求、5响应；Host when允许相等。原页在此只核元数据，SHA链由后续完整关联校验。
 def _raw_records(data):
-    if not data.startswith(b"DPRAW01\0"):
-        raise ValueError("invalid DPRAW01 header")
-    records = []
-    offset = 8
-    while offset < len(data):
-        if len(data) - offset < RECORD_HEADER.size:
-            raise ValueError("truncated DPRAW01 record header")
-        kind, size, when, boot, session, run, seq = RECORD_HEADER.unpack_from(data, offset)
-        offset += RECORD_HEADER.size
-        if kind not in (1, 2, 3, 4, 5) or size == 0 or len(data) - offset < size:
-            raise ValueError("truncated or invalid DPRAW01 record")
-        raw = data[offset:offset + size]
-        offset += size
-        name = {1: "DummyAttemptEvidenceV2", 2: "DummyJointStateV2",
-                3: "DummyDeviceStatusV2", 4: "DummyManageV2Request",
-                5: "DummyManageV2Response"}[kind]
-        fields = _decode(name, raw)
-        if kind == 1:
-            if fields["run_id"] != run or fields["evidence_seq"] != seq:
-                raise ValueError("unlinked evidence record metadata")
-        elif kind in (2, 3, 5) and (fields["boot_epoch"], fields["session_id"]) != (boot, session):
-            raise ValueError("unlinked state/status record metadata")
-        if kind == 4 and (boot, session, run, seq) != (
-                fields["expected_boot_epoch"], fields["expected_session_id"],
-                0, fields["request_seq"]):
-            raise ValueError("unlinked management request metadata")
-        if kind == 5 and (run, seq) != (fields["run_id"], 0):
-            raise ValueError("unlinked management response metadata")
-        records.append({"kind": kind, "when": when, "boot": boot,
-                        "session": session, "run": run, "seq": seq,
-                        "fields": fields, "raw": raw})
-    if any(right["when"] < left["when"] for left, right in zip(records, records[1:])):
-        raise ValueError("nonmonotonic DPRAW01 receive times")
+    if not data.startswith(b"DPRAW02\0"):
+        raise ValueError("current Root capture requires DPRAW02; DPRAW01 is historical only")
+    records=[];offset=8
+    while offset<len(data):
+        if len(data)-offset<RECORD_HEADER.size:raise ValueError("truncated DPRAW02 record header")
+        kind,size,when,boot,session,run,seq,device,context=RECORD_HEADER.unpack_from(data,offset)
+        offset+=RECORD_HEADER.size
+        if len(data)-offset<size:raise ValueError("truncated DPRAW02 record payload")
+        if kind not in (1,2,3,4,5) or not size:raise ValueError("invalid DPRAW02 record")
+        source=_validate_source({'device':device.hex(),'boot_id':boot,'context_id':context})
+        raw=data[offset:offset+size];offset+=size
+        name={1:'DummyAttemptEvidence',2:'DummyJointState',3:'DummyDeviceStatus',4:'DummyManageRequest',5:'DummyManageResponse'}[kind]
+        fields=_decode(name,raw)
+        # Source来自59B容器，Canonical Record不含SDK Source。业务字段不投影成旧DTO。
+        fields={**fields,'source':source}
+        if kind==1 and (fields['run_id'],fields['evidence_seq'])!=(run,seq):raise ValueError('unlinked evidence record metadata')
+        if kind in (2,3,5) and fields['session_id']!=session:raise ValueError('unlinked state/status session')
+        # Request的boot属于Host requester；target boot只存在expected_boot_epoch，二者不可等同。
+        if kind==4 and (session,run,seq)!=(fields['expected_session_id'],0,fields['request_seq']):raise ValueError('unlinked request metadata')
+        if kind==5 and (run,seq)!=(fields['run_id'],0):raise ValueError('unlinked response metadata')
+        records.append({'kind':kind,'when':when,'boot':boot,'session':session,'run':run,'seq':seq,
+                        'source':source,'fields':fields,'raw':raw})
+    if any(right['when']<left['when'] for left,right in zip(records,records[1:])):raise ValueError('nonmonotonic DPRAW02 receive times')
     return _IndexedRecords(records)
 
 
@@ -268,7 +276,7 @@ def _prior(records, kind, when, identity, max_age_us, *, run=None):
     if latest is None or when - latest["when"] > max_age_us:
         raise ValueError(f"missing prior raw {name} observation")
     fields = latest["fields"]
-    key = (latest["boot"], latest["session"], fields["reference_epoch"],
+    key = (_target_boot(latest), latest["session"], fields["reference_epoch"],
            fields["motion_epoch"])
     if key != identity or (run is not None and fields["run_id"] != run):
         raise ValueError(f"ambiguous prior raw {name} identity")
@@ -296,7 +304,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
 
     later_run = latest_status["fields"]["run_id"]
     later_pages = [record for record in records if record["kind"] == 1 and
-                   record["run"] == later_run and record["boot"] == identity[0] and
+                   record["run"] == later_run and _target_boot(record) == identity[0] and
                    record["session"] == identity[1] and record["when"] <= latest_status["when"]]
     if later_run <= run or not later_pages:
         raise ValueError("ambiguous prior raw status identity")
@@ -324,7 +332,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
         # Authenticate its terminal chain before deriving the missing snapshot.
         pages = _pages(records, run, identity[0], identity[1], 1, 0)
         seed = struct.pack("<QQ", run, identity[0]) + bytes.fromhex(client_id)
-        seed += b"".join(bytes.fromhex(next_status[name]) for name in
+        seed += b"".join(bytes.fromhex(_root_field(next_status, name)) for name in
                          ("contract_sha256", "model_sha256", "profile_sha256",
                           "firmware_sha256"))
         previous_chain = hashlib.sha256(seed.ljust(192, b"\0")).digest()
@@ -336,7 +344,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
             chain = evidence_parts(raw_page)
             if (chain["previous"] != previous_chain or chain["fields"]["evidence_lost"] or
                     chain["chain"] != hashlib.sha256(
-                        previous_chain + chain["prefix"] + chain["lost"]).digest() or
+                        previous_chain + chain["canonical"]).digest() or
                     fields["group_count"] < previous_group_count or
                     fields["group_count"] > total_groups or
                     (index < len(pages) - 1 and
@@ -351,7 +359,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
             previous_chain = chain["chain"]
             previous_group_count = fields["group_count"]
         terminal_fields = terminal["fields"]
-        if (pages[-1] is not terminal or terminal["boot"] != identity[0] or
+        if (pages[-1] is not terminal or _target_boot(terminal) != identity[0] or
                 terminal["session"] != identity[1] or
                 terminal_fields["final_state"] != final_state or
                 terminal_fields["motion_complete"] != int(final_state == 6) or
@@ -393,7 +401,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
     if client_id is None:
         raise ValueError("missing client identity for HOLD refresh successor")
     seed = struct.pack("<QQ", later_run, identity[0]) + bytes.fromhex(client_id)
-    seed += b"".join(bytes.fromhex(old[name]) for name in
+    seed += b"".join(bytes.fromhex(_root_field(old, name)) for name in
                      ("contract_sha256", "model_sha256", "profile_sha256",
                       "firmware_sha256"))
     previous = hashlib.sha256(seed.ljust(192, b"\0")).digest()
@@ -411,7 +419,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
             page["motion_complete"] or page["release_committed"] or
             chain["fields"]["evidence_lost"] or chain["previous"] != previous or
             chain["chain"] != hashlib.sha256(
-                previous + chain["prefix"] + chain["lost"]).digest() or
+                previous + chain["canonical"]).digest() or
             terminal["fields"]["final_state"] != final_state or
             terminal["fields"]["motion_complete"] != (final_state == 6) or
             old["evidence_chain_sha256"] != terminal["fields"]["chain_sha256"] or
@@ -419,7 +427,7 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
              old["attempt_kind"], old["parent_run_id"], old["evidence_lost"]) !=
             (4, final_state, int(final_state == 6), 1, 0, 0) or
             (state["fields"]["core_state"], state["fields"]["hold_ready"],
-             state["fields"]["position_valid_mask"]) != (4, 1, 63) or
+             _quality_mask(state["fields"], 'position_valid_quality')) != (4, 1, 63) or
             when - latest_status["when"] > state_max_age or
             latest_status["when"] < cutoff or fresh_state["when"] < cutoff or
             (next_status["core_state"], next_status["final_state"],
@@ -427,20 +435,20 @@ def _hold_observations(records, when, identity, run, state_max_age, terminal_whe
              next_status["parent_run_id"], next_status["evidence_lost"]) !=
             (4, 0, 0, 1, 0, 0) or
             (new_state["core_state"], new_state["hold_ready"],
-             new_state["position_valid_mask"]) != (4, 1, 63) or
-            any(next_status[name] != old[name] for name in
+             _quality_mask(new_state, 'position_valid_quality')) != (4, 1, 63) or
+            any(_root_field(next_status, name) != _root_field(old, name) for name in
                 ("contract_sha256", "model_sha256", "profile_sha256", "firmware_sha256"))):
         raise ValueError("unverified completed-run HOLD refresh successor")
     for candidate in (status, state):
         fields = candidate["fields"]
-        if (candidate["boot"], candidate["session"], fields["reference_epoch"],
+        if (_target_boot(candidate), candidate["session"], fields["reference_epoch"],
                 fields["motion_epoch"]) != identity:
             raise ValueError("ambiguous prior raw HOLD identity")
-    device_id = latest_status["fields"]["device_id"]
-    if any(candidate["fields"]["device_id"] != device_id for candidate in
+    device_id = latest_status["fields"]["domain_device_id"]
+    if any(candidate["fields"]["domain_device_id"] != device_id for candidate in
            (status, state, fresh_state)):
         raise ValueError("HOLD successor changed device identity")
-    if any(latest_status["fields"][name] != status["fields"][name] for name in
+    if any(_root_field(latest_status["fields"], name) != _root_field(status["fields"], name) for name in
            ("contract_sha256", "model_sha256", "profile_sha256", "firmware_sha256")):
         raise ValueError("device identity hash changed before later run status")
     return status, state
@@ -498,11 +506,11 @@ def _raw_ros_handoff(records, sample_time, sample_state, actual, identity,
             following not in raw_states):
         return False
     fields = following["fields"]
-    if ((following["boot"], following["session"], fields["reference_epoch"],
-         fields["motion_epoch"]) != identity or fields["position_valid_mask"] != 63 or
+    if ((_target_boot(following), following["session"], fields["reference_epoch"],
+         fields["motion_epoch"]) != identity or _quality_mask(fields, 'position_valid_quality') != 63 or
             fields["state_seq"] == 0 or fields["produced_at_us"] == 0 or
             fields["core_state"] not in (4, 5) or
-            any(age > feedback_age_budget for age in fields["can_rx_age_us"])):
+            any(age > feedback_age_budget for age in _joint_values(fields, 'can_rx_age_us'))):
         return False
     old = sample_state["fields"]
     seq_delta = (fields["state_seq"] - old["state_seq"]) & 0xffffffff
@@ -510,9 +518,9 @@ def _raw_ros_handoff(records, sample_time, sample_state, actual, identity,
             not 0 < seq_delta < 0x80000000 or
             fields["produced_at_us"] < old["produced_at_us"] or
             any(new <= previous for new, previous in
-                zip(fields["feedback_seq"], old["feedback_seq"]))):
+                zip(_joint_values(fields, 'feedback_seq'), _joint_values(old, 'feedback_seq')))):
         return False
-    position = _six(fields["position_rad"], "raw ROS handoff")
+    position = _six(_joint_values(fields, 'position_rad'), "raw ROS handoff")
     if any(abs(observed - measured) > limit for observed, measured, limit in
            zip(actual, position, path_tolerance)):
         return False
@@ -522,12 +530,12 @@ def _raw_ros_handoff(records, sample_time, sample_state, actual, identity,
         return False
     gate_fields = continuation[1]["fields"]
     if gate_fields["core_state"] not in (fields["core_state"], 4) or any(
-            age > feedback_age_budget for age in gate_fields["can_rx_age_us"]):
+            age > feedback_age_budget for age in _joint_values(gate_fields, 'can_rx_age_us')):
         return False
-    gate_seq = gate_fields["feedback_seq"]
-    return (all(new >= previous for new, previous in zip(gate_seq, fields["feedback_seq"]))
+    gate_seq = _joint_values(gate_fields, 'feedback_seq')
+    return (all(new >= previous for new, previous in zip(gate_seq, _joint_values(fields, 'feedback_seq')))
             and any(new > previous for new, previous in
-                    zip(gate_seq, fields["feedback_seq"])))
+                    zip(gate_seq, _joint_values(fields, 'feedback_seq'))))
 
 
 ##
@@ -547,7 +555,7 @@ def _raw_ros_handoff(records, sample_time, sample_state, actual, identity,
 def _goal_raw_states(records, before, begin, hold, boot, session, reference,
                      allowed_epochs, desired_samples, path_tolerance):
     states = [record for record in records if record["kind"] == 2 and
-              record["boot"] == boot and record["session"] == session and
+              _target_boot(record) == boot and record["session"] == session and
               record["fields"]["reference_epoch"] == reference and
               before <= record["when"] <= hold]
     previous = {}
@@ -571,9 +579,9 @@ def _goal_raw_states(records, before, begin, hold, boot, session, reference,
         previous[epoch] = fields
         if record["when"] < begin:
             continue
-        if fields["position_valid_mask"] != 63:
+        if _quality_mask(fields, 'position_valid_quality') != 63:
             raise ValueError("invalid raw State path position")
-        position = _six(fields["position_rad"], "raw State path")
+        position = _six(_joint_values(fields, 'position_rad'), "raw State path")
         desired = _desired_at(desired_samples, record["when"])
         path_error = [max(old, abs(actual - planned)) for old, actual, planned in
                       zip(path_error, position, desired)]
@@ -598,11 +606,11 @@ def _near_ros_state(records, sample_time, identity, lag_budget, age_budget):
     if nearest is None:
         raise ValueError("missing fresh raw State near final ROS feedback")
     fields = nearest["fields"]
-    if ((nearest["boot"], nearest["session"], fields["reference_epoch"],
-         fields["motion_epoch"]) != identity or fields["position_valid_mask"] != 63 or
+    if ((_target_boot(nearest), nearest["session"], fields["reference_epoch"],
+         fields["motion_epoch"]) != identity or _quality_mask(fields, 'position_valid_quality') != 63 or
             fields["state_seq"] == 0 or fields["produced_at_us"] == 0 or
-            any(seq <= 0 for seq in fields["feedback_seq"]) or
-            any(age > age_budget for age in fields["can_rx_age_us"])):
+            any(seq <= 0 for seq in _joint_values(fields, 'feedback_seq')) or
+            any(age > age_budget for age in _joint_values(fields, 'can_rx_age_us'))):
         raise ValueError("unlinked or stale raw State near final ROS feedback")
     return nearest
 
@@ -623,7 +631,7 @@ def _pages(records, run, boot, session, kind, parent):
         raise ValueError("missing CAN or terminal evidence page")
     for index, page in enumerate(pages):
         fields = page["fields"]
-        if ((page["boot"], page["session"], page["seq"]) != (boot, session, index) or
+        if ((_target_boot(page), page["session"], page["seq"]) != (boot, session, index) or
                 (fields["attempt_kind"], fields["parent_run_id"], fields["attempt_id"]) !=
                 (kind, parent, run) or fields["evidence_lost"]):
             raise ValueError("cross-session or incomplete evidence pages")
@@ -752,16 +760,16 @@ def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
     request = requests[0]
     fields = request["fields"]
     before, after = rows[1], rows[2]
-    binding = ("device_id", "client_instance_id", "expected_boot_epoch",
+    binding = ("domain_device_id", "client_instance_id", "expected_boot_epoch",
                "expected_session_id", "expected_reference_epoch",
                "expected_motion_epoch", "expected_management_epoch",
                "expected_profile_id", "configured_mask")
     if (not before["steady_us"] <= request["when"] <= after["steady_us"] or
-            (request["boot"], request["session"]) !=
-            (goal["boot_epoch"], goal["session_id"]) or
+            (request["fields"]["expected_boot_epoch"], request["session"]) !=
+            (_root_boot(goal), goal["session_id"]) or
             fields["client_instance_id"] != client or
             (fields["expected_reference_epoch"], fields["expected_motion_epoch"],
-             fields["expected_profile_id"], fields["configured_mask"]) !=
+             fields["expected_profile_id"], _quality_mask(fields, 'configured_quality')) !=
             (before["reference_epoch"], before["motion_epoch"], 201, 63) or
             fields["request_id"] <= 0):
         raise ValueError("BeginMotion request does not bind A")
@@ -769,7 +777,7 @@ def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
                item["fields"]["operation"] == 12 and
                item["fields"]["queried_operation_id"] == fields["request_id"] and
                request["when"] <= item["when"] <= after["steady_us"] and
-               all(item["fields"][key] == fields[key] for key in binding)]
+               all(_root_field(item["fields"], key) == _root_field(fields, key) for key in binding)]
     response_ids = {fields["request_id"],
                     *(item["fields"]["request_id"] for item in queries)}
     receipts = [item for item in records if item["kind"] == 5 and
@@ -780,12 +788,12 @@ def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
     if (len(receipts) != 1 or receipts[0]["when"] > after["steady_us"] or
             receipts[0]["fields"]["receipt"] != 1 or
             receipts[0]["fields"]["operation_id"] <= 0 or
-            (receipts[0]["boot"], receipts[0]["session"],
+            (_target_boot(receipts[0]), receipts[0]["session"],
              receipts[0]["fields"]["motion_epoch"]) !=
-            (goal["boot_epoch"], goal["session_id"], goal["motion_epoch"]) or
+            (_root_boot(goal), goal["session_id"], goal["motion_epoch"]) or
             receipts[0]["fields"]["run_id"] not in (0, goal["run_id"]) or
             receipts[0]["fields"]["client_instance_id"] != client or
-            receipts[0]["fields"]["device_id"] != fields["device_id"]):
+            receipts[0]["fields"]["domain_device_id"] != fields["domain_device_id"]):
         raise ValueError("BeginMotion lacks one committed A receipt")
     runs = {item["run"] for item in records if item["kind"] == 1}
     if (runs != {goal["run_id"], release["run_id"]} or
@@ -796,9 +804,9 @@ def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
                         item["fields"]["request_id"] == release["request_id"]]
     if len(release_requests) != 1:
         raise ValueError("second motion status before A release")
-    terminal_when = _pages(records, goal["run_id"], goal["boot_epoch"],
+    terminal_when = _pages(records, goal["run_id"], _root_boot(goal),
                            goal["session_id"], 1, 0)[-1]["when"]
-    hold_identity = (goal["boot_epoch"], goal["session_id"],
+    hold_identity = (_root_boot(goal), goal["session_id"],
                      before["reference_epoch"], goal["motion_epoch"] + 1)
     for item in records:
         if (item["kind"] != 3 or not
@@ -806,10 +814,10 @@ def _preempt_probe(action, rows, records, goal, release, client, state_max_age):
                 item["fields"]["run_id"] in (0, goal["run_id"])):
             continue
         status = item["fields"]
-        if ((item["boot"], item["session"], status["reference_epoch"],
+        if ((_target_boot(item), item["session"], status["reference_epoch"],
              status["motion_epoch"]) != hold_identity or
-                (status["boot_epoch"], status["session_id"]) != hold_identity[:2] or
-                status["device_id"] != fields["device_id"] or
+                (_root_boot(status), status["session_id"]) != hold_identity[:2] or
+                status["domain_device_id"] != fields["domain_device_id"] or
                 status["run_id"] != release["run_id"] or
                 (status["core_state"], status["attempt_kind"], status["parent_run_id"],
                  status["final_state"], status["motion_complete"], status["evidence_lost"]) !=
@@ -853,8 +861,8 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
             goals[1]["action_status"] != "SUCCEEDED" or
             action["goals"][0].get("cancel", {}).get("overlap_probe") != b):
         raise ValueError("unlinked ROS preempt recovery goals")
-    if (goals[0]["boot_epoch"], goals[0]["session_id"]) != \
-            (goals[1]["boot_epoch"], goals[1]["session_id"]) or \
+    if (_root_boot(goals[0]), goals[0]["session_id"]) != \
+            (_root_boot(goals[1]), goals[1]["session_id"]) or \
             timelines[0][2]["reference_epoch"] != timelines[1][2]["reference_epoch"] or \
             goals[1]["motion_epoch"] != goals[0]["stop_epoch"] + 1 or \
             goals[1]["run_id"] != goals[0]["run_id"] + 1 or \
@@ -893,7 +901,7 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
             raise ValueError("duplicate recovery management request")
         requests_by_id[request_id] = (request, 1 if previous is None else previous[1] + 1)
 
-    binding_fields = ("device_id", "client_instance_id", "expected_boot_epoch",
+    binding_fields = ("domain_device_id", "client_instance_id", "expected_boot_epoch",
                       "expected_session_id", "expected_reference_epoch",
                       "expected_motion_epoch", "expected_management_epoch",
                       "expected_profile_id", "configured_mask")
@@ -906,7 +914,7 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
         queries = [item for item in operation_records(12, 4) if
                    item["fields"]["queried_operation_id"] == fields["request_id"] and
                    request["when"] <= item["when"] <= latest and
-                   all(item["fields"][key] == fields[key] for key in binding_fields)]
+                   all(_root_field(item["fields"], key) == _root_field(fields, key) for key in binding_fields)]
         related = [receipt for receipt in records if receipt["kind"] == 5 and
                    request["when"] <= receipt["when"] <= latest and
                    (receipt["fields"]["request_id"] == fields["request_id"] or
@@ -919,8 +927,8 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
                 receipt["fields"]["result_code"] != 23 or
                 receipt["fields"]["operation_id"] != 0 or
                 receipt["fields"]["client_instance_id"] != fields["client_instance_id"] or
-                receipt["fields"]["device_id"] != fields["device_id"] or
-                receipt["boot"] != request["boot"] or
+                receipt["fields"]["domain_device_id"] != fields["domain_device_id"] or
+                _target_boot(receipt) != _target_boot(request) or
                 receipt["session"] != request["session"] or
                 receipt["fields"]["profile_id"] != fields["expected_profile_id"] or
                 receipt["fields"]["run_id"] != 0 or
@@ -938,13 +946,13 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
         fields = request["fields"]
         before, after = rows[1:3]
         if (not before["steady_us"] <= request["when"] <= after["steady_us"] or
-                (request["boot"], request["session"]) !=
-                (goal["boot_epoch"], goal["session_id"]) or
-                fields["device_id"] != goal["device_id"] or
+                (request["fields"]["expected_boot_epoch"], request["session"]) !=
+                (_root_boot(goal), goal["session_id"]) or
+                fields["domain_device_id"] != goal["domain_device_id"] or
                 fields["client_instance_id"] != client or
                 fields["request_id"] <= 0 or
                 (fields["expected_reference_epoch"], fields["expected_motion_epoch"],
-                 fields["expected_profile_id"], fields["configured_mask"]) !=
+                 fields["expected_profile_id"], _quality_mask(fields, 'configured_quality')) !=
                 (before["reference_epoch"], before["motion_epoch"], 201, 63)):
             raise ValueError("recovery BeginMotion request does not bind A/C")
         matches = committed_receipts(request, after["steady_us"])
@@ -952,14 +960,14 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
                 matches[0]["fields"]["operation_id"] <= 0 or
                 (matches[0]["fields"]["transaction_phase"],
                  matches[0]["fields"]["result_code"]) != (3, 0) or
-                (matches[0]["boot"], matches[0]["session"],
+                (_target_boot(matches[0]), matches[0]["session"],
                  matches[0]["fields"]["motion_epoch"]) !=
-                (goal["boot_epoch"], goal["session_id"], goal["motion_epoch"]) or
+                (_root_boot(goal), goal["session_id"], goal["motion_epoch"]) or
                 matches[0]["fields"]["run_id"] not in (0, goal["run_id"]) or
                 (matches[0]["fields"]["motion_complete"],
                  matches[0]["fields"]["release_committed"]) != (0, 0) or
                 matches[0]["fields"]["client_instance_id"] != client or
-                matches[0]["fields"]["device_id"] != fields["device_id"]):
+                matches[0]["fields"]["domain_device_id"] != fields["domain_device_id"]):
             raise ValueError("recovery BeginMotion lacks committed A/C receipt")
         bindings.append({"goal_id": goal["goal_id"], "run_id": goal["run_id"],
                          "request_id": fields["request_id"],
@@ -972,15 +980,15 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
     receipts = committed_receipts(permit, begins[1]["when"])
     if (len(receipts) != 1 or
             not hold_time < permit["when"] < receipts[0]["when"] < begins[1]["when"] or
-            (permit["boot"], permit["session"]) !=
-            (goals[0]["boot_epoch"], goals[0]["session_id"]) or
+            (_target_boot(permit), permit["session"]) !=
+            (_root_boot(goals[0]), goals[0]["session_id"]) or
             fields["client_instance_id"] != client or
             (fields["expected_reference_epoch"], fields["expected_motion_epoch"],
-             fields["expected_profile_id"], fields["configured_mask"]) !=
+             fields["expected_profile_id"], _quality_mask(fields, 'configured_quality')) !=
             (timelines[0][2]["reference_epoch"], goals[0]["stop_epoch"], 201, 63) or
-            (receipts[0]["boot"], receipts[0]["session"],
+            (_target_boot(receipts[0]), receipts[0]["session"],
              receipts[0]["fields"]["motion_epoch"]) !=
-            (goals[0]["boot_epoch"], goals[0]["session_id"], goals[0]["stop_epoch"]) or
+            (_root_boot(goals[0]), goals[0]["session_id"], goals[0]["stop_epoch"]) or
             (receipts[0]["fields"]["transaction_phase"],
              receipts[0]["fields"]["result_code"], receipts[0]["fields"]["receipt"]) !=
             (3, 0, 1) or receipts[0]["fields"]["operation_id"] <= 0 or
@@ -988,7 +996,7 @@ def _preempt_recovery(action, timelines, records, goals, release, client):
             (receipts[0]["fields"]["motion_complete"],
              receipts[0]["fields"]["release_committed"]) != (0, 0) or
             receipts[0]["fields"]["client_instance_id"] != client or
-            receipts[0]["fields"]["device_id"] != fields["device_id"]):
+            receipts[0]["fields"]["domain_device_id"] != fields["domain_device_id"]):
         raise ValueError("missing fresh committed recovery bench permit")
     return bindings
 
@@ -1052,13 +1060,13 @@ def _joined_goal(rows, records, action, context):
     status = _prior(records, 3, begin["steady_us"], identity_key,
                     STATUS_MAX_AGE_US, run=run)
     state = _prior(records, 2, begin["steady_us"], identity_key, state_max_age)
-    device_id = status["fields"]["device_id"]
+    device_id = status["fields"]["domain_device_id"]
     if (device_id == "00" * 16 or any(candidate is not None and
-            candidate["fields"]["device_id"] != device_id for candidate in
+            candidate["fields"]["domain_device_id"] != device_id for candidate in
             (state, before_status, before_state))):
         raise ValueError("goal observations changed device identity")
-    if (status["fields"]["profile_id"] != 201 or status["fields"]["configured_mask"] != 63 or
-            state["fields"]["profile_id"] != 201 or state["fields"]["configured_mask"] != 63):
+    if (status["fields"]["profile_id"] != 201 or _quality_mask(status["fields"], 'configured_quality') != 63 or
+            state["fields"]["profile_id"] != 201 or _quality_mask(state["fields"], 'configured_quality') != 63):
         raise ValueError("non-six-axis device binding")
     pages = _pages(records, run, boot, session, 1, 0)
     goal_pages = [page for page in pages[:-1] if page["fields"]["motion_epoch"] == motion]
@@ -1070,18 +1078,18 @@ def _joined_goal(rows, records, action, context):
         feedback_identity = (boot, session, reference, row["motion_epoch"])
         feedback = _prior(records, 2, row["steady_us"], feedback_identity,
                           state_max_age)
-        if (feedback["fields"]["device_id"] != device_id or
-                feedback["fields"]["position_valid_mask"] != 63 or
-                feedback["fields"]["feedback_seq"] != row["feedback_seq"] or
-                feedback["fields"]["can_rx_age_us"] != row["feedback_age_us"]):
+        if (feedback["fields"]["domain_device_id"] != device_id or
+                _quality_mask(feedback["fields"], 'position_valid_quality') != 63 or
+                _joint_values(feedback["fields"], 'feedback_seq') != row["feedback_seq"] or
+                _joint_values(feedback["fields"], 'can_rx_age_us') != row["feedback_age_us"]):
             raise ValueError("unlinked six-axis feedback")
         gate_feedback.append((row["steady_us"], feedback))
     hold_identity = (boot, session, reference, hold_row["motion_epoch"])
     hold_status, hold_state = _hold_observations(
         records, hold_row["steady_us"], hold_identity, run, state_max_age,
         pages[-1]["when"], context["client_id"], 7 if canceled else 6)
-    if (hold_status["fields"]["device_id"] != device_id or
-            hold_state["fields"]["device_id"] != device_id):
+    if (hold_status["fields"]["domain_device_id"] != device_id or
+            hold_state["fields"]["domain_device_id"] != device_id):
         raise ValueError("HOLD observations changed device identity")
     if (hold_status["fields"]["core_state"], hold_state["fields"]["core_state"],
             hold_status["fields"]["motion_complete"], hold_state["fields"]["hold_ready"]) != \
@@ -1094,10 +1102,10 @@ def _joined_goal(rows, records, action, context):
             hold_status["fields"]["evidence_chain_sha256"] !=
             pages[-1]["fields"]["chain_sha256"]):
         raise ValueError("unlinked HOLD terminal chain")
-    hashes = {key: status["fields"][name] for key, name in
+    hashes = {key: _root_field(status["fields"], name) for key, name in
               (("contract_hash", "contract_sha256"), ("model_hash", "model_sha256"),
                ("profile_hash", "profile_sha256"), ("firmware_hash", "firmware_sha256"))}
-    if any(candidate["fields"][name] != hashes[key]
+    if any(_root_field(candidate["fields"], name) != hashes[key]
            for candidate in (hold_status,) + ((before_status,) if before_status else ())
            for key, name in (("contract_hash", "contract_sha256"),
                              ("model_hash", "model_sha256"),
@@ -1162,10 +1170,10 @@ def _joined_goal(rows, records, action, context):
         last_raw_feedback_epoch = raw_epoch
         raw_state = _prior(records, 2, sample_time,
                            (boot, session, reference, raw_epoch), state_max_age)
-        if raw_state["fields"]["position_valid_mask"] != 63:
+        if _quality_mask(raw_state["fields"], 'position_valid_quality') != 63:
             raise ValueError("invalid raw feedback position")
-        last_ros_feedback_seq = raw_state["fields"]["feedback_seq"]
-        raw_position = _six(raw_state["fields"]["position_rad"], "raw feedback")
+        last_ros_feedback_seq = _joint_values(raw_state["fields"], 'feedback_seq')
+        raw_position = _six(_joint_values(raw_state["fields"], 'position_rad'), "raw feedback")
         if any(abs(a - position) > limit for a, position, limit in
                zip(actual, raw_position, path_tolerance)):
             raise ValueError("ROS feedback outside bounded raw path position")
@@ -1175,7 +1183,7 @@ def _joined_goal(rows, records, action, context):
         raise ValueError("missing post-Begin ROS feedback")
     for gate_time, gate_state in gate_feedback:
         desired = _desired_at(desired_samples, gate_time)
-        raw_position = _six(gate_state["fields"]["position_rad"], "Gate raw feedback")
+        raw_position = _six(_joint_values(gate_state["fields"], 'position_rad'), "Gate raw feedback")
         path_error = [max(previous, abs(position - d)) for previous, position, d in
                       zip(path_error, raw_position, desired)]
     raw_states, raw_path_error = _goal_raw_states(
@@ -1183,7 +1191,7 @@ def _joined_goal(rows, records, action, context):
         boot, session, reference,
         {before["motion_epoch"], motion, hold_row["motion_epoch"]},
         desired_samples, path_tolerance)
-    if any(record["fields"]["device_id"] != device_id for record in raw_states):
+    if any(record["fields"]["domain_device_id"] != device_id for record in raw_states):
         raise ValueError("raw path changed device identity")
     path_error = [max(a, b) for a, b in zip(path_error, raw_path_error)]
     if last_ros_feedback_seq is None:
@@ -1211,9 +1219,9 @@ def _joined_goal(rows, records, action, context):
         raise ValueError("ROS feedback time has no bounded fresh Gate feedback")
     if (tail_gap < -ros_budget or
             (tail_gap > ros_budget and
-             (any(new < old for new, old in zip(feedback["fields"]["feedback_seq"],
+             (any(new < old for new, old in zip(_joint_values(feedback["fields"], 'feedback_seq'),
                                                 last_ros_feedback_seq)) or
-              not any(new > old for new, old in zip(feedback["fields"]["feedback_seq"],
+              not any(new > old for new, old in zip(_joint_values(feedback["fields"], 'feedback_seq'),
                                                   last_ros_feedback_seq))))):
         raise ValueError("ROS feedback time has no bounded fresh Gate feedback")
     goal_tolerance = _six(context["goal_tolerance_rad"], "goal tolerance")
@@ -1221,13 +1229,13 @@ def _joined_goal(rows, records, action, context):
                                  (boot, session, reference, raw_epoch),
                                  ros_budget, context["feedback_age_budget_us"])
     if any(limit <= 0 or abs(a - b) > limit for a, b, limit in
-           zip(actual, _six(near_state["fields"]["position_rad"],
+           zip(actual, _six(_joint_values(near_state["fields"], 'position_rad'),
                             "near ROS raw feedback"), goal_tolerance)):
         raise ValueError("ROS feedback outside bounded raw device position envelope")
     target = _six(action.get("target_rad"), "target")
     if not canceled and any(abs(position - planned) > limit for fields in
            (feedback["fields"], hold_state["fields"]) for position, planned, limit in
-           zip(_six(fields["position_rad"], "terminal raw position"),
+           zip(_six(_joint_values(fields, 'position_rad'), "terminal raw position"),
                target, goal_tolerance)):
         raise ValueError("raw device position outside goal tolerance")
     groups = [{"group_id": page["fields"]["group_id"], "run_id": run,
@@ -1238,16 +1246,16 @@ def _joined_goal(rows, records, action, context):
     ##
     # @par 内部page_json映射
     # 输入页记录，返回raw_hex及原boot/session包装，不改原始载荷；完整链摘要仍来自原页，不是此JSON包装的hash。
-    page_json = lambda items: [{"raw_hex": item["raw"].hex(), "boot_epoch": item["boot"],
+    page_json = lambda items: [{"raw_hex": item["raw"].hex(), "source": item["source"], "boot_epoch": _target_boot(item),
                                 "session_id": item["session"]} for item in items]
     goal = {"goal_id": goal_id, "action_status": "CANCELED" if canceled else "SUCCEEDED",
             "result_error_code": action.get("result_error_code"),
-            "device_id": device_id,
+            "domain_device_id": device_id,
             "run_id": run, "session_id": session,
             "boot_epoch": boot, "motion_epoch": motion,
             "target_rad": target,
             "feedback_rad": actual if canceled else _six(
-                hold_state["fields"]["position_rad"], "verified terminal Hold position"),
+                _joint_values(hold_state["fields"], 'position_rad'), "verified terminal Hold position"),
             "path_error_max_rad": path_error,
             "path_tolerance_rad": path_tolerance,
             "goal_tolerance_rad": goal_tolerance,
@@ -1268,7 +1276,7 @@ def _joined_goal(rows, records, action, context):
                     record["fields"]["request_id"] ==
                     terminal_row["cancel_request_id"] and
                     record["fields"]["client_instance_id"] == client and
-                    (record["boot"], record["session"]) == (boot, session) and
+                    (_target_boot(record), record["session"]) == (boot, session) and
                     begin["steady_us"] <= record["when"] <= terminal_time]
         if len(requests) != 1:
             raise ValueError("missing or ambiguous current cancel request")
@@ -1280,7 +1288,7 @@ def _joined_goal(rows, records, action, context):
             raise ValueError("cancel request does not precede new-epoch Hold SENT")
         if stop_pages[0]["when"] > terminal_time:
             raise ValueError("Safety Stop CAN SENT follows Gate terminal")
-        binding_fields = ("device_id", "client_instance_id", "expected_boot_epoch",
+        binding_fields = ("domain_device_id", "client_instance_id", "expected_boot_epoch",
                           "expected_session_id", "expected_reference_epoch",
                           "expected_motion_epoch", "expected_management_epoch",
                           "expected_profile_id", "configured_mask")
@@ -1290,7 +1298,7 @@ def _joined_goal(rows, records, action, context):
                    record["fields"]["queried_operation_id"] ==
                    request["fields"]["request_id"] and
                    request["when"] <= record["when"] <= hold_row["steady_us"] and
-                   all(record["fields"][name] == request["fields"][name]
+                   all(_root_field(record["fields"], name) == _root_field(request["fields"], name)
                        for name in binding_fields)]
         responses = [record for record in records if record["kind"] == 5 and
                      request["when"] <= record["when"] <= hold_row["steady_us"] and
@@ -1299,8 +1307,8 @@ def _joined_goal(rows, records, action, context):
                           query["fields"]["request_id"] == record["fields"]["request_id"]
                           for query in queries)) and
                      record["fields"]["client_instance_id"] == client and
-                     record["fields"]["device_id"] == request["fields"]["device_id"] and
-                     (record["boot"], record["session"], record["run"]) ==
+                     record["fields"]["domain_device_id"] == request["fields"]["domain_device_id"] and
+                     (_target_boot(record), record["session"], record["run"]) ==
                      (boot, session, run) and
                      (record["fields"]["transaction_phase"],
                       record["fields"]["result_code"]) == (3, 0) and
@@ -1381,7 +1389,7 @@ def _release(records, goal, hold_row, terminal, state_max_age, hashes):
     if len(requests) != 1:
         raise ValueError("missing or ambiguous release management request")
     request = requests[0]
-    if request["fields"]["device_id"] != goal["device_id"]:
+    if request["fields"]["domain_device_id"] != goal["domain_device_id"]:
         raise ValueError("release request changed device identity")
     responses = []
     for record in records:
@@ -1397,11 +1405,11 @@ def _release(records, goal, hold_row, terminal, state_max_age, hashes):
                       request["when"] <= query["when"] <= record["when"]
                       for query in records)
         if ((direct or queried) and fields["operation_id"] == operation_id and
-                fields["run_id"] == release_run and fields["boot_epoch"] == boot and
+                fields["run_id"] == release_run and _root_boot(fields) == boot and
                 fields["session_id"] == 0 and fields["transaction_phase"] == 3 and
                 fields["result_code"] == 0 and
                 (fields["motion_complete"], fields["release_committed"]) == (0, 1) and
-                fields["device_id"] == request["fields"]["device_id"] and
+                fields["domain_device_id"] == request["fields"]["domain_device_id"] and
                 fields["client_instance_id"] == request["fields"]["client_instance_id"]):
             responses.append(record)
     if len(responses) != 1 or responses[0]["fields"]["motion_epoch"] != \
@@ -1411,8 +1419,8 @@ def _release(records, goal, hold_row, terminal, state_max_age, hashes):
     idle_status = _prior(records, 3, idle_row["steady_us"], idle,
                          state_max_age, run=release_run)
     idle_state = _prior(records, 2, idle_row["steady_us"], idle, state_max_age)
-    if (idle_status["fields"]["device_id"] != goal["device_id"] or
-            idle_state["fields"]["device_id"] != goal["device_id"]):
+    if (idle_status["fields"]["domain_device_id"] != goal["domain_device_id"] or
+            idle_state["fields"]["domain_device_id"] != goal["domain_device_id"]):
         raise ValueError("release observation changed device identity")
     if (idle_status["fields"]["core_state"], idle_state["fields"]["core_state"],
             idle_status["fields"]["release_committed"],
@@ -1430,14 +1438,14 @@ def _release(records, goal, hold_row, terminal, state_max_age, hashes):
             status_chain not in ((terminal_chain, "00" * 32) if active else
                                  (terminal_chain,))):
         raise ValueError("unlinked RELEASE terminal chain")
-    if any(idle_status["fields"][name] != hashes[key] for key, name in
+    if any(_root_field(idle_status["fields"], name) != hashes[key] for key, name in
            (("contract_hash", "contract_sha256"), ("model_hash", "model_sha256"),
             ("profile_hash", "profile_sha256"), ("firmware_hash", "firmware_sha256"))):
         raise ValueError("device identity hash changed during goal")
     ##
     # @par 内部page_json映射
     # 将release原页附raw_hex和捕获boot/session，返回序列化列表；不把释放后清零session写回原页身份。
-    page_json = lambda items: [{"raw_hex": item["raw"].hex(), "boot_epoch": item["boot"],
+    page_json = lambda items: [{"raw_hex": item["raw"].hex(), "source": item["source"], "boot_epoch": _target_boot(item),
                                 "session_id": item["session"]} for item in items]
     return {"run_id": release_run, "parent_run_id": run,
             "session_id": session, "boot_epoch": boot,
@@ -1468,6 +1476,9 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
         raise ValueError("invalid ROS action report")
     timelines = _timeline(csv_bytes)
     records = _raw_records(raw_bytes)
+    producer_source,requester_source=_capture_sources(records)
+    if context.get('producer_source')!=producer_source or context.get('requester_source')!=requester_source:
+        raise ValueError('context Source does not match actual DPRAW02 capture')
     _verify_window_context(context, csv_bytes, records)
     if len(timelines) == 1 and action.get("scope") in (
             "ROS_ACTION_ONLY", "ROS_PREEMPT_PROBE"):
@@ -1502,10 +1513,10 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
         if hashes is not None and hashes != goal_hashes:
             raise ValueError("device identity hash changed across goals")
         hashes = goal_hashes
-        if goals and (goal["boot_epoch"], goal["session_id"]) != \
-                (goals[0]["boot_epoch"], goals[0]["session_id"]):
+        if goals and (_root_boot(goal), goal["session_id"]) != \
+                (_root_boot(goals[0]), goals[0]["session_id"]):
             raise ValueError("cross-session ROS goals")
-        if goals and goal["device_id"] != goals[0]["device_id"]:
+        if goals and goal["domain_device_id"] != goals[0]["domain_device_id"]:
             raise ValueError("cross-device ROS goals")
         if goals and goal["run_id"] <= goals[-1]["run_id"]:
             raise ValueError("duplicate or regressing device run across goals")
@@ -1545,7 +1556,8 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
     last = goals[-1]
     result = {"source": "ros_moveit_jtc_usb_ref_can", "profile_id": 201,
               "configured_mask": 63, "identity": {"client_id": context["client_id"],
-                                                     "device_id": goals[0]["device_id"],
+                                                     "domain_device_id": goals[0]["domain_device_id"],
+                                                     "producer_source":producer_source,"requester_source":requester_source,
                                                      **hashes},
               "environment": {"producer_lag_us": context["producer_lag_us"],
                               "producer_lag_budget_us": context["producer_lag_budget_us"],
@@ -1560,10 +1572,10 @@ def join_evidence(timeline_path, raw_path, action_path, context_path):
               "management_records": [{"kind": record["kind"], "when": record["when"],
                                       "boot": record["boot"], "session": record["session"],
                                       "run": record["run"], "seq": record["seq"],
-                                      "raw_hex": record["raw"].hex()} for record in records
+                                      "raw_hex": record["raw"].hex(), "source":record["source"]} for record in records
                                      if record["kind"] in (4, 5)],
               "pre_release_hold": {"run_id": last["run_id"], "session_id": last["session_id"],
-                                   "boot_epoch": last["boot_epoch"],
+                                   "boot_epoch": _root_boot(last),
                                    "motion_epoch": holds[-1][0]["motion_epoch"],
                                    "confirmed": True},
               "release": release}

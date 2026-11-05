@@ -1,40 +1,37 @@
 /** @file panel_feedback.hpp
- * @brief 已解码中央消息到ROS类型的逐字段投影；不授权、不推断完成、不改变有效位。
+ * @brief 中央Owned消息向中央生成ROS接口投影；显式保留presence与实际SDK来源。
  */
 #pragma once
-#include "dummy_ros_control/wire_types.hpp"
-#include "dpsdk_interfaces/msg/dummy_device_status_v2.hpp"
-#include "dpsdk_interfaces/msg/dummy_joint_state_v2.hpp"
-namespace dummy_motion_client {
-dpsdk_interfaces::msg::DummyDeviceStatusV2 panel_status_message(const dp::iface::DummyDeviceStatusV2&);
-dpsdk_interfaces::msg::DummyJointStateV2 panel_state_message(const dp::iface::DummyJointStateV2&);
-}
-
-#include <cstddef>
+#include "dummy_ref/message_contract.hpp"
+#include "dpsdk_interfaces/msg/dummy_device_status.hpp"
+#include "dpsdk_interfaces/msg/dummy_joint_state.hpp"
 #include <cstdint>
-#include <optional>
 namespace dummy_motion_client {
-/** @brief 只有取得控制锁后才复制；不接收诊断回填。 */
+dpsdk_interfaces::msg::DummyDeviceStatus panel_status_message(const dummy_ref::messages::Status&,const dp::comm::SourceId&);
+dpsdk_interfaces::msg::DummyJointState panel_state_message(const dummy_ref::messages::State&,const dp::comm::SourceId&);
+/** @brief 控制锁保护下复制的实际Owned及来源；诊断观察不回填本缓存。 */
 struct PanelFeedbackCache {
-  bool available = false;
-  dp::iface::DummyDeviceStatusV2 status;
-  dp::iface::DummyJointStateV2 state;
-  std::uint64_t status_received_us = 0, state_received_us = 0;
+  bool available=false;
+  dummy_ref::messages::Status status;
+  dummy_ref::messages::State state;
+  dp::comm::SourceId status_source{},state_source{};
+  std::uint64_t status_received_us=0U,state_received_us=0U;
 };
-/** @brief 指向worker已校验非授权诊断字节，不改变其原接收时刻。 */
-struct PanelFeedbackBytes {
-  const std::uint8_t *data = nullptr;
-  std::size_t size = 0;
-  std::uint64_t received_us = 0;
+/** @brief 仅借用调用期间有效的实际Owned；来源值与原接收时刻独立保留。 */
+template<class Message>struct PanelFeedbackObservation {
+  const Message* value=nullptr;
+  dp::comm::SourceId source{};
+  std::uint64_t received_us=0U;
 };
+/** @brief 选定消息借用与输入缓存同寿命，只供立即发布，不授予设备控制资格。 */
 struct PanelFeedbackSelection {
-  std::optional<dp::iface::DummyDeviceStatusV2> status;
-  std::optional<dp::iface::DummyJointStateV2> state;
+  const dummy_ref::messages::Status* status=nullptr;
+  const dummy_ref::messages::State* state=nullptr;
+  dp::comm::SourceId status_source{},state_source{};
 };
-/** @brief 发布专用选择；调用者串行拥有水位，不授予控制或释放资格。 */
-PanelFeedbackSelection select_panel_feedback(
-    const PanelFeedbackCache &control, PanelFeedbackBytes diagnostic_status,
-    PanelFeedbackBytes diagnostic_state, std::uint64_t now,
-    std::uint64_t state_max_age_us, std::uint64_t status_max_age_us,
-    std::uint64_t &status_published_us, std::uint64_t &state_published_us);
+PanelFeedbackSelection select_panel_feedback(const PanelFeedbackCache& control,
+  PanelFeedbackObservation<dummy_ref::messages::Status> diagnostic_status,
+  PanelFeedbackObservation<dummy_ref::messages::State> diagnostic_state,std::uint64_t now,
+  std::uint64_t state_max_age_us,std::uint64_t status_max_age_us,
+  std::uint64_t& status_published_us,std::uint64_t& state_published_us);
 }

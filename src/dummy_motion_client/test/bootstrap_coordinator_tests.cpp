@@ -120,7 +120,7 @@ int main() {
   auto reconnect = state;
   ++reconnect.boot_epoch;
   const auto sent_before_reconnect = client.requests.size();
-  assert(!bootstrap.start_operation(reconnect, ManageOperation::kSetPermit, 29U));
+  assert(!bootstrap.start_operation(reconnect, ManageOperation::INSTALL_PERMIT, 29U));
   assert(client.requests.size() == sent_before_reconnect);
   const auto authorization=bootstrap.authorization();
   assert(authorization && authorization->identity.expected_session_id()==42U &&
@@ -131,7 +131,7 @@ int main() {
   state.real_motion_permitted=false;
   state.permit_remaining_us=0U;
   bootstrap.observe(state,29U);
-  assert(bootstrap.start_operation(state,ManageOperation::kSetPermit,30U));
+  assert(bootstrap.start_operation(state,ManageOperation::INSTALL_PERMIT,30U));
   assert(!std::equal(first_permit_digest.begin(),first_permit_digest.end(),
                      std::begin(client.requests.back().permit_sha256())));
   Client explicit_client;
@@ -144,29 +144,29 @@ int main() {
   /**
    * @brief 显式分步路径：回执operation_complete后再观察相应状态，SetPermit回执先到仍无authorization。
    */
-  const ManageOperation explicit_operations[]{ManageOperation::kSelectMode,ManageOperation::kGrantSession,
-      ManageOperation::kCaptureReference,ManageOperation::kSetPermit};
+  const ManageOperation explicit_operations[]{ManageOperation::SELECT_CONTROL_MODE,ManageOperation::GRANT_SESSION,
+      ManageOperation::CAPTURE_REFERENCE,ManageOperation::INSTALL_PERMIT};
   for (const auto operation : explicit_operations) {
     assert(explicit_bootstrap.start_operation(explicit_state,operation,20U));
     assert(explicit_client.requests.back().operation()==wire_value(operation));
     explicit_bootstrap.tick(21U);
     assert(explicit_bootstrap.operation_complete());
     ++explicit_state.management_epoch;
-    if(operation==ManageOperation::kSelectMode) explicit_state.control_mode=1U;
-    if(operation==ManageOperation::kGrantSession) {
+    if(operation==ManageOperation::SELECT_CONTROL_MODE) explicit_state.control_mode=1U;
+    if(operation==ManageOperation::GRANT_SESSION) {
       explicit_state.session_id=42U; explicit_state.control_mode=1U;
     }
-    if(operation==ManageOperation::kCaptureReference) {
+    if(operation==ManageOperation::CAPTURE_REFERENCE) {
       explicit_state.reference_epoch=1U; explicit_state.reference_kind=1U;
     }
-    if(operation==ManageOperation::kSetPermit) {
+    if(operation==ManageOperation::INSTALL_PERMIT) {
       assert(!explicit_bootstrap.authorization().has_value());
       explicit_state.real_motion_permitted=true;
       explicit_state.permit_remaining_us=900000U;
     }
     explicit_bootstrap.observe(explicit_state,22U);
   }
-  assert(explicit_bootstrap.last_operation()==ManageOperation::kSetPermit);
+  assert(explicit_bootstrap.last_operation()==ManageOperation::INSTALL_PERMIT);
   assert(explicit_bootstrap.authorization().has_value());
   explicit_state.motion_epoch=7U;
   explicit_state.management_epoch=4U;
@@ -190,7 +190,7 @@ int main() {
   assert(explicit_bootstrap.renewal_due(15000020U,30000000U));
   assert(explicit_bootstrap.start_renew_lease(explicit_state,30000000U,15000020U));
   const auto &renew=explicit_client.requests.back();
-  assert(renew.operation()==wire_value(ManageOperation::kRenewLease));
+  assert(renew.operation()==wire_value(ManageOperation::RENEW_LEASE));
   assert(renew.requested_session_lease_us()==30000000U);
   assert(renew.expected_session_id()==42U && renew.expected_boot_epoch()==8U);
   assert(renew.expected_reference_epoch()==1U && renew.expected_motion_epoch()==7U);
@@ -202,7 +202,7 @@ int main() {
   explicit_client.queued=false;
   explicit_bootstrap.tick(15000022U);
   assert(explicit_bootstrap.operation_complete());
-  assert(explicit_bootstrap.last_operation()==ManageOperation::kRenewLease);
+  assert(explicit_bootstrap.last_operation()==ManageOperation::RENEW_LEASE);
   assert(!explicit_bootstrap.authorization().has_value());
   explicit_state.core_state=wire_value(WireCoreState::kRunning);
   explicit_state.state_core_state=wire_value(WireCoreState::kRunning);
@@ -254,7 +254,7 @@ int main() {
     initial.core_state=wire_value(WireCoreState::kHold);
     initial.state_core_state=wire_value(WireCoreState::kHold);
     coordinator.observe(initial,0U);
-    assert(coordinator.start_operation(initial,ManageOperation::kGrantSession,1U));
+    assert(coordinator.start_operation(initial,ManageOperation::GRANT_SESSION,1U));
     coordinator.tick(2U);
     assert(coordinator.operation_complete() && !transport.requests.empty());
     coordinator.observe(explicit_state,3U);
@@ -299,7 +299,7 @@ int main() {
   overflow_state.session_id=0U;
   overflow_state.reference_epoch=0U;
   overflow_state.run_id=0U;
-  assert(overflow.start_operation(overflow_state,ManageOperation::kGrantSession,UINT64_MAX-1U));
+  assert(overflow.start_operation(overflow_state,ManageOperation::GRANT_SESSION,UINT64_MAX-1U));
   overflow.tick(UINT64_MAX);
   assert(overflow.phase()==BootstrapPhase::kFault);
   assert(std::string(overflow.error())=="LEASE_DEADLINE_OVERFLOW");
@@ -307,7 +307,7 @@ int main() {
   BootstrapCoordinator legacy(legacy_client,identity,compiled_policy,1000000U);
   auto legacy_state=explicit_state;
   legacy.observe(legacy_state,0U);
-  assert(legacy.start_operation(legacy_state,ManageOperation::kSelectMode,1U));
+  assert(legacy.start_operation(legacy_state,ManageOperation::SELECT_CONTROL_MODE,1U));
   legacy.tick(2U);
   assert(legacy.operation_complete());
   assert(!legacy.renewal_due(20000020U,20000000U));
@@ -321,23 +321,23 @@ int main() {
   unconfirmed_state.session_id=0U;
   unconfirmed_state.reference_epoch=0U;
   unconfirmed.observe(unconfirmed_state,0U);
-  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::kSelectMode,1U));
+  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::SELECT_CONTROL_MODE,1U));
   unconfirmed.tick(2U);
   ++unconfirmed_state.management_epoch;
   unconfirmed_state.control_mode=1U;
   unconfirmed.observe(unconfirmed_state,2U);
-  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::kGrantSession,3U));
+  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::GRANT_SESSION,3U));
   unconfirmed.tick(4U);
   unconfirmed_state.session_id=42U;
   ++unconfirmed_state.management_epoch;
   unconfirmed.observe(unconfirmed_state,4U);
-  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::kCaptureReference,5U));
+  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::CAPTURE_REFERENCE,5U));
   unconfirmed.tick(6U);
   unconfirmed_state.reference_epoch=1U;
   unconfirmed_state.reference_kind=1U;
   ++unconfirmed_state.management_epoch;
   unconfirmed.observe(unconfirmed_state,6U);
-  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::kSetPermit,7U));
+  assert(unconfirmed.start_operation(unconfirmed_state,ManageOperation::INSTALL_PERMIT,7U));
   unconfirmed.tick(8U);
   unconfirmed_state.real_motion_permitted=true;
   unconfirmed_state.permit_remaining_us=900000U;
@@ -359,7 +359,7 @@ int main() {
   malformed_state.session_id=0U;
   malformed_state.reference_epoch=0U;
   malformed_grant.observe(malformed_state,0U);
-  assert(malformed_grant.start_operation(malformed_state,ManageOperation::kGrantSession,1U));
+  assert(malformed_grant.start_operation(malformed_state,ManageOperation::GRANT_SESSION,1U));
   malformed_grant.tick(2U);
   assert(malformed_grant.phase()==BootstrapPhase::kFault);
   assert(std::string(malformed_grant.error())=="LEASE_RENEWAL_UNCONFIRMED");
@@ -394,7 +394,7 @@ int main() {
   assert(release_client.requests.empty());
   release.observe(holding,99U);
   assert(release.start_release(holding,100U));
-  assert(release_client.requests.back().operation()==wire_value(ManageOperation::kDisableAndRelease));
+  assert(release_client.requests.back().operation()==wire_value(ManageOperation::DISABLE_AND_RELEASE));
   assert(release_client.requests.back().expected_session_id()==42U);
   release.tick(101U);
   assert(!release.released());
@@ -609,7 +609,7 @@ int main() {
     BootstrapCoordinator rejected(rejected_client, identity, compiled_policy,
                                   1000000U);
     assert(rejected.start_operation(
-        holding, ManageOperation::kBeginQualification, 100U, false, true));
+        holding, ManageOperation::BEGIN_QUALIFICATION, 100U, false, true));
     rejected.tick(101U);
     assert(rejected.phase() == BootstrapPhase::kFault);
     assert(rejected.release_slot_available());
@@ -621,7 +621,7 @@ int main() {
     BootstrapCoordinator unknown(unknown_client, identity, compiled_policy,
                                  1000000U);
     assert(unknown.start_operation(
-        holding, ManageOperation::kBeginQualification, 100U, false, true));
+        holding, ManageOperation::BEGIN_QUALIFICATION, 100U, false, true));
     unknown.invalidate("UNKNOWN_INFLIGHT");
     assert(!unknown.release_slot_available());
     assert(!unknown.start_release(holding, 102U, true, 0U));
@@ -638,7 +638,7 @@ int main() {
     current.real_motion_permitted = false;
     current.permit_remaining_us = 0;
     assert(
-        bounded.start_operation(current, ManageOperation::kSetPermit, 100100U));
+        bounded.start_operation(current, ManageOperation::INSTALL_PERMIT, 100100U));
     assert(bounded_client.requests.back().permit_remaining_us() == 900000U);
     bounded.tick(100101U);
     assert(!bounded.operation_complete());
@@ -654,7 +654,7 @@ int main() {
     current.real_motion_permitted = false;
     current.permit_remaining_us = 0;
     assert(
-        bounded.start_operation(current, ManageOperation::kSetPermit, 500100U));
+        bounded.start_operation(current, ManageOperation::INSTALL_PERMIT, 500100U));
     assert(bounded_client.requests.back().permit_remaining_us() == 500000U);
     bounded_client.prepared_success = true;
     bounded.tick(500101U);
@@ -666,7 +666,7 @@ int main() {
     assert(!expired.begin_manual_permit_window(holding.boot_epoch,
                                                UINT64_MAX - 10U));
     assert(expired.begin_manual_permit_window(holding.boot_epoch, 100U));
-    assert(!expired.start_operation(holding, ManageOperation::kSetPermit,
+    assert(!expired.start_operation(holding, ManageOperation::INSTALL_PERMIT,
                                     1000100U));
     assert(expired_client.requests.empty());
     Client pending_client;
@@ -674,7 +674,7 @@ int main() {
     BootstrapCoordinator pending_permit(pending_client, identity,
                                         compiled_policy, 10000000U);
     assert(pending_permit.begin_manual_permit_window(holding.boot_epoch, 100U));
-    assert(pending_permit.start_operation(holding, ManageOperation::kSetPermit,
+    assert(pending_permit.start_operation(holding, ManageOperation::INSTALL_PERMIT,
                                           200U));
     pending_permit.tick(2000200U);
     assert(pending_permit.phase() == BootstrapPhase::kFault);
@@ -686,7 +686,7 @@ int main() {
     quiet.real_motion_permitted=false;quiet.permit_remaining_us=0;
     assert(!task.restart_manual_permit_window(quiet,100U));
     assert(task.begin_manual_permit_window(quiet.boot_epoch,100U));
-    assert(task.start_operation(quiet,ManageOperation::kSetPermit,200U));
+    assert(task.start_operation(quiet,ManageOperation::INSTALL_PERMIT,200U));
     task.tick(201U);++quiet.management_epoch;
     quiet.real_motion_permitted=true;quiet.permit_remaining_us=999000U;
     task.observe(quiet,202U);task.tick(202U);
@@ -710,7 +710,7 @@ int main() {
       assert(task.manual_permit_remaining_us(1100200U)==900000U);
     }
     quiet.real_motion_permitted=false;quiet.permit_remaining_us=0;
-    assert(task.start_operation(quiet,ManageOperation::kSetPermit,1100200U));
+    assert(task.start_operation(quiet,ManageOperation::INSTALL_PERMIT,1100200U));
     assert(explicit_task_client.requests.back().permit_remaining_us()==900000U);
     assert(!task.restart_manual_permit_window(quiet,1100201U));
     assert(task.manual_permit_remaining_us(1100201U)==899999U);

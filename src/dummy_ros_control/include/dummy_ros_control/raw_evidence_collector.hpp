@@ -5,6 +5,11 @@
  */
 #pragma once
 
+#include "canonical_records.h"
+#include "dummy_ros_control/capture_record.hpp"
+#include "dummy_ref/message_contract.hpp"
+#include "dummy_ros_control/message_presence.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -109,28 +114,6 @@ class RawEvidenceBindings final {
 };
 
 /**
- * @brief 372字节原页及已提取元数据/链；final表示此页记录已封口，只有category=4才是整个attempt终页。group_count和序号必须另核对。
- */
-struct RawEvidencePage {
-  static constexpr std::size_t kRawSize = 372U;
-  std::array<std::uint8_t, kRawSize> raw{};
-  std::array<std::uint8_t, 32U> previous_chain_sha256{};
-  std::array<std::uint8_t, 32U> chain_sha256{};
-  std::uint64_t boot_epoch = 0U;
-  std::uint64_t session_id = 0U;
-  std::uint64_t run_id = 0U;
-  std::uint64_t parent_run_id = 0U;
-  std::uint32_t evidence_seq = 0U;
-  std::uint32_t group_count = 0U;
-  std::uint16_t terminal_reason = 0U;
-  std::uint8_t attempt_kind = 0U;
-  std::uint8_t category = 0U;
-  std::uint8_t final_state = 0U;
-  bool final = false;
-  bool evidence_lost = false;
-};
-
-/**
  * @brief 首个非终原页已写/刷新后的证明字段；full_six核六轴mask，strict_refresh_successor要求根运动页等附加条件，均非动作到位凭证。
  */
 struct RawEvidenceFirstPageWritten {
@@ -167,17 +150,21 @@ class RawEvidenceCollector final {
   using BeforeTerminalFlush = bool (*)(void *) noexcept;
   using FlushFile = int (*)(std::FILE *, void *) noexcept;
   /**
-   * @brief 256个定长RAM槽，每条最大651字节载荷；容量满即Failure::kOverflow，不覆盖尚未写出的证据。
+   * @brief 256个完整记录RAM槽，每条容量取中央规范记录的最大上界；容量满即Failure::kOverflow，不覆盖尚未写出的证据。
    */
   static constexpr std::size_t kCapacity = 256U;
-  static constexpr std::size_t kMaxRawSize = 651U;
+  static constexpr std::size_t kMaxCanonicalSize=std::max({
+    dp::protocol::canonical::Traits<dummy_ref::messages::State>::kMaxEncodedSize,
+    dp::protocol::canonical::Traits<dummy_ref::messages::Status>::kMaxEncodedSize,
+    dp::protocol::canonical::Traits<dummy_ref::messages::Evidence>::kMaxEncodedSize,
+    dp::protocol::canonical::Traits<dummy_ref::messages::ManageRequest>::kMaxEncodedSize,
+    dp::protocol::canonical::Traits<dummy_ref::messages::ManageResponse>::kMaxEncodedSize});
+  static_assert(kMaxCanonicalSize<=UINT16_MAX);
+  static constexpr std::size_t kMaxRawSize=kMaxCanonicalSize;
   /**
-   * @brief DPRaw记录类型：证据页/State/Status/管理请求/响应；每类载荷保持实际wire codec字节。
+   * @brief DPRaw记录类型：证据页/State/Status/管理请求/响应；每类载荷均由中央canonical Traits编码。
    */
-  enum class Kind : std::uint8_t {
-    kPage = 1U, kState = 2U, kStatus = 3U,
-    kManagementRequest = 4U, kManagementResponse = 5U
-  };
+  using Kind=CaptureRecordKind;
   /**
    * @brief 首个采集失败原因；Sequence/Chain/Identity/Overflow/Io/Invalid/Incomplete互不混同，非零状态不会自动恢复。
    */
@@ -223,13 +210,14 @@ class RawEvidenceCollector final {
    */
   void stop() noexcept;
   /**
-   * @brief 校验run链、页序、group计数和原字节一致性后排队。
+   * @brief 校验run链、页序、group计数和中央字段组与哈希一致性后排队。
    * 根run首seq=0，后续run须在前run终页后单调且保持boot/session；拒绝丢证据、异常final/kind/parent/链。category4核终页组数，首非终页及终页各导出额外证明；单生产者调用。
-   * @param page 固定372字节原页及提取元数据。
+   * @param page SDK已解码的实际Evidence Owned；来源由source独立传入。
    * @param received_at_us 宿主steady接收µs。
    * @return bool仅表示通过验证且RAM入队；真正写出/flush稍后发生。
    */
-  bool offer_page(const RawEvidencePage &page, std::uint64_t received_at_us) noexcept;
+  bool offer_page(const dummy_ref::messages::Evidence& page,const dp::comm::SourceId& source,
+                  std::uint64_t session_id,std::uint64_t received_at_us) noexcept;
   /** @brief 单生产者查询已验链且已入队的干净Cancel及全轴安全Hold；不代表writer已flush。
    * 仅用于相邻run首页的临时身份绑定，最终封口仍须读取独立flush回执。
    */
@@ -248,36 +236,42 @@ class RawEvidenceCollector final {
    */
   bool expect_run(std::uint64_t run_id, std::uint32_t verified_pre_motion_epoch = 0U) noexcept;
   /**
-   * @brief 复制State/Status原始字节并携带清理生命周期代入队。
-   * @param kind 仅kState或kStatus。
-   * @param raw 借用字节，调用时有效。
-   * @param size 非零且≤651字节。
-   * @param received_at_us 宿主接收µs。
-   * @param boot_epoch 提取的设备boot。
-   * @param session_id 提取的设备session。
+   * @brief 编码实际State/Status规范记录，并保留独立Source与清理生命周期。
+   * @param value SDK回调交付的完整Owned。
+   * @param source SDK已验证来源的值副本。
+   * @param received_at_us 原始宿主接收µs。
    * @param cleanup_producer_valid 故障State源时钟校验结果，只供清理lane。
-   * @return bool：入RAM队列成功，不表示此帧通过正常控制校验。
+   * @return bool：入RAM队列成功，不授予正常控制资格。
    */
-  bool offer_observation(Kind kind, const std::uint8_t *raw, std::size_t size,
-                         std::uint64_t received_at_us, std::uint64_t boot_epoch,
-                         std::uint64_t session_id, bool cleanup_producer_valid=false) noexcept;
+  template<class Message>
+  bool offer_observation(const Message& value,const dp::comm::SourceId& source,
+                         std::uint64_t received_at_us,bool cleanup_producer_valid=false) noexcept {
+    static_assert(std::is_same_v<Message,dummy_ref::messages::State> || std::is_same_v<Message,dummy_ref::messages::Status>);
+    if(!message_fields_present(value)){fail(Failure::kInvalid);return false;}
+    Record record{};
+    record.kind=std::is_same_v<Message,dummy_ref::messages::State>?Kind::kState:Kind::kStatus;
+    record.source=source;record.session_id=*value.session_id();record.received_at_us=received_at_us;
+    record.cleanup_producer_valid=cleanup_producer_valid;
+    record.cleanup_generation=cleanup_generation();
+    return enqueue_value(value,record);
+  }
   /**
-   * @brief 核对请求codec并复制到采集队列。
-   * @param raw 管理请求原载荷。
-   * @param size 必须等于请求codec编码长度。
-   * @param sent_at_us 宿主发送/提交观察µs，不是设备接纳时刻。
-   * @return bool；未running或codec错误粘滞失败。
+   * @brief 核对完整管理请求并写入中央规范记录。
+   * @param value 实际出站Owned，不能缺字段后由采集器补值。
+   * @param source 本地发送者的SDK来源，与正文的目标boot独立。
+   * @param sent_at_us 原始宿主发送观察µs，不是设备接纳时刻。
+   * @return bool；未running或字段组错误粘滞失败。
    */
-  bool offer_management_request(const std::uint8_t *raw, std::size_t size,
+  bool offer_management_request(const dummy_ref::messages::ManageRequest& value,const dp::comm::SourceId& source,
                                 std::uint64_t sent_at_us) noexcept;
   /**
-   * @brief 核对管理响应codec并保留原字节。
-   * @param raw 借用响应载荷。
-   * @param size 精确codec长度。
+   * @brief 核对管理响应字段组并写入中央规范记录。
+   * @param value 实际响应Owned。
+   * @param source SDK已验证的实际服务端来源。
    * @param received_at_us 宿主收到响应µs。
    * @return bool：合法并入队，不代表管理操作结果一定成功。
    */
-  bool offer_management_response(const std::uint8_t *raw, std::size_t size,
+  bool offer_management_response(const dummy_ref::messages::ManageResponse& value,const dp::comm::SourceId& source,
                                  std::uint64_t received_at_us) noexcept;
   /**
    * @brief 由外层发现证据矛盾时锁存Invalid首错。
@@ -313,7 +307,7 @@ class RawEvidenceCollector final {
   struct Record {
     std::array<std::uint8_t, kMaxRawSize> raw{};
     std::uint64_t received_at_us = 0U;
-    std::uint64_t boot_epoch = 0U;
+    dp::comm::SourceId source{};
     std::uint64_t session_id = 0U;
     std::uint64_t run_id = 0U;
     std::uint32_t evidence_seq = 0U;
@@ -346,7 +340,16 @@ class RawEvidenceCollector final {
    * @param record 单生产者拥有的完整值。
    * @return bool；已有首错或满256槽拒绝。
    */
-  bool enqueue(const Record &record) noexcept;
+  bool enqueue(const Record& record) noexcept;
+  /** @brief 只序列化到中央schema生成的规范记录；业务消息无手写字节布局。 */
+  template<class Message>bool enqueue_value(const Message& value,Record record) noexcept {
+    using Traits=dp::protocol::canonical::Traits<Message>;
+    std::size_t written=0U;
+    if(!Traits::encode(value,record.raw.data(),record.raw.size(),&written)){fail(Failure::kInvalid);return false;}
+    record.size=static_cast<std::uint16_t>(written);
+    return enqueue(record);
+  }
+  std::uint64_t cleanup_generation() const noexcept;
   /**
    * @brief 只保留第一个失败并同步到可选channel。
    * 后续失败不覆盖原因为便于定位首因；不自动请求设备运动或停止。
@@ -359,18 +362,18 @@ class RawEvidenceCollector final {
    */
   void write_loop() noexcept;
   /**
-   * @brief 写39字节小端记录头及精确wire载荷。
+   * @brief 写统一DPRAW02小端容器头及精确规范记录载荷。
    * @param record 待输出记录，size指明有效载荷长度。
    * @return bool：两次fwrite均达到请求长度；本方法本身不fflush/fsync。
    */
-  bool write_record(const Record &record) noexcept;
+  bool write_record(const Record& record,const std::uint8_t* bytes,std::size_t size) noexcept;
   /**
-   * @brief 核对首seed或前页链，以及原页规范前缀的SHA-256。
-   * 首seed为192字节零初始化，身份字段占前160字节；页摘要由前链+codec规范前缀+evidence_lost尾字节计算，不包含自引用摘要。
+   * @brief 核对首seed或前页链，以及中央规范Hash purpose的SHA-256。
+   * 首seed为192字节零初始化，身份字段占前160字节；页摘要由前链及canonical Hash purpose实际written字节计算，链字段由中央属性排除。
    * @param page 本次原页与前/当前摘要。
    * @return bool；首seed绑定run/boot/client及四类hash，后页接last_chain。
    */
-  bool verify_chain(const RawEvidencePage &page) noexcept;
+  bool verify_chain(const dummy_ref::messages::Evidence& page,const dp::comm::SourceId& source) noexcept;
 
   /**
    * @brief SPSC环：produced/consumed以release/acquire交接，written/pages/terminal为writer发布的观察量。

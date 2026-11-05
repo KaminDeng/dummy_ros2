@@ -1,8 +1,8 @@
 # @file CMakeLists.txt
 # @brief ROS控制器/硬件插件、位置控制传输与组件测试的构建入口。
 # @details 配置顺序：发现ROS/OpenSSL→核验安装SDK协议/运行库与角色→
-# 装配可加载库→注册测试/独立探针→安装导出。651/18000是runtime容量角色，
-# 不是电机数或USB MTU。配置、编译、测试与物理设备验证是不同层次。
+# 装配可加载库→注册测试/独立探针→安装导出。正式Root profile为dummy，
+# Native/PIC资源角色独立锁定。配置、编译、测试与物理设备验证是不同层次。
 # BUILD_TESTING只控制测试目标注册；没有在配置/构建时自动连接USB或使能机械臂。
 cmake_minimum_required(VERSION 3.16)
 project(dummy_ros_control)
@@ -65,6 +65,21 @@ pluginlib_export_plugin_description_file(hardware_interface dummy_ros_control_pl
 # 以下首个测试区装配组件/替身和Host探针。CTest的TIMEOUT是测试进程墙钟上限，不能当作设备watchdog参数。
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  foreach(case IN ITEMS owned_message_handoff canonical_capture_pool)
+    add_executable(${case}_tests test/${case}_tests.cpp)
+    target_compile_features(${case}_tests PRIVATE cxx_std_17)
+    target_compile_options(${case}_tests PRIVATE -UNDEBUG)
+    target_link_libraries(${case}_tests PRIVATE dummy_guarded_zenbedded_system)
+    add_test(NAME ${case}_tests COMMAND ${case}_tests)
+    set_tests_properties(${case}_tests PROPERTIES TIMEOUT 20 LABELS "component_only;offline")
+  endforeach()
+  # 正式安装Root头/实际PIC归档下验证缺失字段、显式零值及初始化边界。
+  foreach(case IN ITEMS presence root_owner qos_policy)
+    add_executable(protocol_r11_${case}_tests test/protocol_r11_${case}_tests.cpp)
+    target_compile_features(protocol_r11_${case}_tests PRIVATE cxx_std_17)
+    target_link_libraries(protocol_r11_${case}_tests PRIVATE dummy_dp_comm)
+    add_test(NAME protocol_r11_${case}_tests COMMAND protocol_r11_${case}_tests)
+  endforeach()
   # 慢stderr/日志保留、轨迹摘要和raw写入组件；分别验证其责任边界，不据日志成功推断物理动作成功。
   add_executable(diagnostic_journal_tests test/diagnostic_journal_tests.cpp)
   target_compile_features(diagnostic_journal_tests PRIVATE cxx_std_17)
@@ -111,13 +126,40 @@ if(BUILD_TESTING)
   target_link_libraries(state_contention_tests dummy_guarded_zenbedded_system)
   add_test(NAME state_contention_tests COMMAND state_contention_tests)
   # 共享组件二进制由命令行scenario选择故障/乱序分支；后续多个CTest名可以映射到同一可执行文件。
+  include("${CMAKE_CURRENT_SOURCE_DIR}/test/root_component_peer.cmake")
+  add_executable(historical_idle_baseline_tests test/historical_idle_baseline_tests.cpp)
+  target_compile_features(historical_idle_baseline_tests PRIVATE cxx_std_17)
+  target_link_libraries(historical_idle_baseline_tests dummy_guarded_zenbedded_system)
+  add_test(NAME historical_idle_baseline_owned COMMAND historical_idle_baseline_tests)
+  add_executable(root_owned_transport_tests test/root_owned_transport_tests.cpp)
+  add_dependencies(root_owned_transport_tests root_component_peer)
+  target_compile_features(root_owned_transport_tests PRIVATE cxx_std_17)
+  target_compile_definitions(root_owned_transport_tests PRIVATE
+    DUMMY_REF_ROOT_COMPONENT_PEER_PATH="$<TARGET_FILE:root_component_peer>")
+  target_link_libraries(root_owned_transport_tests dummy_guarded_zenbedded_system)
+  add_test(NAME root_owned_transport_tests COMMAND root_owned_transport_tests)
+  add_test(NAME root_owned_transport_state_first COMMAND root_owned_transport_tests state_first)
+  add_test(NAME root_owned_transport_status_first COMMAND root_owned_transport_tests status_first)
+  set_tests_properties(root_owned_transport_tests PROPERTIES TIMEOUT 20 LABELS "component_only;synthetic_pty;root")
   add_executable(transport_component_tests test/transport_component_tests.cpp)
+  add_dependencies(transport_component_tests root_component_peer)
+  target_compile_definitions(transport_component_tests PRIVATE
+    DUMMY_REF_ROOT_COMPONENT_PEER_PATH="$<TARGET_FILE:root_component_peer>")
   # 台架组件的wire状态直接由D第一方正式映射产生，防止两侧手写同错。
   target_include_directories(transport_component_tests PRIVATE
     "${DPSDK_ROOT}/applications/dummy_ref_control/comm"
     "${DPSDK_ROOT}/applications/dummy_ref_control/include")
   target_link_libraries(transport_component_tests dummy_guarded_zenbedded_system OpenSSL::Crypto)
   add_test(NAME transport_component_tests COMMAND transport_component_tests)
+# 完成Status先于终页flush，后继首页仍须通过原身份/终链校验。
+add_test(NAME transport_complete_status_before_flush
+  COMMAND transport_component_tests six_axis raw_complete_status_before_flush)
+  add_test(NAME protocol_r11_transport_presence COMMAND transport_component_tests protocol_r11_presence)
+  set_tests_properties(protocol_r11_transport_presence PROPERTIES TIMEOUT 20 LABELS "component_only;synthetic_pty;root")
+  add_test(NAME transport_result_guard
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/test_transport_result_guard.py"
+      "${CMAKE_CXX_COMPILER}")
+  set_tests_properties(transport_result_guard PROPERTIES TIMEOUT 20 LABELS "component_only;offline")
   target_link_options(transport_component_tests PRIVATE "-Wl,--export-dynamic-symbol=fflush"
     "-Wl,--export-dynamic-symbol=pthread_mutex_unlock")
   add_test(NAME transport_cancel_pending_flush COMMAND transport_component_tests six_axis raw_order_cancel_pending_flush)
@@ -479,6 +521,10 @@ if(BUILD_TESTING)
   add_executable(real_peer_state_probe test/real_peer_state_probe.cpp)
   target_include_directories(real_peer_state_probe PRIVATE "${DUMMY_WIRE_INCLUDE}")
   target_link_libraries(real_peer_state_probe dummy_guarded_zenbedded_system)
+  # 真实设备探针只构建；显式输入/端点且唯一owner授权后才可运行，不注册自动实机CTest。
+  add_executable(protocol_r11_real_plugin_probe test/protocol_r11_real_plugin_probe.cpp)
+  target_link_libraries(protocol_r11_real_plugin_probe dummy_guarded_zenbedded_system OpenSSL::Crypto)
+  ament_target_dependencies(protocol_r11_real_plugin_probe hardware_interface pluginlib)
   add_executable(production_transport_tests test/production_transport_tests.cpp)
   target_link_libraries(production_transport_tests dummy_guarded_zenbedded_system)
   add_test(NAME transport_stop_timeout_parameters
@@ -513,6 +559,7 @@ if(BUILD_TESTING)
 
   # pluginlib装载测试使用私有resource index与库软链接；不会运行安装器或改用户正在使用的安装树。
   add_executable(guarded_plugin_load_tests test/guarded_plugin_load_tests.cpp)
+  add_dependencies(guarded_plugin_load_tests dummy_guarded_joint_trajectory_controller dummy_guarded_zenbedded_system)
   ament_target_dependencies(guarded_plugin_load_tests controller_interface hardware_interface pluginlib)
   # pluginlib组件测试只装配私有索引/链接，不运行installer或改live安装树。
   set(DUMMY_PLUGIN_TEST_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/plugin_test_prefix")
@@ -555,9 +602,10 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
     ENVIRONMENT "AMENT_PREFIX_PATH=${DUMMY_PLUGIN_TEST_PREFIX}:/opt/ros/jazzy;LD_LIBRARY_PATH=${DUMMY_PLUGIN_TEST_PREFIX}/lib:${CMAKE_CURRENT_BINARY_DIR}:/opt/ros/jazzy/lib")
 
   # 当前公共头只能配当前runtime，原析构测试独立保618/18000容量与测试hook。
-  # 请求句柄析构白盒测试独立编译DP_COMM_TESTING且保留618/18000历史容量；不把它链接进651/18000生产插件。
+  # 请求句柄析构白盒测试独立编译DP_COMM_TESTING且保留618/18000历史容量；不把它链接进1536/19456生产PIC插件。
   add_library(dummy_dp_comm_current_test_runtime STATIC
-    "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like.cpp")
+    "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_ros_like.cpp"
+    "${DPSDK_ROOT}/libraries/dp_comm/src/dp_comm_identity_binding.cpp")
   target_compile_features(dummy_dp_comm_current_test_runtime PUBLIC cxx_std_17)
   set(_dummy_test_runtime_includes
     "${DPSDK_HOST_SDK_PREFIX}/include" "${DPSDK_ROOT}/libraries/dp_comm/src"
@@ -573,10 +621,11 @@ file(CREATE_LINK "$<TARGET_FILE:dummy_guarded_zenbedded_system>" "@DUMMY_PLUGIN_
     DP_OSAL_ENABLE_RW_LOCK=1 DP_OSAL_ENABLE_SPIN_LOCK=1 DP_OSAL_ENABLE_STATIC_ALLOC=0
     DP_OSAL_ENABLE_THREAD_POOL=1 DP_OSAL_ENABLE_THREAD_SNAPSHOT=1 DP_OSAL_ENABLE_TIMER=1)
   # 先去除从生产PIC目标继承的容量宏，再设测试值，避免同一编译命令重复冲突定义。
-  list(FILTER _dummy_test_runtime_defines EXCLUDE REGEX "^DP_COMM_RUNTIME_(MAX_MESSAGE_BYTES|STORAGE_BYTES)=")
+  list(FILTER _dummy_test_runtime_defines EXCLUDE REGEX "^DP_COMM_RUNTIME_(MAX_MESSAGE_BYTES|STORAGE_BYTES|LEGACY_TX_BYTES)=")
   target_include_directories(dummy_dp_comm_current_test_runtime PRIVATE ${_dummy_test_runtime_includes})
   target_compile_definitions(dummy_dp_comm_current_test_runtime PRIVATE ${_dummy_test_runtime_defines}
-    DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000 DP_COMM_TESTING=1)
+    DP_COMM_RUNTIME_MAX_MESSAGE_BYTES=618 DP_COMM_RUNTIME_STORAGE_BYTES=18000
+    DP_COMM_RUNTIME_LEGACY_TX_BYTES=642 DP_COMM_TESTING=1)
   add_executable(request_handle_destructor_tests test/request_handle_destructor_tests.cpp)
   target_include_directories(request_handle_destructor_tests PRIVATE
     "${DPSDK_ROOT}/libraries/dp_comm/include")

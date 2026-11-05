@@ -20,6 +20,103 @@ std::string digest(const std::string& s){unsigned char d[32];SHA256(reinterpret_
 bool hex(const std::string& s,std::size_t n){return s.size()==n&&s.find_first_not_of("0123456789abcdef")==std::string::npos&&s!=std::string(n,'0');}
 template<std::size_t N> std::array<std::uint8_t,N> decode(const std::string& s){require(hex(s,N*2),"invalid hex identity");std::array<std::uint8_t,N> a{};for(std::size_t i=0;i<N;++i)a[i]=std::stoul(s.substr(i*2,2),nullptr,16);return a;}
 YAML::Node object(const std::string& s){auto n=YAML::Load(s);require(n.IsMap(),"object required");return n;}
+/** @brief 比较发布元数据的完整树；不从某个同宽字段猜新旧格式。 */
+bool same_metadata(const YAML::Node& left, const YAML::Node& right) {
+    if (left.Type() != right.Type()) return false;
+    if (left.IsScalar()) return left.Scalar() == right.Scalar();
+    if (left.IsSequence()) {
+        if (left.size() != right.size()) return false;
+        for (std::size_t i = 0; i < left.size(); ++i)
+            if (!same_metadata(left[i], right[i])) return false;
+        return true;
+    }
+    if (left.IsMap()) {
+        if (left.size() != right.size()) return false;
+        for (const auto& item : left) {
+            const auto key = item.first.as<std::string>();
+            if (!right[key] || !same_metadata(item.second, right[key])) return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief 验证已由编译SHA钉住的SDK机器人合同及其正式协议发布绑定。
+ * @param root 实际SDK robot_contract根；只读文件，无节点、传输或控制owner。
+ * @param manifest 已通过当前编译manifest SHA验证的原清单。
+ * @param contract 当前部署声明的实际协议身份，不能由seed能力或本地期望补造。
+ * @details Root wrapper1.0与领域DTO2.5是不同版本层；旧raw布局显式保留。
+ * 同时核排序唯一payload/聚合、release/生成元数据/工具/输入源绑定。
+ * runtime_enabled/SEED不赋予运动权限；下方原650策略/六轴/外部部署pin门槛保持。
+ */
+void verify_manual_sdk_bundle(const fs::path& root, const YAML::Node& manifest,
+                              const std::string& contract) {
+    require(manifest["format"].as<std::string>()=="dummy_robot_contract" &&
+            manifest["format_version"].as<unsigned>()==1U && manifest["release_id"].as<std::string>()=="dummy-root",
+            "SDK robot contract format mismatch");
+    require(manifest["contract_sha256"].as<std::string>() == contract, "SDK contract binding mismatch");
+    const auto payloads = manifest["payloads"];
+    require(payloads.IsSequence() && payloads.size() != 0U, "SDK payload list missing");
+    std::map<std::string, std::string> verified;
+    std::string previous, listing;
+    for (const auto& entry : payloads) {
+        const auto relative = entry["path"].as<std::string>();
+        const auto expected = entry["sha256"].as<std::string>();
+        const fs::path path(relative);
+        require(!relative.empty() && !path.is_absolute() && hex(expected, 64U), "unsafe SDK payload");
+        auto component = root;
+        for (const auto& part : path) {
+            require(part != ".." && part != ".", "unsafe SDK payload");
+            component /= part;
+            require(!fs::is_symlink(component), "symlinked SDK payload");
+        }
+        require(fs::canonical(component).string().rfind(root.string() + "/", 0) == 0 &&
+                digest(bytes(component)) == expected, "SDK payload mismatch");
+        require((previous.empty() || previous < relative) && verified.emplace(relative, expected).second,
+                "SDK payload order or duplicate mismatch");
+        if (!listing.empty()) listing += '\n';
+        listing += relative + ":" + expected;
+        previous = relative;
+    }
+    require(digest(listing) == manifest["payload_sorted_sha256"].as<std::string>(), "SDK aggregate mismatch");
+    const std::string release_path = "protocol/release_manifest.json";
+    const std::string wire_path = "protocol/metadata/generation_manifest.json";
+    const auto reference = manifest["protocol_release"], wire = manifest["wire_contract"];
+    require(reference["path"].as<std::string>() == release_path &&
+            verified.count(release_path) && reference["sha256"].as<std::string>() == verified.at(release_path) &&
+            wire["path"].as<std::string>() == wire_path && verified.count(wire_path) &&
+            wire["sha256"].as<std::string>() == contract,
+            "SDK protocol reference mismatch");
+    // Root的wire身份是中央exporter计算的字段闭包摘要，不是generation文件SHA。
+    // 文件原SHA已由payload验证；语义身份由编译钉住的SDK manifest与部署contract共同绑定。
+    const auto release = object(bytes(root / release_path));
+    const auto generation = object(bytes(root / wire_path));
+    const auto selected = release["selection"];
+    require(selected.IsMap(), "SDK protocol selection missing");
+    for (const char* field : {"codec", "profile", "protocol_set"})
+        require(selected[field].as<std::string>() == reference["selection"][field].as<std::string>(),
+                "SDK protocol selection mismatch");
+    require(selected["codec"].as<std::string>() == "flatbuffers" &&
+            selected["protocol_set"].as<std::string>() == "dummy_managed",
+            "SDK codec mismatch");
+
+        require(release["version"].as<unsigned>() == 1U && generation["schema_version"].as<unsigned>() == 1U &&
+                selected["profile"].as<std::string>() == "dummy" &&
+                same_metadata(generation["selection"], selected), "SDK Root version/profile mismatch");
+        const auto files = release["files"];
+        require(files.IsMap() && files.size() != 0U, "SDK Root payload list missing");
+        for (const auto& item : files) {
+            const auto name = "protocol/" + item.first.as<std::string>();
+            require(verified.count(name) && verified.at(name) == item.second.as<std::string>(),
+                    "SDK Root payload binding mismatch");
+        }
+        const auto source = reference["source_snapshot"];
+        require(source["kind"].as<std::string>() == "bounded_input_hashes_v1" &&
+                source["generator_sha256"].as<std::string>() == generation["generator_sha256"].as<std::string>() &&
+                same_metadata(source["inputs"], generation["sources"]) &&
+                same_metadata(source["tool"], generation["tool"]) &&
+                same_metadata(release["tool"], generation["tool"]), "SDK Root source/tool binding mismatch");
+}
 }
 ManualPanelDeployment load_manual_panel_deployment(const std::string& root,const std::string& pin,const std::string& sdk){
  require(hex(pin,64),"external manifest SHA256 pin required");
@@ -35,7 +132,6 @@ ManualPanelDeployment load_manual_panel_deployment(const std::string& root,const
  std::map<std::string,std::string> args;auto argv=cfg["native_arguments"];require(argv.IsSequence(),"bound deployment metadata required");
  for(std::size_t i=0;i<argv.size();++i){auto key=argv[i].as<std::string>();if(key.rfind("--",0)!=0)continue;if(key=="--execute")continue;require(i+1<argv.size()&&!args.count(key),"invalid bound metadata");args[key]=argv[++i].as<std::string>();}
  require(args["--scope"]=="manual-home-empty-supported"&&args["--profile"]=="201"&&args["--mask"]=="63","unsupported scope/profile/mask");
- require(cfg["wire_schema_major"].as<unsigned>()==2&&cfg["wire_schema_minor"].as<unsigned>()==5,"wire version mismatch");
  require(cfg["manual_limit_reference_enabled"].as<bool>()&&cfg["calibration_mode"].as<std::string>()=="manual_limits","manual reference disabled");
  ManualPanelDeployment out;out.deployment_root=fixed.string();out.endpoint=args["--endpoint"];out.device_id=args["--device"];out.client_id=args["--client"];out.profile_id=201;out.joint_mask=63;
  require(out.endpoint.rfind("serial//dev/serial/by-id/",0)==0&&out.endpoint.find("#baudrate=115200")!=std::string::npos,"by-id serial endpoint required");
@@ -48,8 +144,8 @@ ManualPanelDeployment load_manual_panel_deployment(const std::string& root,const
  require(digest(bytes(fixed/"firmware.bin"))==firmware,"firmware identity mismatch");
  const auto sdk_root=fs::canonical(sdk);const auto sdk_manifest_bytes=bytes(sdk_root/"manifest.json");
  require(digest(sdk_manifest_bytes)==DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256,"compiled SDK manifest mismatch");
- auto sdk_manifest=object(sdk_manifest_bytes);require(sdk_manifest["release_id"].as<std::string>()=="dummy-wire-v2.5","SDK release mismatch");
- for(const auto& entry:sdk_manifest["payloads"]){auto rel=entry["path"].as<std::string>();fs::path path(rel);require(!path.is_absolute()&&rel.find("..") == std::string::npos,"unsafe SDK payload");require(digest(bytes(sdk_root/path))==entry["sha256"].as<std::string>(),"SDK payload mismatch");}
+ const auto sdk_manifest=object(sdk_manifest_bytes);
+ verify_manual_sdk_bundle(sdk_root,sdk_manifest,contract);
  p.model_hash=decode<32>(model);require(digest(bytes(sdk_root/"model/model.yaml"))==model,"installed SDK model mismatch");
  p.bundle_hash=decode<32>(digest(sdk_manifest_bytes));p.candidate_profile_payload_hash=decode<32>(digest(bytes(sdk_root/"profiles/f405_6dof_bench.yaml")));
  p.contract_hash=decode<32>(contract);p.profile_hash=decode<32>(policy);p.policy_hash=p.profile_hash;p.firmware_hash=decode<32>(firmware);p.firmware_bound=true;

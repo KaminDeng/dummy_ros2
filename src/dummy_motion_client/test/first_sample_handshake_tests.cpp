@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 /**
  * @file first_sample_handshake_tests.cpp
  * @brief 核Enable/Begin双流首保持采样和真实producer ACK屏障。
@@ -13,8 +14,8 @@
  */
 int main() {
   using namespace action_test;
-  Harness harness; Authorization auth; auth.session=auth.reference=auth.permit=true;
-  auth.identity.set_expected_session_id(1); require(harness.gate.enable(auth,1));
+  Harness harness; Authorization auth;auth.identity=owned_fixture::request();auth.identity.expected_boot_epoch()=0; auth.session=auth.reference=auth.permit=true;
+  auth.identity.expected_session_id()=1; require(harness.gate.enable(auth,1));
   ManageReply queued; queued.request_id=1; queued.queued=true;
   harness.gate.observe(queued,2); require(harness.port.primes==0);
   ++harness.epoch; harness.gate.observe(harness.response(),3);

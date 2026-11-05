@@ -29,6 +29,25 @@ _selected_protocol = sys.modules[_protocol_name]
 decode_selected = _selected_protocol.decode
 evidence_parts = _selected_protocol.evidence_parts
 
+# 同部署目录加载，避免同名模块缓存串到另一份发布。
+import importlib.util as _root_import
+import sys as _root_sys
+_root_path=Path(__file__).with_name('current_root_records.py')
+_root_name='_current_root_'+str(_root_path.resolve()).encode().hex()
+if _root_name not in _root_sys.modules:
+    _root_spec=_root_import.spec_from_file_location(_root_name,_root_path)
+    _root_module=_root_import.module_from_spec(_root_spec)
+    _root_sys.modules[_root_name]=_root_module
+    _root_spec.loader.exec_module(_root_module)
+_root_helpers=_root_sys.modules[_root_name]
+_root_boot=_root_helpers.root_boot
+_root_field=_root_helpers.root_field
+_joint_values=_root_helpers.joint_values
+_quality_mask=_root_helpers.quality_mask
+_validate_source=_root_helpers.validate_source
+_capture_sources=_root_helpers.capture_sources
+_target_boot=_root_helpers.target_boot
+
 
 ##
 # @brief 从管理记录raw_hex解出固定布局字段。
@@ -39,9 +58,10 @@ def _manage_fields(item):
     kind = item.get("kind") if isinstance(item, dict) else None
     if kind not in (4, 5):
         raise ValueError("invalid management record kind")
-    name = "DummyManageV2Request" if kind == 4 else "DummyManageV2Response"
+    name = "DummyManageRequest" if kind == 4 else "DummyManageResponse"
     raw = _hex_bytes(item, "raw_hex", None)
-    return decode_selected(name, raw)
+    fields=decode_selected(name,raw)
+    return {**fields,'source':_validate_source(item.get('source'))}
 
 
 ##
@@ -64,14 +84,15 @@ def _validate_management(evidence, goals, release):
         fields = _manage_fields(item)
         if (type(item.get("when")) is not int or item["when"] <= 0 or
                 item.get("seq") != (fields["request_seq"] if item["kind"] == 4 else 0) or
-                item.get("boot") != (fields["expected_boot_epoch"] if item["kind"] == 4
-                                     else fields["boot_epoch"]) or
+                item.get("boot") != _root_boot(fields) or
                 item.get("session") != (fields["expected_session_id"] if item["kind"] == 4
                                         else fields["session_id"]) or
                 item.get("run") != (0 if item["kind"] == 4 else fields["run_id"]) or
                 fields["client_instance_id"] != evidence["identity"]["client_id"] or
-                fields["device_id"] != evidence["identity"]["device_id"]):
+                fields["domain_device_id"] != evidence["identity"]["domain_device_id"]):
             raise ValueError("unlinked management record identity")
+        expected_source=evidence['identity'].get('requester_source' if item['kind']==4 else 'producer_source')
+        if fields['source']!=_validate_source(expected_source):raise ValueError('management Source mismatch')
         if item["when"] < previous_when:
             raise ValueError("regressing management record time")
         previous_when = item["when"]
@@ -92,7 +113,7 @@ def _validate_management(evidence, goals, release):
             answered_ids.add((fields["client_instance_id"], fields["request_id"]))
         decoded.append((item, fields))
 
-    query_binding_fields = ("device_id", "client_instance_id", "expected_boot_epoch",
+    query_binding_fields = ("domain_device_id", "client_instance_id", "expected_boot_epoch",
                             "expected_session_id", "expected_reference_epoch",
                             "expected_motion_epoch", "expected_management_epoch",
                             "expected_profile_id", "configured_mask")
@@ -106,7 +127,7 @@ def _validate_management(evidence, goals, release):
         requests = [(item, fields) for item, fields in decoded if item["kind"] == 4 and
                     fields["operation"] == operation and
                     item["when"] >= after and
-                    fields["expected_boot_epoch"] == release["boot_epoch"] and
+                    fields["expected_boot_epoch"] == _root_boot(release) and
                     fields["expected_session_id"] == session and
                     fields["expected_profile_id"] == 201]
         matches = []
@@ -131,9 +152,9 @@ def _validate_management(evidence, goals, release):
                 if terminal and (response["receipt"] not in (1, 2) or
                                  response["operation_id"] == 0 or
                                  response["run_id"] != run or
-                                 response["boot_epoch"] != release["boot_epoch"] or
+                                 _root_boot(response) != _root_boot(release) or
                                  response["session_id"] != (0 if operation == 10 else session) or
-                                 response["device_id"] != request["device_id"] or
+                                 response["domain_device_id"] != request["domain_device_id"] or
                                  response["profile_id"] != 201 or
                                  response["transaction_phase"] != 3 or
                                  response["result_code"] != 0 or
@@ -278,14 +299,15 @@ def _validate_pages(attempt, identity, *, run, session, boot, epoch, kind,
         raw = _hex_bytes(page, "raw_hex", None)
         chain = evidence_parts(raw)
         fields = chain["fields"]
+        if _validate_source(page.get('source'))!=_validate_source(identity.get('producer_source')):
+            raise ValueError('evidence Source mismatch')
         if page.get("boot_epoch") != boot or page.get("session_id") != session:
             raise ValueError("unlinked evidence identity")
-        major, minor = fields["schema_major"], fields["schema_minor"]
-        page_run, page_seq, group_id, page_epoch = [fields[name] for name in
+        page_run, page_seq, group_id, page_epoch = [_root_field(fields, name) for name in
             ("run_id", "evidence_seq", "group_id", "motion_epoch")]
-        category, expected, submitted, sent, failed, final = [fields[name] for name in
+        category, expected, submitted, sent, failed, final = [_root_field(fields, name) for name in
             ("category", "expected_mask", "submitted_mask", "sent_mask", "failed_mask", "final")]
-        group_count, attempt_id, page_kind, page_parent, motion_complete, release_committed, state = [fields[name] for name in
+        group_count, attempt_id, page_kind, page_parent, motion_complete, release_committed, state = [_root_field(fields, name) for name in
             ("group_count", "attempt_id", "attempt_kind", "parent_run_id", "motion_complete", "release_committed", "final_state")]
         terminal = seq == len(pages) - 1
         if (group_count > len(pages) - 1 or group_count < previous_group_count or
@@ -301,7 +323,7 @@ def _validate_pages(attempt, identity, *, run, session, boot, epoch, kind,
                 (run, seq, expected_epoch, kind, parent) or fields["evidence_lost"]:
             raise ValueError("unlinked or lost evidence page")
         if chain["previous"] != previous or hashlib.sha256(
-                previous + chain["prefix"] + chain["lost"]).digest() != chain["chain"]:
+                previous + chain["canonical"]).digest() != chain["chain"]:
             raise ValueError("invalid evidence chain")
         previous = chain["chain"]
         if not terminal:
@@ -382,7 +404,7 @@ def _validate_timeline(goal, final_goal, lag_budget):
             raise ValueError("release request key appears on wrong Gate row")
         if (row.get("goal_uuid") != goal["goal_id"] or
                 row.get("session_id") != (0 if index == release_index else goal["session_id"]) or
-                row.get("boot_epoch") != goal["boot_epoch"] or
+                row.get("boot_epoch") != _root_boot(goal) or
                 row.get("axis_mask") != 63 or
                 type(row.get("steady_us")) is not int or row["steady_us"] < 0):
             raise ValueError("unlinked goal timeline")
@@ -483,7 +505,7 @@ def validate_evidence(evidence):
     identity = _required(evidence, "identity")
     if not isinstance(identity, dict):
         raise ValueError("invalid identity")
-    device_id = _hex_bytes(identity, "device_id", 16).hex()
+    device_id = _hex_bytes(identity, "domain_device_id", 16).hex()
     if device_id == "00" * 16:
         raise ValueError("invalid device identity")
     goal_ids = [goal["goal_id"] for goal in goals if isinstance(goal, dict) and
@@ -499,7 +521,7 @@ def validate_evidence(evidence):
     seen = set()
     previous_hold_time = -1
     for goal_index, goal in enumerate(goals):
-        if not isinstance(goal, dict) or goal.get("device_id") != device_id:
+        if not isinstance(goal, dict) or goal.get("domain_device_id") != device_id:
             raise ValueError("goal changed device identity")
         goal_id = _required(goal, "goal_id")
         if (not isinstance(goal_id, str) or len(goal_id) != 32 or
@@ -573,13 +595,13 @@ def validate_evidence(evidence):
                     epoch not in group_epochs[:first_stop] or
                     any(group_epoch != stop_epoch for group_epoch in group_epochs[first_stop:])):
                 raise ValueError("old motion epoch resumed after cancel stop")
-            categories = [bytes.fromhex(page["raw_hex"])[32] for page in
+            categories = [decode_selected("DummyAttemptEvidence",bytes.fromhex(page["raw_hex"]))["category"] for page in
                           goal["evidence_pages"][:-1]]
             if (len(categories) != len(groups) or
                     any(category != 1 for category in categories[:first_stop]) or
                     categories[first_stop] != 2 or
                     any(category not in (1, 2) for category in categories[first_stop:]) or
-                    any(bytes.fromhex(page["raw_hex"])[38:41] != b"\0\0\0" for page in
+                    any(any(decode_selected("DummyAttemptEvidence",bytes.fromhex(page["raw_hex"]))[field]!=0 for field in ("first_failure_source","first_failure_axis_mask")) for page in
                         goal["evidence_pages"][first_stop:-1])):
                 raise ValueError("cancel lacks new-epoch six-axis Hold SENT")
             terminal_state = 7
@@ -626,7 +648,7 @@ def validate_evidence(evidence):
             release.get("terminal") not in ("RELEASED", "CANCELED_AND_RELEASED") or
             release.get("parent_run_id") != last["run_id"] or
             release.get("session_id") != last["session_id"] or
-            release.get("boot_epoch") != last["boot_epoch"] or
+            release.get("boot_epoch") != _root_boot(last) or
             _positive_int(release, "run_id") <= last["run_id"]):
         raise ValueError("unconfirmed or unlinked release")
     if last["timeline"][-1].get("run_id") != release["run_id"]:
@@ -640,14 +662,14 @@ def validate_evidence(evidence):
     active = release["terminal"] == "CANCELED_AND_RELEASED"
     if last["action_status"] == "CANCELED" and (
             release["run_id"] != last["run_id"] + 1 or
-            not any(decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["category"] == 3 for page in
+            not any(decode_selected("DummyAttemptEvidence", bytes.fromhex(page["raw_hex"]))["category"] == 3 for page in
                               release["evidence_pages"][:-1])):
         raise ValueError("cancel release lacks next-run six-axis Disable SENT")
     group_epochs = None
     if active:
         group_pages = release["evidence_pages"][:-1]
-        categories = [decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["category"] for page in group_pages]
-        group_epochs = [decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["motion_epoch"]
+        categories = [decode_selected("DummyAttemptEvidence", bytes.fromhex(page["raw_hex"]))["category"] for page in group_pages]
+        group_epochs = [decode_selected("DummyAttemptEvidence", bytes.fromhex(page["raw_hex"]))["motion_epoch"]
                         for page in group_pages]
         if (release_epoch >= 0xffffffff or len(categories) < 2 or
                 1 not in categories or
@@ -655,8 +677,8 @@ def validate_evidence(evidence):
                 categories != sorted(categories) or
                 any(category not in (1, 2, 3) for category in categories) or
                 any(category == 2 and (
-                    decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["first_failure_source"] != 0 or
-                    decode_selected("DummyAttemptEvidenceV2", bytes.fromhex(page["raw_hex"]))["first_failure_axis_mask"] != 0)
+                    decode_selected("DummyAttemptEvidence", bytes.fromhex(page["raw_hex"]))["first_failure_source"] != 0 or
+                    decode_selected("DummyAttemptEvidence", bytes.fromhex(page["raw_hex"]))["first_failure_axis_mask"] != 0)
                     for category, page in zip(categories, group_pages)) or
                 any(group_epoch != release_epoch for category, group_epoch in
                     zip(categories, group_epochs) if category == 1) or
@@ -671,12 +693,12 @@ def validate_evidence(evidence):
     else:
         group_pages = release["evidence_pages"][:-1]
         if (release_epoch >= 0xffffffff or len(group_pages) != 1 or
-                bytes.fromhex(group_pages[0]["raw_hex"])[32] != 3 or
+                decode_selected("DummyAttemptEvidence",bytes.fromhex(group_pages[0]["raw_hex"]))["category"] != 3 or
                 last["timeline"][-1]["motion_epoch"] != release_epoch + 1):
             raise ValueError("release lacks next-epoch six-axis Disable SENT")
         group_epochs = [release_epoch + 1]
     _validate_pages(release, identity, run=release["run_id"], session=release["session_id"],
-                    boot=release["boot_epoch"], epoch=release_epoch,
+                    boot=_root_boot(release), epoch=release_epoch,
                     kind=1 if active else 3, parent=0 if active else last["run_id"],
                     final_state=2 if active else 8,
                     group_epochs=group_epochs, terminal_epoch=release_epoch)

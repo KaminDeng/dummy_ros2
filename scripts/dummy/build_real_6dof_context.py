@@ -28,6 +28,25 @@ except ImportError:
 PRODUCER_LAG_METHOD = "state_receive_minus_produced_offset_span"
 WINDOW_LAG_METHOD = PRODUCER_LAG_METHOD + "_motion_window"
 
+# 同部署目录加载，避免同名模块缓存串到另一份发布。
+import importlib.util as _root_import
+import sys as _root_sys
+_root_path=Path(__file__).with_name('current_root_records.py')
+_root_name='_current_root_'+str(_root_path.resolve()).encode().hex()
+if _root_name not in _root_sys.modules:
+    _root_spec=_root_import.spec_from_file_location(_root_name,_root_path)
+    _root_module=_root_import.module_from_spec(_root_spec)
+    _root_sys.modules[_root_name]=_root_module
+    _root_spec.loader.exec_module(_root_module)
+_root_helpers=_root_sys.modules[_root_name]
+_root_boot=_root_helpers.root_boot
+_root_field=_root_helpers.root_field
+_joint_values=_root_helpers.joint_values
+_quality_mask=_root_helpers.quality_mask
+_validate_source=_root_helpers.validate_source
+_capture_sources=_root_helpers.capture_sources
+_target_boot=_root_helpers.target_boot
+
 
 ##
 # @brief 核取消过渡可计入观测覆盖的完整原页链与精确回执。
@@ -41,7 +60,7 @@ WINDOW_LAG_METHOD = PRODUCER_LAG_METHOD + "_motion_window"
 # State没有run字段且事务号可滞后；只能用本run完整链补观测覆盖，不能把旧State operation号单独当Stop确认。
 def _cancel_coverage_chain(records, goal, request, receipt, stop_page, client):
     """完整取消链只授权观测覆盖，State旧事务号不作为Stop确认。"""
-    boot, session, run = int(goal["boot"]), int(goal["session"]), int(goal["run_id"])
+    boot, session, run = int(_target_boot(goal)), int(goal["session"]), int(goal["run_id"])
     wanted, result = request["fields"], receipt["fields"]
     if (wanted["configured_mask"] != 63 or wanted["expected_profile_id"] <= 0 or
             wanted["expected_reference_epoch"] != int(goal["reference_epoch"]) or
@@ -51,11 +70,11 @@ def _cancel_coverage_chain(records, goal, request, receipt, stop_page, client):
             result["first_failure_reason"] != 0):
         raise ValueError("unlinked cancel coverage receipt")
     digest_fields = ("contract_sha256", "model_sha256", "profile_sha256", "firmware_sha256")
-    identities = {tuple(item["fields"][name] for name in digest_fields)
-                  for item in records if item["kind"] == 3 and item["boot"] == boot and
-                  item["fields"]["device_id"] == wanted["device_id"] and
+    identities = {tuple(_root_field(item["fields"], name) for name in digest_fields)
+                  for item in records if item["kind"] == 3 and _target_boot(item) == boot and
+                  item["fields"]["domain_device_id"] == wanted["domain_device_id"] and
                   item["fields"]["profile_id"] == wanted["expected_profile_id"] and
-                  item["fields"]["configured_mask"] == wanted["configured_mask"]}
+                  _quality_mask(item["fields"], 'configured_quality') == wanted["configured_mask"]}
     if len(identities) != 1:
         raise ValueError("ambiguous cancel coverage static identity")
     hashes = tuple(bytes.fromhex(value) for value in next(iter(identities)))
@@ -68,8 +87,9 @@ def _cancel_coverage_chain(records, goal, request, receipt, stop_page, client):
     for index, page in enumerate(pages):
         raw, fields = page["raw"], page["fields"]
         terminal = index == len(pages) - 1
-        if (len(raw) != 372 or raw[371] != 0 or raw[307:339] != previous or
-                raw[339:371] != hashlib.sha256(previous + raw[:307] + raw[371:372]).digest() or
+        chain=joiner.evidence_parts(raw)
+        if (chain["lost"] or chain["previous"]!=previous or
+                chain["chain"]!=hashlib.sha256(previous+chain["canonical"]).digest() or
                 fields["evidence_seq"] != index or fields["group_count"] < previous_count or
                 fields["group_count"] > len(pages) - 1 or fields["final"] != 1 or
                 fields["first_failure_source"] != 0 or fields["first_failure_axis_mask"] != 0):
@@ -79,7 +99,7 @@ def _cancel_coverage_chain(records, goal, request, receipt, stop_page, client):
                 (fields["expected_mask"], fields["submitted_mask"], fields["sent_mask"],
                  fields["failed_mask"]) != (63, 63, 63, 0)):
             raise ValueError("unverified cancel coverage CAN SENT")
-        previous, previous_count = raw[339:371], fields["group_count"]
+        previous, previous_count = chain["chain"], fields["group_count"]
     terminal = pages[-1]["fields"]
     if (stop_page not in pages or terminal["final_state"] != 7 or terminal["terminal_reason"] != 0 or
             terminal["motion_epoch"] != int(goal["motion_epoch"]) or
@@ -111,7 +131,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
             raise ValueError("missing final ROS Release observation")
         start = int(goals[0]["steady_us"])
         end = int(final["steady_us"])
-        boot, session = int(goals[0]["boot"]), int(goals[0]["session"])
+        boot, session = int(_target_boot(goals[0])), int(goals[0]["session"])
         motion_runs = [int(row["run_id"]) for row in goals]
         release_run = int(final["run_id"])
         request_id = int(final["release_request_id"])
@@ -138,7 +158,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
         raise ValueError("invalid ROS motion window timeline") from error
     if (start <= 0 or end <= start or boot <= 0 or session <= 0 or
             release_run <= max(motion_runs) or request_id <= 0 or operation_id <= 0 or
-            any(int(row["boot"]) != boot or int(row["session"]) != session or
+            any(int(_target_boot(row)) != boot or int(row["session"]) != session or
                 int(row["run_id"]) <= 0 for row in goals)):
         raise ValueError("ROS motion window identity or ordering mismatch")
     if any(later[0] < earlier[0] or later[1] < earlier[1] for earlier, later in
@@ -148,18 +168,18 @@ def _motion_window(timeline_data, records, client, state_max_age):
                 item["fields"]["operation"] == 10 and
                 item["fields"]["request_id"] == request_id and
                 item["fields"]["client_instance_id"] == client and
-                (item["boot"], item["session"]) == (boot, session)]
+                (_target_boot(item), item["session"]) == (boot, session)]
     terminals = [item for item in records if item["kind"] == 1 and
                  item["fields"]["category"] == 4 and
                  item["fields"]["release_committed"] == 1 and
                  item["fields"]["final_state"] in (2, 8) and
-                 (item["boot"], item["session"], item["run"]) ==
+                 (_target_boot(item), item["session"], item["run"]) ==
                  (boot, session, release_run)]
     queries = [item for item in records if item["kind"] == 4 and
                item["fields"]["operation"] == 12 and
                item["fields"]["queried_operation_id"] == request_id and
                item["fields"]["client_instance_id"] == client and
-               (item["boot"], item["session"]) == (boot, session) and
+               (_target_boot(item), item["session"]) == (boot, session) and
                requests and item["when"] >= requests[0]["when"]]
     responses = [item for item in records if item["kind"] == 5 and
                  (item["fields"]["request_id"] == request_id or
@@ -170,13 +190,13 @@ def _motion_window(timeline_data, records, client, state_max_age):
                  item["fields"]["transaction_phase"] == 3 and
                  item["fields"]["result_code"] == 0 and
                  item["fields"]["release_committed"] == 1 and
-                 (item["boot"], item["session"], item["run"]) ==
+                 (_target_boot(item), item["session"], item["run"]) ==
                  (boot, 0, release_run)]
     if (len(requests) != 1 or len(terminals) != 1 or len(responses) != 1 or
             not start < requests[0]["when"] <= terminals[0]["when"] <= end or
             not requests[0]["when"] <= responses[0]["when"] <= end):
         raise ValueError("missing or unlinked raw Release proof")
-    device_id = requests[0]["fields"]["device_id"]
+    device_id = requests[0]["fields"]["domain_device_id"]
     if device_id == "00" * 16:
         raise ValueError("motion window device identity missing")
     cancel_bounds = {}
@@ -210,12 +230,12 @@ def _motion_window(timeline_data, records, client, state_max_age):
                            item["fields"]["operation"] == 9 and
                            item["fields"]["request_id"] == request_id and
                            item["fields"]["client_instance_id"] == client and
-                           item["fields"]["device_id"] == device_id and
+                           item["fields"]["domain_device_id"] == device_id and
                            item["fields"]["expected_motion_epoch"] == old_epoch and
-                           (item["boot"], item["session"]) == (boot, session) and
+                           (_target_boot(item), item["session"]) == (boot, session) and
                            begin_time <= item["when"] <= terminal_time]
         stop_pages = [item for item in records if item["kind"] == 1 and
-                      (item["boot"], item["session"], item["run"]) ==
+                      (_target_boot(item), item["session"], item["run"]) ==
                       (boot, session, int(goal["run_id"])) and
                       (item["fields"]["attempt_id"], item["fields"]["attempt_kind"],
                        item["fields"]["category"], item["fields"]["motion_epoch"]) ==
@@ -230,11 +250,11 @@ def _motion_window(timeline_data, records, client, state_max_age):
                           item["fields"]["operation"] == 12 and
                           item["fields"]["queried_operation_id"] == request_id and
                           item["fields"]["client_instance_id"] == client and
-                          item["fields"]["device_id"] == device_id and
-                          (item["boot"], item["session"]) == (boot, session) and
+                          item["fields"]["domain_device_id"] == device_id and
+                          (_target_boot(item), item["session"]) == (boot, session) and
                           cancel_requests and
-                          all(item["fields"][name] ==
-                              cancel_requests[0]["fields"][name]
+                          all(_root_field(item["fields"], name) ==
+                              _root_field(cancel_requests[0]["fields"], name)
                               for name in query_binding) and
                           cancel_requests[0]["when"] <= item["when"] <= terminal_time]
         receipts = [item for item in records if item["kind"] == 5 and
@@ -244,14 +264,14 @@ def _motion_window(timeline_data, records, client, state_max_age):
                          query["when"] <= item["when"] for query in cancel_queries)) and
                     item["fields"]["operation_id"] == operation_id and
                     item["fields"]["client_instance_id"] == client and
-                    item["fields"]["device_id"] == device_id and
+                    item["fields"]["domain_device_id"] == device_id and
                     item["fields"]["transaction_phase"] == 3 and
                     item["fields"]["result_code"] == 0 and
                     item["fields"]["receipt"] == 1 and
                     item["fields"]["motion_complete"] == 0 and
                     item["fields"]["release_committed"] == 0 and
                     item["fields"]["motion_epoch"] == stop_epoch and
-                    (item["boot"], item["session"], item["run"]) ==
+                    (_target_boot(item), item["session"], item["run"]) ==
                     (boot, session, int(goal["run_id"])) and
                     goal_times[goal_index] <= item["when"] <= terminal_time]
         if (stop_epoch != old_epoch + 1 or request_id <= 0 or operation_id <= 0 or
@@ -263,9 +283,9 @@ def _motion_window(timeline_data, records, client, state_max_age):
                                      begin_time, int(goal["motion_epoch"]))
         cancel_proofs[goal_index] = (goal, cancel_requests[0], receipts[0], stop_pages[0])
     idle_statuses = [item for item in records if item["kind"] == 3 and
-                     (item["boot"], item["session"], item["fields"]["run_id"]) ==
+                     (_target_boot(item), item["session"], item["fields"]["run_id"]) ==
                      (boot, 0, release_run) and
-                     item["fields"]["device_id"] == device_id and
+                     item["fields"]["domain_device_id"] == device_id and
                      item["fields"]["core_state"] == 1 and
                      item["fields"]["release_committed"] == 1 and
                      item["fields"]["operation_id"] == responses[0]["fields"]["operation_id"] and
@@ -275,8 +295,8 @@ def _motion_window(timeline_data, records, client, state_max_age):
                      requests[0]["when"] <= item["when"] <= end and
                      end - item["when"] <= state_max_age]
     idle_states = [item for item in records if item["kind"] == 2 and
-                   (item["boot"], item["session"]) == (boot, 0) and
-                   item["fields"]["device_id"] == device_id and
+                   (_target_boot(item), item["session"]) == (boot, 0) and
+                   item["fields"]["domain_device_id"] == device_id and
                    (item["fields"]["reference_epoch"],
                     item["fields"]["motion_epoch"]) == release_phase and
                    item["fields"]["core_state"] == 1 and
@@ -288,8 +308,8 @@ def _motion_window(timeline_data, records, client, state_max_age):
                      start <= item["when"] <= end]
     if len(window_states) < 2:
         raise ValueError("insufficient motion window State samples")
-    if any(item["boot"] != boot or item["session"] not in (session, 0) or
-           item["fields"]["device_id"] != device_id or
+    if any(_target_boot(item) != boot or item["session"] not in (session, 0) or
+           item["fields"]["domain_device_id"] != device_id or
            (item["session"] == 0 and
             ((item["fields"]["reference_epoch"],
               item["fields"]["motion_epoch"]) != release_phase or
@@ -324,7 +344,7 @@ def _motion_window(timeline_data, records, client, state_max_age):
         if (goal_index == len(goals) - 1 and item["when"] >= requests[0]["when"] and
                 item["fields"]["core_state"] in (7, 8) and
                 item["fields"]["management_epoch"] == responses[0]["fields"]["management_epoch"] and
-                item["fields"]["configured_mask"] == 63 and
+                _quality_mask(item["fields"], 'configured_quality') == 63 and
                 item["fields"]["profile_id"] == requests[0]["fields"]["expected_profile_id"] and
                 (item["fields"]["reference_epoch"], epoch) == releasing_phase):
             coverage_states.append(item)
@@ -342,12 +362,12 @@ def _motion_window(timeline_data, records, client, state_max_age):
             eligible = (epoch == stop_epoch and
                         fields["reference_epoch"] == request["fields"]["expected_reference_epoch"] and
                         fields["profile_id"] == receipt["fields"]["profile_id"] and
-                        fields["configured_mask"] == 63 and
+                        _quality_mask(fields, 'configured_quality') == 63 and
                         fields["management_epoch"] == receipt["fields"]["management_epoch"] and
                         fields["core_state"] in (7, 4) and
                         (fields["core_state"] != 4 or fields["hold_ready"] == 1) and
-                        all(fields[name] == 63 for name in
-                            ("position_valid_mask", "velocity_valid_mask", "raw_position_valid_mask")))
+                        all(_quality_mask(fields, name) == 63 for name in
+                            ("position_valid_quality", "velocity_valid_quality", "raw_position_valid_quality")))
             if eligible:
                 if goal_index not in verified_cancel_coverage:
                     _cancel_coverage_chain(records, goal, request, receipt, stop_page, client)
@@ -399,7 +419,7 @@ def _positive_int(value, name):
 ##
 # @brief 校验源快照与预算后以独占link发布新context。
 # @param timeline_path CSV捕获路径。
-# @param raw_path DPRAW01路径。
+# @param raw_path DPRAW02路径。
 # @param action_path Action JSON路径。
 # @param output_path 全新context路径，父目录必须已存在，不能是任一输入。
 # @param path_tolerance_rad 六轴有限正路径容差rad。
@@ -439,23 +459,24 @@ def build_context(timeline_path, raw_path, action_path, output_path, *,
 
     snapshots = [joiner._snapshot(path) for path in paths]
     raw_records = joiner._raw_records(snapshots[1][0])
+    producer_source,requester_source=_capture_sources(raw_records)
     states = [item for item in raw_records if item["kind"] == 2]
     if not states:
-        raise ValueError("empty DPRAW01 State stream")
+        raise ValueError("empty DPRAW02 State stream")
     management = [item for item in raw_records if item["kind"] in (4, 5)]
     requests = [item for item in management if item["kind"] == 4]
     if not requests:
-        raise ValueError("missing DPRAW01 management request client identity")
+        raise ValueError("missing DPRAW02 management request client identity")
     clients = {item["fields"]["client_instance_id"] for item in management}
     if len(clients) != 1 or "00" * 16 in clients:
-        raise ValueError("mismatched or zero DPRAW01 management client identity")
+        raise ValueError("mismatched or zero DPRAW02 management client identity")
     offsets = []
     previous_produced = None
     for item in states:
         produced = item["fields"]["produced_at_us"]
         if produced <= 0 or (previous_produced is not None and
                              produced < previous_produced):
-            raise ValueError("nonmonotonic DPRAW01 State produced time")
+            raise ValueError("nonmonotonic DPRAW02 State produced time")
         previous_produced = produced
         offsets.append(item["when"] - produced)
     ##
@@ -485,6 +506,7 @@ def build_context(timeline_path, raw_path, action_path, output_path, *,
     context = {
         "timeline_sha256": snapshots[0][1], "raw_sha256": snapshots[1][1],
         "action_sha256": snapshots[2][1], "client_id": next(iter(clients)),
+        "producer_source":producer_source,"requester_source":requester_source,
         "path_tolerance_rad": path_tolerance_rad,
         "goal_tolerance_rad": goal_tolerance_rad,
         "producer_lag_us": producer_lag,

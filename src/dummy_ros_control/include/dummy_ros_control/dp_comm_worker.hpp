@@ -8,7 +8,8 @@
 #include <cstdint>
 
 #include "dp_comm/dp_comm.hpp"
-#include "dummy_ref/wire_contract.hpp"
+#include "dummy_ref/message_contract.hpp"
+#include "dp_comm/typed_sdk.hpp"
 #include "dummy_ros_control/guarded_zenbedded_system.hpp"
 
 namespace dummy_ros_control {
@@ -18,8 +19,8 @@ namespace dummy_ros_control {
  */
 class DpCommCommandWorker {
  public:
-  using WireCommand = dp::iface::DummyJointCommandV2;
-  using Publisher = dp::comm::Publisher<WireCommand>;
+  using Command = dummy_ref::messages::Command;
+  using Publisher = dp::comm::RootPublisher<Command>;
 
   /**
    * @brief 保存借用对象和固定profile/轴掩码。
@@ -41,20 +42,26 @@ class DpCommCommandWorker {
     if (!system_ || !publisher_) return dp::comm::Result::kInvalidArgument;
     CommandGenerationRecord record{};
     if (!system_->take_publish_record(&record)) return dp::comm::Result::kNotReady;
-    WireCommand message;
-    message.set_schema_major(2U);
-    message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-    message.set_boot_epoch(record.identity.boot);
-    message.set_session_id(record.identity.session);
-    message.set_reference_epoch(record.identity.reference_epoch);
-    message.set_motion_epoch(record.identity.motion_epoch);
-    message.set_profile_id(profile_);
-    message.set_producer_seq(static_cast<std::uint32_t>(record.generation));
-    message.set_freshness_ticket(record.identity.ticket);
-    message.set_configured_mask(configured_mask_);
-    const double positions[6]{record.position[0], record.position[1], record.position[2],
-                              record.position[3], record.position[4], record.position[5]};
-    message.set_position_rad(positions);
+    Command message;
+    message.boot_epoch()=record.identity.boot;
+    message.session_id()=record.identity.session;
+    message.operation_id()=0U;
+    message.reference_epoch()=record.identity.reference_epoch;
+    message.motion_epoch()=record.identity.motion_epoch;
+    message.profile_id()=profile_;
+    message.producer_seq()=static_cast<std::uint32_t>(record.generation);
+    message.freshness_ticket()=record.identity.ticket;
+    std::uint8_t zero_identity[16]{};
+    message.client_instance_id().emplace().assign(zero_identity,16U);
+    message.domain_device_id().emplace().assign(zero_identity,16U);
+    auto& joints=message.joints().emplace();
+    for(std::size_t axis=0;axis<6;++axis){
+      auto* joint=joints.emplace_back();
+      if(!joint)return dp::comm::Result::kNoMemory;
+      joint->joint_id()=static_cast<std::uint8_t>(axis);
+      joint->configured()=(configured_mask_&(1U<<axis))!=0U;
+      joint->position_rad()=record.position[axis];
+    }
     return publisher_->publish(message);
   }
 
@@ -69,11 +76,11 @@ class DpCommCommandWorker {
 };
 
 /**
- * @brief 将借用wire消息复制编码后交给硬件State校验。
+ * @brief 将SDK交付的实际Owned与Source直接交给硬件State校验。
  */
 class DpCommStateReceiver {
  public:
-  using WireState = dp::iface::DummyJointStateV2;
+  using State = dummy_ref::messages::State;
   /**
    * @brief 固定借用目标系统和本次期望条件。
    * @param system 长于订阅回调的硬件对象。
@@ -83,20 +90,17 @@ class DpCommStateReceiver {
       : system_(system), expectation_(expectation) {}
   /**
    * @brief 在回调借用期内复制载荷，避免保存借用指针。
-   * 空context/拷贝/编码失败直接返回；accepted_只在ingest发生后更新，不是所有到达帧的独立计数。
-   * @param borrowed dp_comm借用State，本回调结束后不可继续使用。
+   * 空context直接返回；accepted_只在ingest发生后更新，不是所有到达帧的独立计数。
+   * @param state SDK回调借用的实际State，不在回调外保存引用。
+   * @param info 仅回调期有效的SDK接收信息；只复制SourceId。
    * @param context DpCommStateReceiver实例地址。
    */
-  static void receive(dp::comm::BorrowedMessage<WireState> borrowed, void *context) noexcept {
-    auto *self = static_cast<DpCommStateReceiver *>(context);
-    if (!self || !self->system_) return;
-    WireState state;
-    if (borrowed.copy_to(&state) != dp::comm::Result::kOk) return;
-    std::uint8_t bytes[dp::iface::DummyJointStateV2Codec::kEncodedSize]{};
-    if (dp::iface::DummyJointStateV2Codec::encode(
-            state, bytes, sizeof(bytes)) != dp::iface::CodecResult::kOk) return;
-    self->accepted_ = self->system_->ingest_wire_state(bytes, sizeof(bytes), self->expectation_);
+  static void receive(const State& state,const dp::comm::ReceiveInfo& info,void* context) noexcept {
+    auto* self=static_cast<DpCommStateReceiver*>(context);
+    if(!self || !self->system_)return;
+    self->accepted_=self->system_->ingest_message_state(state,info.source(),self->expectation_);
   }
+
   /**
    * @brief 读取最近一次实际ingest结果。
    * @return bool；调用方负责与回调同上下文读取，字段非原子。

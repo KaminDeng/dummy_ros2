@@ -1,7 +1,7 @@
 /**
  * @file management_admission_retry.hpp
  * @brief 为尚未成功送出的管理请求提供有限本地准入重试。
- * 只处理本地QueueFull，以及明确零correlation未发出的Busy；不能把已发请求的超时当作可安全重发。宿主steady微秒时钟总预算100ms，重试间隔2ms且最多50次，停止请求优先失败。
+ * 仅分类TypedOperation::result()的提交拒绝：WouldBlock（QueueFull别名）未被port接纳，Busy发生在publish前。NoMemory同样未提交，但保留资源错误立即结束策略；poll的OutcomeUnknown/超时不重发。宿主steady微秒时钟总预算100ms，重试间隔2ms且最多50次，停止请求优先失败。
  */
 #pragma once
 
@@ -23,21 +23,21 @@ class ManagementAdmissionRetry {
   /**
    * @brief 固定准入开始时刻与Busy重试资格。
    * @param started_us 宿主单调µs起点。
-   * @param unsent_zero_correlation 仅在确认尚未发出且correlation为0时可为true。
+   * @param busy_before_publish 仅在确认Busy来自TypedOperation提交前阶段时为true。
    */
   explicit ManagementAdmissionRetry(std::uint64_t started_us,
-                                    bool unsent_zero_correlation = false) noexcept
-      : started_us_(started_us), unsent_zero_correlation_(unsent_zero_correlation) {}
+                                    bool busy_before_publish = false) noexcept
+      : started_us_(started_us), busy_before_publish_(busy_before_publish) {}
 
   /**
    * @brief 分类是否允许本地重试。
    * @param result dp_comm提交结果。
-   * @param unsent_zero_correlation Busy尚未产生远端事务的明确证据。
+   * @param busy_before_publish Busy来自提交前而非poll结果的明确证据。
    * @return QueueFull，或已证未发出的Busy时true。
    */
-  static bool retryable(dp::comm::Result result, bool unsent_zero_correlation) noexcept {
-    return result == dp::comm::Result::kQueueFull ||
-        (unsent_zero_correlation && result == dp::comm::Result::kBusy);
+  static bool retryable(dp::comm::Result result, bool busy_before_publish) noexcept {
+    return result == dp::comm::Result::kWouldBlock ||
+        (busy_before_publish && result == dp::comm::Result::kBusy);
   }
 
   /**
@@ -66,7 +66,7 @@ class ManagementAdmissionRetry {
                      bool stop_pending) noexcept {
     if (stop_pending || expired(now_us)) return Decision::kFail;
     if (result == dp::comm::Result::kOk) return Decision::kAccepted;
-    if (!retryable(result, unsent_zero_correlation_) ||
+    if (!retryable(result, busy_before_publish_) ||
         now_us - started_us_ >= 100000U ||
         ++retries_ > 50U || now_us > UINT64_MAX - 2000U)
       return Decision::kFail;
@@ -81,7 +81,7 @@ class ManagementAdmissionRetry {
   std::uint64_t started_us_ = 0U;
   std::uint64_t next_attempt_us_ = 0U;
   unsigned retries_ = 0U;
-  bool unsent_zero_correlation_ = false;
+  bool busy_before_publish_ = false;
 };
 
 }  // namespace dummy_ros_control

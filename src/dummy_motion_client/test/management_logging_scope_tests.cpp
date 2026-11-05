@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 /**
  * @file management_logging_scope_tests.cpp
  * @brief 并发读诊断JSON时复用有界Query重试负例并核饱和日志。
@@ -34,13 +35,11 @@ int main() {
   char name[]="wire",mode[]="release_query_backoff_guards";char* arguments[]={name,mode};
   for(unsigned i=0U;i<20U;++i)assert(original_wire_management_main(2,arguments)==0);
   DpManagementTransport absent({"tcp/127.0.0.1:29999",{1},{2},2,1},DpManagementTransport::Connection::kDeviceWorker);
-  ManageRequest request;request.set_schema_major(2U);request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  request.set_request_id(42U);request.set_request_seq(7U);request.set_operation(3U);
-  request.set_expected_boot_epoch(7U);request.set_expected_session_id(9U);
-  request.set_expected_reference_epoch(1U);request.set_expected_motion_epoch(10U);
-  std::vector<std::uint8_t> bytes(wire::DummyManageV2RequestCodec::kEncodedSize);
-  assert(wire::DummyManageV2RequestCodec::encode(request,bytes.data(),bytes.size())==wire::CodecResult::kOk);
-  for(unsigned i=0U;i<100U;++i)assert(!absent.send(bytes));
+  auto request=owned_fixture::request();
+  request.request_id()=42U;request.request_seq()=7U;request.operation()=3U;
+  request.expected_boot_epoch()=7U;request.expected_session_id()=9U;
+  request.expected_reference_epoch()=1U;request.expected_motion_epoch()=10U;
+  for(unsigned i=0U;i<100U;++i)assert(!absent.send(request));
   running=false;reader.join();
   const auto snapshot=journal.snapshot();
   assert(snapshot.first_present && snapshot.rejections>=140U && snapshot.detail_dropped>0U);

@@ -1502,13 +1502,12 @@ def test_owned_gui_can_close_requires_authority_and_fresh_advancing_double_disab
     import manual_panel_ros_backend as module
     monkeypatch.setattr(module.time,'monotonic',lambda:10.)
     t=object.__new__(module.RosTransport);t.owns_control_node=True
-    fields=dict(device_id=[1,2],profile_id=201,boot_epoch=3,reference_epoch=4,session_id=7)
-    t.latest_state=NS(**fields,state_seq=10);t.latest_status=NS(**fields)
+    t.latest_state,t.latest_status=actual_release_feedback()
+    t.latest_state.session_id=t.latest_status.session_id=7
     t.state_at=t.status_at=9.;t.feedback_max_age_ms=t.status_max_age_ms=500
     checkpoint=t.release_checkpoint()
-    t.latest_state=NS(**dict(fields,session_id=0),state_seq=11,core_state=2,first_failure_reason=0)
-    t.latest_status=NS(**dict(fields,session_id=0),core_state=2,first_failure_reason=0,evidence_lost=False,
-        release_committed=True,real_motion_permitted=False,permit_remaining_us=0)
+    t.latest_state,t.latest_status=actual_release_feedback()
+    t.latest_state.state_seq=11
     t.state_at=t.status_at=10.1
     monkeypatch.setattr(module.time,'monotonic',lambda:10.2)
     if bad=='none':t.latest_status=None
@@ -1516,7 +1515,7 @@ def test_owned_gui_can_close_requires_authority_and_fresh_advancing_double_disab
     elif bad=='same_seq':t.latest_state.state_seq=10
     elif bad=='old_state':t.state_at=9.9
     elif bad=='old_status':t.status_at=9.9
-    elif bad=='identity':t.latest_status.boot_epoch=99
+    elif bad=='identity':t.latest_status.source.boot_hi+=1
     elif bad=='permit':t.latest_status.permit_remaining_us=1
     elif bad=='uncommitted':t.latest_status.release_committed=False
     elif bad=='core':t.latest_state.core_state=4
@@ -1593,3 +1592,83 @@ def test_owned_manual_terminal_bounds_first_double_feedback_wait_without_d10(mon
     clock[0]=31.;b.poll()
     assert any(k=='failed' and 'RELEASE_UNCONFIRMED' in str(v) for k,v in events)
     assert all(name!='disable_and_release' for name,cb in requests)
+
+
+def actual_release_feedback(*,core=2,reason=0):
+    """真实ROSIDL双Root；字段存在性来自生成类，不使用旧flat DTO。"""
+    from copy import deepcopy
+    from test_manual_panel_root import state as make_state
+    from dpsdk_interfaces.msg import DummyDeviceStatus
+    state=make_state();state.reference_epoch=4;state.state_seq=10
+    state.core_state=core;state.first_failure_reason=reason
+    status=DummyDeviceStatus()
+    for name in status.get_fields_and_field_types():
+        if name.startswith('has_'):setattr(status,name,True)
+    status.source=deepcopy(state.source);status.profile_id=state.profile_id
+    status.reference_epoch=state.reference_epoch;status.core_state=core
+    status.first_failure_reason=reason;status.release_committed=True
+    return state,status
+
+
+@pytest.mark.parametrize('operation,prefix',[('manual','MANUAL_CONTROL_FAILED:'),('auto','BASELINE_FAILED:')])
+@pytest.mark.parametrize('bad',['ok','no_authority','old_state','old_status','same_seq','source_device',
+    'source_context','source_boot','reference','active_session','active_permit','uncommitted',
+    'wrong_core','different_fault','missing_presence','state_no_transaction_fault','status_no_fault','motion_epoch','management_epoch'])
+def test_owned_fault_cleanup_keeps_failure_and_retires_only_after_physical_double(operation,prefix,bad,monkeypatch):
+    """复现GUI先业务失败、后物理Fault释放；所有者退休不能被业务证据错误永久锁死。"""
+    import manual_panel_ros_backend as module
+    clock=[10.];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    t=object.__new__(module.RosTransport);t.owns_control_node=True
+    t.latest_state,t.latest_status=actual_release_feedback(core=9,reason=0x1008)
+    t.state_at=t.status_at=9.99;t.feedback_max_age_ms=250;t.status_max_age_ms=1000
+    failure=prefix+' 原任务故障 cleanup=RELEASED_FAULT'
+    replies=[NS(success=False,message=failure),NS(success=False,message=(
+        'EVIDENCE_INCOMPLETE;RELEASE_PENDING' if bad=='no_authority' else 'EVIDENCE_INCOMPLETE;RELEASED_FAULT'))]
+    calls=[];events=[];t.request=lambda name,cb:(calls.append(name),cb(replies.pop(0)))
+    b=module.RosBackend(t,lambda *event:events.append(event));b.operation=operation;b.manual_ready=b.admitting=True
+    b.poll()
+    assert events==[('failed',failure)] and not b.can_close
+    assert b._release_observation is not None and b._cleanup_retirement_pending
+    t.latest_state.state_seq+=1;t.state_at=t.status_at=10.1;clock[0]=10.2
+    # 故障态证据可以不完整，但这不削弱来源、失能和新鲜双消息的独立条件。
+    t.latest_status.evidence_lost=True
+    if bad=='old_state':t.state_at=9.99
+    elif bad=='old_status':t.status_at=9.99
+    elif bad=='same_seq':t.latest_state.state_seq=10
+    elif bad=='source_device':t.latest_status.source.device=list(reversed(t.latest_status.source.device))
+    elif bad=='source_context':t.latest_status.source.context_id+=1
+    elif bad=='source_boot':t.latest_status.source.boot_hi+=1
+    elif bad=='reference':t.latest_status.reference_epoch+=1
+    elif bad=='active_session':t.latest_state.session_id=1
+    elif bad=='active_permit':t.latest_status.permit_remaining_us=1
+    elif bad=='uncommitted':t.latest_status.release_committed=False
+    elif bad=='wrong_core':t.latest_status.core_state=4
+    elif bad=='different_fault':t.latest_status.first_failure_reason+=1
+    elif bad=='state_no_transaction_fault':t.latest_state.first_failure_reason=0
+    elif bad=='status_no_fault':t.latest_status.first_failure_reason=0
+    elif bad=='motion_epoch':t.latest_status.motion_epoch+=1
+    elif bad=='management_epoch':t.latest_status.management_epoch+=1
+    elif bad=='missing_presence':t.latest_status.has_release_committed=False
+    b.poll()
+    assert b.can_close is (bad in ('ok','state_no_transaction_fault'))
+    assert events[0]==('failed',failure) and not any(k=='completed'for k,_ in events)
+    assert 'disable_and_release' not in calls
+    assert calls==['manual_control_status' if operation=='manual'else'baseline_status','bootstrap_status']
+
+
+@pytest.mark.parametrize('operation,prefix',[('manual','MANUAL_CONTROL_FAILED:'),('auto','BASELINE_FAILED:')])
+def test_owned_failed_idle_cleanup_emits_retirement_after_fresh_pair_without_hiding_failure(operation,prefix,monkeypatch):
+    import manual_panel_ros_backend as module
+    clock=[10.];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    t=object.__new__(module.RosTransport);t.owns_control_node=True
+    t.latest_state,t.latest_status=actual_release_feedback()
+    t.state_at=t.status_at=9.99;t.feedback_max_age_ms=250;t.status_max_age_ms=1000
+    replies=[NS(success=False,message=prefix+' 原错误 cleanup=RELEASED_IDLE'),
+             NS(success=True,message='RELEASED_IDLE'),NS(success=True,message='RELEASED_IDLE')]
+    t.request=lambda name,cb:cb(replies.pop(0));events=[]
+    b=module.RosBackend(t,lambda *event:events.append(event));b.operation=operation
+    b.poll();t.latest_state.state_seq+=1;t.state_at=t.status_at=10.1;clock[0]=10.2
+    assert b.can_close
+    b.poll();b.poll()
+    assert [kind for kind,_ in events].count('released')==1
+    assert events[0][0]=='failed' and not any(kind=='completed'for kind,_ in events)

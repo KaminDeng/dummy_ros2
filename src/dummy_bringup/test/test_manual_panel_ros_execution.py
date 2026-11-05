@@ -70,9 +70,20 @@ def test_start_error_budget_requires_duplicate_first_points_and_complete_duratio
 
 def test_duplicate_ros_state_does_not_refresh_arrival():
     from manual_joint_panel import JointPanel
-    panel = NS(ros_backend=NS(latest_state=None), last_state={'boot_epoch': 7, 'state_seq': 10}, last_state_ns=123)
-    JointPanel.ros_state_received(panel, NS(boot_epoch=7, state_seq=10))
-    assert panel.last_state_ns == 123
+    from test_manual_panel_root import state as make_state
+    from manual_panel_root import state_view, valid_state
+    state=make_state();state.state_seq=10
+    assert valid_state(state), '重复帧测试必须先通过真实Root准入，不能靠旧DTO直接被拒绝'
+    panel=NS(ros_backend=NS(latest_state=None),last_state=state_view(state),last_state_ns=123,
+             feedback_labels=[NS(setText=lambda _:None) for _ in range(6)])
+    JointPanel.ros_state_received(panel,state)
+    assert panel.last_state_ns==123 and panel.ros_backend.latest_state is None
+    state.state_seq=11;JointPanel.ros_state_received(panel,state)
+    assert panel.last_state_ns>123 and panel.last_state['state_seq']==11
+    previous_source=panel.last_state['source_identity']
+    state.source.context_id+=1;state.state_seq=1
+    JointPanel.ros_state_received(panel,state)
+    assert panel.last_state['state_seq']==1 and panel.last_state['source_identity']!=previous_source
 
 
 def test_ros_ui_submits_whole_checked_path_without_native(tmp_path):

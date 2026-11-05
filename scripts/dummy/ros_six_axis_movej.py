@@ -229,6 +229,22 @@ def validate_plan(trajectory, target=None, limits=LIMITS):
 
 
 ##
+# @brief 按实际JTC五次样条和20ms差分约束放慢MoveIt完整p/v/a输出，不改变位置路径。
+# @param trajectory 原ROS轨迹；不会原地修改。
+# @param velocity_caps 可选逐轴速度帽；缺省保留规划点原峰值。
+# @param acceleration_caps 可选逐轴加速度帽；缺省保留规划点原峰值。
+# @return 新轨迹及连续/离散边界证据；未知边界、非有限或不连续时间明确拒绝。
+def retime_moveit_trajectory(trajectory, velocity_caps=None, acceleration_caps=None):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location('dummy_controller_trajectory_retime',
+                                                 Path(__file__).with_name('controller_trajectory_retime.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.retime(trajectory, velocity_caps, acceleration_caps)
+
+
+##
 # @brief 生成与C++约定一致的版本化语义轨迹SHA。
 # @param trajectory 含header/joint_names/各点四数组及相对时间的消息。
 # @return 64字符小写SHA；整数域、时间纳秒、字符串编码或非有限数错误拒绝。
@@ -1336,12 +1352,19 @@ def await_mid_motion_hardware_deactivation(node, handle, feedback, deadline,
 # @param goal_uuid_hex 可选单目标保留UUID。
 # @param submission_deadline 可选更早提交截止，只裁规划/准入，不改变后续执行总deadline。
 # @param hardware_deactivate_mid_motion 专用可信witness失活模式，与普通取消收尾区分。
+# @param velocity_scaling 显式的 MoveIt 速度比例，有限且在 (0,1] 内；不得代替设备限速校验。
+# @param acceleration_scaling 显式的 MoveIt 加速度比例，有限且在 (0,1] 内。
 # @return ROS范围报告；任何失败包装GoalAttemptError保留原计划摘要、反馈和首错。
-# MoveIt start_state.is_diff使用服务端当前状态，规划缩放0.1、目标容差0.001rad；局部validate_plan不是完整时间/碰撞验证。
+# MoveIt start_state.is_diff使用服务端当前状态，默认规划缩放0.1、目标容差0.001rad；局部validate_plan不是完整时间/碰撞验证。
 # 最多8次续租特例重试，要求无反馈/错误且精确UUID见证，preempt禁重试；accepted后异常取消仅覆盖明确分支，不能宣称所有异常均已停止。
 def execute_goal(node, planner, client, target, limits, deadline, admission_adapter=None,
                  cancel_mid_motion=False, preempt_probe=False, preempt_goal_ids=None,
-                 goal_uuid_hex=None, submission_deadline=None, hardware_deactivate_mid_motion=False):
+                 goal_uuid_hex=None, submission_deadline=None, hardware_deactivate_mid_motion=False,
+                 velocity_scaling=0.1, acceleration_scaling=0.1):
+    if any(isinstance(value, bool) or not isinstance(value, (float, int)) or
+           not math.isfinite(value) or not 0.0 < value <= 1.0
+           for value in (velocity_scaling, acceleration_scaling)):
+        raise ValueError("MoveIt速度与加速度比例必须为(0,1]内的有限数值")
     from action_msgs.msg import GoalStatus
     from control_msgs.action import FollowJointTrajectory
     from moveit_msgs.msg import Constraints, JointConstraint, MotionPlanRequest
@@ -1354,8 +1377,8 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
     motion.group_name = "dummy_arm"
     motion.num_planning_attempts = 2
     motion.allowed_planning_time = 5.0
-    motion.max_velocity_scaling_factor = 0.1
-    motion.max_acceleration_scaling_factor = 0.1
+    motion.max_velocity_scaling_factor = float(velocity_scaling)
+    motion.max_acceleration_scaling_factor = float(acceleration_scaling)
     motion.goal_constraints = [Constraints(joint_constraints=[
         JointConstraint(joint_name=name, position=value, tolerance_above=0.001,
                         tolerance_below=0.001, weight=1.0)
@@ -1369,6 +1392,12 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
     validate_plan(trajectory, target, limits)
     if len(trajectory.points) > MAX_DIAGNOSTIC_POINTS:
         raise RuntimeError("MoveIt plan exceeds bounded diagnostic point count")
+    trajectory_retime = None
+    if len(trajectory.points) > 1 and any(point.velocities or point.accelerations for point in trajectory.points):
+        original_digest = trajectory_digest(trajectory)
+        trajectory, trajectory_retime = retime_moveit_trajectory(trajectory)
+        trajectory_retime['original_trajectory_sha256'] = original_digest
+        validate_plan(trajectory, target, limits)
     serialized = serialize_message(trajectory)
     if len(serialized) > MAX_SERIALIZED_TRAJECTORY_BYTES:
         raise RuntimeError("MoveIt plan exceeds bounded diagnostic byte count")
@@ -1496,6 +1525,7 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
                     node, handle, stop_deadline=deadline)
         failed = {"scope": "ROS_ACTION_ONLY",
                   "target_rad": list(target), "trajectory_sha256": planned_digest,
+                  "trajectory_retime": trajectory_retime,
                   "action_started_steady_us": started // 1000,
                   "status": "FAILED", "reason": str(error), "feedback": feedback,
                   "device_can_evidence": "REQUIRED_SEPARATELY",
@@ -1521,6 +1551,7 @@ def execute_goal(node, planner, client, target, limits, deadline, admission_adap
     return {"scope": "ROS_ACTION_ONLY", "goal_id": goal_id,
             "joint_names": list(JOINTS), "target_rad": list(target),
             "trajectory_sha256": planned_digest,
+            "trajectory_retime": trajectory_retime,
             "action_started_steady_us": started // 1000,
             "planned_points": len(trajectory.points), "result_error_code": result.result.error_code,
             "result_error_string": result.result.error_string,

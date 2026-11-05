@@ -13,6 +13,7 @@ import signal
 import sys
 import time
 from pathlib import Path
+from manual_panel_root import VIEW_FORMAT,state_view,source_identity,valid_state,valid_status
 
 from PyQt5 import QtCore, QtWidgets
 import rclpy
@@ -74,10 +75,12 @@ class JointPanel(QtWidgets.QWidget):
         self.control_session = None
         self.pending_authorization = None
         self.state_boot = None
+        self.state_source = None
         self.state_sequence = 0
         ##
         # pending_home 表示用户已明确确认新姿态但仍需旧 owner 释放；pending_home_generation 防止旧 worker 的 WAIT 事件提前触发捕获。
         self.retired_state_boots = set()
+        self.retired_state_sources = set()
         self.restart_after_release = False
         self.readonly_handoff = None
         self.release_confirmed = False
@@ -268,8 +271,10 @@ class JointPanel(QtWidgets.QWidget):
         self.last_state = self.calibration = self.control_session = None
         self.last_state_ns = 0
         self.state_boot = None
+        self.state_source = None
         self.state_sequence = 0
         self.retired_state_boots.clear()
+        self.retired_state_sources.clear()
         self.authorized = self.wait_home = self.busy = self.zero_busy = False
         self.pending_authorization = None
         self.anchor = self.previous_raw = None
@@ -613,7 +618,7 @@ class JointPanel(QtWidgets.QWidget):
         if not self.manual_limits_mode() or not self.last_state:
             return None
         state = self.last_state
-        if (state.get('schema_major'), state.get('schema_minor')) != (2, 5) or state.get('profile_id') != 201 or state['position_valid_mask'] != 63:
+        if state.get('format') != VIEW_FORMAT or state.get('profile_id') != 201 or state['position_valid_mask'] != 63:
             return None
         target = []
         boundary = False
@@ -712,9 +717,9 @@ class JointPanel(QtWidgets.QWidget):
     def recovery_target(self):
         if (self.manual_limits_mode() or not self.cfg.get('inward_recovery_enabled',False) or not self.last_state or
                 self.last_state['position_valid_mask'] != 63 or
-                (self.last_state.get('schema_major'),self.last_state.get('schema_minor')) != (2,5) or
+                (getattr(self,'backend','real')!='simulator' and self.last_state.get('format')!=VIEW_FORMAT) or
                 self.last_state.get('profile_id') != 201 or
-                (self.cfg.get('wire_schema_major',2),self.cfg.get('wire_schema_minor',5)) != (2,5)):
+                self.last_state.get('profile_id') != self.cfg.get('profile_id',201)):
             return None
         target=[]
         danger=False
@@ -870,9 +875,14 @@ class JointPanel(QtWidgets.QWidget):
     def fresh(self):
         if self.last_state is None:
             return False
+        # 这里只读已验证Root派生的UI视图；缺失年龄不能补零冒充新鲜反馈。
+        ages = self.last_state.get('can_rx_age_us')
+        if (not isinstance(ages, (tuple, list)) or len(ages) != 6 or
+                any(type(value) is not int or not 0 <= value <= 0xffffffff for value in ages)):
+            return False
         age = time.monotonic_ns() - self.last_state_ns
         return (0 <= age <= 250_000_000 and
-                max(self.last_state['can_rx_age_us']) * 1000 + age <= 250_000_000)
+                max(ages) * 1000 + age <= 250_000_000)
 
     ##
     # @brief 确认当次人工姿态后发起替换参考并低速回 Rest。
@@ -1101,6 +1111,20 @@ class JointPanel(QtWidgets.QWidget):
             line, self.stdout_buffer = self.stdout_buffer.split('\n', 1)
             if hasattr(self, 'motor_parameter_tab') and self.motor_parameter_tab.handle_line(line):
                 continue
+            if line.startswith('panel_state_json='):
+                # 只消费现有Native owner经Managed与完整领域准入后的单帧；旧RAW不再当状态权威。
+                try:
+                    journal = json.loads(line[len('panel_state_json='):])
+                    if journal.get('format') != 'dummy.accepted-state.dpc1':
+                        raise ValueError('不支持的accepted-State格式')
+                    arrival_us = journal['arrival_us']
+                    if type(arrival_us) is not int or arrival_us < 0:
+                        raise ValueError('无效Host接纳时刻')
+                    state = self.decode('DummyJointState', bytes.fromhex(journal['canonical_record']))
+                    self.accept_state(state_view(state,journal['source']), arrival_us * 1000)
+                except (ValueError, TypeError, KeyError):
+                    self.message('Native语义State记录无效；保持原新鲜度门控，不回退RAW解码。')
+                continue
             if not line.startswith('home_rest_event='):
                 if line:
                     self.message(line)
@@ -1234,6 +1258,19 @@ class JointPanel(QtWidgets.QWidget):
     # @return bool：新状态被接受并更新 last_state 时 True；旧帧/退役 boot 时 False。
     def accept_state(self, state, arrival_ns):
         boot, sequence = state['boot_epoch'], state['state_seq']
+        identity=state.get('source_identity')
+        if identity is None:
+            if getattr(self,'simulator',None) is None:return False
+            identity=('local-simulator',boot) # 本地显示容器标记，不是SDK Source。
+        retired=getattr(self,'retired_state_sources',set())
+        if identity in retired:return False
+        previous=getattr(self,'state_source',None)
+        if previous is not None and previous!=identity:
+            retired.add(previous);self.retired_state_sources=retired
+            self.authorized=False;self.pending_authorization=None
+            self.state_sequence=0
+            self.state_boot=None  # 新Source.context可从seq0开始；不得借旧水位拒绝。
+        self.state_source=identity
         if boot in self.retired_state_boots:
             return False
         if self.state_boot == boot and sequence <= self.state_sequence:
@@ -1301,36 +1338,19 @@ class JointPanel(QtWidgets.QWidget):
             if self.worker.state() == QtCore.QProcess.Running:
                 self.accept_state(self.worker.model.snapshot(), time.monotonic_ns())
             return
-        if not self.raw.exists():
-            return
-        with self.raw.open('rb') as f:
-            header = f.read(24)
-            if len(header) != 24 or struct.unpack('<6I', header)[:4] != (0x52575034, 3, 4320, 4096):
-                return
-            f.seek(self.offset)
-            for _ in range(128):
-                record = f.read(4320)
-                if len(record) != 4320:
-                    break
-                ##
-                # 完整记录已消费才推进 offset；无关接口或非法记录会跳过，但不会把残缺尾部当作完整证据。
-                self.offset += 4320
-                size, result = struct.unpack_from('<II', record, 48)
-                interface = struct.unpack_from('<I', record, 76)[0]
-                if (record[72] != 0 or result != 0 or interface != self.cfg['state_interface_id'] or not (4 <= size <= 4096)):
-                    continue
-                try:
-                    # 中央公共布局决定当前payload长度，面板不维护尺寸副本。
-                    state = self.decode('DummyJointStateV2', record[224:224 + size])
-                except (ValueError, struct.error):
-                    continue
-                self.accept_state(state,struct.unpack_from('<Q',record,8)[0])
+        # DPRAW03是原始FBS网络抓包；不借其224B头推断状态，不保旧raw fallback。
+        # 真机UI状态仅接SDK完整准入后的DPC1 stdout，原始记录继续保留作证据。
+        return
 
     ##
     # @brief 批量驱动 ROS 响应、状态接收、权限门控与独立目标/测量发布。
     # 每轮最多 8 次非阻塞 spin；先读状态再推进障碍/参数页。始终发布目标 rad 到独立 topic；新鲜反馈才显示/发布实际关节。pending_home 必须等对应新 worker、只读状态及静止反馈。按钮可用性综合新鲜度、授权、场景、参数事务和路径执行；显示锚点仅提供未标定可视化，不能开运动入口。
     # @return None；执行上述状态更新、界面或日志操作。
     def tick(self):
+        # 关闭流程会处理Qt事件；定时器不得重入已开始销毁的ROS观察节点。
+        # closeEvent仍显式推进ros_tick，等待原释放屏障，不由此跳过清理。
+        if self.closing:
+            return
         if not rclpy.ok():
             self.timer.stop()
             self.close()
@@ -1514,22 +1534,27 @@ class JointPanel(QtWidgets.QWidget):
             self.busy = False
 
     def ros_status_received(self, status):
+        if not valid_status(status):
+            return
         self.ros_status = status
         self.ros_status_ns = time.monotonic_ns()
         self.ros_backend.latest_status = status
         self.ros_runtime.read_only()
 
     def ros_state_received(self, state):
+        if not valid_state(state):
+            return
         old = self.last_state
-        if old and old['boot_epoch'] == state.boot_epoch and state.state_seq <= old['state_seq']:
+        view=state_view(state)
+        if old and old.get('source_identity')==view['source_identity'] and view['state_seq']<=old['state_seq']:
             return
         self.ros_backend.latest_state = state
-        # 只整理显示字段，不据此重建许可、完成或参考状态机。
-        self.last_state = {name: getattr(state, name) for name in state.get_fields_and_field_types()}
-        self.last_state_ns = time.monotonic_ns()
-        if state.position_valid_mask == 63:
-            self.actual_q = list(state.position_rad)
-            for label, value in zip(self.feedback_labels, state.position_rad):
+        # 仅整理少量显示视图；C++管理、许可和完成状态机仍使用真实Root/ROS消息。
+        self.last_state=view
+        self.last_state_ns=time.monotonic_ns()
+        if view['position_valid_mask']==63:
+            self.actual_q=list(view['position_rad'])
+            for label,value in zip(self.feedback_labels,view['position_rad']):
                 label.setText(f'{math.degrees(value):.3f}°')
 
     def refresh_ros_connection_controls(self):
@@ -1586,8 +1611,12 @@ class JointPanel(QtWidgets.QWidget):
         status_age_ns = time.monotonic_ns() - getattr(self, 'ros_status_ns', 0)
         status_fresh = bool(status is not None and status_budget_ms is not None and
                             0 <= status_age_ns <= status_budget_ms * 1_000_000)
-        matched = bool(state and status and all(state[key] == getattr(status, key, None)
-                       for key in ('boot_epoch', 'reference_epoch', 'session_id')))
+        # UI的boot别名来自真实Source；原始ROS Status必须按完整来源及显式presence匹配。
+        # 不同设备、启动或上下文的旧快照不能打开恢复/运动入口。
+        matched = bool(state and status and valid_status(status) and
+            source_identity(status) == state.get('source_identity') and
+            all(state[key] == getattr(status, key) for key in
+                ('profile_id', 'reference_epoch', 'session_id')))
         # ROS只读态没有JSB关节TF；数值反馈不能单独让完整URDF可见。
         # manual_ready或自动流程真实双Hold/Run均已通过C++控制器激活确认。
         manual_model_ready = (self.ros_backend.manual_ready and
@@ -1631,7 +1660,7 @@ class JointPanel(QtWidgets.QWidget):
         if hasattr(self, 'motor_parameter_tab'):
             self.motor_parameter_tab.tick()
         status = self.ros_status
-        identity = '' if status is None else f' · boot={status.boot_epoch:016x} · reference={status.reference_epoch}'
+        identity = '' if status is None else f' · boot={source_identity(status)[1]:016x} · reference={status.reference_epoch}'
         budget_text = ' · 等待状态反馈配置（只读）' if status_budget_ms is None else f' · Status预算={status_budget_ms}ms'
         self.status.setText('真机-USB/ROS · ' + self.ros_runtime.state + identity + budget_text + (' · ' + self.ros_runtime.error if self.ros_runtime.error else ''))
         target = JointState()

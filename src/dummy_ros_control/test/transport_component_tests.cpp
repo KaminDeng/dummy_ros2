@@ -15,6 +15,11 @@
 static bool cancel_status_terminal7_variant=false;
 static bool manual_history_mode = false;
 static bool owner_safety_stop_case = false;
+static bool root_presence_case=false;
+/** @brief 完成Status先于writer flush的离线乱序回归。 */
+static bool complete_status_before_flush_case=false;
+/** @brief 常驻回环router上的Boot恢复场景；与PTY物理重连资格分别取证。 */
+static bool root_tcp_boot_case=false;
 static bool manual_release_mode = false;
 static bool manual_fault_diagnostic_mode = false;
 static bool manual_recovered_idle_mode = false;
@@ -40,9 +45,11 @@ static bool cancel_hold_status_variant=false;
  */
 static unsigned cancel_hold_case=0;
 #include "wire_operation.hpp"
+#include "historical_idle_baseline_fixture.hpp"
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <csignal>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -53,11 +60,20 @@ static unsigned cancel_hold_case=0;
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <termios.h>
 #include <thread>
 #include <openssl/sha.h>
 
 #include "dp_comm/dp_comm.hpp"
 #include "dummy_ref/wire_contract.hpp"
+#include "root_component_stimulus.hpp"
+#include "dummy_ref/root_transport.hpp"
+#include "root_owned_fields_fixture.hpp"
+#include "attempt_evidence.hpp"
+#include "dummy_ref/root_deployment.hpp"
+#include "dummy_ref/root_endpoint_qos.hpp"
+#include "dp_host_instance_identity.h"
+#include "dp_comm_port_api.h"
 #include "dummy_ros_control/command_channel.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ros_control/raw_evidence_collector.hpp"
@@ -112,12 +128,11 @@ static bool source_cancel_coordination=false;
  * @brief 指向argv中负例后缀（或正例nullptr）；用于破坏Cancel Query身份/阶段或Hold，原字符串生存期覆盖整个场景。
  */
 static const char* source_cancel_fault=nullptr;
-namespace wire = dp::iface;
-using State = wire::DummyJointStateV2;
-using Status = wire::DummyDeviceStatusV2;
-using Evidence = wire::DummyAttemptEvidenceV2;
-using Command = wire::DummyJointCommandV2;
-using Management = dp::protocol::services::DummyManageV2;
+using State=dummy_ref::messages::State;
+using Status=dummy_ref::messages::Status;
+using Evidence=dummy_ref::messages::Evidence;
+using Command=dummy_ref::messages::Command;
+using Management=dummy_ref::root::Manage;
 using namespace dummy_ros_control;
 /**
  * @brief 检查采集尚未绑定时可接受的历史released Idle基线。
@@ -125,400 +140,7 @@ using namespace dummy_ros_control;
  * @details 首先允许普通motion与有parent的独立release历史终态；再逐项破坏boot/session/permit/lost/core及历史上下文。
  * 非零历史链在当前采集还没有页时可保留；已落页、已绑定current_boot或历史run/链不匹配都不能当作无害启动基线。
  */
-int test_released_idle_startup_baseline() {
-  {
-    Management::Request first;
-    first.set_request_id(0x1234567800000042ULL);
-    first.set_request_seq(0x90000001U);
-    first.set_operation(1);
-    std::uint8_t client[16]{1};
-    first.set_client_instance_id(client);
-    auto second = first;
-    second.set_request_id(first.request_id() + 1);
-    second.set_request_seq(first.request_seq() + 1);
-    client[0] = 2;
-    second.set_client_instance_id(client);
-    auto query = first;
-    query.set_request_id(first.request_id() + 2);
-    query.set_request_seq(first.request_seq() + 2);
-    query.set_operation(12);
-    query.set_queried_operation_id(first.request_id());
-    if (management_rpc_correlation_id(first) != first.request_seq() ||
-        management_rpc_idempotency_key(first) !=
-            (std::uint32_t(first.request_id()) ^ (1U << 16U)))
-      return 380;
-    if (management_rpc_correlation_id(first) ==
-            management_rpc_correlation_id(second) ||
-        management_rpc_idempotency_key(first) ==
-            management_rpc_idempotency_key(second) ||
-        management_rpc_correlation_id(first) ==
-            management_rpc_correlation_id(query) ||
-        management_rpc_idempotency_key(first) ==
-            management_rpc_idempotency_key(query))
-      return 381;
-    const auto retry = first;
-    if (management_rpc_correlation_id(first) !=
-            management_rpc_correlation_id(retry) ||
-        management_rpc_idempotency_key(first) !=
-            management_rpc_idempotency_key(retry))
-      return 382;
-    for (unsigned i = 0; i < 3; ++i) {
-      Management::Request zero;
-      zero.set_operation(i ? 1 : 0);
-      zero.set_request_id(i == 1 ? 0x10000ULL : i == 2 ? 0x100010000ULL : 0ULL);
-      if (!management_rpc_correlation_id(zero) ||
-          !management_rpc_idempotency_key(zero))
-        return 383;
-    }
-  }
-  // 清错只清当前故障；三种合法历史谱系都可恢复只读，未知历史源不自行变成新尝试。
-  for (const auto kind : {1U, 2U, 3U}) {
-    for (const auto source : {0x100aU, 0x1068U}) {
-      HistoricalIdleBaselineContext context{};context.manual_reference_mode=true;
-      Status value;value.set_boot_epoch(8290386956477645553ULL);value.set_run_id(9U);
-      value.set_attempt_kind(kind);value.set_parent_run_id(kind==1U?0U:8U);
-      value.set_final_state(4U);value.set_core_state(2U);value.set_reference_epoch(1U);
-      value.set_cleanup_state(3U);value.set_release_committed(true);
-      value.set_failure_source(source);value.set_failure_axis_mask(2U);value.set_configured_mask(63U);
-      // 首次零链固定后不能被迟到的非零摘要替换；这里只识别历史，不验收历史原件。
-      if(!historical_released_idle_baseline(value,context))return 430;
-      // Native只读恢复不以历史轴掩码授资格，零掩码不应阻断冷接入。
-      value.set_failure_axis_mask(0U);
-      if(!historical_released_idle_baseline(value,context))return 433;
-      context.current_boot=value.boot_epoch();context.historical_run_boot=value.boot_epoch();
-      context.historical_run_id=9U;context.historical_reference_epoch=1U;
-      if(!historical_released_idle_baseline(value,context))return 431;
-      std::uint8_t changed_chain[32]{1};value.set_evidence_chain_sha256(changed_chain);
-      if(historical_released_idle_baseline(value,context))return 432;
-    }
-  }
-  for (const auto known_source : {0x100aU, 0x1068U, 0x1067U, 0x1024U, 0x1008U}) {
-    HistoricalIdleBaselineContext manual{};
-    manual.manual_reference_mode = true;
-    Status recovered;
-    recovered.set_boot_epoch(7);
-    recovered.set_run_id(57);
-    recovered.set_attempt_kind(1);
-    recovered.set_final_state(4);
-    recovered.set_core_state(2);
-    recovered.set_reference_epoch(1);
-    recovered.set_release_committed(true);
-    recovered.set_cleanup_state(3);
-    recovered.set_failure_source(known_source);
-    recovered.set_failure_axis_mask(63U);recovered.set_configured_mask(63U);
-    // GUI42已显式ClearFault：当前Idle，历史Motion故障保留，链摘要尚为全零也合法。
-    if (known_source==0x100aU) {
-      recovered.set_boot_epoch(8290386956477645553ULL);recovered.set_run_id(9U);
-      recovered.set_motion_epoch(21U);recovered.set_management_epoch(38U);
-    }
-    if (known_source==0x1024U) {
-      recovered.set_boot_epoch(17820284845494219766ULL);
-      recovered.set_run_id(99U); // panel-interface-02当前已Clear的历史Fault4。
-    }
-    if (known_source == 0x1008U) {
-      recovered.set_boot_epoch(1754154692906416797ULL);
-      recovered.set_run_id(15U); // GUI HOME已显式清除导数拒绝，历史失败仍保留。
-    }
-    if (!historical_released_idle_baseline(recovered, manual))
-      return 360;
-    auto partial = recovered;partial.set_failure_axis_mask(2U);
-    if (!historical_released_idle_baseline(partial, manual))return 394;
-    auto bench = manual;
-    bench.manual_reference_mode = false;
-    if (historical_released_idle_baseline(recovered, bench))
-      return 361;
-    for (unsigned i = 0; i < 14; ++i) {
-      auto bad = recovered;
-      switch (i) {
-      case 0:
-        bad.set_first_failure_reason(0x1067);
-        break;
-      case 1:
-        bad.set_core_state(9);
-        break;
-      case 2:
-        bad.set_failure_source(0);
-        break;
-      case 3:
-        bad.set_cleanup_state(2);
-        break;
-      case 4:
-        bad.set_can_failed_mask(1);
-        break;
-      case 5:
-        bad.set_session_id(8);
-        break;
-      case 6:
-        bad.set_reference_epoch(0);
-        break;
-      case 7:
-        bad.set_parent_run_id(56);
-        break;
-      case 8:
-        bad.set_release_committed(false);
-        break;
-      case 9: bad.set_evidence_lost(true); break;
-      case 10: bad.set_real_motion_permitted(true); break;
-      case 11: bad.set_permit_remaining_us(1U); break;
-      case 12: bad.set_attempt_kind(2U); break;
-      case 13: bad.set_boot_epoch(0U); break;
-      }
-      if (historical_released_idle_baseline(bad, manual))
-        return 362 + i;
-    }
-    manual.current_boot = recovered.boot_epoch();
-    manual.historical_run_boot = recovered.boot_epoch();
-    manual.historical_run_id = recovered.run_id();
-    manual.historical_reference_epoch = 1;
-    if (!historical_released_idle_baseline(recovered, manual))
-      return 371;
-    auto changed = recovered;
-    changed.set_reference_epoch(2);
-    if (historical_released_idle_baseline(changed, manual))
-      return 372;
-    manual.pages_written = 1;
-    if (historical_released_idle_baseline(recovered, manual))
-      return 373;
-    manual.pages_written=0;
-    manual.terminal_written_run_id=recovered.run_id();
-    if(historical_released_idle_baseline(recovered,manual)) return 390;
-    manual.terminal_written_run_id=0;
-    changed=recovered; changed.set_boot_epoch(recovered.boot_epoch()+1);
-    if(historical_released_idle_baseline(changed,manual)) return 391;
-    changed=recovered; changed.set_run_id(recovered.run_id()+1);
-    if(historical_released_idle_baseline(changed,manual)) return 392;
-    manual.historical_chain[0]=1;
-    if(historical_released_idle_baseline(recovered,manual)) return 393;
-
-  }
-  {
-    HistoricalIdleBaselineContext manual{};
-    manual.manual_reference_mode = true;
-    Status recovered;
-    recovered.set_boot_epoch(7);
-    recovered.set_run_id(59);
-    recovered.set_parent_run_id(58);
-    recovered.set_attempt_kind(3);
-    recovered.set_final_state(4);
-    recovered.set_core_state(2);
-    recovered.set_reference_epoch(1);
-    recovered.set_release_committed(true);
-    recovered.set_cleanup_state(3);
-    recovered.set_failure_source(0x1064);
-    recovered.set_failure_axis_mask(63U);recovered.set_configured_mask(63U);
-    if (!historical_released_idle_baseline(recovered, manual))
-      return 390;
-    auto bench = manual;
-    bench.manual_reference_mode = false;
-    if (historical_released_idle_baseline(recovered, bench))
-      return 391;
-    for (unsigned i = 0; i < 8; ++i) {
-      auto bad = recovered;
-      switch (i) {
-      case 0:
-        bad.set_first_failure_reason(0x1064);
-        break;
-      case 1:
-        bad.set_core_state(9);
-        break;
-      case 2:
-        bad.set_release_committed(false);
-        break;
-      case 3:
-        bad.set_failure_source(0);
-        break;
-      case 4:
-        bad.set_attempt_kind(4);
-        break;
-      case 5:
-        bad.set_parent_run_id(57);
-        break;
-      case 6:
-        bad.set_cleanup_state(2);
-        break;
-      case 7:
-        bad.set_can_failed_mask(1);
-        break;
-      }
-      if (historical_released_idle_baseline(bad, manual))
-        return 392 + i;
-    }
-  }
-  {
-    // GUI25原件：ClearFault后仅当前故障清零，历史Safety失败不能伪装成成功运动。
-    HistoricalIdleBaselineContext manual{};
-    manual.manual_reference_mode = true;
-    Status recovered;
-    recovered.set_boot_epoch(1754154692906416797ULL);
-    recovered.set_run_id(61);
-    recovered.set_parent_run_id(60);
-    recovered.set_attempt_kind(2);
-    recovered.set_final_state(4);
-    recovered.set_core_state(2);
-    recovered.set_reference_epoch(2);
-    recovered.set_release_committed(true);
-    recovered.set_cleanup_state(3);
-    recovered.set_failure_source(0x1002);
-    recovered.set_failure_axis_mask(63U);recovered.set_configured_mask(63U);
-    if (!historical_released_idle_baseline(recovered, manual)) return 410;
-    auto bench = manual;
-    bench.manual_reference_mode = false;
-    if (historical_released_idle_baseline(recovered, bench)) return 411;
-    for (unsigned i = 0; i < 13; ++i) {
-      auto bad = recovered;
-      switch (i) {
-      case 0: bad.set_first_failure_reason(0x1002); break;
-      case 1: bad.set_core_state(9); break;
-      case 2: bad.set_release_committed(false); break;
-      case 3: bad.set_failure_source(0U); break;
-      case 4: bad.set_parent_run_id(59); break;
-      case 5: bad.set_cleanup_state(2); break;
-      case 6: bad.set_can_failed_mask(1); break;
-      case 7: bad.set_evidence_lost(true); break;
-      case 8: bad.set_session_id(1); break;
-      case 9: bad.set_real_motion_permitted(true); break;
-      case 10: bad.set_permit_remaining_us(1); break;
-      case 11: bad.set_reference_epoch(0); break;
-      case 12: bad.set_final_state(2); break;
-      }
-      if (historical_released_idle_baseline(bad, manual)) return 412 + i;
-    }
-    manual.pages_written = 1;
-    if (historical_released_idle_baseline(recovered, manual)) return 425;
-    manual.pages_written = 0;
-    manual.terminal_written_run_id = 61;
-    if (historical_released_idle_baseline(recovered, manual)) return 426;
-    manual.terminal_written_run_id = 0;
-    manual.current_boot = 1;
-    if (historical_released_idle_baseline(recovered, manual)) return 427;
-  }
-  {
-    HistoricalIdleBaselineContext manual{};
-    manual.manual_reference_mode = true;
-    Status retained;
-    retained.set_boot_epoch(7);
-    retained.set_run_id(113);
-    retained.set_attempt_kind(1);
-    retained.set_final_state(2);
-    retained.set_core_state(2);
-    retained.set_reference_epoch(1);
-    retained.set_release_committed(true);
-    if (!historical_released_idle_baseline(retained, manual))
-      return 350;
-    auto bench = manual;
-    bench.manual_reference_mode = false;
-    if (historical_released_idle_baseline(retained, bench))
-      return 351;
-    auto bad = retained;
-    bad.set_session_id(8);
-    if (historical_released_idle_baseline(bad, manual))
-      return 352;
-    bad = retained;
-    bad.set_release_committed(false);
-    if (historical_released_idle_baseline(bad, manual))
-      return 353;
-    manual.current_boot = 7;
-    manual.historical_run_boot = 7;
-    manual.historical_run_id = 113;
-    manual.historical_reference_epoch = 1;
-    if (!historical_released_idle_baseline(retained, manual))
-      return 354;
-    bad = retained;
-    bad.set_reference_epoch(2);
-    if (historical_released_idle_baseline(bad, manual))
-      return 355;
-    manual.pages_written = 1;
-    if (historical_released_idle_baseline(retained, manual))
-      return 356;
-  }
-
-  /**
-   * @brief context全部为零表示新采集尚未建立当前boot/run证据。
-   * 随后逐项赋值pages_written、historical_run_*、terminal_written_run_id验证“历史基线例外”不会覆盖本次已有证据。
-   */
-  HistoricalIdleBaselineContext context{};
-  Status status;
-  status.set_boot_epoch(7U);
-  status.set_run_id(212U);
-  status.set_parent_run_id(211U);
-  status.set_attempt_kind(3U);
-  status.set_final_state(8U);
-  status.set_core_state(1U);
-  status.set_session_id(0U);
-  status.set_reference_epoch(0U);
-  status.set_release_committed(true);
-  status.set_real_motion_permitted(false);
-  status.set_permit_remaining_us(0U);
-  status.set_evidence_lost(false);
-  if (!historical_released_idle_baseline(status, context)) return 301;
-  auto prior_motion = status;
-  prior_motion.set_attempt_kind(1U);
-  prior_motion.set_parent_run_id(0U);
-  prior_motion.set_final_state(2U);
-  if (!historical_released_idle_baseline(prior_motion, context)) return 302;
-  auto rejected = status;
-  rejected.set_final_state(2U);
-  if (historical_released_idle_baseline(rejected, context)) return 303;
-  rejected = status;
-  rejected.set_parent_run_id(0U);
-  if (historical_released_idle_baseline(rejected, context)) return 304;
-  rejected.set_parent_run_id(212U);
-  if (historical_released_idle_baseline(rejected, context)) return 305;
-  rejected = status;
-  std::uint8_t nonzero_chain[32]{};
-  nonzero_chain[0] = 1U;
-  rejected.set_evidence_chain_sha256(nonzero_chain);
-  if (!historical_released_idle_baseline(rejected, context)) return 306;
-  context.pages_written = 1U;
-  if (historical_released_idle_baseline(rejected, context)) return 318;
-  context.pages_written = 0U;
-  rejected = status;
-  rejected.set_boot_epoch(0U);
-  if (historical_released_idle_baseline(rejected, context)) return 307;
-  rejected = status;
-  rejected.set_session_id(8U);
-  if (historical_released_idle_baseline(rejected, context)) return 308;
-  rejected = status;
-  rejected.set_permit_remaining_us(1U);
-  if (historical_released_idle_baseline(rejected, context)) return 309;
-  rejected = status;
-  rejected.set_evidence_lost(true);
-  if (historical_released_idle_baseline(rejected, context)) return 310;
-  rejected = status;
-  rejected.set_core_state(4U);
-  if (historical_released_idle_baseline(rejected, context)) return 311;
-  context.current_boot = 7U;
-  if (historical_released_idle_baseline(status, context)) return 312;
-  context.current_boot = 0U;
-  context.pages_written = 1U;
-  if (historical_released_idle_baseline(status, context)) return 313;
-  context.pages_written = 0U;
-  context.historical_run_boot = 7U;
-  context.historical_run_id = 212U;
-  if (!historical_released_idle_baseline(status, context)) return 314;
-  rejected = status;
-  rejected.set_evidence_chain_sha256(nonzero_chain);
-  context.historical_chain[0] = 1U;
-  if (!historical_released_idle_baseline(rejected, context)) return 319;
-  if (historical_released_idle_baseline(status, context)) return 320;
-  context.pages_written = 1U;
-  if (historical_released_idle_baseline(rejected, context)) return 321;
-  context.pages_written = 0U;
-  context.terminal_written_run_id = 211U;
-  if (historical_released_idle_baseline(rejected, context)) return 322;
-  context.terminal_written_run_id = 0U;
-  context.historical_chain[0] = 0U;
-  context.historical_run_boot = 8U;
-  if (historical_released_idle_baseline(status, context)) return 315;
-  context.historical_run_boot = 0U;
-  context.historical_run_id = 0U;
-  context.terminal_written_run_id = 211U;
-  if (historical_released_idle_baseline(status, context)) return 316;
-  context.terminal_written_run_id = 0U;
-  context.historical_run_boot = 8U;
-  if (historical_released_idle_baseline(status, context)) return 317;
-  return 0;
-}
+int test_released_idle_startup_baseline(){return root_fixture::historical_idle_baseline_cases();}
 /**
  * @brief 用人工Host µs检查一代命令的精确组ACK及超时分类。
  * @return true表示身份/producer序号匹配、拒绝计数推进和State超龄归因均符合预期。
@@ -648,7 +270,7 @@ std::uint16_t ref_disabling_wire_state() {
  * status/state/evidence各自保存完整消息值；send_*决定本次发布哪些topic，done通知退出而不发布。
  * 默认发Status和State，不发Evidence；这样可独立安排回执、Status、State、原页的到达顺序。
  */
-struct Stimulus { Status status{}; State state{}; Evidence evidence{}; bool done = false; bool send_status = true; bool send_state = true; bool send_evidence = false; };
+using Stimulus=root_fixture::Stimulus;;
 /**
  * @brief 普通场景读回的实际Stop request_id，供同一进程两次运行比较不重复；不是预填期望值。
  */
@@ -682,8 +304,8 @@ std::uint64_t exec_expected_stop_operation = 900U;
  */
 struct PersistentStopCache {
   unsigned round = 0U;
-  Management::Request stop{};
-  Management::Response terminal{};
+  Management::Request stop=owned_fixture::request();
+  Management::Response terminal=owned_fixture::response();dp::comm::SourceId terminal_source{};
   std::uint64_t request_ids[3]{};
 };
 /**
@@ -745,68 +367,6 @@ int test_peer_publish_backpressure() {
  * commands_fd把收到Command对象回传父进程；stops_fd回传Cancel/Complete/Disable及相应Query便于核真实发送身份。
  * 其余字段只为受控故障/顺序注入，不是生产设备状态存储。
  */
-struct Peer {
-  /**
-   * @brief 命令观测pipe写端；传递宿主Command对象，不是把对象内存当作串行协议字节。
-   */
-  int commands_fd;
-  /**
-   * @brief 管理观测pipe写端；父进程按操作号检查实际请求顺序。
-   */
-  int stops_fd;
-  /**
-   * @brief 当前Stop原始逻辑请求ID；Query的queried_operation_id必须指向它。
-   */
-  std::uint64_t stop_request_id = 0U;
-  /**
-   * @brief Stop提交时的motion锚；回执Pending保持，终态按夹具推进1。
-   */
-  std::uint32_t stop_motion_epoch = 0U;
-  /**
-   * @brief Stop提交时的管理代次锚；用于避免Query回执借用别的事务。
-   */
-  std::uint32_t stop_management_epoch = 0U;
-  /**
-   * @brief 当前Stop Query次数；通常首次Pending，之后才构造终态。
-   */
-  unsigned stop_queries = 0U;
-  /**
-   * @brief 已看到Cancel发送，用于触发重叠Disable的旧tuple拒绝夹具。
-   */
-  bool overlap_cancel_observed = false;
-  /**
-   * @brief 标记重叠Disable仍用了错误旧tuple，后续Query给失败而不伪造确认。
-   */
-  bool overlap_disable_old_tuple = false;
-  /**
-   * @brief 让所有Stop Query保持Pending，验证cleanup保留unconfirmed而非把超时当成功。
-   */
-  bool never_complete_stop = false;
-  /**
-   * @brief 在Pending回执先清session/ref，不能据此冒认release已Committed。
-   */
-  bool revoke_owner_before_stop_receipt = false;
-  /**
-   * @brief 记录SelectMode序号水位，Stop必须使用其后继而非从旧计数重新开始。
-   */
-  bool sequence_rebase_mode = false;
-  /**
-   * @brief 终态响应故意release_committed=false，即使后来Idle也不应确认Stop。
-   */
-  bool uncommitted_stop_mode = false;
-  /**
-   * @brief 最近SelectMode请求序号，夹具用普通大小比较拒绝不前进的Stop；非通用回绕算法。
-   */
-  std::uint32_t sequence_floor = 0U;
-  /**
-   * @brief request80的Disable直接返回Committed，跳过本夹具默认的Pending再Query路径。
-   */
-  bool direct_gate_release = false;
-  /**
-   * @brief 记录显式release逻辑ID，使后续Query与该release关联。
-   */
-  std::uint64_t gate_release_request_id = 0U;
-};
 /**
  * @brief 连接两对PTY master的双向字节桥；端点仍走真实串行transport实现。
  * 桥工作线程只搬字节，不解释Dummy消息；20ms poll避免析构时无限睡眠。
@@ -826,6 +386,14 @@ class SerialBridge {
           ::unlockpt(masters_[index]) != 0) return false;
       char name[128]{};
       if (::ptsname_r(masters_[index], name, sizeof(name)) != 0) return false;
+      // PTY初始默认echo会把首个INIT反射给Host；在任何连接前设置叶层原始模式。
+      const int slave=::open(name,O_RDWR|O_NOCTTY|O_NONBLOCK);
+      termios attributes{};
+      if(slave<0)return false;
+      if(::tcgetattr(slave,&attributes)!=0){::close(slave);return false;}
+      ::cfmakeraw(&attributes);
+      const int configured=::tcsetattr(slave,TCSANOW,&attributes);::close(slave);
+      if(configured!=0)return false;
       endpoints_[index] = std::string("serial/") + name + "#baudrate=115200";
     }
     return true;
@@ -908,349 +476,6 @@ class SerialBridge {
   std::thread worker_;
 };
 /**
- * @brief 在borrowed回调有效期内复制Command并送回父进程。
- * @param borrowed dp_comm借用消息，不能跨回调保存其视图。
- * @param context 指向peer本地状态，提供命令观测pipe。
- * @return 无；copy失败不写观测；pipe写结果在此未检查，父端超时/长度断言发现缺失。
- */
-void receive_command(dp::comm::BorrowedMessage<Command> borrowed, void *context) {
-  Command message;
-  if (borrowed.copy_to(&message) == dp::comm::Result::kOk)
-    (void)::write(static_cast<Peer *>(context)->commands_fd, &message, sizeof(message));
-}
-/**
- * @brief peer的manage_v2服务：回显请求身份并按被选场景产生受控事务回执。
- * @param request 经串行协议/typed桥实际收到的请求。
- * @param response 调用方提供的响应槽，由本回调写完整fixture字段。
- * @param context Peer上下文，不拥有或销毁它。
- * @par 未命名RequestInfo
- * 此回调不校验真实认证来源，主要以请求内身份模拟；不能将其当正式设备授权实现。
- * @return kOk表示服务回调完成，不代表业务成功；非法操作或观测pipe写失败返回InvalidArgument。特定Core场景另有Timeout故障注入。
- * @details operation9/10/8分别为Cancel/Disable/Complete，12为QueryResult，6为Begin，1为SelectMode，0为只读Query。业务结果还必须看receipt/result/phase/operation及epoch绑定。
- */
-dp::comm::Result receive_management(const Management::Request &request,
-                                    Management::Response *response,
-                                    const dp::comm::RequestInfo &, void *context) {
-  auto &peer = *static_cast<Peer *>(context);
-  if (request.operation() == 9U) {
-    peer.overlap_cancel_observed=true;
-    if (::write(peer.stops_fd,&request,sizeof(request))!=sizeof(request)) return dp::comm::Result::kInvalidArgument;
-  }
-  if (request.operation() == 10U &&
-      ::write(peer.stops_fd, &request, sizeof(request)) != sizeof(request))
-    return dp::comm::Result::kInvalidArgument;
-  if (request.operation() == 8U &&
-      ::write(peer.stops_fd, &request, sizeof(request)) != sizeof(request))
-    return dp::comm::Result::kInvalidArgument;
-  /**
-   * @brief 只有QueryResult指向当前Stop原请求ID才走Stop结果缓存；Query本身request_id必须独立。
-   */
-  const bool stop_query = request.operation() == 12U && peer.stop_request_id != 0U &&
-      request.queried_operation_id() == peer.stop_request_id;
-  if (peer.sequence_rebase_mode && request.operation() == 1U)
-    peer.sequence_floor = request.request_seq();
-  if (stop_query && ::write(peer.stops_fd, &request, sizeof(request)) != sizeof(request))
-    return dp::comm::Result::kInvalidArgument;
-  if (request.operation() != 6U && request.operation() != 8U && request.operation() != 0U &&
-      request.operation() != 12U && request.operation() != 10U && request.operation() != 1U && request.operation() != 9U)
-    return dp::comm::Result::kInvalidArgument;
-  response->set_schema_major(2U);
-  response->set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  response->set_device_id(request.device_id());
-  response->set_client_instance_id(request.client_instance_id());
-  response->set_request_id(request.request_id());
-  response->set_receipt(1U);
-  response->set_result_code(0U);
-  /**
-   * @brief 普通fixture默认Committed、operation42，特定request45故意给777；request43故意跳两个motion代次。
-   * 这些固定应答用于验证Host拒绝不相关/越代回复，不模拟全部设备业务规则。
-   */
-  response->set_operation_id(request.request_id() == 45U ? 777U : 42U);
-  response->set_transaction_phase(3U);
-  response->set_boot_epoch(request.expected_boot_epoch());
-  response->set_session_id(request.expected_session_id());
-  response->set_reference_epoch(request.expected_reference_epoch());
-  response->set_motion_epoch(request.expected_motion_epoch() +
-      (request.request_id() == 43U ? 2U : 1U));
-  response->set_management_epoch(request.expected_management_epoch() + 1U);
-  response->set_profile_id(request.expected_profile_id());
-  // SOURCE模型只复现once已见TX旧tuple和设备Rejected，不宣未观测CancelCOMMITTED。
-  if (request.operation()==9U) {
-    response->set_result_code(23U);response->set_transaction_phase(1U);response->set_operation_id(0U);
-    response->set_motion_epoch(request.expected_motion_epoch());
-    response->set_management_epoch(request.expected_management_epoch());
-    return dp::comm::Result::kOk;
-  }
-  /**
-   * @brief 主组件源用固定Cancel Query终态模拟已Committed的新tuple。
-   * source_cancel_fault逐项破坏boot/session/ref/run/owner或改Failed/Pending；它不包含真实RobotCore计算。
-   */
-  if(peer.overlap_cancel_observed && request.operation()==12U && request.queried_operation_id()==4693763926145815138ULL) {
-    response->set_result_code(0U);response->set_transaction_phase(3U);response->set_operation_id(9009U);
-    response->set_run_id(9U);response->set_attempt_id(9U);response->set_attempt_kind(1U);
-    response->set_motion_epoch(11U);response->set_management_epoch(2U);
-    if(source_cancel_fault) {
-      if(!std::strcmp(source_cancel_fault,"boot"))response->set_boot_epoch(8U);
-      if(!std::strcmp(source_cancel_fault,"session"))response->set_session_id(9U);
-      if(!std::strcmp(source_cancel_fault,"ref"))response->set_reference_epoch(10U);
-      if(!std::strcmp(source_cancel_fault,"run"))response->set_run_id(10U);
-      if(!std::strcmp(source_cancel_fault,"owner")){std::uint8_t other[16]{3U};response->set_client_instance_id(other);}
-      if(!std::strcmp(source_cancel_fault,"failed")){response->set_result_code(10U);response->set_transaction_phase(4U);response->set_operation_id(0U);}
-      if(!std::strcmp(source_cancel_fault,"pending")){response->set_result_code(23U);response->set_transaction_phase(2U);response->set_operation_id(0U);}
-    }
-    return dp::comm::Result::kOk;
-  }
-  /**
-   * @brief 重叠Cancel后仍用旧motion/management提交Disable，fixture保留Pending而让后续Query明确失败。
-   * 这里的11/2是共同合成peer分支的约定，不覆盖Core专属28673/77/1/3/4身份。
-   */
-  if (peer.overlap_cancel_observed && request.operation()==10U &&
-      (request.expected_motion_epoch()!=11U ||request.expected_management_epoch()!=2U)) {
-    peer.overlap_disable_old_tuple=true;peer.stop_request_id=request.request_id();
-    peer.stop_motion_epoch=request.expected_motion_epoch()+1U;
-    peer.stop_management_epoch=request.expected_management_epoch()+1U;
-    response->set_result_code(23U);response->set_transaction_phase(1U);response->set_operation_id(0U);
-    response->set_motion_epoch(request.expected_motion_epoch());
-    response->set_management_epoch(request.expected_management_epoch());
-    return dp::comm::Result::kOk;
-  }
-  if (peer.overlap_disable_old_tuple && stop_query) {
-    response->set_result_code(10U);response->set_transaction_phase(4U);response->set_operation_id(0U);
-    response->set_motion_epoch(peer.stop_motion_epoch);response->set_management_epoch(peer.stop_management_epoch);
-    response->set_run_id(0U);response->set_release_committed(false);response->set_motion_complete(false);
-    return dp::comm::Result::kOk;
-  }
-  /**
-   * @brief Complete47先收到Pending回执；Query47才给可关联终态，便于排列Status/State/回执不同先后。
-   */
-  if (request.operation() == 8U && request.request_id() == 47U) {
-    response->set_operation_id(0U);
-    response->set_transaction_phase(1U);
-    response->set_result_code(23U);
-    response->set_motion_epoch(request.expected_motion_epoch());
-    response->set_management_epoch(request.expected_management_epoch());
-  /**
-   * @brief 显式gate release的Query回执用于注入错operation/motion/management、Pending或未Committed。
-   * 故障参数由main的release_deactivate_mode12..16映射，不能被早到Idle缓存绕过。
-   */
-  } else if (request.operation() == 12U && request.queried_operation_id() == 47U) {
-    response->set_operation_id(47U);
-  }
-  if (request.operation() == 10U) {
-    if (peer.sequence_rebase_mode && request.request_seq() <= peer.sequence_floor) {
-      response->set_result_code(16U);
-      response->set_transaction_phase(4U);
-      response->set_operation_id(0U);
-      return dp::comm::Result::kOk;
-    }
-    /**
-     * @brief 显式gate release80：默认先Pending，direct_gate_release时直接Committed并清session/ref。
-     * 后续是否免重复Stop仍须合法Idle反馈，不能只看这个RPC返回。
-     */
-    if (request.request_id() == 80U) {
-      peer.gate_release_request_id = request.request_id();
-      response->set_run_id(2U);
-      response->set_attempt_kind(1U);
-      if (peer.direct_gate_release) {
-        response->set_operation_id(80U);
-        response->set_session_id(0U);
-        response->set_reference_epoch(0U);
-        response->set_release_committed(true);
-        return dp::comm::Result::kOk;
-      }
-      response->set_operation_id(0U);
-      response->set_transaction_phase(1U);
-      response->set_result_code(23U);
-      response->set_motion_epoch(request.expected_motion_epoch());
-      response->set_management_epoch(request.expected_management_epoch());
-      return dp::comm::Result::kOk;
-    }
-    /**
-     * @brief 跨exec复用模式保存每轮Stop逻辑ID，拒绝任意两Host复用同ID；最多支持三轮。
-     */
-    if (persistent_stop_cache_test) {
-      ++persistent_stop_cache->round;
-      if (persistent_stop_cache->round > 3U) return dp::comm::Result::kInvalidArgument;
-      for (unsigned index = 0U; index + 1U < persistent_stop_cache->round; ++index)
-        if (persistent_stop_cache->request_ids[index] == request.request_id())
-          return dp::comm::Result::kInvalidArgument;
-      persistent_stop_cache->request_ids[persistent_stop_cache->round - 1U] = request.request_id();
-    }
-    if (persistent_stop_cache_test && persistent_stop_cache->round == 1U) persistent_stop_cache->stop = request;
-    peer.stop_request_id = request.request_id();
-    peer.stop_motion_epoch = request.expected_motion_epoch();
-    peer.stop_management_epoch = request.expected_management_epoch();
-    peer.stop_queries = 0U;
-    response->set_operation_id(0U);
-    response->set_transaction_phase(1U);
-    response->set_result_code(23U);
-    response->set_motion_epoch(peer.stop_motion_epoch);
-    response->set_management_epoch(peer.stop_management_epoch);
-    if (peer.revoke_owner_before_stop_receipt) {
-      response->set_session_id(0U);
-      response->set_reference_epoch(0U);
-    }
-  } else if (stop_query) {
-    ++peer.stop_queries;
-    /**
-     * @brief 第2轮原样重放首轮完整Query终态，包括旧request/operation关联。
-     * 不替换为新Query ID来制造伪相关；新Host即使随后见旧Idle也必须保持Stop未确认。
-     */
-    if (persistent_stop_cache_test && persistent_stop_cache->round == 2U) {
-      // 保留第一进程的完整 QueryResult，不改写 request/operation identity。
-      if (persistent_stop_cache->terminal.request_id() == request.request_id() ||
-          persistent_stop_cache->terminal.operation_id() != 900U ||
-          persistent_stop_cache->terminal.boot_epoch() != request.expected_boot_epoch())
-        return dp::comm::Result::kInvalidArgument;
-      *response = persistent_stop_cache->terminal;
-      std::fprintf(stderr, "跨exec peer重放旧回执 old_stop=%llu new_stop=%llu old_reply=%llu op=%llu\n",
-          (unsigned long long)persistent_stop_cache->stop.request_id(),
-          (unsigned long long)peer.stop_request_id,
-          (unsigned long long)response->request_id(),
-          (unsigned long long)response->operation_id());
-      return dp::comm::Result::kOk;
-    }
-    /**
-     * @brief 首Query（或never_complete全部Query）只返回Pending/op0；clear owner不等于release_committed。
-     * 普通后继Query才清session/ref、推进epochs并发布release标志，uncommitted模式反向验证该标志必需。
-     */
-    if (peer.stop_queries == 1U || peer.never_complete_stop) {
-      response->set_operation_id(0U);
-      response->set_transaction_phase(2U);
-      response->set_result_code(23U);
-      response->set_motion_epoch(peer.stop_motion_epoch);
-      response->set_management_epoch(peer.stop_management_epoch);
-      if (peer.revoke_owner_before_stop_receipt) {
-        response->set_session_id(0U);
-        response->set_reference_epoch(0U);
-      }
-    } else {
-      response->set_operation_id(persistent_stop_cache_test
-          ? 899U + persistent_stop_cache->round : 900U);
-      response->set_session_id(0U);
-      response->set_reference_epoch(0U);
-      response->set_motion_epoch(peer.stop_motion_epoch + 1U);
-      response->set_management_epoch(peer.stop_management_epoch + 1U);
-      response->set_release_committed(!peer.uncommitted_stop_mode);
-      if (persistent_stop_cache_test && persistent_stop_cache->round == 1U)
-        persistent_stop_cache->terminal = *response;
-    }
-  } else if (request.operation() == 12U &&
-             request.queried_operation_id() == peer.gate_release_request_id) {
-    response->set_run_id(2U);
-    response->set_attempt_kind(1U);
-    response->set_session_id(0U);
-    response->set_reference_epoch(0U);
-    response->set_release_committed(true);
-    if(release_receipt_fault==1U) response->set_operation_id(43U);
-    if(release_receipt_fault==2U) response->set_motion_epoch(12U);
-    if(release_receipt_fault==3U) response->set_management_epoch(3U);
-    if(release_receipt_fault==4U) { response->set_transaction_phase(2U); response->set_result_code(23U); }
-    if(release_receipt_fault==5U) response->set_release_committed(false);
-  }
-  return dp::comm::Result::kOk;
-}
-/**
- * @brief 在子进程建立静态dp_comm节点并执行parent驱动的发布/服务循环。
- * @param endpoint PTY串行端点，节点角色peer。
- * @param input parent→peer刺激pipe读端。
- * @param output 命令观测及初始R通知pipe写端。
- * @param stops_output 管理操作观测pipe写端。
- * @param never_complete_stop 强制Stop Query始终Pending。
- * @param revoke_owner_before_stop_receipt 提前清Pending回执session/ref。
- * @param direct_gate_release release80直接Committed。
- * @param sequence_rebase_mode SelectMode提高Stop请求序号下限。
- * @param uncommitted_stop_mode Stop终态故意不设release_committed。
- * @return 0收到done退出；1..8分别定位context/node/实体/激活/pipe/发布/spin错误。
- * @details 生命周期上持有publisher/subscription/service直至循环结束。普通模式node激活后写R，跨exec持久模式由外部supervisor提前握手。
- * 即使返回kOk也只证明这个受控peer传输和fixture处理，不代表真实设备认证或机械动作。
- */
-int run_peer(const std::string &endpoint, int input, int output, int stops_output,
-             bool never_complete_stop, bool revoke_owner_before_stop_receipt,
-             bool direct_gate_release, bool sequence_rebase_mode,
-             bool uncommitted_stop_mode) {
-  dp::comm::StaticStorage storage({1U, 3U, 1U, 0U, 8U,
-      wire::DummyDeviceStatusV2Codec::kEncodedSize, 96U, 1U, 0U, 1U, 1U});
-  const dp::comm::TransportConfig config{"peer", "", endpoint.c_str(), "component_peer"};
-  auto initialized = dp::comm::Context::init(storage,
-      dp::comm::InitOptions{dp::comm::MemoryMode::kStaticOnly, &config, nullptr});
-  if (!initialized.has_value()) return 1;
-  auto context = std::move(initialized).take_value();
-  dp::comm::NodeOptions options{};
-  options.product_name = "dummy_robot";
-  options.device_id.bytes[0] = 1U;
-  options.node_name = "ref_control";
-  auto created = context.create_node(options);
-  if (!created.has_value()) return 2;
-  auto node = std::move(created).take_value();
-  auto states = node.create_publisher<State>("state_v2", {});
-  auto statuses = node.create_publisher<Status>("status_v2", {});
-  auto evidences = node.create_publisher<Evidence>("attempt_evidence_v2", {});
-  Peer peer{output, stops_output};
-  peer.never_complete_stop = never_complete_stop;
-  peer.revoke_owner_before_stop_receipt = revoke_owner_before_stop_receipt;
-  peer.direct_gate_release = direct_gate_release;
-  peer.sequence_rebase_mode = sequence_rebase_mode;
-  peer.uncommitted_stop_mode = uncommitted_stop_mode;
-  auto subscribed = node.create_subscription<Command>("command_v2", {}, receive_command, &peer);
-  auto managed = node.create_service<Management>("manage_v2", receive_management, &peer);
-  if (!states.has_value() || !statuses.has_value() || !evidences.has_value() ||
-      !subscribed.has_value() || !managed.has_value()) return 3;
-  auto state_publisher = std::move(states).take_value();
-  auto status_publisher = std::move(statuses).take_value();
-  auto evidence_publisher = std::move(evidences).take_value();
-  auto subscription = std::move(subscribed).take_value();
-  auto service = std::move(managed).take_value();
-  dp::comm::StaticExecutor executor;
-  if (executor.add_node(node) != dp::comm::Result::kOk || node.activate() != dp::comm::Result::kOk) return 4;
-  const char ready = 'R';
-  if (!persistent_stop_cache_test && ::write(output, &ready, 1) != 1) return 5;
-  for (;;) {
-    pollfd request{input, POLLIN, 0};
-    if (::poll(&request, 1, 1) > 0) {
-      Stimulus stimulus{};
-      if (::read(input, &stimulus, sizeof(stimulus)) != sizeof(stimulus)) return 6;
-      if (stimulus.done) {
-        // pico serial Context析构会等待reader；worker退出，设备缓存由supervisor保留。
-        if (persistent_stop_cache_test) ::_exit(0);
-        return 0;
-      }
-      /**
-       * @par 内部发送回调
-       * pump推进同一executor；Status、State、Evidence按该顺序尝试发布，send_*可独立关闭。
-       * publish_state可消费一次QueueFull注入；各topic有限重试后任一失败使peer返回7，不能默默丢页还宣称证据完整。
-       */
-      const auto pump = [&] { return executor.spin_some(); };
-      const auto status_result = stimulus.send_status
-          ? publish_peer_with_retry([&] { return status_publisher.publish(stimulus.status); }, pump)
-          : dp::comm::Result::kOk;
-      const auto publish_state = [&] {
-        if (inject_peer_state_queue_full_once) {
-          inject_peer_state_queue_full_once = false;
-          std::fprintf(stderr, "peer injected state queue full once\n");
-          return dp::comm::Result::kQueueFull;
-        }
-        return state_publisher.publish(stimulus.state);
-      };
-      const auto state_result = stimulus.send_state
-          ? publish_peer_with_retry(publish_state, pump)
-          : dp::comm::Result::kOk;
-      const auto evidence_result = stimulus.send_evidence
-          ? publish_peer_with_retry([&] { return evidence_publisher.publish(stimulus.evidence); }, pump)
-          : dp::comm::Result::kOk;
-      if (status_result != dp::comm::Result::kOk || state_result != dp::comm::Result::kOk ||
-          evidence_result != dp::comm::Result::kOk) {
-        std::fprintf(stderr, "peer publish failed status=%u state=%u evidence=%u\n",
-                     static_cast<unsigned>(status_result), static_cast<unsigned>(state_result),
-                     static_cast<unsigned>(evidence_result));
-        return 7;
-      }
-    }
-    const auto spun = executor.spin_some();
-    if (spun != dp::comm::Result::kOk && spun != dp::comm::Result::kBusy) return 8;
-  }
-}
-/**
  * @brief 以steady_clock最多等3s，每2ms重评谓词。
  * @tparam Predicate 可调用bool谓词，可在其中发刺激/读统计。
  * @param predicate 满足预期时返回true的检查动作；到期还会再调用一次。
@@ -1305,7 +530,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                bool uncommitted_stop_mode, bool uncommitted_idle_status_mode) {
   pollfd response{input, POLLIN, 0};
   char ready{};
-  if (::poll(&response, 1, 3000) != 1 || ::read(input, &ready, 1) != 1 || ready != 'R') return 10;
+
   TransportParameters parameters{};
   parameters.endpoint = endpoint;
   parameters.device_id[0] = 1U;
@@ -1380,110 +605,114 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       released_child_case != 0U;
   GuardedZenbeddedSystem system;
   DeviceTransport transport(system, parameters);
-  if (!transport.start() || !wait_for([&] { return transport.statistics().ready; })) return 11;
+  if (!transport.start() || !wait_for([&] { return transport.statistics().ready; })) {
+    const auto failure=transport.diagnostic_snapshot();std::fprintf(stderr,"Host ready failed: %s\n",failure.first.detail.data());return 11;
+  }
+  // 先启动实际Host连接，peer的Root reader安装可需要底层会话握手；随后仍核真实R。
+  if (::poll(&response, 1, 3000) != 1 || ::read(input, &ready, 1) != 1 || ready != 'R') return 10;
   Stimulus valid{};
-  valid.status.set_schema_major(2U);
-  valid.status.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  valid.state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  valid.state.set_schema_major(2U);
+  (void)0;
+  (void)0;
+  (void)0;
+  (void)0;
   std::uint8_t device[16]{1U};
-  valid.status.set_device_id(device);
-  valid.state.set_device_id(device);
-  valid.status.set_boot_epoch(7U);
-  valid.state.set_boot_epoch(7U);
-  valid.status.set_session_id(8U);
-  valid.state.set_session_id(8U);
+  valid.status.domain_device_id().emplace().assign(device,16);
+  valid.state.domain_device_id().emplace().assign(device,16);
+  valid.status_source.boot_id=(7U);
+  valid.state_source.boot_id=(7U);
+  valid.status.session_id()=(8U);
+  valid.state.session_id()=(8U);
   if(complete_order_mode>=18U && complete_order_mode<=27U) {
-    valid.status.set_run_id(1U);
-    valid.status.set_attempt_kind(1U);
+    valid.status.run_id()=(1U);
+    valid.status.attempt_kind()=(1U);
   }
   if (raw_capture_mode) {
-    valid.status.set_run_id(raw_order_case >= 34U && raw_order_case <= 58U ? 1U :
+    valid.status.run_id()=(raw_order_case >= 34U && raw_order_case <= 58U ? 1U :
         ((raw_order_case >= 24U && raw_order_case <= 33U) || raw_order_case >= 59U) ? 123U :
         raw_order_case >= 20U && raw_order_case <= 23U ? 121U :
         raw_order_case != 0U ? 1U : 3U);
-    valid.status.set_attempt_kind(1U);
+    valid.status.attempt_kind()=(1U);
   }
   if(owner_safety_stop_case) {
-    valid.status.set_core_state(4);valid.state.set_core_state(4);
-    valid.status.set_management_epoch(1);valid.state.set_management_epoch(1);
-    valid.status.set_operation_id(42);valid.state.set_operation_id(42);
+    valid.status.core_state()=(4);valid.state.core_state()=(4);
+    valid.status.management_epoch()=(1);valid.state.management_epoch()=(1);
+    valid.status.operation_id()=(42);valid.state.operation_id()=(42);
   }
-  valid.status.set_reference_epoch(9U);
-  valid.state.set_reference_epoch(9U);
-  valid.status.set_motion_epoch(10U);
-  if (reject_during_ack_mode) valid.status.set_command_reject_count(3U);
-  valid.state.set_motion_epoch(10U);
+  valid.status.reference_epoch()=(9U);
+  valid.state.reference_epoch()=(9U);
+  valid.status.motion_epoch()=(10U);
+  if (reject_during_ack_mode) valid.status.command_reject_count()=(3U);
+  valid.state.motion_epoch()=(10U);
   if (cold_gap_mode) {
-    valid.status.set_session_id(0U);
-    valid.state.set_session_id(0U);
-    valid.status.set_reference_epoch(0U);
-    valid.state.set_reference_epoch(0U);
-    valid.status.set_motion_epoch(0U);
-    valid.state.set_motion_epoch(0U);
-    valid.status.set_core_state(1U);
-    valid.state.set_core_state(1U);
+    valid.status.session_id()=(0U);
+    valid.state.session_id()=(0U);
+    valid.status.reference_epoch()=(0U);
+    valid.state.reference_epoch()=(0U);
+    valid.status.motion_epoch()=(0U);
+    valid.state.motion_epoch()=(0U);
+    valid.status.core_state()=(1U);
+    valid.state.core_state()=(1U);
   }
   if (ack_timeout_mode || default_ack_age_mode || release_deactivate_mode != 0U) {
-    valid.status.set_management_epoch(1U);
-    valid.state.set_management_epoch(1U);
-    valid.status.set_can_sent_mask(parameters.configured_mask);
+    valid.status.management_epoch()=(1U);
+    valid.state.management_epoch()=(1U);
+    valid.status.can_sent_mask()=(parameters.configured_mask);
   }
-  valid.status.set_profile_id(1U);
-  valid.state.set_profile_id(1U);
-  valid.status.set_configured_mask(parameters.configured_mask);
-  valid.state.set_configured_mask(parameters.configured_mask);
-  valid.state.set_position_valid_mask(parameters.configured_mask);
+  valid.status.profile_id()=(1U);
+  valid.state.profile_id()=(1U);
+  valid.status.configured_mask()=(parameters.configured_mask);
+  root_fixture::set_configured(valid.state,parameters.configured_mask);
+  root_fixture::set_position_quality(valid.state,parameters.configured_mask);
   if (cold_gap_mode) {
-    valid.state.set_position_valid_mask(0U);
-    valid.state.set_raw_position_valid_mask(parameters.configured_mask);
+    root_fixture::set_position_quality(valid.state,0U);
+    root_fixture::set_raw_quality(valid.state,parameters.configured_mask);
     const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-    valid.state.set_raw_motor_position_rev(idle_raw);
+    root_fixture::set_raw_position(valid.state,idle_raw);
   }
   if (inactive_prime_mode) {
-    valid.state.set_committed_producer_seq(44U);
-    valid.state.set_admitted_producer_seq(44U);
+    valid.state.committed_producer_seq()=(44U);
+    valid.state.admitted_producer_seq()=(44U);
   }
   if (manual_history_mode || manual_fault_diagnostic_mode ||
       manual_recovered_idle_mode) {
-    valid.status.set_reference_epoch(1);
-    valid.state.set_reference_epoch(1);
-    valid.status.set_motion_epoch(113);
-    valid.state.set_motion_epoch(113);
-    valid.status.set_management_epoch(173);
-    valid.state.set_management_epoch(173);
-    valid.status.set_core_state(2);
-    valid.state.set_core_state(2);
-    valid.state.set_position_valid_mask(parameters.configured_mask);
-    valid.status.set_run_id(113);
-    valid.status.set_attempt_kind(1);
-    valid.status.set_final_state(manual_fault_diagnostic_mode ? 4 : 2);
-    valid.status.set_release_committed(true);
+    valid.status.reference_epoch()=(1);
+    valid.state.reference_epoch()=(1);
+    valid.status.motion_epoch()=(113);
+    valid.state.motion_epoch()=(113);
+    valid.status.management_epoch()=(173);
+    valid.state.management_epoch()=(173);
+    valid.status.core_state()=(2);
+    valid.state.core_state()=(2);
+    root_fixture::set_position_quality(valid.state,parameters.configured_mask);
+    valid.status.run_id()=(113);
+    valid.status.attempt_kind()=(1);
+    valid.status.final_state()=(manual_fault_diagnostic_mode ? 4 : 2);
+    valid.status.release_committed()=(true);
     if (manual_fault_diagnostic_mode) {
-      valid.status.set_core_state(9);
-      valid.state.set_core_state(9);
+      valid.status.core_state()=(9);
+      valid.state.core_state()=(9);
     }
     if (manual_recovered_idle_mode) {
-      valid.status.set_final_state(4);
-      valid.status.set_cleanup_state(3);
-      valid.status.set_failure_source(manual_recovered_release_mode ? 0x1064
+      valid.status.final_state()=(4);
+      valid.status.cleanup_state()=(3);
+      valid.status.failure_source()=(manual_recovered_release_mode ? 0x1064
                                                                     : 0x1067);
       if (manual_recovered_release_mode) {
-        valid.status.set_attempt_kind(3);
-        valid.status.set_parent_run_id(112);
+        valid.status.attempt_kind()=(3);
+        valid.status.parent_run_id()=(112);
       }
     }
   }
   if (released_child_case) {
-    valid.status.set_core_state(2);
-    valid.state.set_core_state(2);
-    valid.status.set_management_epoch(1);
-    valid.state.set_management_epoch(1);
-    valid.state.set_raw_position_valid_mask(63);
+    valid.status.core_state()=(2);
+    valid.state.core_state()=(2);
+    valid.status.management_epoch()=(1);
+    valid.state.management_epoch()=(1);
+    root_fixture::set_raw_quality(valid.state,63);
   }
-  valid.status.set_capabilities(kPositionOnlyCapability);
-  valid.status.set_control_period_us(parameters.control_period_us);
-  valid.status.set_state_publish_period_us(parameters.state_publish_period_us);
+  valid.status.capabilities()=(kPositionOnlyCapability);
+  valid.status.control_period_us()=(parameters.control_period_us);
+  valid.status.state_publish_period_us()=(parameters.state_publish_period_us);
   std::uint8_t contract_hash[32]{};
   std::uint8_t model_hash[32]{};
   std::uint8_t profile_hash[32]{};
@@ -1491,24 +720,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   std::uint8_t policy_hash[32]{};
   contract_hash[0] = 1U; model_hash[0] = 2U; profile_hash[0] = 3U;
   firmware_hash[0] = 4U; policy_hash[0] = 5U;
-  valid.status.set_contract_sha256(contract_hash);
-  valid.status.set_model_sha256(model_hash);
-  valid.status.set_profile_sha256(profile_hash);
-  valid.status.set_firmware_sha256(firmware_hash);
-  valid.status.set_compiled_policy_sha256(policy_hash);
+  valid.status.contract_sha256().emplace().assign(contract_hash,32);
+  valid.status.model_sha256().emplace().assign(model_hash,32);
+  valid.status.profile_sha256().emplace().assign(profile_hash,32);
+  valid.status.firmware_sha256().emplace().assign(firmware_hash,32);
+  valid.status.compiled_policy_sha256().emplace().assign(policy_hash,32);
   const double minimum[6]{-1, -1, -1, -1, -1, -1};
   const double maximum[6]{1, 1, 1, 1, 1, 1};
   const double velocity[6]{1, 1, 1, 1, 1, 1};
   const double acceleration[6]{2, 2, 2, 2, 2, 2};
-  valid.status.set_position_min_rad(minimum);
-  valid.status.set_position_max_rad(maximum);
-  valid.status.set_velocity_max_rad_s(velocity);
-  valid.status.set_acceleration_max_rad_s(acceleration);
-  valid.state.set_state_seq(1U);
+  valid.status.position_min_rad().emplace().assign(minimum,6);
+  valid.status.position_max_rad().emplace().assign(maximum,6);
+  valid.status.velocity_max_rad_s().emplace().assign(velocity,6);
+  valid.status.acceleration_max_rad_s().emplace().assign(acceleration,6);
+  valid.state.state_seq()=(1U);
   const double positions[6]{0.25, six_axis ? 0.2 : NAN, six_axis ? 0.3 : NAN,
                            six_axis ? 0.4 : NAN, six_axis ? 0.5 : NAN, six_axis ? 0.6 : NAN};
-  valid.state.set_position_rad(positions);
-  if (ticket_mode != 0U) valid.state.set_freshness_ticket(9007199254740996ULL);
+  root_fixture::set_position(valid.state,positions);
+  if (ticket_mode != 0U) valid.state.freshness_ticket()=(9007199254740996ULL);
   /**
    * @brief Host steady起点和人工Source域5,000,000,000µs偏移。
    * 内部device_now_us返回该偏移加Host经过时间，用大偏移检查不能把Source绝对值直接当Host时间。
@@ -1529,23 +758,23 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   auto send = [&](Stimulus stimulus) {
     if (manual_release_mode) {
-      if (stimulus.status.core_state() == 1U &&
-          stimulus.status.session_id() == 0U) {
-        stimulus.status.set_core_state(2);
-        stimulus.status.set_reference_epoch(9);
+      if ((*stimulus.status.core_state()) == 1U &&
+          (*stimulus.status.session_id()) == 0U) {
+        stimulus.status.core_state()=(2);
+        stimulus.status.reference_epoch()=(9);
       }
-      if (stimulus.state.core_state() == 1U &&
-          stimulus.state.session_id() == 0U) {
-        stimulus.state.set_core_state(2);
-        stimulus.state.set_reference_epoch(9);
-        stimulus.state.set_position_valid_mask(parameters.configured_mask);
+      if ((*stimulus.state.core_state()) == 1U &&
+          (*stimulus.state.session_id()) == 0U) {
+        stimulus.state.core_state()=(2);
+        stimulus.state.reference_epoch()=(9);
+        root_fixture::set_position_quality(stimulus.state,parameters.configured_mask);
       }
     }
-    if (stimulus.state.produced_at_us() == 0U)
-      stimulus.state.set_produced_at_us(device_now_us());
+    if ((*stimulus.state.produced_at_us()) == 0U)
+      stimulus.state.produced_at_us()=(device_now_us());
     if (ticket_mode == 0U && stimulus.send_state)
-      stimulus.state.set_freshness_ticket(++synthetic_ticket);
-    return ::write(output, &stimulus, sizeof(stimulus)) == sizeof(stimulus);
+      stimulus.state.freshness_ticket()=(++synthetic_ticket);
+    return (root_fixture::write_stimulus(output,stimulus));
   };
   /**
    * @par 内部send_rejected_state回调
@@ -1564,6 +793,90 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   JointStateSnapshot snapshot{};
   const auto channel = DeviceTransport::management_channel(parameters);
   if (!channel) return 55;
+  /** @brief 按夹具声明的反馈周期持续发布当前样本，直到实际观测命中本步骤。
+   * @details publish成功只证明本地接纳；State最新值合并/有界入口允许丢弃。
+   * 不重试管理RPC、不推进业务身份，不改wait_for原3s总期限或生产heartbeat预算。 */
+  const auto feedback_until = [&](Stimulus stimulus, auto observed) {
+    auto next_send = std::chrono::steady_clock::now();
+    bool pipe_ok = true;
+    const bool reached = wait_for([&] {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= next_send) {
+        pipe_ok = send(stimulus);
+        next_send = now + std::chrono::microseconds(parameters.state_publish_period_us);
+        if (!pipe_ok) return true;
+      }
+      return observed();
+    });
+    return pipe_ok && reached;
+  };
+  const auto observed_status_matches = [&](const Status& expected,const dp::comm::SourceId& expected_source) {
+    const auto observation = [&] {
+      std::lock_guard<std::mutex> lock(channel->mutex);
+      return channel->observation;
+    }();
+    Status seen=owned_fixture::status();dp::comm::SourceId seen_source{};
+    return observation.status_received_us != 0U &&
+        ((seen=observation.status),(seen_source=observation.status_source),message_fields_present(seen)) == true &&
+        seen_source.boot_id == expected_source.boot_id && (*seen.session_id()) == (*expected.session_id()) &&
+        (*seen.reference_epoch()) == (*expected.reference_epoch()) && (*seen.motion_epoch()) == (*expected.motion_epoch()) &&
+        (*seen.management_epoch()) == (*expected.management_epoch());
+  };
+  const auto observed_state_matches = [&](const State& expected,const dp::comm::SourceId& expected_source) {
+    // 用正常接纳快照；独立diagnostic raw时钟故意保留跨authority水位，不能充当本步骤成功。
+    const auto observation = [&] {
+      std::lock_guard<std::mutex> lock(channel->mutex);
+      return channel->observation;
+    }();
+    State seen=owned_fixture::state();dp::comm::SourceId seen_source{};
+    return observation.state_received_us != 0U &&
+        ((seen=observation.state),(seen_source=observation.state_source),message_fields_present(seen)) == true &&
+        seen_source.boot_id == expected_source.boot_id && (*seen.session_id()) == (*expected.session_id()) &&
+        (*seen.reference_epoch()) == (*expected.reference_epoch()) && (*seen.motion_epoch()) == (*expected.motion_epoch()) &&
+        (*seen.management_epoch()) == (*expected.management_epoch()) && (*seen.state_seq()) == (*expected.state_seq());
+  };
+  /** @brief Root元数据/文件格式负例：用真实Status heartbeat作处理屏障，坏State不得进入业务回调或续state_received_us。
+   * @details 正式发送叶层见publish_partial_state；不以旧DTO.boot/schema字段代替Root权威元信息。 */
+  const auto reject_root_frame=[&](Stimulus stimulus) {
+    auto heartbeat=stimulus;heartbeat.send_state=false;heartbeat.send_status=true;
+    const auto drain_before=transport.statistics().status_messages;
+    if(!wait_for([&]{return send(heartbeat) && transport.statistics().status_messages>=drain_before+3;}))return false;
+    const auto before=transport.statistics();const auto observed=channel->diagnostic_observation().state_received_us;
+    stimulus.send_status=true;
+    if(!wait_for([&]{return send(stimulus) && transport.statistics().status_messages>=before.status_messages+3;}))return false;
+    const auto after=transport.statistics();
+    return after.state_callbacks==before.state_callbacks && channel->diagnostic_observation().state_received_us==observed;
+  };
+  if(root_presence_case) {
+    valid.state.hold_ready()=(true);
+    if(!wait_for([&]{return send(valid) && system.copy_state(&snapshot) && snapshot.position[0]==0.25;}))return 901;
+    auto heartbeat=valid;heartbeat.send_state=false;
+    const auto status_before=transport.statistics().status_messages;
+    if(!wait_for([&]{return send(heartbeat) && transport.statistics().status_messages>=status_before+3;}))return 902;
+    const auto anchor=channel->diagnostic_observation().state_received_us;
+    const auto callbacks=transport.statistics().state_callbacks;
+    for(unsigned missing=1;missing<=2;++missing) {
+      auto partial=valid;partial.omit_state_field=missing;partial.state.state_seq()=(2);
+      const auto until=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
+      while(std::chrono::steady_clock::now()<until) {
+        if(!send(partial))return 903;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+      const auto observation=channel->diagnostic_observation();
+      if(observation.state_received_us!=anchor || transport.statistics().state_callbacks!=callbacks ||
+         !system.copy_state(&snapshot) || snapshot.position[0]!=0.25)return 904;
+      State retained=owned_fixture::state();dp::comm::SourceId retained_source{};
+      if(((retained=observation.state),(retained_source=observation.state_source),message_fields_present(retained))!=true || !(*retained.hold_ready()))return 905;
+    }
+    if(transport.statistics().status_messages<=status_before+3)return 906;
+    double zero[6]{};root_fixture::set_position(valid.state,zero);valid.state.hold_ready()=(false);valid.state.state_seq()=(3);
+    if(!wait_for([&]{
+      if(!send(valid) || !system.copy_state(&snapshot) || snapshot.position[0]!=0)return false;
+      const auto observation=channel->diagnostic_observation();State current=owned_fixture::state();dp::comm::SourceId current_source{};
+      return observation.state_received_us>anchor && ((current=observation.state),(current_source=observation.state_source),message_fields_present(current))==true && !(*current.hold_ready()) && (*current.state_seq())==3;
+    }))return 907;
+    transport.stop();return 0;
+  }
   std::shared_ptr<DeviceManagementRequest> captured_release;
   std::shared_ptr<DeviceManagementRequest> captured_query;
   std::uint64_t early_idle_received_upper=0U, early_idle_received_lower=0U, early_idle_callback_count=0U;
@@ -1584,54 +897,48 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }))
       return 870;
     auto released = valid;
-    released.status.set_session_id(0);
-    released.state.set_session_id(0);
-    released.status.set_run_id(valid.status.run_id() + 1);
-    released.status.set_parent_run_id(valid.status.run_id());
-    released.status.set_attempt_kind(3);
-    released.status.set_motion_epoch(11);
-    released.state.set_motion_epoch(11);
-    released.status.set_management_epoch(2);
-    released.state.set_management_epoch(2);
-    released.status.set_final_state(8);
-    released.status.set_release_committed(true);
-    released.status.set_cleanup_state(3);
-    released.state.set_state_seq(2);
+    released.status.session_id()=(0);
+    released.state.session_id()=(0);
+    released.status.run_id()=((*valid.status.run_id()) + 1);
+    released.status.parent_run_id()=((*valid.status.run_id()));
+    released.status.attempt_kind()=(3);
+    released.status.motion_epoch()=(11);
+    released.state.motion_epoch()=(11);
+    released.status.management_epoch()=(2);
+    released.state.management_epoch()=(2);
+    released.status.final_state()=(8);
+    released.status.release_committed()=(true);
+    released.status.cleanup_state()=(3);
+    released.state.state_seq()=(2);
     std::uint8_t chain[32]{1};
-    released.status.set_evidence_chain_sha256(chain);
+    released.status.evidence_chain_sha256().emplace().assign(chain,32);
     if (released_child_case == 2U)
-      released.status.set_parent_run_id(99);
+      released.status.parent_run_id()=(99);
     if (released_child_case == 3U)
-      released.status.set_release_committed(false);
+      released.status.release_committed()=(false);
     if (released_child_case == 4U) {
-      released.status.set_reference_epoch(10);
-      released.state.set_reference_epoch(10);
+      released.status.reference_epoch()=(10);
+      released.state.reference_epoch()=(10);
     }
     if (released_child_case == 5U) {
-      released.status.set_motion_epoch(12);
-      released.state.set_motion_epoch(12);
+      released.status.motion_epoch()=(12);
+      released.state.motion_epoch()=(12);
     }
     if (released_child_case == 6U) {
-      released.status.set_management_epoch(3);
-      released.state.set_management_epoch(3);
+      released.status.management_epoch()=(3);
+      released.state.management_epoch()=(3);
     }
     if (released_child_case == 1U) {
       if (!wait_for([&] {
             send(released);
             std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;
-            State observed_state;
-            return wire::DummyDeviceStatusV2Codec::decode(
-                       channel->observation.status.data(),
-                       channel->observation.status.size(),
-                       &observed) == wire::CodecResult::kOk &&
-                   wire::DummyJointStateV2Codec::decode(
-                       channel->observation.state.data(),
-                       channel->observation.state.size(),
-                       &observed_state) == wire::CodecResult::kOk &&
-                   observed.session_id() == 0U &&
-                   observed.run_id() == released.status.run_id() &&
-                   observed_state.session_id() == 0U;
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            State observed_state=owned_fixture::state();dp::comm::SourceId observed_state_source{};
+            return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true &&
+                   ((observed_state=channel->observation.state),(observed_state_source=channel->observation.state_source),message_fields_present(observed_state)) == true &&
+                   (*observed.session_id()) == 0U &&
+                   (*observed.run_id()) == (*released.status.run_id()) &&
+                   (*observed_state.session_id()) == 0U;
           }))
         return 871;
       if (transport.statistics().raw_evidence_failure != 0U ||
@@ -1644,12 +951,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }))
         return 873;
       std::lock_guard<std::mutex> lock(channel->mutex);
-      Status observed;
-      if (wire::DummyDeviceStatusV2Codec::decode(
-              channel->observation.status.data(),
-              channel->observation.status.size(),
-              &observed) != wire::CodecResult::kOk ||
-          observed.session_id() != 8U)
+      Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+      if (((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) != true ||
+          (*observed.session_id()) != 8U)
         return 874;
     }
     transport.stop();
@@ -1671,18 +975,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }))
       return 850;
     auto diagnostic = channel->diagnostic_observation();
-    Status observed_status;
-    State observed_state;
-    if (wire::DummyDeviceStatusV2Codec::decode(
-            diagnostic.status.data(), diagnostic.status.size(),
-            &observed_status) != wire::CodecResult::kOk ||
-        wire::DummyJointStateV2Codec::decode(
-            diagnostic.state.data(), diagnostic.state.size(),
-            &observed_state) != wire::CodecResult::kOk ||
-        observed_status.core_state() != 9U ||
-        observed_state.core_state() != 9U ||
-        observed_state.reference_epoch() != 1U ||
-        observed_state.position_valid_mask() != 63U ||
+    Status observed_status=owned_fixture::status();dp::comm::SourceId observed_status_source{};
+    State observed_state=owned_fixture::state();dp::comm::SourceId observed_state_source{};
+    if (((observed_status=diagnostic.status),(observed_status_source=diagnostic.status_source),message_fields_present(observed_status)) != true ||
+        ((observed_state=diagnostic.state),(observed_state_source=diagnostic.state_source),message_fields_present(observed_state)) != true ||
+        (*observed_status.core_state()) != 9U ||
+        (*observed_state.core_state()) != 9U ||
+        (*observed_state.reference_epoch()) != 1U ||
+        root_fixture::position_quality(observed_state) != 63U ||
         system.copy_state(&snapshot) ||
         channel->observation.state_received_us != 0U ||
         channel->raw_cleanup_observation().state_received_us != 0U)
@@ -1697,7 +997,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       return 853;
     auto next = valid;
     next.send_status = false;
-    next.state.set_state_seq(valid.state.state_seq() + 1U);
+    next.state.state_seq()=((*valid.state.state_seq()) + 1U);
     if (!send(next) || !wait_for([&] {
           return channel->diagnostic_observation().state_received_us >
                  source_stamp;
@@ -1707,7 +1007,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     auto wrong = valid;
     wrong.send_state = false;
     std::uint8_t hash[32]{99};
-    wrong.status.set_model_sha256(hash);
+    wrong.status.model_sha256().emplace().assign(hash,32);
     if (!send(wrong))
       return 855;
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
@@ -1720,23 +1020,29 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   auto unbound = valid;
   unbound.send_status = false;
   if (!wait_for([&] { send(unbound); return transport.statistics().rejected_states != 0U; }) ||
-      system.copy_state(&snapshot)) return 48;
+      system.copy_state(&snapshot)) {
+    const auto stats=transport.statistics();
+    std::fprintf(stderr,"ROOT_UNBOUND_FAILED status=%llu state=%llu callbacks=%llu rejected=%llu\n",
+      (unsigned long long)stats.status_messages,(unsigned long long)stats.state_messages,
+      (unsigned long long)stats.state_callbacks,(unsigned long long)stats.rejected_states);
+    return 48;
+  }
   if (manual_recovered_idle_mode && manual_recovered_idle_fault) {
     auto bad = valid;
     if (manual_recovered_idle_fault == 1U)
-      bad.status.set_first_failure_reason(0x1067);
+      bad.status.first_failure_reason()=(0x1067);
     if (manual_recovered_idle_fault == 2U) {
-      bad.status.set_core_state(9);
-      bad.state.set_core_state(9);
+      bad.status.core_state()=(9);
+      bad.state.core_state()=(9);
     }
     if (manual_recovered_idle_fault == 3U)
-      bad.status.set_failure_source(0x1068);
+      bad.status.failure_source()=(0x1068);
     if (manual_recovered_idle_fault == 4U)
-      bad.status.set_cleanup_state(2);
+      bad.status.cleanup_state()=(2);
     if (manual_recovered_idle_fault == 6U)
-      bad.status.set_release_committed(false);
+      bad.status.release_committed()=(false);
     if (manual_recovered_idle_fault == 7U)
-      bad.status.set_attempt_kind(2);
+      bad.status.attempt_kind()=(2);
     if (manual_recovered_idle_fault == 5U) {
       if (!wait_for([&] {
             send(valid);
@@ -1744,9 +1050,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             return channel->observation.state_received_us != 0U;
           }))
         return 860;
-      bad.status.set_reference_epoch(2);
-      bad.state.set_reference_epoch(2);
-      bad.state.set_state_seq(2);
+      bad.status.reference_epoch()=(2);
+      bad.state.reference_epoch()=(2);
+      bad.state.state_seq()=(2);
     }
     const auto rejected_before = transport.statistics().rejected_states;
     if (!wait_for([&] {
@@ -1763,17 +1069,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           channel->observation.state_received_us != 0U)
         return 862;
       if (manual_recovered_idle_fault == 5U) {
-        State state;
-        Status status;
-        if (wire::DummyJointStateV2Codec::decode(
-                channel->observation.state.data(),
-                channel->observation.state.size(),
-                &state) != wire::CodecResult::kOk ||
-            wire::DummyDeviceStatusV2Codec::decode(
-                channel->observation.status.data(),
-                channel->observation.status.size(),
-                &status) != wire::CodecResult::kOk ||
-            state.reference_epoch() != 1U || status.reference_epoch() != 1U)
+        State state=owned_fixture::state();dp::comm::SourceId state_source{};
+        Status status=owned_fixture::status();dp::comm::SourceId status_source{};
+        if (((state=channel->observation.state),(state_source=channel->observation.state_source),message_fields_present(state)) != true ||
+            ((status=channel->observation.status),(status_source=channel->observation.status_source),message_fields_present(status)) != true ||
+            (*state.reference_epoch()) != 1U || (*status.reference_epoch()) != 1U)
           return 865;
       }
     }
@@ -1782,7 +1082,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     transport.stop();
     return 0;
   }
-  if (release_deactivate_mode==4U && source_cancel_coordination) { valid.status.set_run_id(9U); valid.status.set_attempt_id(9U); valid.status.set_attempt_kind(1U); }
+  if (release_deactivate_mode==4U && source_cancel_coordination) { valid.status.run_id()=(9U); valid.status.attempt_id()=(9U); valid.status.attempt_kind()=(1U); }
   /**
    * @brief 显式释放/生命周期子场景的独立入口，完成后直接return不跑后续普通运动流程。
    * release80默认Pending、Query81指向80；少数模式直接Committed或完全无gate reply。编号细节见main表。
@@ -1790,36 +1090,34 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if (release_deactivate_mode != 0U) {
     if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 230;
     if (release_deactivate_mode != 4U) {
-      Management::Request release;
-      release.set_schema_major(2U);
-      release.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-      release.set_device_id(device);
+      Management::Request release=owned_fixture::request();
+      (void)0;
+      (void)0;
+      release.domain_device_id().emplace().assign(device,16);
       std::uint8_t client[16]{2U};
-      release.set_client_instance_id(client);
-      release.set_request_id(80U);
-      release.set_request_seq(80U);
-      release.set_operation(10U);
-      release.set_expected_boot_epoch(7U);
-      release.set_expected_session_id(8U);
-      release.set_expected_reference_epoch(9U);
-      release.set_expected_motion_epoch(10U);
-      release.set_expected_management_epoch(1U);
-      release.set_expected_profile_id(1U);
-      release.set_configured_mask(parameters.configured_mask);
+      release.client_instance_id().emplace().assign(client,16);
+      release.request_id()=(80U);
+      release.request_seq()=(80U);
+      release.operation()=(10U);
+      release.expected_boot_epoch()=(7U);
+      release.expected_session_id()=(8U);
+      release.expected_reference_epoch()=(9U);
+      release.expected_motion_epoch()=(10U);
+      release.expected_management_epoch()=(1U);
+      release.expected_profile_id()=(1U);
+      release.configured_mask()=(parameters.configured_mask);
       if (release_deactivate_mode != 5U) {
         auto explicit_release = std::make_shared<DeviceManagementRequest>();
-        if (wire::DummyManageV2RequestCodec::encode(release, explicit_release->request.data(),
-            explicit_release->request.size()) != wire::CodecResult::kOk) return 231;
+        if (((explicit_release->request=release),message_fields_present(release)) != true) return 231;
         {
           std::lock_guard<std::mutex> lock(channel->mutex);
           channel->queued = explicit_release;
         }
         if (!wait_for([&] { return explicit_release->complete.load(); })) return 232;
         captured_release = explicit_release;
-        Management::Response release_receipt;
-        if (wire::DummyManageV2ResponseCodec::decode(explicit_release->response.data(),
-            explicit_release->response.size(), &release_receipt) != wire::CodecResult::kOk ||
-            release_receipt.transaction_phase() != (release_deactivate_mode == 7U ? 3U : 1U))
+        Management::Response release_receipt=owned_fixture::response();dp::comm::SourceId release_receipt_source{};
+        if (((release_receipt=explicit_release->response),(release_receipt_source=explicit_release->response_source),message_fields_present(release_receipt)) != true ||
+            (*release_receipt.transaction_phase()) != (release_deactivate_mode == 7U ? 3U : 1U))
           return 233;
         // GUI49：普通Gate D10直接COMMITTED也必须归档原根，不能只等后续worker Query。
         if(release_deactivate_mode==7U && !wait_for([&] {
@@ -1835,15 +1133,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           auto stopping=valid; stopping.send_state=false;
           dummy_ref::JointSnapshot stopping_snapshot{};
           stopping_snapshot.lifecycle=dummy_ref::LifecycleState::kStopping;
-          stopping.status.set_core_state(dummy_ref::comm::lifecycle_to_wire(stopping_snapshot));
-          stopping.status.set_motion_epoch(11U); stopping.status.set_management_epoch(2U);
-          stopping.status.set_operation_id(42U); stopping.status.set_transaction_phase(2U);
-          stopping.status.set_run_id(2U);
+          stopping.status.core_state()=(dummy_ref::comm::lifecycle_to_wire(stopping_snapshot));
+          stopping.status.motion_epoch()=(11U); stopping.status.management_epoch()=(2U);
+          stopping.status.operation_id()=(42U); stopping.status.transaction_phase()=(2U);
+          stopping.status.run_id()=(2U);
           if(!send(stopping) || !wait_for([&] {
-                std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
-                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                    observed.core_state()==7U && observed.operation_id()==42U;
+                std::lock_guard<std::mutex> lock(channel->mutex); Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                    (*observed.core_state())==7U && (*observed.operation_id())==42U;
               })) return 375;
           /**
            * @brief 组合陈旧候选负例：新epoch先校准，再连续发新鲜State避免心跳先Stop掩盖候选年龄。
@@ -1852,24 +1149,22 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           if(release_deactivate_mode==17U) {
             // 新Status epoch会清时钟水位；先接纳真实当前epoch的old-owner State重新校准。
             auto anchor=valid; anchor.send_status=false;
-            anchor.state.set_core_state(7U); anchor.state.set_motion_epoch(11U);
-            anchor.state.set_management_epoch(2U); anchor.state.set_operation_id(42U);
-            anchor.state.set_transaction_phase(2U); anchor.state.set_state_seq(2U);
+            anchor.state.core_state()=(7U); anchor.state.motion_epoch()=(11U);
+            anchor.state.management_epoch()=(2U); anchor.state.operation_id()=(42U);
+            anchor.state.transaction_phase()=(2U); anchor.state.state_seq()=(2U);
             if(!send(anchor) || !wait_for([&] {
-                  std::lock_guard<std::mutex> lock(channel->mutex); State observed;
-                  return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                      channel->observation.state.size(),&observed)==wire::CodecResult::kOk &&
-                      observed.state_seq()==2U && observed.session_id()==8U && observed.motion_epoch()==11U;
+                  std::lock_guard<std::mutex> lock(channel->mutex); State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                  return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed))==true &&
+                      (*observed.state_seq())==2U && (*observed.session_id())==8U && (*observed.motion_epoch())==11U;
                 })) return 384;
             // 旧payload仍晚于首校准anchor；持续fresh State避免heartbeat先Stop掩盖年龄守卫。
             for(std::uint32_t seq=3U;seq<=13U;++seq) {
               std::this_thread::sleep_for(std::chrono::milliseconds(20));
-              anchor.state.set_state_seq(seq); anchor.state.set_produced_at_us(device_now_us());
+              anchor.state.state_seq()=(seq); anchor.state.produced_at_us()=(device_now_us());
               if(!send(anchor) || !wait_for([&] {
-                    std::lock_guard<std::mutex> lock(channel->mutex); State observed;
-                    return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                        channel->observation.state.size(),&observed)==wire::CodecResult::kOk &&
-                        observed.state_seq()==seq;
+                    std::lock_guard<std::mutex> lock(channel->mutex); State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                    return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed))==true &&
+                        (*observed.state_seq())==seq;
                   })) return 385;
             }
             const auto before_refresh=transport.statistics().status_messages;
@@ -1878,25 +1173,25 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                 })) return 386;
           }
           auto early=valid; early.send_status=false;
-          early.state.set_core_state(1U); early.state.set_session_id(0U);
-          early.state.set_reference_epoch(0U); early.state.set_motion_epoch(11U);
-          early.state.set_management_epoch(2U); early.state.set_operation_id(42U);
-          early.state.set_transaction_phase(3U); early.state.set_state_seq(2U);
-          early.state.set_position_valid_mask(0U); early.state.set_raw_position_valid_mask(parameters.configured_mask);
-          const double raw[6]{.1,.2,.3,.4,.5,.6}; early.state.set_raw_motor_position_rev(raw);
+          early.state.core_state()=(1U); early.state.session_id()=(0U);
+          early.state.reference_epoch()=(0U); early.state.motion_epoch()=(11U);
+          early.state.management_epoch()=(2U); early.state.operation_id()=(42U);
+          early.state.transaction_phase()=(3U); early.state.state_seq()=(2U);
+          root_fixture::set_position_quality(early.state,0U); root_fixture::set_raw_quality(early.state,parameters.configured_mask);
+          const double raw[6]{.1,.2,.3,.4,.5,.6}; root_fixture::set_raw_position(early.state,raw);
           for(unsigned fault=0;fault<6;++fault) {
             auto wrong=early;
-            if(fault==0) wrong.state.set_transaction_phase(2U);
-            if(fault==1) wrong.state.set_operation_id(0U);
-            if(fault==2) wrong.state.set_operation_id(43U);
-            if(fault==3) wrong.state.set_boot_epoch(8U);
-            if(fault==4) wrong.state.set_motion_epoch(12U);
-            if(fault==5) wrong.state.set_management_epoch(3U);
+            if(fault==0) wrong.state.transaction_phase()=(2U);
+            if(fault==1) wrong.state.operation_id()=(0U);
+            if(fault==2) wrong.state.operation_id()=(43U);
+            if(fault==3) wrong.state_source.boot_id=(8U);
+            if(fault==4) wrong.state.motion_epoch()=(12U);
+            if(fault==5) wrong.state.management_epoch()=(3U);
             if(!send_rejected_state(wrong)) return 376;
           }
           if(release_deactivate_mode==17U) {
-            early.state.set_state_seq(20U);
-            early.state.set_produced_at_us(device_now_us()-200000U);
+            early.state.state_seq()=(20U);
+            early.state.produced_at_us()=(device_now_us()-200000U);
           }
           const auto before_early=transport.statistics();
           early_idle_received_lower=transport_steady_now_us();
@@ -1915,83 +1210,78 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if (release_deactivate_mode == 9U) {
           auto disabling = valid;
           disabling.send_state = false;
-          disabling.status.set_core_state(ref_disabling_wire_state());
-          disabling.status.set_motion_epoch(11U);
-          disabling.status.set_management_epoch(2U);
+          disabling.status.core_state()=(ref_disabling_wire_state());
+          disabling.status.motion_epoch()=(11U);
+          disabling.status.management_epoch()=(2U);
           const auto statuses_before = transport.statistics().status_messages;
           if (!send(disabling) || !wait_for([&] {
                 return transport.statistics().status_messages > statuses_before;
               })) return 249;
           auto early_idle = valid;
           early_idle.send_status = false;
-          early_idle.state.set_core_state(1U);
-          early_idle.state.set_session_id(0U);
-          early_idle.state.set_reference_epoch(0U);
-          early_idle.state.set_motion_epoch(11U);
-          early_idle.state.set_management_epoch(2U);
-          early_idle.state.set_position_valid_mask(0U);
-          early_idle.state.set_raw_position_valid_mask(parameters.configured_mask);
+          early_idle.state.core_state()=(1U);
+          early_idle.state.session_id()=(0U);
+          early_idle.state.reference_epoch()=(0U);
+          early_idle.state.motion_epoch()=(11U);
+          early_idle.state.management_epoch()=(2U);
+          root_fixture::set_position_quality(early_idle.state,0U);
+          root_fixture::set_raw_quality(early_idle.state,parameters.configured_mask);
           const double raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-          early_idle.state.set_raw_motor_position_rev(raw);
+          root_fixture::set_raw_position(early_idle.state,raw);
           // 正式Stopping7不能冒充Disabling8，其他tuple相同仍拒临时Idle。
           auto stopping = disabling;
           dummy_ref::JointSnapshot stopping_snapshot{};
           stopping_snapshot.lifecycle=dummy_ref::LifecycleState::kStopping;
-          stopping.status.set_core_state(dummy_ref::comm::lifecycle_to_wire(stopping_snapshot));
+          stopping.status.core_state()=(dummy_ref::comm::lifecycle_to_wire(stopping_snapshot));
           if(!send(stopping) || !wait_for([&] {
                 std::lock_guard<std::mutex> lock(channel->mutex);
-                Status observed;
-                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                    observed.core_state()==dummy_ref::comm::lifecycle_to_wire(stopping_snapshot);
+                Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                    (*observed.core_state())==dummy_ref::comm::lifecycle_to_wire(stopping_snapshot);
               }) || !send_rejected_state(early_idle)) return 371;
           auto permitted = disabling;
-          permitted.status.set_real_motion_permitted(true);
-          permitted.status.set_permit_remaining_us(1000U);
+          permitted.status.real_motion_permitted()=(true);
+          permitted.status.permit_remaining_us()=(1000U);
           if(!send(permitted) || !wait_for([&] {
                 std::lock_guard<std::mutex> lock(channel->mutex);
-                Status observed;
-                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                    observed.permit_remaining_us()==1000U;
+                Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                    (*observed.permit_remaining_us())==1000U;
               }) || !send_rejected_state(early_idle)) return 372;
           if(!send(disabling) || !wait_for([&] {
                 std::lock_guard<std::mutex> lock(channel->mutex);
-                Status observed;
-                return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                    channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                    observed.core_state()==ref_disabling_wire_state() && observed.permit_remaining_us()==0U;
+                Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                    (*observed.core_state())==ref_disabling_wire_state() && (*observed.permit_remaining_us())==0U;
               })) return 373;
           auto wrong_management = early_idle;
-          wrong_management.state.set_management_epoch(3U);
+          wrong_management.state.management_epoch()=(3U);
           if(!send_rejected_state(wrong_management)) return 374;
           auto wrong_boot = early_idle;
-          wrong_boot.state.set_boot_epoch(8U);
+          wrong_boot.state_source.boot_id=(8U);
           if (!send_rejected_state(wrong_boot)) return 250;
           auto wrong_epoch = early_idle;
-          wrong_epoch.state.set_motion_epoch(12U);
+          wrong_epoch.state.motion_epoch()=(12U);
           if (!send_rejected_state(wrong_epoch)) return 251;
           for (std::uint32_t seq = 2U; seq <= 16U; ++seq) {
-            early_idle.state.set_state_seq(seq);
+            early_idle.state.state_seq()=(seq);
             if (!wait_for([&] {
                   send(early_idle);
                   std::lock_guard<std::mutex> lock(channel->mutex);
-                  State observed;
-                  return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                      channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-                      observed.state_seq() == seq;
+                  State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                  return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                      (*observed.state_seq()) == seq;
                 })) return 249;
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
           }
         }
         if (release_deactivate_mode != 7U) {
-          release.set_request_id(81U);
-          release.set_request_seq(81U);
-          release.set_operation(12U);
-          release.set_queried_operation_id(80U);
+          release.request_id()=(81U);
+          release.request_seq()=(81U);
+          release.operation()=(12U);
+          release.queried_operation_id()=(80U);
           auto query = std::make_shared<DeviceManagementRequest>();
-          if (wire::DummyManageV2RequestCodec::encode(release, query->request.data(),
-              query->request.size()) != wire::CodecResult::kOk) return 237;
+          if (((query->request=release),message_fields_present(release)) != true) return 237;
           {
             std::lock_guard<std::mutex> lock(channel->mutex);
             channel->queued = query;
@@ -2008,9 +1298,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             bool adopted=false;
             do {
               {
-                std::lock_guard<std::mutex> lock(channel->mutex); State observed;
-                adopted=wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                    channel->observation.state.size(),&observed)==wire::CodecResult::kOk && observed.session_id()==0U;
+                std::lock_guard<std::mutex> lock(channel->mutex); State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                adopted=((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed))==true && (*observed.session_id())==0U;
               }
               if(adopted) break;
               std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -2019,41 +1308,39 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             if(release_deactivate_mode==12U) {
               // 强receipt本身有效；旧缓存op42失配不能否决op43的后续合法Idle。
               auto final_idle=valid;
-              final_idle.status.set_core_state(1U); final_idle.status.set_session_id(0U);
-              final_idle.status.set_reference_epoch(0U); final_idle.status.set_motion_epoch(11U);
-              final_idle.status.set_management_epoch(2U); final_idle.status.set_run_id(2U);
-              final_idle.status.set_operation_id(43U); final_idle.status.set_transaction_phase(3U);
-              final_idle.status.set_release_committed(true); final_idle.status.set_permit_remaining_us(0U);
-              final_idle.state.set_core_state(1U); final_idle.state.set_session_id(0U);
-              final_idle.state.set_reference_epoch(0U); final_idle.state.set_motion_epoch(11U);
-              final_idle.state.set_management_epoch(2U); final_idle.state.set_operation_id(43U);
-              final_idle.state.set_transaction_phase(3U); final_idle.state.set_state_seq(3U);
-              final_idle.state.set_position_valid_mask(0U); final_idle.state.set_raw_position_valid_mask(parameters.configured_mask);
-              const double raw[6]{.1,.2,.3,.4,.5,.6}; final_idle.state.set_raw_motor_position_rev(raw);
+              final_idle.status.core_state()=(1U); final_idle.status.session_id()=(0U);
+              final_idle.status.reference_epoch()=(0U); final_idle.status.motion_epoch()=(11U);
+              final_idle.status.management_epoch()=(2U); final_idle.status.run_id()=(2U);
+              final_idle.status.operation_id()=(43U); final_idle.status.transaction_phase()=(3U);
+              final_idle.status.release_committed()=(true); final_idle.status.permit_remaining_us()=(0U);
+              final_idle.state.core_state()=(1U); final_idle.state.session_id()=(0U);
+              final_idle.state.reference_epoch()=(0U); final_idle.state.motion_epoch()=(11U);
+              final_idle.state.management_epoch()=(2U); final_idle.state.operation_id()=(43U);
+              final_idle.state.transaction_phase()=(3U); final_idle.state.state_seq()=(3U);
+              root_fixture::set_position_quality(final_idle.state,0U); root_fixture::set_raw_quality(final_idle.state,parameters.configured_mask);
+              const double raw[6]{.1,.2,.3,.4,.5,.6}; root_fixture::set_raw_position(final_idle.state,raw);
               if(!send(final_idle) || !wait_for([&] {
-                    std::lock_guard<std::mutex> lock(channel->mutex); State state; Status status;
-                    return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&state)==wire::CodecResult::kOk &&
-                        wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&status)==wire::CodecResult::kOk &&
-                        state.state_seq()==3U && state.session_id()==0U && status.session_id()==0U && status.operation_id()==43U;
+                    std::lock_guard<std::mutex> lock(channel->mutex); State state=owned_fixture::state();dp::comm::SourceId state_source{}; Status status=owned_fixture::status();dp::comm::SourceId status_source{};
+                    return ((state=channel->observation.state),(state_source=channel->observation.state_source),message_fields_present(state))==true &&
+                        ((status=channel->observation.status),(status_source=channel->observation.status_source),message_fields_present(status))==true &&
+                        (*state.state_seq())==3U && (*state.session_id())==0U && (*status.session_id())==0U && (*status.operation_id())==43U;
                   })) return 382;
               if(transport.statistics().stop_requests_sent!=0U) return 383;
             }
             return 0;
           }
-          Management::Response release_reply;
-          if (wire::DummyManageV2ResponseCodec::decode(query->response.data(),
-              query->response.size(), &release_reply) != wire::CodecResult::kOk ||
-              !release_reply.release_committed() || release_reply.transaction_phase() != 3U)
+          Management::Response release_reply=owned_fixture::response();dp::comm::SourceId release_reply_source{};
+          if (((release_reply=query->response),(release_reply_source=query->response_source),message_fields_present(release_reply)) != true ||
+              !(*release_reply.release_committed()) || (*release_reply.transaction_phase()) != 3U)
             return 239;
           /**
            * @brief 强回执后采用已收到的同op早Idle，要求接收Host时间仍落在首次发送窗口。
            * state_callbacks计数不再增加，证明使用了原候选，不是靠重发一条新State掩盖缓存解锁问题。
            */
           if((release_deactivate_mode==11U || release_deactivate_mode==18U) && !wait_for([&] {
-                std::lock_guard<std::mutex> lock(channel->mutex); State observed;
-                return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                    channel->observation.state.size(),&observed)==wire::CodecResult::kOk &&
-                    observed.state_seq()==2U && observed.session_id()==0U && observed.operation_id()==42U &&
+                std::lock_guard<std::mutex> lock(channel->mutex); State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed))==true &&
+                    (*observed.state_seq())==2U && (*observed.session_id())==0U && (*observed.operation_id())==42U &&
                     channel->observation.state_received_us>=early_idle_received_lower &&
                     channel->observation.state_received_us<=early_idle_received_upper;
               })) return 378;
@@ -2066,18 +1353,17 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           if(release_deactivate_mode==18U) {
             // 真COMMITTED已锁定；继续20ms新鲜Idle State，旧Stopping Status故意保持500ms。
             auto idle=valid; idle.send_status=false;
-            idle.state.set_core_state(1U); idle.state.set_session_id(0U); idle.state.set_reference_epoch(0U);
-            idle.state.set_motion_epoch(11U); idle.state.set_management_epoch(2U);
-            idle.state.set_operation_id(42U); idle.state.set_transaction_phase(3U);
-            idle.state.set_position_valid_mask(0U); idle.state.set_raw_position_valid_mask(parameters.configured_mask);
-            const double raw[6]{.1,.2,.3,.4,.5,.6}; idle.state.set_raw_motor_position_rev(raw);
+            idle.state.core_state()=(1U); idle.state.session_id()=(0U); idle.state.reference_epoch()=(0U);
+            idle.state.motion_epoch()=(11U); idle.state.management_epoch()=(2U);
+            idle.state.operation_id()=(42U); idle.state.transaction_phase()=(3U);
+            root_fixture::set_position_quality(idle.state,0U); root_fixture::set_raw_quality(idle.state,parameters.configured_mask);
+            const double raw[6]{.1,.2,.3,.4,.5,.6}; root_fixture::set_raw_position(idle.state,raw);
             for(std::uint32_t seq=3U;seq<=28U;++seq) {
               std::this_thread::sleep_for(std::chrono::milliseconds(20));
-              idle.state.set_state_seq(seq); idle.state.set_produced_at_us(device_now_us());
+              idle.state.state_seq()=(seq); idle.state.produced_at_us()=(device_now_us());
               if(!send(idle) || !wait_for([&] {
-                    std::lock_guard<std::mutex> lock(channel->mutex); State observed;
-                    return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                        channel->observation.state.size(),&observed)==wire::CodecResult::kOk && observed.state_seq()==seq;
+                    std::lock_guard<std::mutex> lock(channel->mutex); State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                    return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed))==true && (*observed.state_seq())==seq;
                   })) return 387;
               if(transport.statistics().heartbeat_stops!=0U || transport.statistics().stop_requests_sent!=0U) return 388;
             }
@@ -2096,30 +1382,30 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         return 0;
       }
       auto released = valid;
-      released.status.set_core_state(1U);
-      released.state.set_core_state(1U);
-      released.status.set_session_id(0U);
-      released.state.set_session_id(0U);
-      released.status.set_reference_epoch(0U);
-      released.state.set_reference_epoch(0U);
-      released.status.set_motion_epoch(11U);
-      released.state.set_motion_epoch(11U);
-      released.status.set_management_epoch(2U);
-      released.state.set_management_epoch(2U);
-      released.status.set_release_committed(release_deactivate_mode != 2U);
-      released.status.set_permit_remaining_us(0U);
-      released.state.set_position_valid_mask(0U);
-      released.state.set_raw_position_valid_mask(parameters.configured_mask);
+      released.status.core_state()=(1U);
+      released.state.core_state()=(1U);
+      released.status.session_id()=(0U);
+      released.state.session_id()=(0U);
+      released.status.reference_epoch()=(0U);
+      released.state.reference_epoch()=(0U);
+      released.status.motion_epoch()=(11U);
+      released.state.motion_epoch()=(11U);
+      released.status.management_epoch()=(2U);
+      released.state.management_epoch()=(2U);
+      released.status.release_committed()=(release_deactivate_mode != 2U);
+      released.status.permit_remaining_us()=(0U);
+      root_fixture::set_position_quality(released.state,0U);
+      root_fixture::set_raw_quality(released.state,parameters.configured_mask);
       const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-      released.state.set_raw_motor_position_rev(idle_raw);
-      released.state.set_state_seq(2U);
+      root_fixture::set_raw_position(released.state,idle_raw);
+      released.state.state_seq()=(2U);
       if(release_deactivate_mode==11U || release_deactivate_mode==18U) {
-        released.state.set_state_seq(release_deactivate_mode==18U ? 29U : 3U); released.state.set_operation_id(42U);
-        released.state.set_transaction_phase(3U);
-        released.status.set_run_id(2U); released.status.set_operation_id(42U);
-        released.status.set_transaction_phase(3U);
+        released.state.state_seq()=(release_deactivate_mode==18U ? 29U : 3U); released.state.operation_id()=(42U);
+        released.state.transaction_phase()=(3U);
+        released.status.run_id()=(2U); released.status.operation_id()=(42U);
+        released.status.transaction_phase()=(3U);
       }
-      if (release_deactivate_mode == 9U) released.state.set_state_seq(17U);
+      if (release_deactivate_mode == 9U) released.state.state_seq()=(17U);
       /**
        * @brief 已有强release结果但旧owner Disabling Status落后时，持续提供当前Idle State。
        * 29个20ms新State必须不新增Stop；最终再补Status，不把Status先到当作唯一合法顺序。
@@ -2127,9 +1413,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       if (release_deactivate_mode == 6U) {
         auto old_owner_status = valid;
         old_owner_status.send_state = false;
-        old_owner_status.status.set_core_state(ref_disabling_wire_state());
-        old_owner_status.status.set_motion_epoch(11U);
-        old_owner_status.status.set_management_epoch(2U);
+        old_owner_status.status.core_state()=(ref_disabling_wire_state());
+        old_owner_status.status.motion_epoch()=(11U);
+        old_owner_status.status.management_epoch()=(2U);
         const auto before_status = transport.statistics().status_messages;
         if (!send(old_owner_status) || !wait_for([&] {
               return transport.statistics().status_messages > before_status;
@@ -2139,43 +1425,39 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if (!wait_for([&] {
               send(early_idle_state);
               std::lock_guard<std::mutex> lock(channel->mutex);
-              State observed;
+              State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
               return channel->observation.state_received_us != 0U &&
-                  wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                      channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-                  observed.state_seq() == 2U;
+                  ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                  (*observed.state_seq()) == 2U;
             })) return 241;
         for (std::uint32_t seq = 3U; seq <= 31U; ++seq) {
-          early_idle_state.state.set_state_seq(seq);
+          early_idle_state.state.state_seq()=(seq);
           if (!wait_for([&] {
                 send(early_idle_state);
                 std::lock_guard<std::mutex> lock(channel->mutex);
-                State observed;
-                return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                    channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-                    observed.state_seq() == seq;
+                State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                    (*observed.state_seq()) == seq;
               })) return 242;
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (transport.statistics().heartbeat_stops != 0U ||
             transport.statistics().stop_requests_sent != 0U) return 243;
-        released.state.set_state_seq(32U);
+        released.state.state_seq()=(32U);
       }
       if (!wait_for([&] {
             send(released);
             std::lock_guard<std::mutex> lock(channel->mutex);
-            State observed;
+            State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
             return channel->observation.state_received_us != 0U &&
-                wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                    channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-                observed.state_seq() == released.state.state_seq();
+                ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                (*observed.state_seq()) == (*released.state.state_seq());
           })) return 234;
       if((release_deactivate_mode==11U || release_deactivate_mode==18U) && !wait_for([&] {
-            std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
-            return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                observed.core_state()==1U && observed.session_id()==0U && observed.run_id()==2U &&
-                observed.operation_id()==42U && observed.release_committed();
+            std::lock_guard<std::mutex> lock(channel->mutex); Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                (*observed.core_state())==1U && (*observed.session_id())==0U && (*observed.run_id())==2U &&
+                (*observed.operation_id())==42U && (*observed.release_committed());
           })) return 381;
       if (release_deactivate_mode == 8U || release_deactivate_mode == 9U) {
         std::this_thread::sleep_for(std::chrono::milliseconds(310));
@@ -2185,43 +1467,43 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
     }
     if (release_deactivate_mode==4U && source_cancel_coordination) {
-      Management::Request cancel;
-      cancel.set_schema_major(2U);cancel.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-      cancel.set_device_id(device);std::uint8_t cancel_client[16]{2U};cancel.set_client_instance_id(cancel_client);
-      cancel.set_request_id(4693763926145815138ULL);cancel.set_request_seq(91U);cancel.set_operation(9U);
-      cancel.set_expected_boot_epoch(7U);cancel.set_expected_session_id(8U);cancel.set_expected_reference_epoch(9U);
-      cancel.set_expected_motion_epoch(10U);cancel.set_expected_management_epoch(1U);cancel.set_expected_profile_id(1U);
-      cancel.set_configured_mask(63U);
+      Management::Request cancel=owned_fixture::request();
+      (void)0;(void)0;
+      cancel.domain_device_id().emplace().assign(device,16);std::uint8_t cancel_client[16]{2U};cancel.client_instance_id().emplace().assign(cancel_client,16);
+      cancel.request_id()=(4693763926145815138ULL);cancel.request_seq()=(91U);cancel.operation()=(9U);
+      cancel.expected_boot_epoch()=(7U);cancel.expected_session_id()=(8U);cancel.expected_reference_epoch()=(9U);
+      cancel.expected_motion_epoch()=(10U);cancel.expected_management_epoch()=(1U);cancel.expected_profile_id()=(1U);
+      cancel.configured_mask()=(63U);
       auto pending_cancel=std::make_shared<DeviceManagementRequest>();
-      if(wire::DummyManageV2RequestCodec::encode(cancel,pending_cancel->request.data(),pending_cancel->request.size())!=wire::CodecResult::kOk)return 801;
+      if(((pending_cancel->request=cancel),message_fields_present(cancel))!=true)return 801;
       {std::lock_guard<std::mutex>lock(channel->mutex);channel->queued=pending_cancel;}
-      pollfd overlap_event{stops_input,POLLIN,0};Management::Request actual_cancel;
-      if(::poll(&overlap_event,1,3000)!=1 || ::read(stops_input,&actual_cancel,sizeof(actual_cancel))!=sizeof(actual_cancel)
-          ||actual_cancel.operation()!=9U ||actual_cancel.request_id()!=cancel.request_id())return 802;
+      pollfd overlap_event{stops_input,POLLIN,0};Management::Request actual_cancel=owned_fixture::request();
+      if(::poll(&overlap_event,1,3000)!=1 || (root_fixture::read_value(stops_input,actual_cancel)==false)
+          ||(*actual_cancel.operation())!=9U ||(*actual_cancel.request_id())!=(*cancel.request_id()))return 802;
       // 真正System生命周期callback，Worker自身取StopKind、组实际Disable/Query并处理peer回调。
       system.on_deactivate(rclcpp_lifecycle::State());
-      Management::Request query=cancel;query.set_request_id(4693763926145815139ULL);query.set_request_seq(92U);
-      query.set_operation(12U);query.set_queried_operation_id(cancel.request_id());
-      if(source_cancel_fault && !std::strcmp(source_cancel_fault,"foreign_query"))query.set_queried_operation_id(cancel.request_id()+100U);
+      Management::Request query=cancel;query.request_id()=(4693763926145815139ULL);query.request_seq()=(92U);
+      query.operation()=(12U);query.queried_operation_id()=((*cancel.request_id()));
+      if(source_cancel_fault && !std::strcmp(source_cancel_fault,"foreign_query"))query.queried_operation_id()=((*cancel.request_id())+100U);
       auto pending_query=std::make_shared<DeviceManagementRequest>();
-      if(wire::DummyManageV2RequestCodec::encode(query,pending_query->request.data(),pending_query->request.size())!=wire::CodecResult::kOk)return 807;
+      if(((pending_query->request=query),message_fields_present(query))!=true)return 807;
       bool query_enqueued=false;
       if(!wait_for([&]{if(query_enqueued)return true;std::lock_guard<std::mutex>lock(channel->mutex);if(channel->queued)return false;channel->queued=pending_query;query_enqueued=true;return true;}))return 808;
-      auto held=valid;held.status.set_core_state(4U);held.status.set_motion_epoch(11U);held.status.set_management_epoch(2U);
-      held.status.set_operation_id(9009U);held.status.set_transaction_phase(3U);held.status.set_final_state(7U);
-      held.status.set_attempt_kind(1U);held.status.set_run_id(9U);held.status.set_attempt_id(9U);
-      held.state.set_core_state(4U);held.state.set_hold_ready(true);
-      if(source_cancel_fault && (!std::strcmp(source_cancel_fault,"nonhold") || !std::strcmp(source_cancel_fault,"second_stop"))){held.state.set_core_state(5U);held.state.set_hold_ready(false);}held.state.set_motion_epoch(11U);held.state.set_management_epoch(2U);
-      held.state.set_state_seq(2U);held.state.set_produced_at_us(device_now_us());
+      auto held=valid;held.status.core_state()=(4U);held.status.motion_epoch()=(11U);held.status.management_epoch()=(2U);
+      held.status.operation_id()=(9009U);held.status.transaction_phase()=(3U);held.status.final_state()=(7U);
+      held.status.attempt_kind()=(1U);held.status.run_id()=(9U);held.status.attempt_id()=(9U);
+      held.state.core_state()=(4U);held.state.hold_ready()=(true);
+      if(source_cancel_fault && (!std::strcmp(source_cancel_fault,"nonhold") || !std::strcmp(source_cancel_fault,"second_stop"))){held.state.core_state()=(5U);held.state.hold_ready()=(false);}held.state.motion_epoch()=(11U);held.state.management_epoch()=(2U);
+      held.state.state_seq()=(2U);held.state.produced_at_us()=(device_now_us());
       // 原borrowed Status/State真实callback，而非手写authority成员。
       if(!send(held))return 809;
-      Management::Request actual_disable;
+      Management::Request actual_disable=owned_fixture::request();
       const auto cancel_wait_started=std::chrono::steady_clock::now();
       const auto cancel_wait_until=cancel_wait_started+std::chrono::milliseconds(source_cancel_fault?300:200);
       bool second_stop_requested=false;
 
       while(::poll(&overlap_event,1,0)!=1 && std::chrono::steady_clock::now()<cancel_wait_until) {
-        held.state.set_state_seq(held.state.state_seq()+1U);held.state.set_produced_at_us(device_now_us());
+        held.state.state_seq()=((*held.state.state_seq())+1U);held.state.produced_at_us()=(device_now_us());
         if(!send(held))return 809;
         if(source_cancel_fault && !std::strcmp(source_cancel_fault,"second_stop")) {
           const auto elapsed=std::chrono::steady_clock::now()-cancel_wait_started;
@@ -2238,19 +1520,19 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if(::poll(&overlap_event,1,0)==1 ||stats.stop_requests_sent!=0U ||stats.stop_requests_confirmed!=0U ||stats.unconfirmed_stop_requests!=1U)return 813;
         std::fprintf(stderr,"GREEN_NEGATIVE_SOURCE noBlindDisable reason=%s unconfirmed=1 original250k\n",source_cancel_fault);return 0;
       }
-      if(::poll(&overlap_event,1,0)!=1 ||::read(stops_input,&actual_disable,sizeof(actual_disable))!=sizeof(actual_disable)
-         ||actual_disable.operation()!=10U)return 803;
+      if(::poll(&overlap_event,1,0)!=1 ||(root_fixture::read_value(stops_input,actual_disable)==false)
+         ||(*actual_disable.operation())!=10U)return 803;
       std::fprintf(stderr,"OVERLAP_ACTUAL_TX cancel_motion=%u cancel_mgmt=%u disable_motion=%u disable_mgmt=%u\n",
-          actual_cancel.expected_motion_epoch(),actual_cancel.expected_management_epoch(),
-          actual_disable.expected_motion_epoch(),actual_disable.expected_management_epoch());
-      if(actual_disable.expected_motion_epoch()!=11U ||actual_disable.expected_management_epoch()!=2U)return 805;
-      Management::Request actual_query;
-      if(::poll(&overlap_event,1,3000)!=1 ||::read(stops_input,&actual_query,sizeof(actual_query))!=sizeof(actual_query)||actual_query.operation()!=12U)return 810;
-      auto idle=held;idle.status.set_session_id(0U);idle.status.set_reference_epoch(0U);idle.status.set_motion_epoch(12U);idle.status.set_management_epoch(3U);
-      idle.status.set_core_state(1U);idle.status.set_release_committed(true);idle.status.set_operation_id(900U);idle.status.set_transaction_phase(3U);
-      idle.state.set_session_id(0U);idle.state.set_reference_epoch(0U);idle.state.set_motion_epoch(12U);idle.state.set_management_epoch(3U);idle.state.set_core_state(1U);
-      idle.state.set_position_valid_mask(0U);idle.state.set_raw_position_valid_mask(63U);double raw_position[6]{.1,.2,.3,.4,.5,.6};idle.state.set_raw_motor_position_rev(raw_position);
-      idle.state.set_state_seq(3U);idle.state.set_produced_at_us(device_now_us());
+          (*actual_cancel.expected_motion_epoch()),(*actual_cancel.expected_management_epoch()),
+          (*actual_disable.expected_motion_epoch()),(*actual_disable.expected_management_epoch()));
+      if((*actual_disable.expected_motion_epoch())!=11U ||(*actual_disable.expected_management_epoch())!=2U)return 805;
+      Management::Request actual_query=owned_fixture::request();
+      if(::poll(&overlap_event,1,3000)!=1 ||(root_fixture::read_value(stops_input,actual_query)==false)||(*actual_query.operation())!=12U)return 810;
+      auto idle=held;idle.status.session_id()=(0U);idle.status.reference_epoch()=(0U);idle.status.motion_epoch()=(12U);idle.status.management_epoch()=(3U);
+      idle.status.core_state()=(1U);idle.status.release_committed()=(true);idle.status.operation_id()=(900U);idle.status.transaction_phase()=(3U);
+      idle.state.session_id()=(0U);idle.state.reference_epoch()=(0U);idle.state.motion_epoch()=(12U);idle.state.management_epoch()=(3U);idle.state.core_state()=(1U);
+      root_fixture::set_position_quality(idle.state,0U);root_fixture::set_raw_quality(idle.state,63U);double raw_position[6]{.1,.2,.3,.4,.5,.6};root_fixture::set_raw_position(idle.state,raw_position);
+      idle.state.state_seq()=(3U);idle.state.produced_at_us()=(device_now_us());
       if(!wait_for([&]{send(idle);return transport.statistics().stop_requests_confirmed==1U;}))return 811;
       const auto stats=transport.statistics();transport.stop();
       if(stats.stop_requests_sent!=1U ||stats.unconfirmed_stop_requests!=0U)return 812;
@@ -2261,8 +1543,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
        * 保留的文字/返回805/806不代表本次正例还在执行该旧故障分支；实际正反断言已经在前面完成。
        */
       // RED：当前Worker已知道有未完成Cancel却继续用同旧tuple发Disable，无法合法Stop确认。
-      if(actual_disable.expected_motion_epoch()==actual_cancel.expected_motion_epoch() &&
-         actual_disable.expected_management_epoch()==actual_cancel.expected_management_epoch()) {
+      if((*actual_disable.expected_motion_epoch())==(*actual_cancel.expected_motion_epoch()) &&
+         (*actual_disable.expected_management_epoch())==(*actual_cancel.expected_management_epoch())) {
         std::fprintf(stderr,"RED_ORIGINAL_STOP_OVERLAP old_tuple_disable_and_QueryRejected_rc10 confirmed=%llu\n",
              static_cast<unsigned long long>(transport.statistics().stop_requests_confirmed));
         return 805;
@@ -2289,7 +1571,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     transport.stop();
     /**
-     * @brief stop关闭writer后逐记录重读raw文件，检查release/Query请求响应交替、原字节和39字节头身份。
+     * @brief stop关闭writer后逐记录重读raw文件，检查release/Query请求响应交替、中央规范记录和独立容器来源身份。
      * Host记录时间单调；默认Pending再Query有4条管理记录，直接Committed模式只有2条。不重算物理运动结果。
      */
     if (raw_capture_mode && (release_deactivate_mode == 1U || release_deactivate_mode == 7U)) {
@@ -2303,13 +1585,13 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       unsigned management_records = 0U;
       std::uint64_t previous_time = 0U;
       bool valid_capture = true;
-      std::uint8_t header[39]{};
+      std::uint8_t header[kCaptureHeaderSize]{};
       while (valid_capture) {
         const auto header_bytes = std::fread(header, 1U, sizeof(header), file);
         if (header_bytes == 0U && std::feof(file)) break;
         if (header_bytes != sizeof(header)) { valid_capture = false; break; }
         const auto size = static_cast<std::uint16_t>(header[1] | (header[2] << 8U));
-        std::array<std::uint8_t, wire::DummyDeviceStatusV2Codec::kEncodedSize> raw{};
+        std::array<std::uint8_t, dp::protocol::canonical::Traits<Status>::kMaxEncodedSize> raw{};
         const auto time = le(header + 3U, 8U);
         if (size == 0U || size > raw.size() ||
             std::fread(raw.data(), 1U, size, file) != size ||
@@ -2320,37 +1602,37 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           const auto &expected = management_records < 2U ? captured_release : captured_query;
           if (!expected || management_records >= (release_deactivate_mode == 7U ? 2U : 4U) ||
               header[0] != (is_request ? 4U : 5U) ||
-              size != (is_request ? wire::DummyManageV2RequestCodec::kEncodedSize :
-                                    wire::DummyManageV2ResponseCodec::kEncodedSize)) {
+              size > (is_request ? dp::protocol::canonical::Traits<Management::Request>::kMaxEncodedSize :
+                                    dp::protocol::canonical::Traits<Management::Response>::kMaxEncodedSize)) {
             valid_capture = false;
             break;
           }
           if (is_request) {
-            Management::Request request;
-            valid_capture = std::equal(raw.begin(), raw.begin() + size, expected->request.begin()) &&
-                wire::DummyManageV2RequestCodec::decode(raw.data(), size, &request) ==
-                    wire::CodecResult::kOk &&
-                le(header + 11U, 8U) == request.expected_boot_epoch() &&
-                le(header + 19U, 8U) == request.expected_session_id() &&
+            Management::Request request=owned_fixture::request();
+            valid_capture = root_fixture::canonical_equal(raw.data(),size,expected->request) &&
+                dp::protocol::canonical::Traits<Management::Request>::decode(raw.data(),size,&request) ==
+                    true &&
+                root_fixture::capture_source(header).boot_id!=0U && (*request.expected_boot_epoch())==(*expected->request.expected_boot_epoch()) &&
+                le(header + 19U, 8U) == (*request.expected_session_id()) &&
                 le(header + 27U, 8U) == 0U &&
-                le(header + 35U, 4U) == request.request_seq() &&
-                request.operation() == (management_records == 0U ? 10U : 12U) &&
-                request.request_id() == (management_records == 0U ? 80U : 81U) &&
-                (management_records == 0U || request.queried_operation_id() == 80U);
+                le(header + 35U, 4U) == (*request.request_seq()) &&
+                (*request.operation()) == (management_records == 0U ? 10U : 12U) &&
+                (*request.request_id()) == (management_records == 0U ? 80U : 81U) &&
+                (management_records == 0U || (*request.queried_operation_id()) == 80U);
           } else {
-            Management::Response response;
-            valid_capture = std::equal(raw.begin(), raw.begin() + size, expected->response.begin()) &&
-                wire::DummyManageV2ResponseCodec::decode(raw.data(), size, &response) ==
-                    wire::CodecResult::kOk &&
-                le(header + 11U, 8U) == response.boot_epoch() &&
-                le(header + 19U, 8U) == response.session_id() &&
-                le(header + 27U, 8U) == response.run_id() &&
-                le(header + 35U, 4U) == 0U && response.run_id() == 2U &&
-                response.request_id() == (management_records == 1U ? 80U : 81U) &&
-                response.transaction_phase() ==
+            Management::Response response=owned_fixture::response();dp::comm::SourceId response_source{};
+            valid_capture = root_fixture::canonical_equal(raw.data(),size,expected->response) &&
+                ((response_source=root_fixture::capture_source(header)),dp::protocol::canonical::Traits<Management::Response>::decode(raw.data(),size,&response)) ==
+                    true &&
+                le(header + 11U, 8U) == response_source.boot_id &&
+                le(header + 19U, 8U) == (*response.session_id()) &&
+                le(header + 27U, 8U) == (*response.run_id()) &&
+                le(header + 35U, 4U) == 0U && (*response.run_id()) == 2U &&
+                (*response.request_id()) == (management_records == 1U ? 80U : 81U) &&
+                (*response.transaction_phase()) ==
                     (management_records == 1U && release_deactivate_mode == 1U ? 1U : 3U) &&
                 (management_records == 1U && release_deactivate_mode == 1U ?
-                    !response.release_committed() : response.release_committed());
+                    !(*response.release_committed()) : (*response.release_committed()));
           }
           ++management_records;
         }
@@ -2369,16 +1651,15 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if (!wait_for([&] {
           send(valid);
           std::lock_guard<std::mutex> lock(channel->mutex);
-          State observed;
+          State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
           return channel->observation.state_received_us != 0U &&
-              wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                  channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-              observed.state_seq() == 1U;
+              ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+              (*observed.state_seq()) == 1U;
         })) return 154;
     if (cold_fault_gap_mode) {
       auto fault = valid;
       fault.send_state = false;
-      fault.status.set_core_state(9U);
+      fault.status.core_state()=(9U);
       const auto before = transport.statistics().status_messages;
       if (!send(fault) || !wait_for([&] {
             return transport.statistics().status_messages > before;
@@ -2401,14 +1682,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       wrong_hash.send_state = false;
       std::uint8_t mismatched_hash[32]{};
       mismatched_hash[0] = 9U;
-      wrong_hash.status.set_contract_sha256(mismatched_hash);
+      wrong_hash.status.contract_sha256().emplace().assign(mismatched_hash,32);
       const auto bootstrap_before = transport.statistics().bootstrap_rejections;
       if (!send(wrong_hash) || !wait_for([&] {
             return transport.statistics().bootstrap_rejections > bootstrap_before;
           })) return 164;
       auto premature = valid;
       premature.send_status = false;
-      premature.state.set_state_seq(2U);
+      premature.state.state_seq()=(2U);
       if (!send_rejected_state(premature)) return 165;
       auto status_only = valid;
       status_only.send_state = false;
@@ -2420,14 +1701,13 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       stale.send_status = false;
       if (!send_rejected_state(stale)) return 162;
       auto next = stale;
-      next.state.set_state_seq(2U);
+      next.state.state_seq()=(2U);
       if (!wait_for([&] {
             send(next);
             std::lock_guard<std::mutex> lock(channel->mutex);
-            State observed;
-            return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-                observed.state_seq() == 2U;
+            State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+            return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                (*observed.state_seq()) == 2U;
           }) || transport.statistics().stop_requests_sent != 0U) return 163;
     }
     transport.stop();
@@ -2439,22 +1719,22 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   if (raw_order_case >= 15U && raw_order_case <= 19U) {
     auto historical = valid;
-    historical.status.set_run_id(2U);
-    historical.status.set_attempt_kind(1U);
-    historical.status.set_parent_run_id(0U);
-    historical.status.set_session_id(0U);
-    historical.status.set_reference_epoch(0U);
-    historical.status.set_core_state(1U);
-    historical.status.set_final_state(2U);
-    historical.status.set_release_committed(raw_order_case != 16U);
-    historical.status.set_permit_remaining_us(0U);
-    historical.state.set_session_id(0U);
-    historical.state.set_reference_epoch(0U);
-    historical.state.set_core_state(1U);
-    historical.state.set_position_valid_mask(0U);
-    historical.state.set_raw_position_valid_mask(parameters.configured_mask);
+    historical.status.run_id()=(2U);
+    historical.status.attempt_kind()=(1U);
+    historical.status.parent_run_id()=(0U);
+    historical.status.session_id()=(0U);
+    historical.status.reference_epoch()=(0U);
+    historical.status.core_state()=(1U);
+    historical.status.final_state()=(2U);
+    historical.status.release_committed()=(raw_order_case != 16U);
+    historical.status.permit_remaining_us()=(0U);
+    historical.state.session_id()=(0U);
+    historical.state.reference_epoch()=(0U);
+    historical.state.core_state()=(1U);
+    root_fixture::set_position_quality(historical.state,0U);
+    root_fixture::set_raw_quality(historical.state,parameters.configured_mask);
     const double raw_motor_rev[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-    historical.state.set_raw_motor_position_rev(raw_motor_rev);
+    root_fixture::set_raw_position(historical.state,raw_motor_rev);
     if (!send(historical)) return 285;
     if (raw_order_case == 16U) {
       if (!wait_for([&] { return transport.statistics().raw_evidence_failure != 0U; }))
@@ -2464,19 +1744,17 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     if (!wait_for([&] {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          return wire::DummyDeviceStatusV2Codec::decode(
-              channel->observation.status.data(), channel->observation.status.size(),
-              &observed) == wire::CodecResult::kOk && observed.run_id() == 2U;
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U;
         })) return 285;
     if (raw_order_case >= 17U) {
       auto changed = historical;
       changed.send_state = false;
-      if (raw_order_case == 17U) changed.status.set_boot_epoch(8U);
-      if (raw_order_case == 18U) changed.status.set_session_id(9U);
+      if (raw_order_case == 17U) changed.status_source.boot_id=(8U);
+      if (raw_order_case == 18U) changed.status.session_id()=(9U);
       if (raw_order_case == 19U) {
-        changed.status.set_core_state(4U);
-        changed.status.set_final_state(0U);
+        changed.status.core_state()=(4U);
+        changed.status.final_state()=(0U);
       }
       const auto status_count = transport.statistics().status_messages;
       if (raw_order_case == 18U) {
@@ -2486,10 +1764,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         bool retained = false;
         {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          retained = wire::DummyDeviceStatusV2Codec::decode(
-              channel->observation.status.data(), channel->observation.status.size(),
-              &observed) == wire::CodecResult::kOk && observed.session_id() == 0U &&
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          retained = ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.session_id()) == 0U &&
               transport.statistics().raw_evidence_failure == 0U;
         }
         transport.stop();
@@ -2505,21 +1781,21 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     stale_page.send_state = false;
     stale_page.send_status = false;
     stale_page.send_evidence = true;
-    stale_page.evidence.set_schema_major(2U);
-    stale_page.evidence.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-    stale_page.evidence.set_run_id(2U);
-    stale_page.evidence.set_attempt_id(2U);
-    stale_page.evidence.set_evidence_seq(0U);
-    stale_page.evidence.set_attempt_kind(1U);
-    stale_page.evidence.set_parent_run_id(0U);
-    stale_page.evidence.set_motion_epoch(10U);
-    stale_page.evidence.set_category(2U);
-    stale_page.evidence.set_final(1U);
-    stale_page.evidence.set_group_count(1U);
-    stale_page.evidence.set_group_id(2U);
-    stale_page.evidence.set_expected_mask(63U);
-    stale_page.evidence.set_submitted_mask(63U);
-    stale_page.evidence.set_sent_mask(63U);
+    (void)0;
+    (void)0;
+    stale_page.evidence.run_id()=(2U);
+    stale_page.evidence.attempt_id()=(2U);
+    stale_page.evidence.evidence_seq()=(0U);
+    stale_page.evidence.attempt_kind()=(1U);
+    stale_page.evidence.parent_run_id()=(0U);
+    stale_page.evidence.motion_epoch()=(10U);
+    stale_page.evidence.category()=(2U);
+    stale_page.evidence.final()=(1U);
+    stale_page.evidence.group_count()=(1U);
+    stale_page.evidence.group_id()=(2U);
+    stale_page.evidence.expected_mask()=(63U);
+    stale_page.evidence.submitted_mask()=(63U);
+    stale_page.evidence.sent_mask()=(63U);
     if (!send(stale_page)) return 286;
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     const auto captured = transport.statistics();
@@ -2534,21 +1810,20 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   if (six_axis && !heartbeat_budget_mode) {
     auto cold = valid;
-    cold.status.set_core_state(1U);
-    cold.state.set_core_state(1U);
-    cold.state.set_position_valid_mask(0U);
-    cold.state.set_velocity_valid_mask(63U);
-    cold.state.set_raw_position_valid_mask(63U);
+    cold.status.core_state()=(1U);
+    cold.state.core_state()=(1U);
+    root_fixture::set_position_quality(cold.state,0U);
+    root_fixture::set_velocity_quality(cold.state,63U);
+    root_fixture::set_raw_quality(cold.state,63U);
     const double raw_motor_rev[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-    cold.state.set_raw_motor_position_rev(raw_motor_rev);
+    root_fixture::set_raw_position(cold.state,raw_motor_rev);
     if (!wait_for([&] {
           send(cold);
           std::lock_guard<std::mutex> lock(channel->mutex);
-          State observed;
+          State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
           return channel->observation.state_received_us != 0U &&
-              wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-              observed.core_state() == 1U && observed.raw_position_valid_mask() == 63U;
+              ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+              (*observed.core_state()) == 1U && root_fixture::raw_quality(observed) == 63U;
         }) || system.copy_state(&snapshot)) return 84;
     std::uint64_t cold_received_us = 0U;
     {
@@ -2563,16 +1838,26 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     for (unsigned fault = 0U; fault < 5U; ++fault) {
       auto wrong = cold;
       const auto diagnostics_before = transport.statistics();
-      wrong.state.set_state_seq(2U);
-      if (fault == 0U) wrong.state.set_raw_position_valid_mask(0U);
-      if (fault == 1U) wrong.state.set_produced_at_us(device_now_us() - 2000000U);
-      if (fault == 2U) wrong.state.set_produced_at_us(device_now_us() + 2000000U);
-      if (fault == 3U) wrong.state.set_core_state(4U);
+      wrong.state.state_seq()=(2U);
+      if (fault == 0U) root_fixture::set_raw_quality(wrong.state,0U);
+      if (fault == 1U) wrong.state.produced_at_us()=(device_now_us() - 2000000U);
+      if (fault == 2U) wrong.state.produced_at_us()=(device_now_us() + 2000000U);
+      if (fault == 3U) wrong.state.core_state()=(4U);
       if (fault == 4U) {
         const double bad_raw[6]{NAN, 0.2, 0.3, 0.4, 0.5, 0.6};
-        wrong.state.set_raw_motor_position_rev(bad_raw);
+        root_fixture::set_raw_position(wrong.state,bad_raw);
       }
-      if (!send_rejected_state(wrong) || system.copy_state(&snapshot)) return 87 + fault;
+      /** @brief 过旧/超前负例等待本次对应类别；总拒绝可能仍属于前一个在途刺激。 */
+      const bool rejected = (fault == 1U || fault == 2U)
+          ? wait_for([&] {
+              if (!send(wrong)) return false;
+              const auto after = transport.statistics();
+              return fault == 1U
+                  ? after.stale_payload_rejections > diagnostics_before.stale_payload_rejections
+                  : after.clock_skew_rejections > diagnostics_before.clock_skew_rejections;
+            })
+          : send_rejected_state(wrong);
+      if (!rejected || system.copy_state(&snapshot)) return 87 + fault;
       const auto diagnostics_after = transport.statistics();
       if (fault == 1U && diagnostics_after.stale_payload_rejections <=
               diagnostics_before.stale_payload_rejections) return 120;
@@ -2581,39 +1866,45 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       std::lock_guard<std::mutex> lock(channel->mutex);
       if (channel->observation.state_received_us != cold_received_us) return 92 + fault;
     }
-    valid.state.set_state_seq(2U);
+    valid.state.state_seq()=(2U);
   }
-  if(raw_order_case>=87U && raw_order_case<=96U) {valid.status.set_core_state(3U);valid.state.set_core_state(4U);valid.state.set_can_sent_mask(63U);valid.status.set_can_sent_mask(63U);}
+  if(raw_order_case>=87U && raw_order_case<=96U) {valid.status.core_state()=(3U);valid.state.core_state()=(4U);valid.state.can_sent_mask()=(63U);valid.status.can_sent_mask()=(63U);}
   /**
    * @brief public Stop失效之后的raw cleanup通道与普通控制缓存分开。
    * 83原Run锚+新鲜同boot Fault可保留raw；84只有Hold无Run锚、85错boot、86重复Source产生时刻都不得写raw cleanup观测。
    */
-  if((raw_order_case>=83U && raw_order_case<=86U)) {valid.status.set_core_state(raw_order_case==84U?4U:5U);valid.state.set_core_state(raw_order_case==84U?4U:5U);}
-  if(!(raw_order_case>=83U && raw_order_case<=86U) && !wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 12;
+  if((raw_order_case>=83U && raw_order_case<=86U)) {valid.status.core_state()=(raw_order_case==84U?4U:5U);valid.state.core_state()=(raw_order_case==84U?4U:5U);}
+  if(!(raw_order_case>=83U && raw_order_case<=86U) && !wait_for([&] { send(valid); return system.copy_state(&snapshot); })) {
+    const auto stats=transport.statistics();const auto diagnostic=transport.diagnostic_snapshot();
+    std::fprintf(stderr,"ROOT_BOOTSTRAP_FAILED status=%llu state=%llu callbacks=%llu rejected=%llu first=%s\n",
+      (unsigned long long)stats.status_messages,(unsigned long long)stats.state_messages,
+      (unsigned long long)stats.state_callbacks,(unsigned long long)stats.rejected_states,diagnostic.first.detail.data());
+    return 12;
+  }
   if(owner_safety_stop_case) {
     // 先通过真实PTY管理回调建立本client COMMITTED owner，而非直接伪造所有权槽。
-    auto pending=std::make_shared<DeviceManagementRequest>();Management::Request request;
-    request.set_schema_major(2);request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);request.set_request_id(44);request.set_request_seq(1);request.set_operation(1);
+    auto pending=std::make_shared<DeviceManagementRequest>();Management::Request request=owned_fixture::request();
+    (void)0;(void)0;request.request_id()=(44);request.request_seq()=(1);request.operation()=(1);
     std::uint8_t request_client[16];
     std::copy(parameters.client_instance_id.begin(),parameters.client_instance_id.end(),request_client);
-    request.set_device_id(valid.status.device_id());request.set_client_instance_id(request_client);
-    request.set_expected_boot_epoch(7);request.set_expected_session_id(8);request.set_expected_reference_epoch(9);
-    request.set_expected_motion_epoch(9);request.set_expected_management_epoch(0);request.set_expected_profile_id(1);request.set_configured_mask(63);
-    if(wire::DummyManageV2RequestCodec::encode(request,pending->request.data(),pending->request.size())!=wire::CodecResult::kOk)return 880;
+    request.domain_device_id().emplace().assign((valid.status.domain_device_id()->data()),16);request.client_instance_id().emplace().assign(request_client,16);
+    request.expected_boot_epoch()=(7);request.expected_session_id()=(8);request.expected_reference_epoch()=(9);
+    request.expected_motion_epoch()=(9);request.expected_management_epoch()=(0);request.expected_profile_id()=(1);request.configured_mask()=(63);
+    if(((pending->request=request),message_fields_present(request))!=true)return 880;
     {std::lock_guard<std::mutex> lock(channel->mutex);channel->queued=pending;}
     if(!wait_for([&]{send(valid);return pending->complete.load();}))return 881;
     // 错链原页使真实collector粘错；诊断源继续新鲜，不能将该错误当授权或清除它。
     auto bad=valid;bad.send_status=false;bad.send_state=false;bad.send_evidence=true;
-    bad.evidence.set_schema_major(2);bad.evidence.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-    bad.evidence.set_run_id(3);bad.evidence.set_attempt_id(3);bad.evidence.set_attempt_kind(1);bad.evidence.set_category(1);
-    bad.evidence.set_group_id(1);bad.evidence.set_group_count(1);bad.evidence.set_final(1);
+    (void)0;(void)0;
+    bad.evidence.run_id()=(3);bad.evidence.attempt_id()=(3);bad.evidence.attempt_kind()=(1);bad.evidence.category()=(1);
+    bad.evidence.group_id()=(1);bad.evidence.group_count()=(1);bad.evidence.final()=(1);
     if(!send(bad) || !wait_for([&]{send(valid);return channel->raw_evidence_failure.load()!=0;}))return 882;
     if(!wait_for([&]{send(valid);return channel->request_owner_safety_stop(
         static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()),7,8,9);}))return 883;
     const auto now=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
     if(channel->request_owner_safety_stop(now,7,8,9))return 884;
-    pollfd stop_fd{stops_input,POLLIN,0};Management::Request stop;
-    if(::poll(&stop_fd,1,1000)!=1 || ::read(stops_input,&stop,sizeof(stop))!=sizeof(stop) || stop.operation()!=10U)return 885;
+    pollfd stop_fd{stops_input,POLLIN,0};Management::Request stop=owned_fixture::request();
+    if(::poll(&stop_fd,1,1000)!=1 || (root_fixture::read_value(stops_input,stop)==false) || (*stop.operation())!=10U)return 885;
     transport.stop();
     const auto stats=transport.statistics();
     return stats.stop_requests_sent==1U && channel->raw_evidence_failure.load()!=0U?0:886;
@@ -2621,26 +1912,26 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if((raw_order_case>=83U && raw_order_case<=86U)) {
     if(!send(valid))return 333;
     if(!wait_for([&] {
-      std::lock_guard<std::mutex> lock(channel->mutex);wire::DummyJointStateV2 accepted{};
-      return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&accepted)==wire::CodecResult::kOk && accepted.core_state()==(raw_order_case==84U?4U:5U);
+      std::lock_guard<std::mutex> lock(channel->mutex);State accepted{};dp::comm::SourceId accepted_source{};
+      return ((accepted=channel->observation.state),(accepted_source=channel->observation.state_source),message_fields_present(accepted))==true && (*accepted.core_state())==(raw_order_case==84U?4U:5U);
     }))return 333;
-    wire::DummyJointStateV2 established{};
-    {std::lock_guard<std::mutex> lock(channel->mutex);wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&established);}
+    State established{};dp::comm::SourceId established_source{};
+    {std::lock_guard<std::mutex> lock(channel->mutex);((established=channel->observation.state),(established_source=channel->observation.state_source),message_fields_present(established));}
     const auto before=transport.statistics().invalidations;
     system.request_transport_stop();
     if(!wait_for([&]{return transport.statistics().invalidations>before;}))return 330;
-    auto fault=valid;fault.send_status=false;fault.state.set_core_state(9U);
-    fault.state.set_session_id(0U);fault.state.set_reference_epoch(0U);fault.state.set_motion_epoch(11U);
-    fault.state.set_state_seq(established.state_seq()+1U);fault.state.set_produced_at_us(device_now_us());
-    if(raw_order_case==85U)fault.state.set_boot_epoch(17U);
-    if(raw_order_case==86U)fault.state.set_produced_at_us(established.produced_at_us());
+    auto fault=valid;fault.send_status=false;fault.state.core_state()=(9U);
+    fault.state.session_id()=(0U);fault.state.reference_epoch()=(0U);fault.state.motion_epoch()=(11U);
+    fault.state.state_seq()=((*established.state_seq())+1U);fault.state.produced_at_us()=(device_now_us());
+    if(raw_order_case==85U)fault.state_source.boot_id=(17U);
+    if(raw_order_case==86U)fault.state.produced_at_us()=((*established.produced_at_us()));
     const auto received_before=transport.statistics().state_messages;
     if(!send(fault)||!wait_for([&]{return transport.statistics().state_messages>received_before;}))return 331;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     const auto sample=channel->raw_cleanup_observation();
     std::printf("public_stop_invalidations=%llu normal_admission_state=%u rawCleanupStateReceived=%llu\n",
       static_cast<unsigned long long>(transport.statistics().invalidations),system.copy_state(&snapshot),static_cast<unsigned long long>(sample.state_received_us));
-    std::printf(" mode=%u acceptedRunCore=%u acceptedSeq=%u faultSeq=%u producerBefore=%llu producerFault=%llu\n",raw_order_case,established.core_state(),established.state_seq(),fault.state.state_seq(),static_cast<unsigned long long>(established.produced_at_us()),static_cast<unsigned long long>(fault.state.produced_at_us()));
+    std::printf(" mode=%u acceptedRunCore=%u acceptedSeq=%u faultSeq=%u producerBefore=%llu producerFault=%llu\n",raw_order_case,(*established.core_state()),(*established.state_seq()),(*fault.state.state_seq()),static_cast<unsigned long long>((*established.produced_at_us())),static_cast<unsigned long long>((*fault.state.produced_at_us())));
     transport.stop();const bool expected=raw_order_case==83U;return (sample.state_received_us!=0U)==expected?0:332;
   }
 
@@ -2653,33 +1944,33 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   if(raw_order_case>=87U && raw_order_case<=96U) {
     channel->inactive_prime_allowed.store(true,std::memory_order_release);
-    State accepted;{std::lock_guard<std::mutex> lock(channel->mutex);wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),channel->observation.state.size(),&accepted);}
-    set_command_identity({7U,8U,9U,10U,accepted.freshness_ticket()});
+    State accepted=owned_fixture::state();dp::comm::SourceId accepted_source{};{std::lock_guard<std::mutex> lock(channel->mutex);((accepted=channel->observation.state),(accepted_source=channel->observation.state_source),message_fields_present(accepted));}
+    set_command_identity({7U,8U,9U,10U,(*accepted.freshness_ticket())});
     const auto generation=publish_control_update(positions,6U,0,nullptr);
     if(!generation || !system.transfer_control_update() || ::poll(&response,1,1000)!=1) return 370;
     Command command;
-    if(::read(input,&command,sizeof(command))!=sizeof(command)||command.producer_seq()!=generation||command.motion_epoch()!=10U) return 371;
-    auto ack=valid;ack.send_status=false;ack.state.set_state_seq(3U);
-    ack.state.set_committed_producer_seq(command.producer_seq());
+    if((root_fixture::read_value(input,command)==false)||(*command.producer_seq())!=generation||(*command.motion_epoch())!=10U) return 371;
+    auto ack=valid;ack.send_status=false;ack.state.state_seq()=(3U);
+    ack.state.committed_producer_seq()=((*command.producer_seq()));
 
-    if(raw_order_case==88U)ack.state.set_committed_producer_seq(0U);
+    if(raw_order_case==88U)ack.state.committed_producer_seq()=(0U);
     // 原GroupSentAck以committed序号为权威，partial mask本例仍须无committed ACK。
-    if(raw_order_case==89U){ack.state.set_committed_producer_seq(0U);ack.state.set_can_sent_mask(31U);}
-    if(raw_order_case==90U)ack.state.set_motion_epoch(11U);
-    if(raw_order_case==91U)ack.state.set_core_state(5U);
-    if(raw_order_case==92U)ack.state.set_session_id(9U);
-    if(raw_order_case==93U)ack.state.set_produced_at_us(device_now_us()-2000000U);
-    if(raw_order_case==94U)ack.state.set_reference_epoch(19U);
-    if(raw_order_case==95U)ack.state.set_boot_epoch(17U);
+    if(raw_order_case==89U){ack.state.committed_producer_seq()=(0U);ack.state.can_sent_mask()=(31U);}
+    if(raw_order_case==90U)ack.state.motion_epoch()=(11U);
+    if(raw_order_case==91U)ack.state.core_state()=(5U);
+    if(raw_order_case==92U)ack.state.session_id()=(9U);
+    if(raw_order_case==93U)ack.state.produced_at_us()=(device_now_us()-2000000U);
+    if(raw_order_case==94U)ack.state.reference_epoch()=(19U);
+    if(raw_order_case==95U)ack.state_source.boot_id=(17U);
     const auto state_before=transport.statistics().state_messages;
     if(!send(ack)||!wait_for([&]{return transport.statistics().state_messages>state_before;}))return 372;
     if(raw_order_case==87U ||raw_order_case==88U ||raw_order_case==89U ||raw_order_case==91U ||raw_order_case==96U) {
       if(!wait_for([&]{return system.copy_state(&snapshot)&&snapshot.envelope.state_seq==3U;}))return 372;
     }
 
-    {std::lock_guard<std::mutex> lock(channel->mutex);Status cached;
-      wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&cached);
-      if(cached.core_state()!=3U || channel->hold_drain.quiescent)return 373;
+    {std::lock_guard<std::mutex> lock(channel->mutex);Status cached=owned_fixture::status();dp::comm::SourceId cached_source{};
+      ((cached=channel->observation.status),(cached_source=channel->observation.status_source),message_fields_present(cached));
+      if((*cached.core_state())!=3U || channel->hold_drain.quiescent)return 373;
     }
 
     if(raw_order_case==96U) {
@@ -2687,19 +1978,19 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       system.request_transport_stop();
       if(!wait_for([&]{return transport.statistics().invalidations>invalidated;}))return 376;
     }
-    auto hold=valid;hold.send_state=false;hold.status.set_core_state(4U);
-    if(raw_order_case!=87U &&raw_order_case!=96U)hold.status.set_can_sent_mask(0U);
+    auto hold=valid;hold.send_state=false;hold.status.core_state()=(4U);
+    if(raw_order_case!=87U &&raw_order_case!=96U)hold.status.can_sent_mask()=(0U);
 
-    hold.status.set_committed_producer_seq(raw_order_case==87U?command.producer_seq():0U);
+    hold.status.committed_producer_seq()=(raw_order_case==87U?(*command.producer_seq()):0U);
     const auto statuses_before=transport.statistics().status_messages;
-    if(!send(hold)||!wait_for([&]{if(raw_order_case==96U)return transport.statistics().status_messages>statuses_before;std::lock_guard<std::mutex> lock(channel->mutex);Status cached;
-      return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&cached)==wire::CodecResult::kOk&&cached.core_state()==4U;})) return 374;
+    if(!send(hold)||!wait_for([&]{if(raw_order_case==96U)return transport.statistics().status_messages>statuses_before;std::lock_guard<std::mutex> lock(channel->mutex);Status cached=owned_fixture::status();dp::comm::SourceId cached_source{};
+      return ((cached=channel->observation.status),(cached_source=channel->observation.status_source),message_fields_present(cached))==true&&(*cached.core_state())==4U;})) return 374;
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     bool passed=false;
     {std::lock_guard<std::mutex> lock(channel->mutex);const auto d=channel->hold_drain;
       std::printf("StateACKBeforeStatusHold generation=%llu seq=%u processed=%llu committed=%u quiescent=%u disposition=%u boot=%llu session=%llu ref=%u epoch=%u\n",
-        static_cast<unsigned long long>(generation),command.producer_seq(),static_cast<unsigned long long>(d.processed_generation),d.committed_seq,d.quiescent,d.disposition,static_cast<unsigned long long>(d.boot_epoch),static_cast<unsigned long long>(d.session_id),d.reference_epoch,d.motion_epoch);
-      passed=d.processed_generation==generation&&d.committed_seq==command.producer_seq()&&d.quiescent&&d.disposition==2U&&d.boot_epoch==7U&&d.session_id==8U&&d.reference_epoch==9U&&d.motion_epoch==10U;
+        static_cast<unsigned long long>(generation),(*command.producer_seq()),static_cast<unsigned long long>(d.processed_generation),d.committed_seq,d.quiescent,d.disposition,static_cast<unsigned long long>(d.boot_epoch),static_cast<unsigned long long>(d.session_id),d.reference_epoch,d.motion_epoch);
+      passed=d.processed_generation==generation&&d.committed_seq==(*command.producer_seq())&&d.quiescent&&d.disposition==2U&&d.boot_epoch==7U&&d.session_id==8U&&d.reference_epoch==9U&&d.motion_epoch==10U;
     }
 
     if(raw_order_case!=87U) {
@@ -2714,9 +2005,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * 这里的RPC complete原子标志只表示响应已到；Query47关联结果、Status/State时序、终末producer ACK与后续刷新仍有独立门槛。
    */
   if (complete_order_mode != 0U) {
-    valid.status.set_management_epoch(10U);
-    valid.state.set_management_epoch(10U);
-    valid.state.set_state_seq(2U);
+    valid.status.management_epoch()=(10U);
+    valid.state.management_epoch()=(10U);
+    valid.state.state_seq()=(2U);
     if (!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                               snapshot.envelope.state_seq == 2U; })) return 166;
     std::uint32_t terminal_sequence=0U;
@@ -2732,34 +2023,33 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if(!generation || !system.transfer_control_update() || ::poll(&response,1,3000)!=1)
           return 187;
         Command command;
-        if(::read(input,&command,sizeof(command))!=sizeof(command) ||
-           command.motion_epoch()!=10U || command.producer_seq()!=generation) return 188;
-        terminal_sequence=command.producer_seq();
-        valid.state.set_state_seq(3U+sample);
-        valid.state.set_committed_producer_seq(terminal_sequence);
+        if((root_fixture::read_value(input,command)==false) ||
+           (*command.motion_epoch())!=10U || (*command.producer_seq())!=generation) return 188;
+        terminal_sequence=(*command.producer_seq());
+        valid.state.state_seq()=(3U+sample);
+        valid.state.committed_producer_seq()=(terminal_sequence);
         if(complete_order_mode==12U && sample==1U) continue;
         if(!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                                   snapshot.envelope.state_seq==3U+sample; })) return 189;
       }
     }
-    Management::Request complete;
-    complete.set_schema_major(2U); complete.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-    complete.set_device_id(device);
+    Management::Request complete=owned_fixture::request();
+    (void)0; (void)0;
+    complete.domain_device_id().emplace().assign(device,16);
     const std::uint8_t client[16]{2U};
-    complete.set_client_instance_id(client);
-    complete.set_request_id(47U); complete.set_request_seq(47U);
-    complete.set_operation(8U);
-    complete.set_expected_boot_epoch(7U); complete.set_expected_session_id(8U);
-    complete.set_expected_reference_epoch(9U); complete.set_expected_motion_epoch(10U);
-    complete.set_expected_management_epoch(10U); complete.set_expected_profile_id(1U);
-    complete.set_configured_mask(parameters.configured_mask);
+    complete.client_instance_id().emplace().assign(client,16);
+    complete.request_id()=(47U); complete.request_seq()=(47U);
+    complete.operation()=(8U);
+    complete.expected_boot_epoch()=(7U); complete.expected_session_id()=(8U);
+    complete.expected_reference_epoch()=(9U); complete.expected_motion_epoch()=(10U);
+    complete.expected_management_epoch()=(10U); complete.expected_profile_id()=(1U);
+    complete.configured_mask()=(parameters.configured_mask);
     if(complete_order_mode==15U)
-      complete.set_expected_management_epoch(11U);
+      complete.expected_management_epoch()=(11U);
     if(complete_order_mode==11U || complete_order_mode==12U)
-      complete.set_terminal_producer_seq(terminal_sequence);
+      complete.terminal_producer_seq()=(terminal_sequence);
     auto pending=std::make_shared<DeviceManagementRequest>();
-    if (wire::DummyManageV2RequestCodec::encode(complete,pending->request.data(),
-          pending->request.size())!=wire::CodecResult::kOk) return 167;
+    if (((pending->request=complete),message_fields_present(complete))!=true) return 167;
     { std::lock_guard<std::mutex> lock(channel->mutex); channel->queued=pending; }
     /**
      * @brief Complete的expected_management_epoch故意错为11；要求本地failed且100ms没有operation8发送。
@@ -2774,23 +2064,22 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     if(complete_order_mode==17U || (complete_order_mode>=30U && complete_order_mode<=41U)) {
       pollfd observed_request{stops_input,POLLIN,0};
-      Management::Request sent_complete;
+      Management::Request sent_complete=owned_fixture::request();
       if(::poll(&observed_request,1,1000)!=1 ||
-         ::read(stops_input,&sent_complete,sizeof(sent_complete))!=sizeof(sent_complete) ||
-         sent_complete.operation()!=8U) return 205;
+         (root_fixture::read_value(stops_input,sent_complete)==false) ||
+         (*sent_complete.operation())!=8U) return 205;
       auto enabling=valid;
-      enabling.status.set_motion_epoch(11U);
-      enabling.status.set_core_state(3U);
-      enabling.state.set_motion_epoch(11U);
-      enabling.state.set_core_state(3U);
-      enabling.state.set_state_seq(3U);
+      enabling.status.motion_epoch()=(11U);
+      enabling.status.core_state()=(3U);
+      enabling.state.motion_epoch()=(11U);
+      enabling.state.core_state()=(3U);
+      enabling.state.state_seq()=(3U);
       enabling.send_state=false;
       if(!send(enabling) || !wait_for([&] {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-              observed.motion_epoch()==11U;
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+              (*observed.motion_epoch())==11U;
         })) return 199;
       enabling.send_status=false;
       enabling.send_state=true;
@@ -2801,8 +2090,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       const auto first=publish_control_update(positions,six_axis ? 6U : 1U,0,nullptr);
       if(!first || !system.transfer_control_update() || ::poll(&response,1,3000)!=1) return 201;
       Command first_command;
-      if(::read(input,&first_command,sizeof(first_command))!=sizeof(first_command) ||
-         first_command.motion_epoch()!=11U || first_command.producer_seq()!=first) return 202;
+      if((root_fixture::read_value(input,first_command)==false) ||
+         (*first_command.motion_epoch())!=11U || (*first_command.producer_seq())!=first) return 202;
       double second_position[6]{};
       std::copy(std::begin(positions),std::end(positions),second_position);
       /**
@@ -2812,16 +2101,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       if(complete_order_mode>=30U && complete_order_mode<=34U) {
         // 原Complete句柄结束并转Query时canceled清理；不能把它当真实Complete终态。
         pending->canceled.store(true,std::memory_order_release);
-        enabling.state.set_core_state(4U);
-        enabling.state.set_hold_ready(true);
-        enabling.state.set_position_valid_mask(parameters.configured_mask);
-        enabling.state.set_committed_producer_seq(first_command.producer_seq());
-        enabling.state.set_state_seq(4U);
+        enabling.state.core_state()=(4U);
+        enabling.state.hold_ready()=(true);
+        root_fixture::set_position_quality(enabling.state,parameters.configured_mask);
+        enabling.state.committed_producer_seq()=((*first_command.producer_seq()));
+        enabling.state.state_seq()=(4U);
         if(complete_order_mode==31U || complete_order_mode==32U || complete_order_mode==34U) {
           const auto before_invalid=transport.statistics();
-          if(complete_order_mode==31U) enabling.state.set_boot_epoch(8U);
-          if(complete_order_mode==32U) enabling.state.set_motion_epoch(12U);
-          if(complete_order_mode==34U) enabling.state.set_produced_at_us(device_now_us()-2000000U);
+          if(complete_order_mode==31U) enabling.state_source.boot_id=(8U);
+          if(complete_order_mode==32U) enabling.state.motion_epoch()=(12U);
+          if(complete_order_mode==34U) enabling.state.produced_at_us()=(device_now_us()-2000000U);
           if(!send_rejected_state(enabling)) return 368;
           const auto after_invalid=transport.statistics();
           const bool no_admission=system.copy_state(&snapshot) && snapshot.envelope.state_seq==3U;
@@ -2838,7 +2127,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if(!same || !system.transfer_control_update()) return 365;
         // 等待owner消费此代际，不能用加长sleep掩盖Stop。
         for(unsigned n=0;n<8U;++n) {
-          enabling.state.set_state_seq(5U+n);
+          enabling.state.state_seq()=(5U+n);
           if(!send(enabling)) return 366;
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -2857,28 +2146,27 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
        */
       if(complete_order_mode>=35U && complete_order_mode<=41U) {
         auto hold_status=enabling; hold_status.send_state=false; hold_status.send_status=true;
-        hold_status.status.set_core_state(4U);
-        hold_status.status.set_committed_producer_seq(first_command.producer_seq());
-        hold_status.status.set_can_submitted_mask(parameters.configured_mask);
-        hold_status.status.set_can_sent_mask(parameters.configured_mask);
-        if(complete_order_mode==37U) hold_status.status.set_can_sent_mask(0U);
-        if(complete_order_mode==40U) hold_status.status.set_committed_producer_seq(first_command.producer_seq()+1U);
-        if(complete_order_mode==41U) hold_status.status.set_can_sent_mask(parameters.configured_mask & ~1U);
-        if(complete_order_mode==38U) hold_status.status.set_motion_epoch(12U);
+        hold_status.status.core_state()=(4U);
+        hold_status.status.committed_producer_seq()=((*first_command.producer_seq()));
+        hold_status.status.can_submitted_mask()=(parameters.configured_mask);
+        hold_status.status.can_sent_mask()=(parameters.configured_mask);
+        if(complete_order_mode==37U) hold_status.status.can_sent_mask()=(0U);
+        if(complete_order_mode==40U) hold_status.status.committed_producer_seq()=((*first_command.producer_seq())+1U);
+        if(complete_order_mode==41U) hold_status.status.can_sent_mask()=(parameters.configured_mask & ~1U);
+        if(complete_order_mode==38U) hold_status.status.motion_epoch()=(12U);
         const auto before_status_stats=transport.statistics();
         const auto before_status=before_status_stats.status_messages;
         if(!send(hold_status) || !wait_for([&] {
-              std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                  channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                  observed.core_state()==4U && transport.statistics().status_messages>before_status;
+              std::lock_guard<std::mutex> lock(channel->mutex); Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                  (*observed.core_state())==4U && transport.statistics().status_messages>before_status;
             })) return 389;
         if(complete_order_mode==36U) second_position[0]+=0.02;
         std::uint32_t following_state_seq=4U;
         if(complete_order_mode==39U) {
           const auto started=transport_steady_now_us(); std::uint32_t seq=4U;
           while(transport_steady_now_us()-started<2100000U) {
-            enabling.state.set_state_seq(seq++); enabling.state.set_produced_at_us(device_now_us());
+            enabling.state.state_seq()=(seq++); enabling.state.produced_at_us()=(device_now_us());
             if(!send(enabling)) return 394;
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
           }
@@ -2887,9 +2175,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           std::fprintf(stderr,"EXPIRED_COMPLETE_PENDING_WITNESS elapsed_us=%llu send_status=%d last_state_seq=%u\n",
               static_cast<unsigned long long>(expired_elapsed),enabling.send_status,seq-1U);
           if(expired_elapsed<2100000U) return 397;
-          std::lock_guard<std::mutex> lock(channel->mutex); Status observed;
-          if(enabling.send_status || wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&observed)!=wire::CodecResult::kOk || observed.core_state()!=4U ||
+          std::lock_guard<std::mutex> lock(channel->mutex); Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          if(enabling.send_status || ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))!=true || (*observed.core_state())!=4U ||
               transport.statistics().heartbeat_stops!=0U || transport.statistics().stop_requests_sent!=0U ||
               transport.statistics().invalidations!=before_status_stats.invalidations) return 396;
         }
@@ -2904,7 +2191,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               rejected.commands_published==before_same.commands_published ? 0 : 390;
         }
         for(unsigned n=0;n<8U;++n) {
-          enabling.state.set_state_seq(following_state_seq+n);
+          enabling.state.state_seq()=(following_state_seq+n);
           if(!send(enabling)) return 391;
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -2923,8 +2210,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       const auto second=publish_control_update(second_position,six_axis ? 6U : 1U,0,nullptr);
       const auto after_first=transport.statistics();
       if(!second || !system.transfer_control_update()) return 203;
-      enabling.state.set_state_seq(4U);
-      enabling.state.set_committed_producer_seq(first_command.producer_seq());
+      enabling.state.state_seq()=(4U);
+      enabling.state.committed_producer_seq()=((*first_command.producer_seq()));
       if(!wait_for([&] { send(enabling); return system.copy_state(&snapshot) &&
                                 snapshot.envelope.state_seq==4U; }) ||
          ::poll(&response,1,100)!=0 ||
@@ -2935,15 +2222,15 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     if(complete_order_mode==11U || complete_order_mode==12U) {
       pollfd observed_request{stops_input,POLLIN,0};
-      Management::Request sent_complete;
+      Management::Request sent_complete=owned_fixture::request();
       if(complete_order_mode==12U) {
         if(::poll(&observed_request,1,100)!=0) return 192;
         if(!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                                   snapshot.envelope.state_seq==4U; })) return 193;
       }
       if(::poll(&observed_request,1,1000)!=1 ||
-         ::read(stops_input,&sent_complete,sizeof(sent_complete))!=sizeof(sent_complete) ||
-         sent_complete.operation()!=8U || sent_complete.terminal_producer_seq()!=terminal_sequence)
+         (root_fixture::read_value(stops_input,sent_complete)==false) ||
+         (*sent_complete.operation())!=8U || (*sent_complete.terminal_producer_seq())!=terminal_sequence)
         return 168;
       const auto before=transport.statistics();
       for(unsigned sample=0U;sample<3U;++sample) {
@@ -2960,19 +2247,19 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if (!wait_for([&] { return pending->complete.load(); })) return 168;
     if(complete_order_mode==28U || complete_order_mode==29U) {
       pollfd observed_request{stops_input,POLLIN,0};
-      Management::Request sent_complete;
+      Management::Request sent_complete=owned_fixture::request();
       if(::poll(&observed_request,1,1000)!=1 ||
-         ::read(stops_input,&sent_complete,sizeof(sent_complete))!=sizeof(sent_complete) ||
-         sent_complete.request_id()!=47U || sent_complete.operation()!=8U ||
-         sent_complete.terminal_producer_seq()!=0U) return 363;
+         (root_fixture::read_value(stops_input,sent_complete)==false) ||
+         (*sent_complete.request_id())!=47U || (*sent_complete.operation())!=8U ||
+         (*sent_complete.terminal_producer_seq())!=0U) return 363;
     }
     auto next=valid;
-    next.status.set_motion_epoch(11U);
-    next.state.set_motion_epoch(11U);
-    next.state.set_state_seq(3U);
-    next.status.set_core_state(4U);
-    next.state.set_core_state(4U);
-    next.state.set_hold_ready(true);
+    next.status.motion_epoch()=(11U);
+    next.state.motion_epoch()=(11U);
+    next.state.state_seq()=(3U);
+    next.status.core_state()=(4U);
+    next.state.core_state()=(4U);
+    next.state.hold_ready()=(true);
     const auto baseline=transport.statistics();
     /**
      * @par 内部send_part回调
@@ -2981,11 +2268,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     auto send_part=[&](bool status,bool state) {
       auto part=next;
       part.send_status=status; part.send_state=state;
-      part.state.set_produced_at_us(device_now_us());
+      part.state.produced_at_us()=(device_now_us());
       return send(part);
     };
     if(complete_order_mode==4U || complete_order_mode==29U) {
-      next.status.set_motion_epoch(12U);
+      next.status.motion_epoch()=(12U);
       if(!send_part(true,false) || !wait_for([&] {
           return transport.statistics().invalidations>baseline.invalidations;
         })) return 177;
@@ -2993,13 +2280,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       return 0;
     }
     if(complete_order_mode==9U) {
-      next.status.set_core_state(9U);
+      next.status.core_state()=(9U);
       if(!send_part(true,false) || !wait_for([&] {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          return wire::DummyDeviceStatusV2Codec::decode(
-              channel->observation.status.data(),channel->observation.status.size(),
-              &observed)==wire::CodecResult::kOk && observed.motion_epoch()==11U;
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true && (*observed.motion_epoch())==11U;
         }) || transport.statistics().invalidations<=baseline.invalidations) return 184;
       transport.stop();
       return 0;
@@ -3022,11 +2307,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
      */
     auto complete_query=[&] {
       auto query=complete;
-      query.set_operation(12U); query.set_request_id(48U); query.set_request_seq(48U);
-      query.set_queried_operation_id(47U);
+      query.operation()=(12U); query.request_id()=(48U); query.request_seq()=(48U);
+      query.queried_operation_id()=(47U);
       auto requested=std::make_shared<DeviceManagementRequest>();
-      if(wire::DummyManageV2RequestCodec::encode(query,requested->request.data(),
-            requested->request.size())!=wire::CodecResult::kOk) return false;
+      if(((requested->request=query),message_fields_present(query))!=true) return false;
       { std::lock_guard<std::mutex> lock(channel->mutex); channel->queued=requested; }
       return wait_for([&] { return requested->complete.load(); });
     };
@@ -3048,7 +2332,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       if(!send_part(true,false) || !wait_for([&] {
           return transport.statistics().status_messages>baseline.status_messages;
         })) return 173;
-      next.state.set_state_seq(4U);
+      next.state.state_seq()=(4U);
       if(!send_part(false,true) || !wait_for([&] {
           return system.copy_state(&snapshot) && snapshot.envelope.state_seq==4U;
         }) || !complete_query()) return 174;
@@ -3059,7 +2343,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     if(complete_order_mode==14U) {
       for(unsigned sample=0U;sample<110U;++sample) {
-        next.state.set_state_seq(4U+sample);
+        next.state.state_seq()=(4U+sample);
         if(!send_part(false,true)) return 195;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
       }
@@ -3071,43 +2355,41 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if(complete_order_mode>=18U && complete_order_mode<=27U) {
       auto exported=next;
       exported.send_state=false;
-      exported.status.set_final_state(6U);
-      exported.status.set_motion_complete(true);
-      if(complete_order_mode==21U) exported.status.set_run_id(2U);
-      if(complete_order_mode==22U) exported.status.set_evidence_lost(true);
+      exported.status.final_state()=(6U);
+      exported.status.motion_complete()=(true);
+      if(complete_order_mode==21U) exported.status.run_id()=(2U);
+      if(complete_order_mode==22U) exported.status.evidence_lost()=(true);
       std::uint8_t chain[32]{};
       if(complete_order_mode!=19U) chain[0]=0x5aU;
-      exported.status.set_evidence_chain_sha256(chain);
+      exported.status.evidence_chain_sha256().emplace().assign(chain,32);
       if(!send(exported) || !wait_for([&] {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-              observed.final_state()==6U;
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+              (*observed.final_state())==6U;
         })) return 206;
       if(channel->post_complete_begin_ready.load(std::memory_order_acquire) !=
          (complete_order_mode!=19U && complete_order_mode!=21U && complete_order_mode!=22U))
         return 217;
       if(complete_order_mode>=23U && complete_order_mode<=25U) {
         auto contradiction=exported;
-        if(complete_order_mode==23U) contradiction.status.set_evidence_lost(true);
+        if(complete_order_mode==23U) contradiction.status.evidence_lost()=(true);
         else if(complete_order_mode==24U) {
-          contradiction.status.set_final_state(0U);
-          contradiction.status.set_motion_complete(false);
+          contradiction.status.final_state()=(0U);
+          contradiction.status.motion_complete()=(false);
           std::uint8_t empty_chain[32]{};
-          contradiction.status.set_evidence_chain_sha256(empty_chain);
+          contradiction.status.evidence_chain_sha256().emplace().assign(empty_chain,32);
         } else {
-          contradiction.status.set_attempt_kind(2U);
-          contradiction.status.set_parent_run_id(1U);
+          contradiction.status.attempt_kind()=(2U);
+          contradiction.status.parent_run_id()=(1U);
         }
         if(!send(contradiction) || !wait_for([&] {
             std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;
-            return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                (complete_order_mode==23U ? observed.evidence_lost() :
-                 complete_order_mode==24U ? observed.final_state()==0U :
-                 observed.attempt_kind()==2U);
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                (complete_order_mode==23U ? (*observed.evidence_lost()) :
+                 complete_order_mode==24U ? (*observed.final_state())==0U :
+                 (*observed.attempt_kind())==2U);
           }) || channel->post_complete_begin_ready.load(std::memory_order_acquire)) return 219;
         channel->inactive_prime_allowed.store(true,std::memory_order_release);
         set_command_identity({7U,8U,9U,11U,9007199254740997ULL});
@@ -3132,7 +2414,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if(!wait_for([&] {
             return transport.statistics().rejected_commands>before.rejected_commands;
           }) || ::poll(&response,1,100)!=0) return 222;
-        next.state.set_state_seq(4U);
+        next.state.state_seq()=(4U);
         next.send_status=false;
         if(!send(next) || !wait_for([&] {
             return system.copy_state(&snapshot) && snapshot.envelope.state_seq==4U;
@@ -3142,8 +2424,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if(!fresh || !system.transfer_control_update() || ::poll(&response,1,1000)!=1)
           return 223;
         Command recovered;
-        if(::read(input,&recovered,sizeof(recovered))!=sizeof(recovered) ||
-           recovered.producer_seq()!=fresh) return 224;
+        if((root_fixture::read_value(input,recovered)==false) ||
+           (*recovered.producer_seq())!=fresh) return 224;
         transport.stop();
         return 0;
       }
@@ -3158,8 +2440,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
       if(::poll(&response,1,1000)!=1) return 209;
       Command first_refresh;
-      if(::read(input,&first_refresh,sizeof(first_refresh))!=sizeof(first_refresh) ||
-         first_refresh.motion_epoch()!=11U || first_refresh.producer_seq()!=refresh) return 210;
+      if((root_fixture::read_value(input,first_refresh)==false) ||
+         (*first_refresh.motion_epoch())!=11U || (*first_refresh.producer_seq())!=refresh) return 210;
       /**
        * @brief 发送刷新后、尚无State精确ACK时不得提前将hold_drain标quiescent。
        */
@@ -3170,7 +2452,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
       if(complete_order_mode==27U) {
         for(unsigned sample=0U;sample<8U;++sample) {
-          next.state.set_state_seq(4U+sample);
+          next.state.state_seq()=(4U+sample);
           if(!send_part(false,true)) return 225;
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -3181,8 +2463,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         transport.stop();
         return 0;
       }
-      next.state.set_state_seq(4U);
-      next.state.set_committed_producer_seq(first_refresh.producer_seq());
+      next.state.state_seq()=(4U);
+      next.state.committed_producer_seq()=((*first_refresh.producer_seq()));
       if(!send_part(false,true) || !wait_for([&] {
           return system.copy_state(&snapshot) && snapshot.envelope.state_seq==4U;
         }) || transport.statistics().group_sent_ack_timeouts!=0U) return 211;
@@ -3213,20 +2495,19 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
                    channel->hold_drain.tolerance[0]==0.003;
           })) return 261;
         auto active_run=exported;
-        active_run.status.set_run_id(2U);
-        active_run.status.set_final_state(0U);
-        active_run.status.set_motion_complete(false);
+        active_run.status.run_id()=(2U);
+        active_run.status.final_state()=(0U);
+        active_run.status.motion_complete()=(false);
         std::uint8_t empty_chain[32]{};
-        active_run.status.set_evidence_chain_sha256(empty_chain);
+        active_run.status.evidence_chain_sha256().emplace().assign(empty_chain,32);
         if(!send(active_run) || !wait_for([&] {
             std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;
-            return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-                channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-                observed.run_id()==2U;
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                (*observed.run_id())==2U;
           })) return 212;
         for(unsigned i=0U;i<55U;++i) {
-          next.state.set_state_seq(5U+i);
+          next.state.state_seq()=(5U+i);
           if(!send_part(false,true)) return 213;
           if(i%12U==0U && !send(active_run)) return 214;
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -3247,8 +2528,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if(!next_refresh || !system.transfer_control_update() || ::poll(&response,1,1000)!=1)
           return 215;
         Command second_refresh;
-        if(::read(input,&second_refresh,sizeof(second_refresh))!=sizeof(second_refresh) ||
-           second_refresh.producer_seq()!=next_refresh) return 216;
+        if((root_fixture::read_value(input,second_refresh)==false) ||
+           (*second_refresh.producer_seq())!=next_refresh) return 216;
       }
       transport.stop();
       return 0;
@@ -3273,11 +2554,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       } else {
         if(::poll(&response,1,3000)!=1) return 180;
         Command command;
-        if(::read(input,&command,sizeof(command))!=sizeof(command) ||
-           command.motion_epoch()!=11U || command.producer_seq()!=generation) return 180;
+        if((root_fixture::read_value(input,command)==false) ||
+           (*command.motion_epoch())!=11U || (*command.producer_seq())!=generation) return 180;
       }
       for(unsigned i=0U;i<8U;++i) {
-        next.state.set_state_seq(4U+i);
+        next.state.state_seq()=(4U+i);
         if(!send_part(false,true)) return 181;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
@@ -3323,77 +2604,69 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stimulus.send_state = false;
         stimulus.send_evidence = true;
         auto &message = stimulus.evidence;
-        message.set_schema_major(2U);
-        message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-        message.set_run_id(run);
-        message.set_attempt_id(run);
-        message.set_evidence_seq(sequence);
-        message.set_attempt_kind(run == 2U &&
+        (void)0;
+        (void)0;
+        message.run_id()=(run);
+        message.attempt_id()=(run);
+        message.evidence_seq()=(sequence);
+        message.attempt_kind()=(run == 2U &&
             (raw_order_case == 4U || (raw_order_case == 11U && sequence == 1U)) ? 2U : kind);
-        message.set_parent_run_id(parent);
-        message.set_motion_epoch(raw_order_case >= 43U && raw_order_case <= 50U ?
+        message.parent_run_id()=(parent);
+        message.motion_epoch()=(raw_order_case >= 43U && raw_order_case <= 50U ?
             (run == 1U ? 1U : run == 2U && sequence == 0U ? 3U : 5U) :
             (raw_order_case >= 34U && raw_order_case <= 42U) ||
                 (raw_order_case >= 51U && raw_order_case <= 58U) ?
             (run == 1U ? 1U : 3U) : 10U);
         if (run == 2U && sequence == 0U && raw_order_case == 38U)
-          message.set_motion_epoch(0U);
+          message.motion_epoch()=(0U);
         if (raw_order_case >= 59U && run == 123U)
-          message.set_motion_epoch(category == 2U ? 10U : 9U);
+          message.motion_epoch()=(category == 2U ? 10U : 9U);
         if (raw_order_case == 70U && run == 124U && sequence == 0U)
-          message.set_motion_epoch(11U);
+          message.motion_epoch()=(11U);
         if (run == 124U && sequence == 0U && raw_order_case == 31U)
-          message.set_motion_epoch(0U);
-        message.set_category(category);
-        message.set_final(1U);
-        message.set_group_count(group_count);
+          message.motion_epoch()=(0U);
+        message.category()=(category);
+        message.final()=(1U);
+        message.group_count()=(group_count);
         if (category == 4U) {
-          message.set_final_state(final_state);
+          message.final_state()=(final_state);
           if (((run == 1U && raw_order_case >= 34U && raw_order_case <= 58U &&
                 raw_order_case != 41U) ||
                (run >= 2U && raw_order_case >= 43U && raw_order_case <= 50U)))
-            message.set_motion_complete(true);
+            message.motion_complete()=(true);
         }
         else {
-          message.set_group_id(run);
-          message.set_expected_mask(63U);
-          message.set_submitted_mask(63U);
-          message.set_sent_mask(63U);
+          message.group_id()=(run);
+          message.expected_mask()=(63U);
+          message.submitted_mask()=(63U);
+          message.sent_mask()=(63U);
           if ((run == 124U && sequence == 0U && raw_order_case == 30U) ||
               (run == 2U && sequence == 0U && raw_order_case == 40U))
-            message.set_sent_mask(31U);
+            message.sent_mask()=(31U);
         }
         if(cancel_pending_flush_case) {
           if((cancel_pending_flush_fault==1U && run==123U && category==2U) ||
-             (cancel_pending_flush_fault==3U && run==124U && sequence==0U))message.set_sent_mask(31U);
-          if(cancel_pending_flush_fault==4U && run==124U && sequence==0U)message.set_motion_epoch(11U);
+             (cancel_pending_flush_fault==3U && run==124U && sequence==0U))message.sent_mask()=(31U);
+          if(cancel_pending_flush_fault==4U && run==124U && sequence==0U)message.motion_epoch()=(11U);
         }
         if(cancel_origin_case && run==123U) {
-          message.set_motion_epoch(category==4U ?
+          message.motion_epoch()=(category==4U ?
             (cancel_origin_fault==1U ? 48U : cancel_origin_fault==2U || cancel_origin_fault==3U ? 50U : cancel_origin_fault==6U ? 53U : 49U) :
             category==2U ? 52U : sequence==0U ? 50U : 51U);
         }
         if(cancel_origin_case && run==124U) {
-          message.set_motion_epoch(52U);
-          if(category==4U)message.set_motion_complete(true);
+          message.motion_epoch()=(52U);
+          if(category==4U)message.motion_complete()=(true);
         }
         std::uint8_t previous_digest[32]{};
         std::copy(previous.begin(), previous.end(), previous_digest);
         if (run == 2U && (raw_order_case == 5U || raw_order_case == 55U ||
                           (raw_order_case == 12U && sequence == 1U))) previous_digest[0] ^= 1U;
-        message.set_previous_chain_sha256(previous_digest);
-        std::array<std::uint8_t, wire::DummyAttemptEvidenceV2Codec::kEncodedSize> raw{};
-        if (wire::DummyAttemptEvidenceV2Codec::encode(
-                message, raw.data(), raw.size()) != wire::CodecResult::kOk) return false;
-        std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> input{};
-        std::copy(previous.begin(), previous.end(), input.begin());
-        std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
-                    input.begin() + 32U);
-        input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
-        ::SHA256(input.data(), input.size(), next->data());
+        message.previous_chain_sha256().emplace().assign(previous_digest,32);
+        if(!dummy_ref::comm::attempt_evidence::next_chain(previous,message,next))return false;
         std::uint8_t next_digest[32]{};
         std::copy(next->begin(), next->end(), next_digest);
-        message.set_chain_sha256(next_digest);
+        message.chain_sha256().emplace().assign(next_digest,32);
         return !deliver || send(stimulus);
       };
       /**
@@ -3422,15 +2695,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       if(cancel_origin_case) {
         // 实机顺序：Acquire Idle epoch48，恢复参考后零组Idle epoch49，
         // EnableHold首CAN50，Begin CAN51，Cancel安全Hold52，终页attempt epoch49。
-        auto origin=valid;origin.send_state=false;origin.status.set_core_state(2U);
-        origin.status.set_attempt_id(cancel_origin_fault==5U ? 999U : 123U);
-        origin.status.set_group_count(cancel_origin_fault==4U ? 1U : 0U);origin.status.set_final_state(0U);
+        auto origin=valid;origin.send_state=false;origin.status.core_state()=(2U);
+        origin.status.attempt_id()=(cancel_origin_fault==5U ? 999U : 123U);
+        origin.status.group_count()=(cancel_origin_fault==4U ? 1U : 0U);origin.status.final_state()=(0U);
         auto send_origin=[&](unsigned epoch) {
-          origin.status.set_motion_epoch(epoch);
+          origin.status.motion_epoch()=(epoch);
           return send(origin) && wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&observed)==wire::CodecResult::kOk &&
-              observed.run_id()==123U && observed.motion_epoch()==epoch && observed.core_state()==2U;});
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+              (*observed.run_id())==123U && (*observed.motion_epoch())==epoch && (*observed.core_state())==2U;});
         };
         if(!send_origin(48U) || !send_origin(cancel_origin_fault==6U ? 53U : 49U))return 410;
         std::array<std::uint8_t,32U> first{},motion{},safety{},terminal{};
@@ -3448,32 +2720,29 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           cancel_origin_fault==1U ? 48U : cancel_origin_fault==2U || cancel_origin_fault==3U ? 50U : cancel_origin_fault==6U ? 53U : 49U,
           receipt.safety_hold_valid);
         if(cancel_origin_fault==0U && receipt.safety_hold_valid) {
-          auto hold=valid;hold.status.set_motion_epoch(52U);hold.state.set_motion_epoch(52U);
-          hold.status.set_core_state(4U);hold.state.set_core_state(4U);hold.state.set_hold_ready(true);
-          hold.state.set_state_seq(100U);hold.status.set_final_state(7U);hold.status.set_group_count(3U);
+          auto hold=valid;hold.status.motion_epoch()=(52U);hold.state.motion_epoch()=(52U);
+          hold.status.core_state()=(4U);hold.state.core_state()=(4U);hold.state.hold_ready()=(true);
+          hold.state.state_seq()=(100U);hold.status.final_state()=(7U);hold.status.group_count()=(3U);
           std::uint8_t digest[32]{};std::copy(terminal.begin(),terminal.end(),digest);
-          hold.status.set_evidence_chain_sha256(digest);
+          hold.status.evidence_chain_sha256().emplace().assign(digest,32);
           if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
-            State observed;return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-              channel->observation.state.size(),&observed)==wire::CodecResult::kOk && observed.state_seq()==100U;}))return 416;
+            State observed=owned_fixture::state();dp::comm::SourceId observed_source{};return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed))==true && (*observed.state_seq())==100U;}))return 416;
           std::array<std::uint8_t,32U> next_first{},next_terminal{};
           if(!publish_page(124U,0U,1U,1U,0U,seed_for(124U),&next_first) ||
              !wait_for([&]{return transport.statistics().raw_evidence_pages_written==5U ||
                transport.statistics().raw_evidence_failure!=0U;}) ||
              transport.statistics().raw_evidence_failure!=0U)return 417;
-          hold.status.set_run_id(124U);hold.status.set_final_state(0U);hold.status.set_group_count(1U);
-          std::fill(std::begin(digest),std::end(digest),0U);hold.status.set_evidence_chain_sha256(digest);
-          hold.state.set_state_seq(101U);
+          hold.status.run_id()=(124U);hold.status.final_state()=(0U);hold.status.group_count()=(1U);
+          std::fill(std::begin(digest),std::end(digest),0U);hold.status.evidence_chain_sha256().emplace().assign(digest,32);
+          hold.state.state_seq()=(101U);
           if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&observed)==wire::CodecResult::kOk && observed.run_id()==124U;}) ||
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true && (*observed.run_id())==124U;}) ||
              !publish_page(124U,1U,4U,1U,6U,next_first,&next_terminal) ||
              !wait_for([&]{return transport.statistics().raw_evidence_last_terminal_written_run==124U;}))return 418;
-          hold.status.set_final_state(6U);hold.status.set_motion_complete(true);hold.state.set_state_seq(102U);
-          std::copy(next_terminal.begin(),next_terminal.end(),digest);hold.status.set_evidence_chain_sha256(digest);
+          hold.status.final_state()=(6U);hold.status.motion_complete()=(true);hold.state.state_seq()=(102U);
+          std::copy(next_terminal.begin(),next_terminal.end(),digest);hold.status.evidence_chain_sha256().emplace().assign(digest,32);
           if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&observed)==wire::CodecResult::kOk && observed.run_id()==124U && observed.final_state()==6U;}))return 419;
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true && (*observed.run_id())==124U && (*observed.final_state())==6U;}))return 419;
         }
         transport.stop();
         return receipt.boot_epoch==7U && receipt.session_id==8U && receipt.run_id==123U &&
@@ -3487,20 +2756,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
        * 49迟到终态Status链错误使failure=6，50迟到正确链可匹配；验证原页/Status异步顺序，非物理动作顺序。
        */
       if (raw_order_case >= 43U && raw_order_case <= 50U) {
-        valid.status.set_core_state(3U);
-        valid.status.set_final_state(0U);
-        valid.status.set_motion_epoch(3U);
-        valid.status.set_management_epoch(7U);
-        valid.state.set_motion_epoch(3U);
-        valid.state.set_management_epoch(7U);
+        valid.status.core_state()=(3U);
+        valid.status.final_state()=(0U);
+        valid.status.motion_epoch()=(3U);
+        valid.status.management_epoch()=(7U);
+        valid.state.motion_epoch()=(3U);
+        valid.state.management_epoch()=(7U);
         std::array<std::uint8_t, 32U> first_page{}, first_terminal{};
         std::array<std::uint8_t, 32U> second_page{}, second_terminal{}, third_page{};
         if (!send(valid) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 1U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 1U;
             }) || !publish_page(1U, 0U, 1U, 1U, 0U, seed_for(1U), &first_page) ||
             !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; }) ||
             !publish_page(1U, 1U, 4U, 1U, 6U, first_page, &first_terminal) ||
@@ -3513,20 +2780,36 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             transport.statistics().raw_evidence_failure != 0U) return 324;
         auto second_status = valid;
         second_status.send_state = false;
-        second_status.status.set_run_id(2U);
-        second_status.status.set_motion_epoch(5U);
-        second_status.status.set_management_epoch(8U);
+        second_status.status.run_id()=(2U);
+        second_status.status.motion_epoch()=(5U);
+        second_status.status.management_epoch()=(8U);
         if (!send(second_status) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
-                  observed.core_state() == 3U && observed.final_state() == 0U &&
-                  observed.motion_epoch() == 5U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U &&
+                  (*observed.core_state()) == 3U && (*observed.final_state()) == 0U &&
+                  (*observed.motion_epoch()) == 5U;
             })) return 325;
+        // 真实回程时序：后继run已临时绑定；完成Status早于终页flush，
+        // flush后首个刷新页不能要求设备重复发送同一份Status。
+        if (complete_status_before_flush_case) cancel_flush_armed=true;
+        if (complete_status_before_flush_case) {
+          if (!publish_page(2U, 1U, 4U, 1U, 6U, second_page, &second_terminal) ||
+              !wait_for([&] { return cancel_flush_entered.load(); })) return 420;
+          auto early_final=second_status;
+          early_final.status.core_state()=(4U);early_final.status.final_state()=(6U);
+          early_final.status.motion_complete()=(true);
+          std::uint8_t digest[32]{};std::copy(second_terminal.begin(),second_terminal.end(),digest);
+          early_final.status.evidence_chain_sha256().emplace().assign(digest,32);
+          if (!send(early_final) || !wait_for([&] {
+              std::lock_guard<std::mutex> lock(channel->mutex);Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true &&
+                  (*observed.run_id())==2U && (*observed.final_state())==6U;
+            })) {cancel_flush_resume=true;return 421;}
+          cancel_flush_resume=true;
+        }
         if (raw_order_case != 48U &&
-            (!publish_page(2U, 1U, 4U, 1U, 6U, second_page, &second_terminal) ||
+            ((!complete_status_before_flush_case && !publish_page(2U, 1U, 4U, 1U, 6U, second_page, &second_terminal)) ||
              !wait_for([&] {
                const auto receipt = channel->raw_evidence_terminal_flushed();
                return transport.statistics().raw_evidence_last_terminal_written_run == 2U &&
@@ -3535,14 +2818,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
              }))) return 326;
         {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          if (wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) != wire::CodecResult::kOk || observed.run_id() != 2U ||
-              observed.final_state() != 0U ||
-              std::any_of(std::begin(observed.evidence_chain_sha256()),
-                  std::end(observed.evidence_chain_sha256()),
-                  [](std::uint8_t byte) { return byte != 0U; })) return 327;
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          if (((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) != true || (*observed.run_id()) != 2U ||
+              (!complete_status_before_flush_case && (*observed.final_state()) != 0U) ||
+              (!complete_status_before_flush_case && std::any_of(observed.evidence_chain_sha256()->begin(),
+                  observed.evidence_chain_sha256()->end(),
+                  [](std::uint8_t byte) { return byte != 0U; }))) return 327;
         }
         if (raw_order_case >= 44U && raw_order_case <= 47U) {
           auto receipt = raw_order_case == 44U ? stale_receipt :
@@ -3559,15 +2840,15 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               return stats.raw_evidence_pages_written > before_third.raw_evidence_pages_written ||
                   stats.raw_evidence_failure != 0U;
             })) return 328;
-        if (raw_order_case >= 49U) {
+        if (raw_order_case == 49U || raw_order_case == 50U) {
           auto late_status = second_status;
-          late_status.status.set_core_state(4U);
-          late_status.status.set_final_state(6U);
-          late_status.status.set_motion_complete(true);
+          late_status.status.core_state()=(4U);
+          late_status.status.final_state()=(6U);
+          late_status.status.motion_complete()=(true);
           std::uint8_t late_digest[32]{};
           std::copy(second_terminal.begin(), second_terminal.end(), late_digest);
           if (raw_order_case == 49U) late_digest[0] ^= 1U;
-          late_status.status.set_evidence_chain_sha256(late_digest);
+          late_status.status.evidence_chain_sha256().emplace().assign(late_digest,32);
           const auto before_late = transport.statistics().status_messages;
           if (!send(late_status) || !wait_for([&] {
                 const auto stats = transport.statistics();
@@ -3584,13 +2865,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }
           if (!wait_for([&] {
                 std::lock_guard<std::mutex> lock(channel->mutex);
-                Status observed;
-                return wire::DummyDeviceStatusV2Codec::decode(
-                    channel->observation.status.data(), channel->observation.status.size(),
-                    &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
-                    observed.final_state() == 6U &&
+                Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U &&
+                    (*observed.final_state()) == 6U &&
                     std::equal(second_terminal.begin(), second_terminal.end(),
-                               observed.evidence_chain_sha256());
+                               (observed.evidence_chain_sha256()->data()));
               }) || transport.statistics().raw_evidence_failure != 0U) return 337;
         }
         if (raw_order_case >= 44U && raw_order_case <= 48U) {
@@ -3602,35 +2881,31 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if (transport.statistics().raw_evidence_failure != 0U ||
             transport.statistics().raw_evidence_pages_written != 5U) return 330;
         auto third_status = second_status;
-        third_status.status.set_run_id(3U);
-        third_status.status.set_core_state(4U);
-        third_status.status.set_management_epoch(9U);
+        third_status.status.run_id()=(3U);
+        third_status.status.core_state()=(4U);
+        third_status.status.management_epoch()=(9U);
         if (!send(third_status) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 3U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 3U;
             })) return 331;
         std::array<std::uint8_t, 32U> third_terminal{};
         if (!publish_page(3U, 1U, 4U, 1U, 6U, third_page, &third_terminal) ||
             !wait_for([&] { return transport.statistics().raw_evidence_last_terminal_written_run == 3U; }))
           return 332;
         auto third_final = third_status;
-        third_final.status.set_final_state(6U);
-        third_final.status.set_motion_complete(true);
+        third_final.status.final_state()=(6U);
+        third_final.status.motion_complete()=(true);
         std::uint8_t third_digest[32]{};
         std::copy(third_terminal.begin(), third_terminal.end(), third_digest);
-        third_final.status.set_evidence_chain_sha256(third_digest);
+        third_final.status.evidence_chain_sha256().emplace().assign(third_digest,32);
         if (!send(third_final) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 3U &&
-                  observed.final_state() == 6U &&
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 3U &&
+                  (*observed.final_state()) == 6U &&
                   std::equal(third_terminal.begin(), third_terminal.end(),
-                             observed.evidence_chain_sha256());
+                             (observed.evidence_chain_sha256()->data()));
             })) return 333;
         transport.stop();
         const auto result = transport.statistics();
@@ -3645,26 +2920,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
        */
       if ((raw_order_case >= 34U && raw_order_case <= 42U) ||
           (raw_order_case >= 51U && raw_order_case <= 58U)) {
-        valid.status.set_core_state(3U);
-        valid.status.set_final_state(0U);
-        valid.status.set_motion_epoch(3U);
-        valid.status.set_management_epoch(7U);
-        valid.state.set_motion_epoch(3U);
-        valid.state.set_management_epoch(7U);
+        valid.status.core_state()=(3U);
+        valid.status.final_state()=(0U);
+        valid.status.motion_epoch()=(3U);
+        valid.status.management_epoch()=(7U);
+        valid.state.motion_epoch()=(3U);
+        valid.state.management_epoch()=(7U);
         if (raw_order_case >= 51U) {
-          valid.state.set_core_state(4U);
-          valid.state.set_hold_ready(true);
-          valid.state.set_position_valid_mask(63U);
+          valid.state.core_state()=(4U);
+          valid.state.hold_ready()=(true);
+          root_fixture::set_position_quality(valid.state,63U);
         }
         std::array<std::uint8_t, 32U> first_group{}, first_terminal{}, next_group{}, next_terminal{};
         if (!send(valid) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 1U &&
-                  observed.core_state() == 3U && observed.final_state() == 0U &&
-                  observed.motion_epoch() == 3U && observed.management_epoch() == 7U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 1U &&
+                  (*observed.core_state()) == 3U && (*observed.final_state()) == 0U &&
+                  (*observed.motion_epoch()) == 3U && (*observed.management_epoch()) == 7U;
             }) || !publish_page(1U, 0U, 1U, 1U, 0U, seed_for(1U), &first_group) ||
             !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; }))
           return 307;
@@ -3692,12 +2965,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         {
           const auto before = transport.statistics();
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          if (wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) != wire::CodecResult::kOk || observed.run_id() != 1U ||
-              observed.core_state() != 3U || observed.final_state() != 0U ||
-              observed.motion_epoch() != 3U || observed.management_epoch() != 7U ||
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          if (((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) != true || (*observed.run_id()) != 1U ||
+              (*observed.core_state()) != 3U || (*observed.final_state()) != 0U ||
+              (*observed.motion_epoch()) != 3U || (*observed.management_epoch()) != 7U ||
               before.raw_evidence_last_terminal_written_run !=
                   (raw_order_case == 37U ? 0U : 1U)) return 316;
         }
@@ -3705,8 +2976,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           auto ongoing = valid;
           ongoing.send_status = false;
           if (raw_order_case == 57U) {
-            ongoing.state.set_core_state(6U);
-            ongoing.state.set_hold_ready(false);
+            ongoing.state.core_state()=(6U);
+            ongoing.state.hold_ready()=(false);
           }
           /**
            * @brief 用Host经过300ms刻意陈旧Status；20ms推进State，选定负例则不保鲜或改为非Hold。
@@ -3716,38 +2987,32 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           std::uint32_t seq = 2U;
           while (transport_steady_now_us() - start <= 300000U) {
             if (raw_order_case != 56U) {
-              ongoing.state.set_state_seq(seq++);
+              ongoing.state.state_seq()=(seq++);
               if (!send(ongoing) || !wait_for([&] {
                     std::lock_guard<std::mutex> lock(channel->mutex);
-                    State observed;
-                    return wire::DummyJointStateV2Codec::decode(
-                        channel->observation.state.data(), channel->observation.state.size(),
-                        &observed) == wire::CodecResult::kOk &&
-                        observed.state_seq() == ongoing.state.state_seq();
+                    State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                    return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                        (*observed.state_seq()) == (*ongoing.state.state_seq());
                   })) return 338;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
           }
           if (raw_order_case != 56U) {
-            ongoing.state.set_state_seq(seq);
+            ongoing.state.state_seq()=(seq);
             if (!send(ongoing) || !wait_for([&] {
                   std::lock_guard<std::mutex> lock(channel->mutex);
-                  State observed;
-                  return wire::DummyJointStateV2Codec::decode(
-                      channel->observation.state.data(), channel->observation.state.size(),
-                      &observed) == wire::CodecResult::kOk &&
-                      observed.state_seq() == ongoing.state.state_seq();
+                  State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                  return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                      (*observed.state_seq()) == (*ongoing.state.state_seq());
                 })) return 339;
           }
           std::lock_guard<std::mutex> lock(channel->mutex);
           const auto now = transport_steady_now_us();
-          State observed_state;
-          if (wire::DummyJointStateV2Codec::decode(
-                  channel->observation.state.data(), channel->observation.state.size(),
-                  &observed_state) != wire::CodecResult::kOk ||
-              observed_state.core_state() != (raw_order_case == 57U ? 6U : 4U) ||
-              observed_state.hold_ready() != (raw_order_case != 57U) ||
-              observed_state.position_valid_mask() != 63U) return 341;
+          State observed_state=owned_fixture::state();dp::comm::SourceId observed_state_source{};
+          if (((observed_state=channel->observation.state),(observed_state_source=channel->observation.state_source),message_fields_present(observed_state)) != true ||
+              (*observed_state.core_state()) != (raw_order_case == 57U ? 6U : 4U) ||
+              (*observed_state.hold_ready()) != (raw_order_case != 57U) ||
+              root_fixture::position_quality(observed_state) != 63U) return 341;
           if (channel->observation.status_received_us == 0U ||
               now - channel->observation.status_received_us <= 250000U ||
               (raw_order_case != 56U &&
@@ -3784,30 +3049,26 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }
         auto next_status = valid;
         next_status.send_state = false;
-        next_status.status.set_run_id(2U);
-        next_status.status.set_core_state(4U);
+        next_status.status.run_id()=(2U);
+        next_status.status.core_state()=(4U);
         if (!send(next_status) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U;
             }) || !publish_page(2U, 1U, 4U, 1U, 6U, next_group, &next_terminal) ||
             !wait_for([&] {
               return transport.statistics().raw_evidence_last_terminal_written_run == 2U;
             })) return 313;
         auto final_status = next_status;
-        final_status.status.set_final_state(6U);
+        final_status.status.final_state()=(6U);
         std::uint8_t digest[32]{};
         std::copy(next_terminal.begin(), next_terminal.end(), digest);
-        final_status.status.set_evidence_chain_sha256(digest);
+        final_status.status.evidence_chain_sha256().emplace().assign(digest,32);
         if (!send(final_status) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
-                  observed.final_state() == 6U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U &&
+                  (*observed.final_state()) == 6U;
             })) return 314;
         transport.stop();
         return transport.statistics().raw_evidence_failure == 0U &&
@@ -3825,16 +3086,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         const auto next_run = refresh ? 124U : 122U;
         std::array<std::uint8_t, 32U> motion_group{}, motion_terminal{};
         std::array<std::uint8_t, 32U> release_page{}, release_terminal{};
-        if (refresh) valid.status.set_core_state(cancel_hold_status_variant ? 4U : 7U);
+        if (refresh) valid.status.core_state()=(cancel_hold_status_variant ? 4U : 7U);
         if (!send(valid) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == motion_run &&
-                  (!refresh || (observed.core_state() == (cancel_hold_status_variant ? 4U : 7U) && observed.final_state() == 0U &&
-                    std::all_of(std::begin(observed.evidence_chain_sha256()),
-                        std::end(observed.evidence_chain_sha256()),
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == motion_run &&
+                  (!refresh || ((*observed.core_state()) == (cancel_hold_status_variant ? 4U : 7U) && (*observed.final_state()) == 0U &&
+                    std::all_of(observed.evidence_chain_sha256()->begin(),
+                        observed.evidence_chain_sha256()->end(),
                         [](auto byte) { return byte == 0U; })));
             }) || !publish_page(motion_run, 0U, raw_order_case >= 59U ? 1U : 2U, 1U, 0U, seed_for(motion_run), &motion_group) ||
             !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; })) return 288;
@@ -3851,17 +3110,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }
         if(cancel_pending_flush_case) {
           // 与实机相同：旧Stopping Status超过254480us，但Hold State持续新鲜。
-          auto hold=valid;hold.send_status=false;hold.state.set_core_state(4U);
-          hold.state.set_hold_ready(true);hold.state.set_position_valid_mask(63U);
-          if(cancel_pending_flush_fault==2U) {hold.state.set_core_state(3U);hold.state.set_hold_ready(false);}
+          auto hold=valid;hold.send_status=false;hold.state.core_state()=(4U);
+          hold.state.hold_ready()=(true);root_fixture::set_position_quality(hold.state,63U);
+          if(cancel_pending_flush_fault==2U) {hold.state.core_state()=(3U);hold.state.hold_ready()=(false);}
           std::uint64_t status_at=0U;
           {std::lock_guard<std::mutex> lock(channel->mutex);status_at=channel->observation.status_received_us;}
           std::uint32_t sequence=2U;
           do {
-            hold.state.set_state_seq(sequence++);
+            hold.state.state_seq()=(sequence++);
             if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
-              State state;return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                channel->observation.state.size(),&state)==wire::CodecResult::kOk && state.state_seq()==hold.state.state_seq();}))return 390;
+              State state=owned_fixture::state();dp::comm::SourceId state_source{};return ((state=channel->observation.state),(state_source=channel->observation.state_source),message_fields_present(state))==true && (*state.state_seq())==(*hold.state.state_seq());}))return 390;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
           } while(transport_steady_now_us()-status_at<254480U);
           struct ResumeFlush {~ResumeFlush(){cancel_flush_resume=true;cancel_receipt_resume=true;}} resume_flush;
@@ -3888,10 +3146,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }
           // 后发State到达确认worker已处理前面的原页；普通模式writer仍暂停，
           // consumer_snapshot模式则已确定性完成writer发布。
-          hold.state.set_state_seq(sequence++);
+          hold.state.state_seq()=(sequence++);
           if(!send(hold) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
-            State state;return wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-              channel->observation.state.size(),&state)==wire::CodecResult::kOk && state.state_seq()==hold.state.state_seq();}))return 394;
+            State state=owned_fixture::state();dp::comm::SourceId state_source{};return ((state=channel->observation.state),(state_source=channel->observation.state_source),message_fields_present(state))==true && (*state.state_seq())==(*hold.state.state_seq());}))return 394;
           const auto pending=transport.statistics();
           std::fprintf(stderr,"cancel-pending-window: status_age=%llu failure=%u terminal_written=%llu\n",
             (unsigned long long)(transport_steady_now_us()-status_at),unsigned(pending.raw_evidence_failure),
@@ -3910,24 +3167,22 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
               channel->raw_evidence_terminal_flushed().run_id!=motion_run ? 0 : 403;
           }
           if(!wait_for([&]{return transport.statistics().raw_evidence_pages_written==4U;}))return 397;
-          auto successor=hold;successor.send_status=true;successor.status.set_run_id(next_run);
-          successor.status.set_core_state(4U);successor.status.set_final_state(0U);
-          successor.state.set_state_seq(sequence++);
+          auto successor=hold;successor.send_status=true;successor.status.run_id()=(next_run);
+          successor.status.core_state()=(4U);successor.status.final_state()=(0U);
+          successor.state.state_seq()=(sequence++);
           if(!send(successor) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);
-            Status status;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&status)==wire::CodecResult::kOk && status.run_id()==next_run;}))return 398;
+            Status status=owned_fixture::status();dp::comm::SourceId status_source{};return ((status=channel->observation.status),(status_source=channel->observation.status_source),message_fields_present(status))==true && (*status.run_id())==next_run;}))return 398;
           if(!publish_page(next_run,1U,4U,1U,6U,release_page,&release_terminal) ||
              !wait_for([&]{return transport.statistics().raw_evidence_last_terminal_written_run==next_run;}))return 399;
-          successor.status.set_final_state(6U);
+          successor.status.final_state()=(6U);
           std::uint8_t final_chain[32]{};std::copy(release_terminal.begin(),release_terminal.end(),final_chain);
           if(cancel_pending_flush_fault==5U)final_chain[0]^=1U;
-          successor.status.set_evidence_chain_sha256(final_chain);successor.state.set_state_seq(sequence++);
+          successor.status.evidence_chain_sha256().emplace().assign(final_chain,32);successor.state.state_seq()=(sequence++);
           if(!send(successor) || !wait_for([&]{
             if(transport.statistics().raw_evidence_failure!=0U)return true;
-            std::lock_guard<std::mutex> lock(channel->mutex);Status status;
-            return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-              channel->observation.status.size(),&status)==wire::CodecResult::kOk &&
-              status.run_id()==next_run && status.final_state()==6U;
+            std::lock_guard<std::mutex> lock(channel->mutex);Status status=owned_fixture::status();dp::comm::SourceId status_source{};
+            return ((status=channel->observation.status),(status_source=channel->observation.status_source),message_fields_present(status))==true &&
+              (*status.run_id())==next_run && (*status.final_state())==6U;
           }))return 404;
           transport.stop();
           return transport.statistics().raw_evidence_failure==(cancel_pending_flush_fault==5U ? 6U : 0U) ? 0 : 400;
@@ -3948,16 +3203,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
            */
           if(cancel_status_terminal7_variant){
             auto hold_terminal_status=valid;hold_terminal_status.send_state=false;
-            hold_terminal_status.status.set_core_state(4U);hold_terminal_status.status.set_final_state(7U);
+            hold_terminal_status.status.core_state()=(4U);hold_terminal_status.status.final_state()=(7U);
             std::uint8_t digest[32]{};std::copy(motion_terminal.begin(),motion_terminal.end(),digest);
-            hold_terminal_status.status.set_evidence_chain_sha256(digest);
-            if(cancel_status_bad_flags>=1U && cancel_status_bad_flags<=4U)hold_terminal_status.status.set_final_state(cancel_status_bad_flags==1U?4U:cancel_status_bad_flags==2U?5U:cancel_status_bad_flags==3U?6U:9U);
-            if(cancel_status_bad_flags==5U){digest[0]^=1U;hold_terminal_status.status.set_evidence_chain_sha256(digest);}
-            if(cancel_status_bad_flags==6U){std::fill(std::begin(digest),std::end(digest),0U);hold_terminal_status.status.set_evidence_chain_sha256(digest);}
-            if(cancel_status_bad_flags==7U)hold_terminal_status.status.set_failure_source(1U);
-            if(cancel_status_bad_flags==8U)hold_terminal_status.status.set_failure_axis_mask(1U);
-            if(cancel_status_bad_flags==9U)hold_terminal_status.status.set_first_failure_reason(1U);
-            if(!send(hold_terminal_status) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);Status observed;return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),channel->observation.status.size(),&observed)==wire::CodecResult::kOk && observed.core_state()==4U && observed.final_state()==hold_terminal_status.status.final_state() && observed.run_id()==motion_run;}))return 363;
+            hold_terminal_status.status.evidence_chain_sha256().emplace().assign(digest,32);
+            if(cancel_status_bad_flags>=1U && cancel_status_bad_flags<=4U)hold_terminal_status.status.final_state()=(cancel_status_bad_flags==1U?4U:cancel_status_bad_flags==2U?5U:cancel_status_bad_flags==3U?6U:9U);
+            if(cancel_status_bad_flags==5U){digest[0]^=1U;hold_terminal_status.status.evidence_chain_sha256().emplace().assign(digest,32);}
+            if(cancel_status_bad_flags==6U){std::fill(std::begin(digest),std::end(digest),0U);hold_terminal_status.status.evidence_chain_sha256().emplace().assign(digest,32);}
+            if(cancel_status_bad_flags==7U)hold_terminal_status.status.failure_source()=(1U);
+            if(cancel_status_bad_flags==8U)hold_terminal_status.status.failure_axis_mask()=(1U);
+            if(cancel_status_bad_flags==9U)hold_terminal_status.status.first_failure_reason()=(1U);
+            if(!send(hold_terminal_status) || !wait_for([&]{std::lock_guard<std::mutex> lock(channel->mutex);Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed))==true && (*observed.core_state())==4U && (*observed.final_state())==(*hold_terminal_status.status.final_state()) && (*observed.run_id())==motion_run;}))return 363;
           }
           /**
            * @brief 先得到真实本地writer终态flush，再只改共享回执某字段隔离资格负例。
@@ -3975,25 +3230,23 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             channel->publish_raw_evidence_terminal_flushed(invalid_receipt);
           auto ongoing = valid;
           ongoing.send_status = false;
-          ongoing.state.set_core_state(4U);
-          ongoing.state.set_hold_ready(true);
-          ongoing.state.set_position_valid_mask(63U);
-          if (raw_order_case == 65U) ongoing.state.set_core_state(cancel_state_stopping_notready?7U:6U);
-          if (raw_order_case == 66U || cancel_state_stopping_notready) ongoing.state.set_hold_ready(false);
-          if (raw_order_case == 67U) ongoing.state.set_management_epoch(1U);
+          ongoing.state.core_state()=(4U);
+          ongoing.state.hold_ready()=(true);
+          root_fixture::set_position_quality(ongoing.state,63U);
+          if (raw_order_case == 65U) ongoing.state.core_state()=(cancel_state_stopping_notready?7U:6U);
+          if (raw_order_case == 66U || cancel_state_stopping_notready) ongoing.state.hold_ready()=(false);
+          if (raw_order_case == 67U) ongoing.state.management_epoch()=(1U);
           const auto start = transport_steady_now_us();
           std::uint32_t seq = 2U;
           std::uint64_t accepted_state_at = 0U;
           while (transport_steady_now_us() - start <= 300000U) {
             if (raw_order_case != 64U || seq == 2U) {
-              ongoing.state.set_state_seq(seq++);
+              ongoing.state.state_seq()=(seq++);
               if (!send(ongoing) || !wait_for([&] {
                     std::lock_guard<std::mutex> lock(channel->mutex);
-                    State observed;
-                    return wire::DummyJointStateV2Codec::decode(
-                        channel->observation.state.data(), channel->observation.state.size(),
-                        &observed) == wire::CodecResult::kOk &&
-                        observed.state_seq() == ongoing.state.state_seq() &&
+                    State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+                    return ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+                        (*observed.state_seq()) == (*ongoing.state.state_seq()) &&
                         (accepted_state_at = channel->observation.state_received_us) != 0U;
                   })) return 358;
             }
@@ -4001,19 +3254,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           }
           std::lock_guard<std::mutex> lock(channel->mutex);
           const auto now = transport_steady_now_us();
-          State observed;
+          State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
           /**
            * @brief State失鲜组合负例显式检查stale或heartbeat Stop已经发生。
            * 因此通过只证明组合安全拒绝，不声称单独隔离某一个binding年龄谓词。
            */
           if (raw_order_case == 64U) {
             if (accepted_state_at == 0U || now - accepted_state_at <= 250000U) return 359;
-          } else if (wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                  channel->observation.state.size(), &observed) != wire::CodecResult::kOk ||
-              observed.core_state() != (raw_order_case == 65U ? (cancel_state_stopping_notready?7U:6U) : 4U) ||
-              observed.hold_ready() != (raw_order_case != 66U && !cancel_state_stopping_notready) ||
-              observed.management_epoch() != (raw_order_case == 67U ? 1U : 0U) ||
-              observed.position_valid_mask() != 63U ||
+          } else if (((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) != true ||
+              (*observed.core_state()) != (raw_order_case == 65U ? (cancel_state_stopping_notready?7U:6U) : 4U) ||
+              (*observed.hold_ready()) != (raw_order_case != 66U && !cancel_state_stopping_notready) ||
+              (*observed.management_epoch()) != (raw_order_case == 67U ? 1U : 0U) ||
+              root_fixture::position_quality(observed) != 63U ||
               (raw_order_case != 64U &&
                now - channel->observation.state_received_us >= 100000U) ||
               (raw_order_case == 64U &&
@@ -4026,18 +3278,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }
         auto motion_final = valid;
         motion_final.send_state = false;
-        motion_final.status.set_core_state(4U);
-        motion_final.status.set_final_state(7U);
+        motion_final.status.core_state()=(4U);
+        motion_final.status.final_state()=(7U);
         std::uint8_t motion_digest[32]{};
         std::copy(motion_terminal.begin(), motion_terminal.end(), motion_digest);
-        motion_final.status.set_evidence_chain_sha256(motion_digest);
+        motion_final.status.evidence_chain_sha256().emplace().assign(motion_digest,32);
         if (!refresh && (!send(motion_final) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == motion_run &&
-                  observed.final_state() == 7U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == motion_run &&
+                  (*observed.final_state()) == 7U;
             }))) return 289;
         if (raw_order_case == 64U) {
           // 组合State失鲜安全拒绝：不宣称隔离单个binding年龄谓词。
@@ -4088,20 +3338,20 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }
         auto release_status = valid;
         release_status.send_state = false;
-        release_status.status.set_run_id(next_run);
-        release_status.status.set_parent_run_id(refresh ? 0U : 121U);
-        release_status.status.set_attempt_kind(refresh ? 1U : 3U);
-        release_status.status.set_core_state(refresh ? 4U : 1U);
-        release_status.status.set_session_id(refresh ? 8U : 0U);
-        release_status.status.set_reference_epoch(refresh ? 9U : 0U);
-        release_status.status.set_motion_epoch(refresh ? 10U : 11U);
-        release_status.status.set_management_epoch(refresh ? 0U : 1U);
-        release_status.status.set_release_committed(!refresh);
-        release_status.status.set_permit_remaining_us(0U);
-        release_status.status.set_final_state(refresh ? 0U : 8U);
+        release_status.status.run_id()=(next_run);
+        release_status.status.parent_run_id()=(refresh ? 0U : 121U);
+        release_status.status.attempt_kind()=(refresh ? 1U : 3U);
+        release_status.status.core_state()=(refresh ? 4U : 1U);
+        release_status.status.session_id()=(refresh ? 8U : 0U);
+        release_status.status.reference_epoch()=(refresh ? 9U : 0U);
+        release_status.status.motion_epoch()=(refresh ? 10U : 11U);
+        release_status.status.management_epoch()=(refresh ? 0U : 1U);
+        release_status.status.release_committed()=(!refresh);
+        release_status.status.permit_remaining_us()=(0U);
+        release_status.status.final_state()=(refresh ? 0U : 8U);
         if (raw_order_case == 25U || raw_order_case == 26U) {
-          if (raw_order_case == 26U) release_status.status.set_session_id(9U);
-          else release_status.status.set_boot_epoch(8U);
+          if (raw_order_case == 26U) release_status.status.session_id()=(9U);
+          else release_status.status_source.boot_id=(8U);
           const auto statuses_before_bad_identity = transport.statistics().status_messages;
           if (!send(release_status) || !wait_for([&] {
                 return transport.statistics().status_messages > statuses_before_bad_identity;
@@ -4117,14 +3367,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }
         if (!send(release_status) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == next_run &&
-                  observed.parent_run_id() == (refresh ? 0U : 121U) &&
-                  observed.attempt_kind() == (refresh ? 1U : 3U) &&
-                  observed.core_state() == (refresh ? 4U : 1U) &&
-                  observed.release_committed() == !refresh;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == next_run &&
+                  (*observed.parent_run_id()) == (refresh ? 0U : 121U) &&
+                  (*observed.attempt_kind()) == (refresh ? 1U : 3U) &&
+                  (*observed.core_state()) == (refresh ? 4U : 1U) &&
+                  (*observed.release_committed()) == !refresh;
             }) || transport.statistics().raw_evidence_failure != 0U ||
             transport.statistics().raw_evidence_last_terminal_written_run != motion_run)
           return 292;
@@ -4136,26 +3384,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           if (!publish_page(next_run, 1U, 4U, 1U, 6U, release_page,
                             &release_terminal, 1U, 0U, false)) return 302;
           auto early_final = release_status;
-          early_final.status.set_final_state(6U);
-          early_final.status.set_motion_complete(true);
+          early_final.status.final_state()=(6U);
+          early_final.status.motion_complete()=(true);
           std::uint8_t digest[32]{};
           std::copy(release_terminal.begin(), release_terminal.end(), digest);
-          early_final.status.set_evidence_chain_sha256(digest);
+          early_final.status.evidence_chain_sha256().emplace().assign(digest,32);
           if (!send(early_final) || !wait_for([&] {
                 std::lock_guard<std::mutex> lock(channel->mutex);
-                Status observed;
-                return wire::DummyDeviceStatusV2Codec::decode(
-                    channel->observation.status.data(), channel->observation.status.size(),
-                    &observed) == wire::CodecResult::kOk && observed.run_id() == next_run &&
-                    observed.final_state() == 6U;
+                Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == next_run &&
+                    (*observed.final_state()) == 6U;
               })) return 303;
           if (!publish_page(next_run, 1U, 4U, 1U, 6U, release_page,
                             &release_terminal, 1U, 0U) ||
               !wait_for([&] { return transport.statistics().raw_evidence_last_terminal_written_run == next_run; }))
             return 304;
           auto following = release_status;
-          following.status.set_run_id(next_run + 1U);
-          following.status.set_motion_epoch(11U);
+          following.status.run_id()=(next_run + 1U);
+          following.status.motion_epoch()=(11U);
           const auto before_following = transport.statistics().status_messages;
           if (!send(following) || !wait_for([&] {
                 const auto stats = transport.statistics();
@@ -4173,11 +3419,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             !wait_for([&] { return transport.statistics().raw_evidence_last_terminal_written_run == next_run; }))
           return 293;
         auto release_final = release_status;
-        if (refresh) release_final.status.set_final_state(6U);
+        if (refresh) release_final.status.final_state()=(6U);
         std::uint8_t release_digest[32]{};
         std::copy(release_terminal.begin(), release_terminal.end(), release_digest);
         if (raw_order_case == 32U) release_digest[0] ^= 1U;
-        release_final.status.set_evidence_chain_sha256(release_digest);
+        release_final.status.evidence_chain_sha256().emplace().assign(release_digest,32);
         if (raw_order_case == 32U) {
           if (!send(release_final) || !wait_for([&] {
                 return transport.statistics().raw_evidence_failure != 0U;
@@ -4194,15 +3440,13 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         }
         if (!send(release_final) || !wait_for([&] {
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == next_run &&
-                  observed.final_state() == (refresh ? 6U : 8U) &&
-                  observed.core_state() == (refresh ? 4U : 1U) &&
-                  observed.release_committed() == !refresh &&
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == next_run &&
+                  (*observed.final_state()) == (refresh ? 6U : 8U) &&
+                  (*observed.core_state()) == (refresh ? 4U : 1U) &&
+                  (*observed.release_committed()) == !refresh &&
                   std::equal(release_terminal.begin(), release_terminal.end(),
-                             observed.evidence_chain_sha256());
+                             (observed.evidence_chain_sha256()->data()));
             })) return 294;
         transport.stop();
         const auto capture = transport.statistics();
@@ -4213,10 +3457,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       std::array<std::uint8_t, 32U> group_one{}, terminal_one{}, group_two{}, terminal_two{};
       if (!send(valid) || !wait_for([&] {
             std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;
-            return wire::DummyDeviceStatusV2Codec::decode(
-                channel->observation.status.data(), channel->observation.status.size(),
-                &observed) == wire::CodecResult::kOk && observed.run_id() == 1U;
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 1U;
           }) || !publish_page(1U, 0U, 2U, 1U, 0U, seed_for(1U), &group_one) ||
           !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 1U; }))
         return 251;
@@ -4234,20 +3476,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         return 251;
       auto exported = valid;
       exported.send_state = false;
-      exported.status.set_core_state(4U);
-      exported.status.set_final_state(6U);
-      exported.status.set_motion_complete(true);
+      exported.status.core_state()=(4U);
+      exported.status.final_state()=(6U);
+      exported.status.motion_complete()=(true);
       std::uint8_t terminal_digest[32]{};
       std::copy(terminal_one.begin(), terminal_one.end(), terminal_digest);
-      exported.status.set_evidence_chain_sha256(terminal_digest);
+      exported.status.evidence_chain_sha256().emplace().assign(terminal_digest,32);
       if (!send(exported) || !wait_for([&] {
             std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;
-            return wire::DummyDeviceStatusV2Codec::decode(
-                channel->observation.status.data(), channel->observation.status.size(),
-                &observed) == wire::CodecResult::kOk && observed.run_id() == 1U &&
-                observed.final_state() == 6U && observed.motion_complete() &&
-                std::equal(terminal_one.begin(), terminal_one.end(), observed.evidence_chain_sha256());
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 1U &&
+                (*observed.final_state()) == 6U && (*observed.motion_complete()) &&
+                std::equal(terminal_one.begin(), terminal_one.end(), (observed.evidence_chain_sha256()->data()));
           })) return 252;
       if (!publish_page(2U, 0U, 1U, 1U, 0U, seed_for(2U), &group_two) ||
           !wait_for([&] { return transport.statistics().raw_evidence_pages_written == 3U ||
@@ -4265,40 +3505,38 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       if (raw_order_case >= 9U && raw_order_case <= 14U) {
         auto released_state = valid;
         released_state.send_status = false;
-        released_state.state.set_session_id(0U);
-        released_state.state.set_reference_epoch(0U);
-        released_state.state.set_motion_epoch(11U);
-        released_state.state.set_management_epoch(1U);
-        released_state.state.set_core_state(1U);
-        released_state.state.set_position_valid_mask(0U);
-        released_state.state.set_raw_position_valid_mask(63U);
-        released_state.state.set_state_seq(2U);
+        released_state.state.session_id()=(0U);
+        released_state.state.reference_epoch()=(0U);
+        released_state.state.motion_epoch()=(11U);
+        released_state.state.management_epoch()=(1U);
+        released_state.state.core_state()=(1U);
+        root_fixture::set_position_quality(released_state.state,0U);
+        root_fixture::set_raw_quality(released_state.state,63U);
+        released_state.state.state_seq()=(2U);
         const double raw_motor_rev[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-        released_state.state.set_raw_motor_position_rev(raw_motor_rev);
+        root_fixture::set_raw_position(released_state.state,raw_motor_rev);
         const auto state_count = transport.statistics().state_messages;
         if (!send(released_state) || !wait_for([&] {
               return transport.statistics().state_messages > state_count;
             })) return 270;
         auto released_status = valid;
         released_status.send_state = false;
-        released_status.status.set_run_id(2U);
-        released_status.status.set_session_id(0U);
-        released_status.status.set_reference_epoch(0U);
-        released_status.status.set_motion_epoch(11U);
-        released_status.status.set_management_epoch(1U);
-        released_status.status.set_core_state(1U);
-        released_status.status.set_release_committed(true);
-        released_status.status.set_permit_remaining_us(0U);
-        released_status.status.set_final_state(2U);
-        if (raw_order_case == 10U) released_status.status.set_boot_epoch(8U);
+        released_status.status.run_id()=(2U);
+        released_status.status.session_id()=(0U);
+        released_status.status.reference_epoch()=(0U);
+        released_status.status.motion_epoch()=(11U);
+        released_status.status.management_epoch()=(1U);
+        released_status.status.core_state()=(1U);
+        released_status.status.release_committed()=(true);
+        released_status.status.permit_remaining_us()=(0U);
+        released_status.status.final_state()=(2U);
+        if (raw_order_case == 10U) released_status.status_source.boot_id=(8U);
         if (!send(released_status) || !wait_for([&] {
               if (transport.statistics().raw_evidence_failure != 0U) return true;
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
-                  observed.session_id() == 0U;
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U &&
+                  (*observed.session_id()) == 0U;
             })) return 271;
         if (raw_order_case == 10U) {
           transport.stop();
@@ -4323,11 +3561,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           return transport.statistics().raw_evidence_failure != 0U ? 0 : 277;
         }
         auto final_status = released_status;
-        final_status.status.set_management_epoch(2U);
+        final_status.status.management_epoch()=(2U);
         std::uint8_t final_digest[32]{};
         std::copy(terminal_two.begin(), terminal_two.end(), final_digest);
         if (raw_order_case == 14U) final_digest[0] ^= 1U;
-        final_status.status.set_evidence_chain_sha256(final_digest);
+        final_status.status.evidence_chain_sha256().emplace().assign(final_digest,32);
         if (raw_order_case == 14U) {
           if (!send(final_status) || !wait_for([&] {
                 return transport.statistics().raw_evidence_failure != 0U;
@@ -4338,13 +3576,11 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if (!send(final_status) || !wait_for([&] {
               if (transport.statistics().raw_evidence_failure != 0U) return true;
               std::lock_guard<std::mutex> lock(channel->mutex);
-              Status observed;
-              return wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) == wire::CodecResult::kOk && observed.run_id() == 2U &&
-                  observed.session_id() == 0U && observed.final_state() == 2U &&
+              Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+              return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U &&
+                  (*observed.session_id()) == 0U && (*observed.final_state()) == 2U &&
                   std::equal(terminal_two.begin(), terminal_two.end(),
-                             observed.evidence_chain_sha256());
+                             (observed.evidence_chain_sha256()->data()));
             })) return 278;
         transport.stop();
         const auto capture = transport.statistics();
@@ -4353,27 +3589,27 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         std::FILE *file = std::fopen(capture_path.c_str(), "rb");
         if (!file) return 280;
         if (::fseek(file, 8L, SEEK_SET) != 0) { std::fclose(file); return 281; }
-        std::uint8_t header[39]{};
+        std::uint8_t header[kCaptureHeaderSize]{};
         int index = 0, page_indices[3]{-1, -1, -1}, released_index = -1, final_index = -1;
         bool old_identity = true;
         while (std::fread(header, 1U, sizeof(header), file) == sizeof(header)) {
           const auto size = static_cast<std::uint16_t>(header[1] | (header[2] << 8U));
-          std::array<std::uint8_t, wire::DummyDeviceStatusV2Codec::kEncodedSize> payload{};
+          std::array<std::uint8_t, dp::protocol::canonical::Traits<Status>::kMaxEncodedSize> payload{};
           if (size > payload.size() || std::fread(payload.data(), 1U, size, file) != size) break;
-          if (header[0] == 1U && size == wire::DummyAttemptEvidenceV2Codec::kEncodedSize) {
-            Evidence observed;
-            if (wire::DummyAttemptEvidenceV2Codec::decode(payload.data(), size, &observed) ==
-                    wire::CodecResult::kOk && observed.run_id() == 2U && observed.evidence_seq() < 3U) {
-              page_indices[observed.evidence_seq()] = index;
+          if (header[0] == 1U && size <= dp::protocol::canonical::Traits<Evidence>::kMaxEncodedSize) {
+            Evidence observed=owned_fixture::evidence();dp::comm::SourceId observed_source{};
+            if (((observed_source=root_fixture::capture_source(header)),dp::protocol::canonical::Traits<Evidence>::decode(payload.data(),size,&observed)) ==
+                    true && (*observed.run_id()) == 2U && (*observed.evidence_seq()) < 3U) {
+              page_indices[(*observed.evidence_seq())] = index;
               old_identity = old_identity && header[11] == 7U && header[19] == 8U;
             }
-          } else if (header[0] == 3U && size == wire::DummyDeviceStatusV2Codec::kEncodedSize) {
-            Status observed;
-            if (wire::DummyDeviceStatusV2Codec::decode(payload.data(), size, &observed) ==
-                    wire::CodecResult::kOk && observed.run_id() == 2U) {
+          } else if (header[0] == 3U && size <= dp::protocol::canonical::Traits<Status>::kMaxEncodedSize) {
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            if (((observed_source=root_fixture::capture_source(header)),dp::protocol::canonical::Traits<Status>::decode(payload.data(),size,&observed)) ==
+                    true && (*observed.run_id()) == 2U) {
               const bool chain_present = std::any_of(
-                  std::begin(observed.evidence_chain_sha256()),
-                  std::end(observed.evidence_chain_sha256()),
+                  observed.evidence_chain_sha256()->begin(),
+                  observed.evidence_chain_sha256()->end(),
                   [](std::uint8_t byte) { return byte != 0U; });
               if (chain_present) final_index = index;
               else released_index = index;
@@ -4401,10 +3637,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
       auto status_two = valid;
       status_two.send_state = false;
-      status_two.status.set_run_id(2U);
-      status_two.status.set_management_epoch(1U);
-      if (raw_order_case == 2U) status_two.status.set_boot_epoch(8U);
-      if (raw_order_case == 3U) status_two.status.set_session_id(9U);
+      status_two.status.run_id()=(2U);
+      status_two.status.management_epoch()=(1U);
+      if (raw_order_case == 2U) status_two.status_source.boot_id=(8U);
+      if (raw_order_case == 3U) status_two.status.session_id()=(9U);
       if (raw_order_case == 2U || raw_order_case == 3U) {
         if (!send(status_two) || !wait_for([&] {
               return transport.statistics().raw_evidence_failure != 0U;
@@ -4414,10 +3650,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       }
       if (!send(status_two) || !wait_for([&] {
             std::lock_guard<std::mutex> lock(channel->mutex);
-            Status observed;
-            return wire::DummyDeviceStatusV2Codec::decode(
-                channel->observation.status.data(), channel->observation.status.size(),
-                &observed) == wire::CodecResult::kOk && observed.run_id() == 2U;
+            Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+            return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == 2U;
           }) || !publish_page(2U, 1U, 4U, 1U, 6U, group_two, &terminal_two) ||
           !wait_for([&] { return transport.statistics().raw_evidence_last_terminal_written_run == 2U; }))
         return 255;
@@ -4429,21 +3663,21 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       std::FILE *file = std::fopen(capture_path.c_str(), "rb");
       if (!file) return 257;
       if (::fseek(file, 8L, SEEK_SET) != 0) { std::fclose(file); return 258; }
-      std::uint8_t header[39]{};
+      std::uint8_t header[kCaptureHeaderSize]{};
       int index = 0, page_two_index = -1, status_two_index = -1;
       while (std::fread(header, 1U, sizeof(header), file) == sizeof(header)) {
         const auto size = static_cast<std::uint16_t>(header[1] | (header[2] << 8U));
-        std::array<std::uint8_t, wire::DummyDeviceStatusV2Codec::kEncodedSize> payload{};
+        std::array<std::uint8_t, dp::protocol::canonical::Traits<Status>::kMaxEncodedSize> payload{};
         if (size > payload.size() || std::fread(payload.data(), 1U, size, file) != size) break;
-        if (header[0] == 1U && size == wire::DummyAttemptEvidenceV2Codec::kEncodedSize) {
-          Evidence observed;
-          if (wire::DummyAttemptEvidenceV2Codec::decode(payload.data(), size, &observed) ==
-                  wire::CodecResult::kOk && observed.run_id() == 2U && observed.evidence_seq() == 0U)
+        if (header[0] == 1U && size <= dp::protocol::canonical::Traits<Evidence>::kMaxEncodedSize) {
+          Evidence observed=owned_fixture::evidence();dp::comm::SourceId observed_source{};
+          if (((observed_source=root_fixture::capture_source(header)),dp::protocol::canonical::Traits<Evidence>::decode(payload.data(),size,&observed)) ==
+                  true && (*observed.run_id()) == 2U && (*observed.evidence_seq()) == 0U)
             page_two_index = index;
-        } else if (header[0] == 3U && size == wire::DummyDeviceStatusV2Codec::kEncodedSize) {
-          Status observed;
-          if (wire::DummyDeviceStatusV2Codec::decode(payload.data(), size, &observed) ==
-                  wire::CodecResult::kOk && observed.run_id() == 2U)
+        } else if (header[0] == 3U && size <= dp::protocol::canonical::Traits<Status>::kMaxEncodedSize) {
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          if (((observed_source=root_fixture::capture_source(header)),dp::protocol::canonical::Traits<Status>::decode(payload.data(),size,&observed)) ==
+                  true && (*observed.run_id()) == 2U)
             status_two_index = index;
         }
         ++index;
@@ -4469,52 +3703,42 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         stimulus.send_state = false;
         stimulus.send_evidence = true;
         auto &message = stimulus.evidence;
-        message.set_schema_major(2U);
-        message.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-        message.set_run_id(run);
-        message.set_attempt_id(run);
-        message.set_evidence_seq(terminal ? 1U : 0U);
-        message.set_attempt_kind(1U);
-        message.set_motion_epoch(10U);
-        message.set_category(terminal ? 4U : 2U);
-        message.set_final(1U);
-        message.set_group_count(1U);
-        if (terminal) message.set_final_state(3U);
+        (void)0;
+        (void)0;
+        message.run_id()=(run);
+        message.attempt_id()=(run);
+        message.evidence_seq()=(terminal ? 1U : 0U);
+        message.attempt_kind()=(1U);
+        message.motion_epoch()=(10U);
+        message.category()=(terminal ? 4U : 2U);
+        message.final()=(1U);
+        message.group_count()=(1U);
+        if (terminal) message.final_state()=(3U);
         else {
-          message.set_group_id(run);
-          message.set_expected_mask(63U);
-          message.set_submitted_mask(63U);
-          message.set_sent_mask(63U);
+          message.group_id()=(run);
+          message.expected_mask()=(63U);
+          message.submitted_mask()=(63U);
+          message.sent_mask()=(63U);
         }
         std::uint8_t prior[32]{};
         std::copy(previous.begin(), previous.end(), prior);
-        message.set_previous_chain_sha256(prior);
-        std::array<std::uint8_t, wire::DummyAttemptEvidenceV2Codec::kEncodedSize> raw{};
-        if (wire::DummyAttemptEvidenceV2Codec::encode(
-                message, raw.data(), raw.size()) != wire::CodecResult::kOk) return false;
-        std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> input{};
-        std::copy(previous.begin(), previous.end(), input.begin());
-        std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
-                    input.begin() + 32U);
-        input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
-        ::SHA256(input.data(), input.size(), next->data());
+        message.previous_chain_sha256().emplace().assign(prior,32);
+        if(!dummy_ref::comm::attempt_evidence::next_chain(previous,message,next))return false;
         std::uint8_t digest[32]{};
         std::copy(next->begin(), next->end(), digest);
-        message.set_chain_sha256(digest);
+        message.chain_sha256().emplace().assign(digest,32);
         return send(stimulus);
       };
       for (std::uint64_t run = 3U; run <= 11U; ++run) {
         if (run != 3U) {
           auto status_only = valid;
           status_only.send_state = false;
-          status_only.status.set_run_id(run);
-          status_only.status.set_management_epoch(static_cast<std::uint32_t>(run - 3U));
+          status_only.status.run_id()=(run);
+          status_only.status.management_epoch()=(static_cast<std::uint32_t>(run - 3U));
           if (!send(status_only) || !wait_for([&] {
                 std::lock_guard<std::mutex> lock(channel->mutex);
-                Status observed;
-                return wire::DummyDeviceStatusV2Codec::decode(
-                    channel->observation.status.data(), channel->observation.status.size(),
-                    &observed) == wire::CodecResult::kOk && observed.run_id() == run;
+                Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+                return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.run_id()) == run;
               })) return 145;
         }
         std::array<std::uint8_t, 192U> seed{};
@@ -4536,17 +3760,15 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         if (run == 4U || run == 11U) {
           auto stale_status = valid;
           stale_status.send_state = false;
-          stale_status.status.set_run_id(3U);
-          stale_status.status.set_management_epoch(static_cast<std::uint32_t>(run - 3U));
+          stale_status.status.run_id()=(3U);
+          stale_status.status.management_epoch()=(static_cast<std::uint32_t>(run - 3U));
           const auto rejected_before = transport.statistics().stale_run_status_rejections;
           if (!send(stale_status) || !wait_for([&] {
                 return transport.statistics().stale_run_status_rejections > rejected_before;
               })) return 150;
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          if (wire::DummyDeviceStatusV2Codec::decode(
-                  channel->observation.status.data(), channel->observation.status.size(),
-                  &observed) != wire::CodecResult::kOk || observed.run_id() != run ||
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          if (((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) != true || (*observed.run_id()) != run ||
               transport.statistics().raw_evidence_failure != 0U) return 151;
         }
       }
@@ -4571,10 +3793,10 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     auto released_status = valid;
     released_status.send_state = false;
-    released_status.status.set_session_id(0U);
-    released_status.status.set_reference_epoch(0U);
-    released_status.status.set_management_epoch(1U);
-    if (raw_bad_release_mode) released_status.status.set_parent_run_id(42U);
+    released_status.status.session_id()=(0U);
+    released_status.status.reference_epoch()=(0U);
+    released_status.status.management_epoch()=(1U);
+    if (raw_bad_release_mode) released_status.status.parent_run_id()=(42U);
     /**
      * @brief 将释放Status指向不相关parent42，要求采集失败及共享失败码锁存。
      * 只能证明绑定门槛触发，不说明对端真实执行了释放。
@@ -4590,26 +3812,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     }
     if (!send(released_status) || !wait_for([&] {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed;
-          return wire::DummyDeviceStatusV2Codec::decode(
-              channel->observation.status.data(), channel->observation.status.size(),
-              &observed) == wire::CodecResult::kOk && observed.session_id() == 0U &&
-              observed.run_id() == 3U;
+          Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+          return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true && (*observed.session_id()) == 0U &&
+              (*observed.run_id()) == 3U;
         })) return 141;
     auto evidence = valid;
     evidence.send_status = false;
     evidence.send_state = false;
     evidence.send_evidence = true;
-    evidence.evidence.set_schema_major(2U);
-    evidence.evidence.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-    evidence.evidence.set_run_id(3U);
-    evidence.evidence.set_attempt_id(3U);
-    evidence.evidence.set_evidence_seq(0U);
-    evidence.evidence.set_attempt_kind(1U);
-    evidence.evidence.set_category(4U);
-    evidence.evidence.set_final(1U);
-    evidence.evidence.set_final_state(3U);
-    evidence.evidence.set_terminal_reason(14U);
+    (void)0;
+    (void)0;
+    evidence.evidence.run_id()=(3U);
+    evidence.evidence.attempt_id()=(3U);
+    evidence.evidence.evidence_seq()=(0U);
+    evidence.evidence.attempt_kind()=(1U);
+    evidence.evidence.category()=(4U);
+    evidence.evidence.final()=(1U);
+    evidence.evidence.final_state()=(3U);
+    evidence.evidence.terminal_reason()=(14U);
     std::array<std::uint8_t, 192U> seed{};
     seed[0] = 3U;
     seed[8] = 7U;
@@ -4620,18 +3840,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     std::copy(parameters.firmware_hash.begin(), parameters.firmware_hash.end(), seed.begin() + 128U);
     std::uint8_t previous[32]{};
     ::SHA256(seed.data(), seed.size(), previous);
-    evidence.evidence.set_previous_chain_sha256(previous);
-    std::array<std::uint8_t, wire::DummyAttemptEvidenceV2Codec::kEncodedSize> raw{};
-    if (wire::DummyAttemptEvidenceV2Codec::encode(
-            evidence.evidence, raw.data(), raw.size()) != wire::CodecResult::kOk) return 140;
-    std::array<std::uint8_t, 32U + wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256 + 1U> chain_input{};
-    std::copy(std::begin(previous), std::end(previous), chain_input.begin());
-    std::copy_n(raw.begin(), wire::DummyAttemptEvidenceV2Codec::kOffset_previous_chain_sha256,
-                chain_input.begin() + 32U);
-    chain_input.back() = raw[wire::DummyAttemptEvidenceV2Codec::kOffset_evidence_lost];
-    std::uint8_t chain[32]{};
-    ::SHA256(chain_input.data(), chain_input.size(), chain);
-    evidence.evidence.set_chain_sha256(chain);
+    evidence.evidence.previous_chain_sha256().emplace().assign(previous,32);
+    std::array<std::uint8_t,32> prior_array{},chain_array{};
+    std::copy_n(previous,32,prior_array.begin());
+    if(!dummy_ref::comm::attempt_evidence::next_chain(prior_array,evidence.evidence,&chain_array))return 140;
+    std::uint8_t chain[32]{};std::copy(chain_array.begin(),chain_array.end(),chain);
+    evidence.evidence.chain_sha256().emplace().assign(chain,32);
     if (!send(evidence) || !wait_for([&] {
           return transport.statistics().raw_evidence_pages_written == 1U;
         })) return 140;
@@ -4639,12 +3853,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     const auto capture = transport.statistics();
     std::FILE *file = std::fopen(capture_path.c_str(), "rb");
     if (!file) return 138;
-    std::uint8_t header[39]{};
+    std::uint8_t header[kCaptureHeaderSize]{};
     bool found_page = false;
     if (::fseek(file, 8L, SEEK_SET) != 0) { std::fclose(file); return 139; }
     while (std::fread(header, 1U, sizeof(header), file) == sizeof(header)) {
       const auto payload_size = static_cast<std::uint16_t>(header[1] | (header[2] << 8U));
-      if (header[0] == 1U && payload_size == wire::DummyAttemptEvidenceV2Codec::kEncodedSize &&
+      if (header[0] == 1U && payload_size <= dp::protocol::canonical::Traits<Evidence>::kMaxEncodedSize &&
           header[11] == 7U && header[19] == 8U && header[27] == 3U) found_page = true;
       if (::fseek(file, payload_size, SEEK_CUR) != 0) break;
     }
@@ -4656,14 +3870,14 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * @brief 普通完整场景先要求连续100ms得到稳定可用快照；若绑定失效变化则升seq并重新计稳定窗。
    * 该准备过程允许异步bootstrap完成，不把一次瞬间copy成功当作长期稳定。
    */
-  auto stable_sequence = valid.state.state_seq();
+  auto stable_sequence = (*valid.state.state_seq());
   auto observed_invalidations = transport.statistics().invalidations;
   auto stable_since = std::chrono::steady_clock::now();
   if (!wait_for([&] {
         const auto statistics = transport.statistics();
         if (statistics.invalidations != observed_invalidations) {
           observed_invalidations = statistics.invalidations;
-          valid.state.set_state_seq(++stable_sequence);
+          valid.state.state_seq()=(++stable_sequence);
           stable_since = std::chrono::steady_clock::now();
         }
         send(valid);
@@ -4672,7 +3886,17 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           return false;
         }
         return std::chrono::steady_clock::now() - stable_since >= std::chrono::milliseconds(100);
-      })) return 54;
+      })) {
+    const auto stats=transport.statistics();const bool copied=system.copy_state(&snapshot);
+    std::fprintf(stderr,"ROOT_STABLE_FAILED status=%llu state=%llu callbacks=%llu rejected=%llu invalid=%llu seq=%u wanted=%u copy=%u identity=%llu authority=%llu sequence=%llu ingest=%llu stop=%llu bootstrap=%llu stale=%llu skew=%llu\n",
+      (unsigned long long)stats.status_messages,(unsigned long long)stats.state_messages,(unsigned long long)stats.state_callbacks,
+      (unsigned long long)stats.rejected_states,(unsigned long long)stats.invalidations,snapshot.envelope.state_seq,stable_sequence,unsigned(copied),
+      (unsigned long long)stats.state_identity_rejections,(unsigned long long)stats.state_authority_rejections,
+      (unsigned long long)stats.state_sequence_rejections,(unsigned long long)stats.state_ingest_rejections,
+      (unsigned long long)stats.stop_latched_state_rejections,(unsigned long long)stats.bootstrap_rejections,
+      (unsigned long long)stats.stale_payload_rejections,(unsigned long long)stats.clock_skew_rejections);
+    return 54;
+  }
   if (snapshot.position[0] != 0.25 ||
       (six_axis ? snapshot.position[1] != 0.2 : !std::isnan(snapshot.position[1]))) return 13;
   /**
@@ -4697,7 +3921,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         })) return 151;
     auto newer_state = valid;
     newer_state.send_status = false;
-    newer_state.state.set_state_seq(stable_sequence + 1U);
+    newer_state.state.state_seq()=(stable_sequence + 1U);
     const auto latched_before = transport.statistics().stop_latched_state_rejections;
     if (!send_rejected_state(newer_state) || system.copy_state(&snapshot) ||
         transport.statistics().stop_latched_state_rejections <= latched_before) return 152;
@@ -4719,15 +3943,15 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * 将合法seq推进后重发，直到copy_state精确看到该seq；用于普通身份负例之间恢复夹具，不清除生产Stop锁存。
    */
   auto restore_valid_snapshot = [&] {
-    valid.state.set_state_seq(++stable_sequence);
+    valid.state.state_seq()=(++stable_sequence);
     return wait_for([&] {
       send(valid);
       return system.copy_state(&snapshot) && snapshot.envelope.state_seq == stable_sequence;
     });
   };
   if (default_ack_age_mode) {
-    valid.state.set_state_seq(++stable_sequence);
-    valid.state.set_produced_at_us(device_now_us());
+    valid.state.state_seq()=(++stable_sequence);
+    valid.state.produced_at_us()=(device_now_us());
     if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
         snapshot.envelope.state_seq == stable_sequence; })) return 139;
   }
@@ -4739,41 +3963,41 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     for (unsigned fault = 0U; fault < 3U; ++fault) {
       auto invalid_floor = valid;
       invalid_floor.send_status = false;
-      invalid_floor.state.set_state_seq(++stable_sequence);
-      invalid_floor.state.set_committed_producer_seq(5000U);
-      invalid_floor.state.set_admitted_producer_seq(5000U);
-      if (fault == 0U) invalid_floor.state.set_boot_epoch(999U);
-      if (fault == 1U) invalid_floor.state.set_motion_epoch(999U);
-      if (fault == 2U) invalid_floor.state.set_produced_at_us(1U);
+      invalid_floor.state.state_seq()=(++stable_sequence);
+      invalid_floor.state.committed_producer_seq()=(5000U);
+      invalid_floor.state.admitted_producer_seq()=(5000U);
+      if (fault == 0U) invalid_floor.state_source.boot_id=(999U);
+      if (fault == 1U) invalid_floor.state.motion_epoch()=(999U);
+      if (fault == 2U) invalid_floor.state.produced_at_us()=(1U);
       if (!send_rejected_state(invalid_floor)) return 160;
     }
-    valid.state.set_state_seq(++stable_sequence);
-    valid.state.set_produced_at_us(0U);
+    valid.state.state_seq()=(++stable_sequence);
+    valid.state.produced_at_us()=(0U);
     if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
         snapshot.envelope.state_seq == stable_sequence; })) return 159;
     channel->inactive_prime_allowed.store(true);
-    set_command_identity({valid.status.boot_epoch(), valid.status.session_id(),
-        valid.status.reference_epoch(), valid.status.motion_epoch(), 9007199254740997ULL});
+    set_command_identity({valid.status_source.boot_id, (*valid.status.session_id()),
+        (*valid.status.reference_epoch()), (*valid.status.motion_epoch()), 9007199254740997ULL});
     const auto prime_generation = publish_control_update(positions, 6U, 0, nullptr);
     const bool sent = prime_generation != 0U && ::poll(&response, 1, 1500) == 1;
     Command prime_command;
-    const bool valid_prime = sent && ::read(input, &prime_command, sizeof(prime_command)) == sizeof(prime_command) &&
-        prime_command.producer_seq() == wire_producer_sequence(prime_generation) &&
-        prime_command.producer_seq() == 45U &&
-        prime_command.motion_epoch() == valid.status.motion_epoch();
-    if (!valid_prime) { const auto stats=transport.statistics(); std::fprintf(stderr,"reject=%llu published=%llu invalid=%llu ready=%d\n",(unsigned long long)stats.rejected_commands,(unsigned long long)stats.commands_published,(unsigned long long)stats.invalidations,stats.ready); std::fprintf(stderr,"highwater prime sent=%d generation=%llu wire=%u motion=%u expected_motion=%u\n",sent,static_cast<unsigned long long>(prime_generation),prime_command.producer_seq(),prime_command.motion_epoch(),valid.status.motion_epoch()); return 154; }
+    const bool valid_prime = sent && (root_fixture::read_value(input,prime_command)) &&
+        (*prime_command.producer_seq()) == wire_producer_sequence(prime_generation) &&
+        (*prime_command.producer_seq()) == 45U &&
+        (*prime_command.motion_epoch()) == (*valid.status.motion_epoch());
+    if (!valid_prime) { const auto stats=transport.statistics(); std::fprintf(stderr,"reject=%llu published=%llu invalid=%llu ready=%d\n",(unsigned long long)stats.rejected_commands,(unsigned long long)stats.commands_published,(unsigned long long)stats.invalidations,stats.ready); std::fprintf(stderr,"highwater prime sent=%d generation=%llu wire=%u motion=%u expected_motion=%u\n",sent,static_cast<unsigned long long>(prime_generation),(*prime_command.producer_seq()),(*prime_command.motion_epoch()),(*valid.status.motion_epoch())); return 154; }
     const auto before_old_ack = transport.statistics().group_sent_ack_misses;
     valid.send_status = false;
-    valid.state.set_state_seq(++stable_sequence);
-    valid.state.set_produced_at_us(0U);
+    valid.state.state_seq()=(++stable_sequence);
+    valid.state.produced_at_us()=(0U);
     if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
         snapshot.envelope.state_seq == stable_sequence; })) return 155;
     const auto old_ack_misses = transport.statistics().group_sent_ack_misses;
     if (old_ack_misses <= before_old_ack) return 156; // retained44 is not ACK45
-    valid.state.set_committed_producer_seq(prime_command.producer_seq());
-    valid.state.set_admitted_producer_seq(prime_command.producer_seq());
-    valid.state.set_can_sent_mask(63U);
-    valid.state.set_state_seq(++stable_sequence);
+    valid.state.committed_producer_seq()=((*prime_command.producer_seq()));
+    valid.state.admitted_producer_seq()=((*prime_command.producer_seq()));
+    valid.state.can_sent_mask()=(63U);
+    valid.state.state_seq()=(++stable_sequence);
     if (!wait_for([&] { return send(valid) && system.copy_state(&snapshot) &&
         snapshot.envelope.state_seq == stable_sequence; })) return 157;
     if (transport.statistics().group_sent_ack_misses != old_ack_misses ||
@@ -4784,47 +4008,57 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   }
   if (system.on_activate(rclcpp_lifecycle::State()) != hardware_interface::CallbackReturn::SUCCESS) return 14;
   if (ticket_mode != 0U) {
-    valid.state.set_state_seq(++stable_sequence);
-    valid.state.set_produced_at_us(device_now_us());
-    valid.state.set_freshness_ticket(9007199254740997ULL);
+    valid.state.state_seq()=(++stable_sequence);
+    valid.state.produced_at_us()=(device_now_us());
+    valid.state.freshness_ticket()=(9007199254740997ULL);
     if (!send(valid) || !wait_for([&] { return system.copy_state(&snapshot) &&
         snapshot.envelope.state_seq == stable_sequence; })) return 250;
   } else {
-    valid.state.set_state_seq(++stable_sequence);
-    valid.state.set_produced_at_us(device_now_us());
-    if (!send(valid) || !wait_for([&] { return system.copy_state(&snapshot) &&
-        snapshot.envelope.state_seq == stable_sequence; })) return 256;
-    valid.state.set_produced_at_us(0U);
+    valid.state.state_seq()=(++stable_sequence);
+    valid.state.produced_at_us()=(0U);
+    if (!feedback_until(valid, [&] { return observed_state_matches(valid.state,valid.state_source) &&
+        system.copy_state(&snapshot) && snapshot.envelope.state_seq == stable_sequence; })) {
+      const auto stats = transport.statistics();
+      const auto observation = channel->diagnostic_observation();
+      State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
+      (void)((observed=observation.state),(observed_source=observation.state_source),message_fields_present(observed));
+      std::fprintf(stderr, "ROOT_ACTIVATE_STATE_FAILED expected_seq=%u observed_seq=%u callbacks=%llu messages=%llu rejected=%llu identity=%llu authority=%llu sequence=%llu stop=%llu\n",
+          stable_sequence, (*observed.state_seq()), (unsigned long long)stats.state_callbacks,
+          (unsigned long long)stats.state_messages, (unsigned long long)stats.rejected_states,
+          (unsigned long long)stats.state_identity_rejections, (unsigned long long)stats.state_authority_rejections,
+          (unsigned long long)stats.state_sequence_rejections, (unsigned long long)stats.stop_latched_state_rejections);
+      return 256;
+    }
+    valid.state.produced_at_us()=(0U);
   }
   set_command_identity({7U, 8U, 9U, 10U, 9007199254740997ULL});
   const auto generation = publish_control_update(positions, six_axis ? 6U : 1U, 0, nullptr);
   if (!generation || !system.transfer_control_update()) return 15;
   if (::poll(&response, 1, 3000) != 1) return 16;
   Command command;
-  const auto command_bytes = ::read(input, &command, sizeof(command));
-  if (command_bytes != sizeof(command)) {
-    std::fprintf(stderr, "first command read: bytes=%zd expected=%zu errno=%d revents=%d\n",
-                 command_bytes, sizeof(command), errno, response.revents);
+  const auto command_bytes = root_fixture::read_value(input,command);
+  if (!command_bytes) {
+    std::fprintf(stderr, "first command canonical decode=%u owned_size=%zu errno=%d revents=%d\n",
+                 unsigned(command_bytes), sizeof(command), errno, response.revents);
     return 17;
   }
-  if (command.device_id()[0] != 1U || command.client_instance_id()[0] != 2U ||
-      command.boot_epoch() != 7U || command.session_id() != 8U ||
-      command.reference_epoch() != 9U || command.motion_epoch() != 10U || command.configured_mask() != parameters.configured_mask ||
-      command.profile_id() != 1U || command.producer_seq() != generation ||
-      command.freshness_ticket() == 0U || command.position_rad()[0] != 0.25 ||
-      (six_axis ? command.position_rad()[1] != 0.2 : command.position_rad()[1] != 0.0) ||
-      !std::all_of(std::begin(command.position_rad()), std::end(command.position_rad()),
-                   [](double value) { return std::isfinite(value); })) {
+  if ((command.domain_device_id()->data())[0] != 1U || (command.client_instance_id()->data())[0] != 2U ||
+      (*command.boot_epoch()) != 7U || (*command.session_id()) != 8U ||
+      (*command.reference_epoch()) != 9U || (*command.motion_epoch()) != 10U || root_fixture::configured(command) != parameters.configured_mask ||
+      (*command.profile_id()) != 1U || (*command.producer_seq()) != generation ||
+      (*command.freshness_ticket()) == 0U || root_fixture::position(command)[0] != 0.25 ||
+      (six_axis ? root_fixture::position(command)[1] != 0.2 : root_fixture::position(command)[1] != 0.0) ||
+      !std::all_of(command.joints()->begin(),command.joints()->end(),[](const auto& joint){return joint.position_rad()&&std::isfinite(*joint.position_rad());})) {
     std::fprintf(stderr,
         "first command fields: device=%u client=%u boot=%llu session=%llu reference=%u motion=%u mask=%u profile=%u seq=%u expected_seq=%llu ticket=%llu position0=%.17g position1=%.17g\n",
-        command.device_id()[0], command.client_instance_id()[0],
-        static_cast<unsigned long long>(command.boot_epoch()),
-        static_cast<unsigned long long>(command.session_id()),
-        command.reference_epoch(), command.motion_epoch(), command.configured_mask(),
-        command.profile_id(), command.producer_seq(),
+        (command.domain_device_id()->data())[0], (command.client_instance_id()->data())[0],
+        static_cast<unsigned long long>((*command.boot_epoch())),
+        static_cast<unsigned long long>((*command.session_id())),
+        (*command.reference_epoch()), (*command.motion_epoch()), root_fixture::configured(command),
+        (*command.profile_id()), (*command.producer_seq()),
         static_cast<unsigned long long>(generation),
-        static_cast<unsigned long long>(command.freshness_ticket()),
-        command.position_rad()[0], command.position_rad()[1]);
+        static_cast<unsigned long long>((*command.freshness_ticket())),
+        root_fixture::position(command)[0], root_fixture::position(command)[1]);
     return 17;
   }
   /**
@@ -4832,18 +4066,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * 明确拒绝应立即触发Stop尝试且ACK timeout仍0，不能把设备拒绝拖到超时后才发现。
    */
   if (reject_during_ack_mode) {
-    valid.status.set_command_reject_count(4U);
-    valid.status.set_can_sent_mask(parameters.configured_mask);
+    valid.status.command_reject_count()=(4U);
+    valid.status.can_sent_mask()=(parameters.configured_mask);
     if (!send(valid) || !wait_for([&] {
           std::lock_guard<std::mutex> lock(channel->mutex);
-          return channel->observation.rejected_ack_sequence == command.producer_seq();
+          return channel->observation.rejected_ack_sequence == (*command.producer_seq());
         })) return 260;
     {
       std::lock_guard<std::mutex> lock(channel->mutex);
       const auto &observed=channel->observation;
       if (observed.rejected_ack_boot_epoch!=7U || observed.rejected_ack_session_id!=8U ||
           observed.rejected_ack_reference_epoch!=9U || observed.rejected_ack_motion_epoch!=10U ||
-          observed.rejected_ack_sequence!=command.producer_seq()) return 261;
+          observed.rejected_ack_sequence!=(*command.producer_seq())) return 261;
     }
     if (!wait_for([&] { const auto stats=transport.statistics();
           return stats.stop_requests_sent+stats.stop_request_failures!=0U; }) ||
@@ -4862,29 +4096,29 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     if (second_generation == 0U || !system.transfer_control_update()) return 251;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(75);
     while (std::chrono::steady_clock::now() < deadline) {
-      valid.state.set_state_seq(++stable_sequence);
-      valid.state.set_produced_at_us(device_now_us());
+      valid.state.state_seq()=(++stable_sequence);
+      valid.state.produced_at_us()=(device_now_us());
       if (!send(valid)) return 252;
       std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
-    valid.state.set_state_seq(++stable_sequence);
-    valid.state.set_produced_at_us(device_now_us());
-    valid.state.set_committed_producer_seq(static_cast<std::uint32_t>(generation));
-    if (ticket_mode == 1U) valid.state.set_freshness_ticket(9007199254740998ULL);
+    valid.state.state_seq()=(++stable_sequence);
+    valid.state.produced_at_us()=(device_now_us());
+    valid.state.committed_producer_seq()=(static_cast<std::uint32_t>(generation));
+    if (ticket_mode == 1U) valid.state.freshness_ticket()=(9007199254740998ULL);
     const auto before_authority = transport.statistics().invalidations;
     if (ticket_mode == 3U) {
-      valid.status.set_session_id(99U);
-      valid.state.set_session_id(99U);
-      valid.state.set_freshness_ticket(9007199254740998ULL);
+      valid.status.session_id()=(99U);
+      valid.state.session_id()=(99U);
+      valid.state.freshness_ticket()=(9007199254740998ULL);
     }
     if (!send(valid)) return 253;
     if (ticket_mode == 3U && !wait_for([&] {
           return transport.statistics().invalidations > before_authority;
         })) return 259;
     if (ticket_mode == 1U) {
-      if (::poll(&response, 1, 1500) != 1 || ::read(input, &command, sizeof(command)) != sizeof(command) ||
-          command.producer_seq() != second_generation || command.position_rad()[0] != 0.26 ||
-          command.freshness_ticket() != 9007199254740998ULL) return 254;
+      if (::poll(&response, 1, 1500) != 1 || (root_fixture::read_value(input,command)==false) ||
+          (*command.producer_seq()) != second_generation || root_fixture::position(command)[0] != 0.26 ||
+          (*command.freshness_ticket()) != 9007199254740998ULL) return 254;
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(80));
       if (::poll(&response, 1, 0) == 1 ||
@@ -4911,8 +4145,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         continue;
       }
-      unacked.state.set_state_seq(++stable_sequence);
-      unacked.state.set_produced_at_us(device_now_us());
+      unacked.state.state_seq()=(++stable_sequence);
+      unacked.state.produced_at_us()=(device_now_us());
       if (!send(unacked)) return 134;
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
@@ -4945,9 +4179,9 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     transport.stop();
     return 0;
   }
-  valid.status.set_committed_producer_seq(static_cast<std::uint32_t>(generation));
-  valid.status.set_can_sent_mask(parameters.configured_mask);
-  valid.state.set_state_seq(++stable_sequence);
+  valid.status.committed_producer_seq()=(static_cast<std::uint32_t>(generation));
+  valid.status.can_sent_mask()=(parameters.configured_mask);
+  valid.state.state_seq()=(++stable_sequence);
   if (!wait_for([&] {
         send(valid);
         return system.copy_state(&snapshot) && snapshot.envelope.state_seq == stable_sequence;
@@ -4955,7 +4189,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   // Replayed sequence, wrong device/profile and missing position evidence cannot replace feedback.
   auto invalid = valid;
   const double wrong_position[6]{0.75, NAN, NAN, NAN, NAN, NAN};
-  invalid.state.set_position_rad(wrong_position);
+  root_fixture::set_position(invalid.state,wrong_position);
   if (!send_rejected_state(invalid) ||
       !system.copy_state(&snapshot) || snapshot.position[0] != 0.25) return 18;
   /**
@@ -4967,26 +4201,28 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     for (unsigned attempt = 0U; attempt < 3U && !rejected_while_snapshot_retained; ++attempt) {
       auto wrong = valid;
       const auto sequence = stable_sequence + 1U;
-      wrong.state.set_state_seq(sequence);
-      wrong.state.set_produced_at_us(device_now_us());
-      if (fault == 0U) { std::uint8_t other[16]{3U}; wrong.state.set_device_id(other); }
-      if (fault == 1U) wrong.state.set_profile_id(2U);
-      if (fault == 2U) wrong.state.set_configured_mask(six_axis ? 1U : 63U);
-      if (fault == 3U) wrong.state.set_produced_at_us(device_now_us() + 2000000U);
-      if (fault == 4U) wrong.state.set_produced_at_us(device_now_us() - 2000000U);
-      if (fault == 5U) wrong.state.set_session_id(99U);
-      if (fault == 6U) wrong.state.set_boot_epoch(99U);
-      if (fault == 7U) wrong.state.set_reference_epoch(99U);
-      if (fault == 8U) wrong.state.set_motion_epoch(99U);
-      rejected_while_snapshot_retained = send_rejected_state(wrong) &&
+      wrong.state.state_seq()=(sequence);
+      wrong.state.produced_at_us()=(device_now_us());
+      if (fault == 0U) { std::uint8_t other[16]{3U}; wrong.state.domain_device_id().emplace().assign(other,16); }
+      if (fault == 1U) wrong.state.profile_id()=(2U);
+      if (fault == 2U) root_fixture::set_configured(wrong.state,six_axis ? 1U : 63U);
+      if (fault == 3U) wrong.state.produced_at_us()=(device_now_us() + 2000000U);
+      if (fault == 4U) wrong.state.produced_at_us()=(device_now_us() - 2000000U);
+      if (fault == 5U) wrong.state.session_id()=(99U);
+      if (fault == 6U) wrong.invalid_root_source_boot=99U;
+      if (fault == 7U) wrong.state.reference_epoch()=(99U);
+      if (fault == 8U) wrong.state.motion_epoch()=(99U);
+      rejected_while_snapshot_retained = (fault==6U?reject_root_frame(wrong):send_rejected_state(wrong)) &&
           system.copy_state(&snapshot) && snapshot.position[0] == 0.25;
       if (!rejected_while_snapshot_retained && !restore_valid_snapshot()) return 21 + fault;
     }
     if (!rejected_while_snapshot_retained) return 21 + fault;
-    valid.state.set_state_seq(++stable_sequence);
+    valid.state.state_seq()=(++stable_sequence);
     if (!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                                   snapshot.envelope.state_seq == stable_sequence; })) return 30 + fault;
   }
+  auto invalid_format=valid;invalid_format.invalid_root_file_id=true;
+  if(!reject_root_frame(invalid_format) || !system.copy_state(&snapshot) || snapshot.position[0]!=0.25)return 483;
   // A status authority transition must immediately invalidate old state and commands.
   // State carrying the previous authority cannot repopulate the snapshot.
   /**
@@ -4995,14 +4231,17 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   for (unsigned changed_field = 0U; changed_field < 3U; ++changed_field) {
     auto transition = valid;
-    transition.status.set_management_epoch(valid.status.management_epoch() + 1U);
-    transition.state.set_management_epoch(transition.status.management_epoch());
-    if (changed_field == 0U) transition.status.set_session_id(18U);
-    if (changed_field == 1U) transition.status.set_reference_epoch(19U);
-    if (changed_field == 2U) transition.status.set_motion_epoch(20U);
-    transition.state.set_state_seq(2U);
+    transition.status.management_epoch()=((*valid.status.management_epoch()) + 1U);
+    transition.state.management_epoch()=((*transition.status.management_epoch()));
+    if (changed_field == 0U) transition.status.session_id()=(18U);
+    if (changed_field == 1U) transition.status.reference_epoch()=(19U);
+    if (changed_field == 2U) transition.status.motion_epoch()=(20U);
+    transition.state.state_seq()=(2U);
     const auto before = transport.statistics().invalidations;
-    if (!send(transition) || !wait_for([&] { return transport.statistics().invalidations > before; }) ||
+    const auto heartbeat_before = transport.statistics().state_heartbeat_gap_stops;
+    if (!feedback_until(transition, [&] {
+          return observed_status_matches(transition.status,transition.status_source) && transport.statistics().invalidations > before;
+        }) || transport.statistics().state_heartbeat_gap_stops != heartbeat_before ||
         system.copy_state(&snapshot) || publish_control_update(positions, six_axis ? 6U : 1U, 0, nullptr) != 0U)
       return 40 + changed_field;
     if (changed_field == 0U) {
@@ -5013,21 +4252,29 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         return 123;
     }
     valid.status = transition.status;
-    valid.state.set_session_id(valid.status.session_id());
-    valid.state.set_reference_epoch(valid.status.reference_epoch());
-    valid.state.set_motion_epoch(valid.status.motion_epoch());
-    valid.state.set_management_epoch(valid.status.management_epoch());
-    valid.state.set_state_seq(1U);
-    if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 44 + changed_field;
+    valid.state.session_id()=((*valid.status.session_id()));
+    valid.state.reference_epoch()=((*valid.status.reference_epoch()));
+    valid.state.motion_epoch()=((*valid.status.motion_epoch()));
+    valid.state.management_epoch()=((*valid.status.management_epoch()));
+    valid.state.state_seq()=(1U);
+    if (!feedback_until(valid, [&] { return observed_state_matches(valid.state,valid.state_source) &&
+          system.copy_state(&snapshot) && snapshot.envelope.state_seq == (*valid.state.state_seq()); })) {
+      const auto stats=transport.statistics();
+      std::fprintf(stderr,"transition recovery field=%u messages=%llu identity=%llu authority=%llu sequence=%llu ingest=%llu rejected=%llu\n",changed_field,
+        (unsigned long long)stats.state_messages,(unsigned long long)stats.state_identity_rejections,(unsigned long long)stats.state_authority_rejections,
+        (unsigned long long)stats.state_sequence_rejections,(unsigned long long)stats.state_ingest_rejections,(unsigned long long)stats.rejected_states);
+      std::fprintf(stderr,"transition extra stale=%llu skew=%llu bootstrap=%llu stopped=%llu heartbeat=%llu\n",(unsigned long long)stats.stale_payload_rejections,(unsigned long long)stats.clock_skew_rejections,(unsigned long long)stats.bootstrap_rejections,(unsigned long long)stats.stop_latched_state_rejections,(unsigned long long)stats.heartbeat_stops);
+      return 44+changed_field;
+    }
   }
-  valid.status.set_management_epoch(10U);
-  valid.state.set_management_epoch(10U);
-  valid.state.set_state_seq(2U);
+  valid.status.management_epoch()=(10U);
+  valid.state.management_epoch()=(10U);
+  valid.state.state_seq()=(2U);
   if (!wait_for([&] { send(valid); return system.copy_state(&snapshot); })) return 51;
   auto asynchronous_epoch = valid;
-  asynchronous_epoch.status.set_motion_epoch(valid.status.motion_epoch() + 1U);
-  asynchronous_epoch.state.set_motion_epoch(asynchronous_epoch.status.motion_epoch());
-  asynchronous_epoch.state.set_state_seq(3U);
+  asynchronous_epoch.status.motion_epoch()=((*valid.status.motion_epoch()) + 1U);
+  asynchronous_epoch.state.motion_epoch()=((*asynchronous_epoch.status.motion_epoch()));
+  asynchronous_epoch.state.state_seq()=(3U);
   const auto before_asynchronous_epoch = transport.statistics().invalidations;
   if (!wait_for([&] {
         send(asynchronous_epoch);
@@ -5039,23 +4286,23 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * 随后用独立Committed管理回执测试Status暂缺时可接受的精确下一motion代次。
    */
   auto reordered = valid;
-  reordered.status.set_management_epoch(9U);
-  reordered.status.set_session_id(0U);
-  reordered.state.set_state_seq(4U);
+  reordered.status.management_epoch()=(9U);
+  reordered.status.session_id()=(0U);
+  reordered.state.state_seq()=(4U);
   const auto before_reordered = transport.statistics().invalidations;
   if (!wait_for([&] { send(reordered); return system.copy_state(&snapshot); }) ||
       transport.statistics().invalidations != before_reordered) return 52;
   // A committed management reply authorizes the next epoch while status is suppressed.
-  const auto next_motion_epoch = valid.status.motion_epoch() + 1U;
+  const auto next_motion_epoch = (*valid.status.motion_epoch()) + 1U;
   channel->inactive_prime_allowed.store(true);
-  set_command_identity({valid.status.boot_epoch(), valid.status.session_id(),
-      valid.status.reference_epoch(), next_motion_epoch, 9007199254740997ULL});
+  set_command_identity({valid.status_source.boot_id, (*valid.status.session_id()),
+      (*valid.status.reference_epoch()), next_motion_epoch, 9007199254740997ULL});
   const auto unauthorized_generation = publish_control_update(positions, six_axis ? 6U : 1U, 0, nullptr);
   const auto before_unauthorized = transport.statistics().rejected_commands;
   if (!unauthorized_generation || !system.transfer_control_update() ||
       !wait_for([&] {
-        valid.state.set_state_seq(++stable_sequence);
-        valid.state.set_produced_at_us(device_now_us());
+        valid.state.state_seq()=(++stable_sequence);
+        valid.state.produced_at_us()=(device_now_us());
         send(valid);
         return transport.statistics().rejected_commands > before_unauthorized;
       })) return 66;
@@ -5066,8 +4313,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   auto send_fresh_state = [&] {
     auto heartbeat = valid;
     heartbeat.send_status = false;
-    heartbeat.state.set_state_seq(++stable_sequence);
-    heartbeat.state.set_produced_at_us(0U);
+    heartbeat.state.state_seq()=(++stable_sequence);
+    heartbeat.state.produced_at_us()=(0U);
     return send(heartbeat);
   };
   /**
@@ -5111,12 +4358,12 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       return false;
     });
     if (!sent || !completed || failed_in_flight) {
-      Management::Request decoded;
-      wire::DummyManageV2RequestCodec::decode(request->request.data(), request->request.size(), &decoded);
+      Management::Request decoded=owned_fixture::request();
+      ((decoded=request->request),message_fields_present(decoded));
       const auto stats = transport.statistics();
       std::fprintf(stderr,
           "management wait: request=%llu sent=%d failed=%d canceled=%d complete=%d elapsed_ms=%lld state=%llu rejected=%llu heartbeat=%llu stale=%llu stop_sent=%llu seq=%u\n",
-          static_cast<unsigned long long>(decoded.request_id()), sent, request->failed.load(),
+          static_cast<unsigned long long>((*decoded.request_id())), sent, request->failed.load(),
           request->canceled.load(), request->complete.load(),
           static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - started).count()),
@@ -5132,26 +4379,25 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * @brief Begin42回执精确推进下一motion，证明该绑定可在Status暂缺时接纳新State/命令。
    * 之前用同新epoch但无回执的目标应被拒绝；本回执来自受控peer，不代表实际设备授权。
    */
-  Management::Request authorization;
-  authorization.set_schema_major(2U);
-  authorization.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  authorization.set_device_id(device);
+  Management::Request authorization=owned_fixture::request();
+  (void)0;
+  (void)0;
+  authorization.domain_device_id().emplace().assign(device,16);
   const std::uint8_t client[16]{2U};
-  authorization.set_client_instance_id(client);
-  authorization.set_request_id(42U);
-  authorization.set_request_seq(42U);
-  authorization.set_operation(6U);
-  authorization.set_expected_boot_epoch(valid.status.boot_epoch());
-  authorization.set_expected_session_id(valid.status.session_id());
-  authorization.set_expected_reference_epoch(valid.status.reference_epoch());
-  authorization.set_expected_motion_epoch(valid.status.motion_epoch());
-  authorization.set_expected_management_epoch(valid.status.management_epoch());
-  authorization.set_expected_profile_id(parameters.profile_id);
-  authorization.set_configured_mask(parameters.configured_mask);
-  authorization.set_freshness_ticket(9007199254740997ULL);
+  authorization.client_instance_id().emplace().assign(client,16);
+  authorization.request_id()=(42U);
+  authorization.request_seq()=(42U);
+  authorization.operation()=(6U);
+  authorization.expected_boot_epoch()=(valid.status_source.boot_id);
+  authorization.expected_session_id()=((*valid.status.session_id()));
+  authorization.expected_reference_epoch()=((*valid.status.reference_epoch()));
+  authorization.expected_motion_epoch()=((*valid.status.motion_epoch()));
+  authorization.expected_management_epoch()=((*valid.status.management_epoch()));
+  authorization.expected_profile_id()=(parameters.profile_id);
+  authorization.configured_mask()=(parameters.configured_mask);
+  authorization.freshness_ticket()=(9007199254740997ULL);
   auto pending = std::make_shared<DeviceManagementRequest>();
-  if (wire::DummyManageV2RequestCodec::encode(authorization, pending->request.data(),
-        pending->request.size()) != wire::CodecResult::kOk) return 64;
+  if (((pending->request=authorization),message_fields_present(authorization)) != true) return 64;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
     channel->queued = pending;
@@ -5159,24 +4405,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if (!wait_for_management(pending)) return 65;
   auto authorized_state = valid;
   authorized_state.send_status = false;
-  authorized_state.state.set_motion_epoch(next_motion_epoch);
-  authorized_state.state.set_state_seq(++stable_sequence);
-  authorized_state.state.set_produced_at_us(device_now_us());
+  authorized_state.state.motion_epoch()=(next_motion_epoch);
+  authorized_state.state.state_seq()=(++stable_sequence);
+  authorized_state.state.produced_at_us()=(device_now_us());
   if (!send(authorized_state) || !wait_for([&] {
         return system.copy_state(&snapshot) && snapshot.envelope.state_seq == stable_sequence;
       })) return 257;
-  set_command_identity({valid.status.boot_epoch(), valid.status.session_id(),
-      valid.status.reference_epoch(), next_motion_epoch, 9007199254740997ULL});
+  set_command_identity({valid.status_source.boot_id, (*valid.status.session_id()),
+      (*valid.status.reference_epoch()), next_motion_epoch, 9007199254740997ULL});
   const auto next_generation = publish_control_update(positions, six_axis ? 6U : 1U, 0, nullptr);
   if (!next_generation || ::poll(&response, 1, 3000) != 1)
     return 58;
-  if (::read(input, &command, sizeof(command)) != sizeof(command) ||
-      command.motion_epoch() != next_motion_epoch) return 59;
+  if ((root_fixture::read_value(input,command)==false) ||
+      (*command.motion_epoch()) != next_motion_epoch) return 59;
   auto status_suppressed = valid;
   status_suppressed.send_status = false;
-  status_suppressed.state.set_produced_at_us(0U);
-  status_suppressed.state.set_motion_epoch(next_motion_epoch);
-  status_suppressed.state.set_state_seq(++stable_sequence);
+  status_suppressed.state.produced_at_us()=(0U);
+  status_suppressed.state.motion_epoch()=(next_motion_epoch);
+  status_suppressed.state.state_seq()=(++stable_sequence);
   if (!wait_for([&] {
         send(status_suppressed);
         return system.copy_state(&snapshot) && snapshot.envelope.state_seq == stable_sequence;
@@ -5191,8 +4437,8 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
         static_cast<unsigned long long>(stats.heartbeat_stops), stats.ready);
     return 60;
   }
-  status_suppressed.state.set_committed_producer_seq(static_cast<std::uint32_t>(next_generation));
-  status_suppressed.state.set_state_seq(++stable_sequence);
+  status_suppressed.state.committed_producer_seq()=(static_cast<std::uint32_t>(next_generation));
+  status_suppressed.state.state_seq()=(++stable_sequence);
   if (!wait_for([&] {
         send(status_suppressed);
         return system.copy_state(&snapshot) && snapshot.envelope.state_seq == stable_sequence;
@@ -5210,27 +4456,27 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   const auto followup_generation = publish_control_update(positions, six_axis ? 6U : 1U, 0, nullptr);
   if (!followup_generation || !system.transfer_control_update() ||
       ::poll(&response, 1, 3000) != 1) return 82;
-  if (::read(input, &command, sizeof(command)) != sizeof(command) ||
-      command.motion_epoch() != next_motion_epoch ||
-      command.producer_seq() != followup_generation) return 83;
+  if ((root_fixture::read_value(input,command)==false) ||
+      (*command.motion_epoch()) != next_motion_epoch ||
+      (*command.producer_seq()) != followup_generation) return 83;
   auto stale_epoch = status_suppressed;
-  stale_epoch.state.set_motion_epoch(valid.status.motion_epoch());
-  stale_epoch.state.set_state_seq(stable_sequence + 1U);
+  stale_epoch.state.motion_epoch()=((*valid.status.motion_epoch()));
+  stale_epoch.state.state_seq()=(stable_sequence + 1U);
   if (!send_rejected_state(stale_epoch)) return 68;
   auto delayed_status = status_suppressed;
   delayed_status.send_status = true;
-  delayed_status.status.set_committed_producer_seq(static_cast<std::uint32_t>(followup_generation));
-  delayed_status.state.set_state_seq(++stable_sequence);
+  delayed_status.status.committed_producer_seq()=(static_cast<std::uint32_t>(followup_generation));
+  delayed_status.state.state_seq()=(++stable_sequence);
   const auto before_delayed_status = transport.statistics();
   if (!wait_for([&] {
         send(delayed_status);
         return transport.statistics().status_messages > before_delayed_status.status_messages;
       }) || transport.statistics().invalidations != before_delayed_status.invalidations ||
       !system.copy_state(&snapshot)) return 63;
-  valid.status.set_motion_epoch(next_motion_epoch);
-  valid.status.set_committed_producer_seq(static_cast<std::uint32_t>(followup_generation));
-  valid.state.set_motion_epoch(next_motion_epoch);
-  valid.state.set_state_seq(stable_sequence);
+  valid.status.motion_epoch()=(next_motion_epoch);
+  valid.status.committed_producer_seq()=(static_cast<std::uint32_t>(followup_generation));
+  valid.state.motion_epoch()=(next_motion_epoch);
+  valid.state.state_seq()=(stable_sequence);
   const auto before_ack = transport.statistics().status_messages;
   if (!wait_for([&] {
         send(valid);
@@ -5240,20 +4486,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * @brief peer故意回motion跳2，后继State不得借这个异常回执获得许可。
    * 之后Query0只读应答和QueryResult指向另一operation777同样不能授权新的motion。
    */
-  authorization.set_request_id(43U);
-  authorization.set_request_seq(43U);
-  authorization.set_expected_motion_epoch(next_motion_epoch);
+  authorization.request_id()=(43U);
+  authorization.request_seq()=(43U);
+  authorization.expected_motion_epoch()=(next_motion_epoch);
   auto jump_request = std::make_shared<DeviceManagementRequest>();
-  if (wire::DummyManageV2RequestCodec::encode(authorization, jump_request->request.data(),
-        jump_request->request.size()) != wire::CodecResult::kOk) return 69;
+  if (((jump_request->request=authorization),message_fields_present(authorization)) != true) return 69;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
     channel->queued = jump_request;
   }
   if (!wait_for_management(jump_request)) return 70;
-  Management::Response jump_reply;
-  if (wire::DummyManageV2ResponseCodec::decode(jump_request->response.data(),
-      jump_request->response.size(), &jump_reply) != wire::CodecResult::kOk) return 127;
+  Management::Response jump_reply=owned_fixture::response();dp::comm::SourceId jump_reply_source{};
+  if (((jump_reply=jump_request->response),(jump_reply_source=jump_request->response_source),message_fields_present(jump_reply)) != true) return 127;
   auto status_only = valid;
   status_only.send_state = false;
   const auto before_jump_barrier = transport.statistics().status_messages;
@@ -5261,18 +4505,17 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       !wait_for([&] { return transport.statistics().status_messages > before_jump_barrier; })) return 75;
   auto jumped = valid;
   jumped.send_status = false;
-  jumped.state.set_motion_epoch(next_motion_epoch + 2U);
-  jumped.state.set_state_seq(stable_sequence + 1U);
-  jumped.state.set_produced_at_us(device_now_us());
+  jumped.state.motion_epoch()=(next_motion_epoch + 2U);
+  jumped.state.state_seq()=(stable_sequence + 1U);
+  jumped.state.produced_at_us()=(device_now_us());
   if (!send_rejected_state(jumped) || !system.copy_state(&snapshot) ||
-      snapshot.envelope.state_seq == jumped.state.state_seq()) return 71;
+      snapshot.envelope.state_seq == (*jumped.state.state_seq())) return 71;
   if (!send_fresh_state()) return 261;
-  authorization.set_request_id(44U);
-  authorization.set_request_seq(44U);
-  authorization.set_operation(0U);
+  authorization.request_id()=(44U);
+  authorization.request_seq()=(44U);
+  authorization.operation()=(0U);
   auto status_query = std::make_shared<DeviceManagementRequest>();
-  if (wire::DummyManageV2RequestCodec::encode(authorization, status_query->request.data(),
-        status_query->request.size()) != wire::CodecResult::kOk) return 72;
+  if (((status_query->request=authorization),message_fields_present(authorization)) != true) return 72;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
     channel->queued = status_query;
@@ -5283,19 +4526,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       !wait_for([&] { return transport.statistics().status_messages > before_query_barrier; })) return 76;
   auto unlicensed = valid;
   unlicensed.send_status = false;
-  unlicensed.state.set_motion_epoch(next_motion_epoch + 1U);
-  unlicensed.state.set_state_seq(stable_sequence + 1U);
-  unlicensed.state.set_produced_at_us(device_now_us());
+  unlicensed.state.motion_epoch()=(next_motion_epoch + 1U);
+  unlicensed.state.state_seq()=(stable_sequence + 1U);
+  unlicensed.state.produced_at_us()=(device_now_us());
   if (!send_rejected_state(unlicensed) || !system.copy_state(&snapshot) ||
-      snapshot.envelope.state_seq == unlicensed.state.state_seq()) return 74;
+      snapshot.envelope.state_seq == (*unlicensed.state.state_seq())) return 74;
   if (!send_fresh_state()) return 262;
-  authorization.set_request_id(45U);
-  authorization.set_request_seq(45U);
-  authorization.set_operation(12U);
-  authorization.set_queried_operation_id(43U);
+  authorization.request_id()=(45U);
+  authorization.request_seq()=(45U);
+  authorization.operation()=(12U);
+  authorization.queried_operation_id()=(43U);
   auto unrelated_query = std::make_shared<DeviceManagementRequest>();
-  if (wire::DummyManageV2RequestCodec::encode(authorization, unrelated_query->request.data(),
-        unrelated_query->request.size()) != wire::CodecResult::kOk) return 77;
+  if (((unrelated_query->request=authorization),message_fields_present(authorization)) != true) return 77;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
     channel->queued = unrelated_query;
@@ -5304,46 +4546,49 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   const auto before_unrelated_barrier = transport.statistics().status_messages;
   if (!send(status_only) ||
       !wait_for([&] { return transport.statistics().status_messages > before_unrelated_barrier; })) return 79;
-  unlicensed.state.set_produced_at_us(device_now_us());
-  if (!send_rejected_state(unlicensed) || !system.copy_state(&snapshot) ||
-      snapshot.envelope.state_seq == unlicensed.state.state_seq()) return 80;
+  // RPC等待会发送合法保鲜State并递增seq；负例必须在等待后分配独立seq，不能与该合法缓存碰撞。
+  unlicensed.state.state_seq()=(++stable_sequence);
+  unlicensed.state.produced_at_us()=(device_now_us());
+  { const bool rejected=send_rejected_state(unlicensed);const bool retained=system.copy_state(&snapshot);
+    if(!rejected || !retained || snapshot.envelope.state_seq==(*unlicensed.state.state_seq())) {
+      const auto counts=transport.statistics();
+      std::fprintf(stderr,"case80 rejected=%u retained=%u cached_seq=%u sent_seq=%u invalidations=%llu stale=%llu identity=%llu authority=%llu stopped=%llu\n",unsigned(rejected),unsigned(retained),snapshot.envelope.state_seq,(*unlicensed.state.state_seq()),(unsigned long long)counts.invalidations,(unsigned long long)counts.stale_payload_rejections,(unsigned long long)counts.state_identity_rejections,(unsigned long long)counts.state_authority_rejections,(unsigned long long)counts.stop_latched_state_rejections);return 80;
+    }
+  }
   if (!send_fresh_state()) return 263;
   channel->inactive_prime_allowed.store(false);
-  valid.state.set_state_seq(++stable_sequence);
-  valid.state.set_produced_at_us(0U);
+  valid.state.state_seq()=(++stable_sequence);
+  valid.state.produced_at_us()=(0U);
   if (!wait_for([&] { send(valid); return system.copy_state(&snapshot) &&
                                   snapshot.envelope.state_seq == stable_sequence; })) return 108;
   /**
    * @brief 为后续超龄Stop建立最后有效授权tuple；Stop必须使用该回执的motion/management，而非旧Status缓存。
    */
-  authorization.set_request_id(46U);
-  authorization.set_request_seq(sequence_rebase_mode ? 2100000000U : 46U);
-  authorization.set_operation(6U);
-  authorization.set_expected_motion_epoch(next_motion_epoch);
-  authorization.set_expected_management_epoch(jump_reply.management_epoch());
+  authorization.request_id()=(46U);
+  authorization.request_seq()=(sequence_rebase_mode ? 2100000000U : 46U);
+  authorization.operation()=(6U);
+  authorization.expected_motion_epoch()=(next_motion_epoch);
+  authorization.expected_management_epoch()=((*jump_reply.management_epoch()));
   auto stop_authority = std::make_shared<DeviceManagementRequest>();
-  if (wire::DummyManageV2RequestCodec::encode(authorization, stop_authority->request.data(),
-      stop_authority->request.size()) != wire::CodecResult::kOk) return 130;
+  if (((stop_authority->request=authorization),message_fields_present(authorization)) != true) return 130;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
     channel->queued = stop_authority;
   }
   if (!wait_for_management(stop_authority)) return 131;
-  Management::Response stop_authority_reply;
-  if (wire::DummyManageV2ResponseCodec::decode(stop_authority->response.data(),
-      stop_authority->response.size(), &stop_authority_reply) != wire::CodecResult::kOk) return 132;
+  Management::Response stop_authority_reply=owned_fixture::response();dp::comm::SourceId stop_authority_reply_source{};
+  if (((stop_authority_reply=stop_authority->response),(stop_authority_reply_source=stop_authority->response_source),message_fields_present(stop_authority_reply)) != true) return 132;
   /**
    * @brief 用SelectMode请求序号2183397839提升发送序号水位。
    * 后继Stop应2183397840且独立request_id，Query再加1并保留原Stop绑定；不能在新请求类型中从旧序号重新开始。
    */
   if (sequence_rebase_mode) {
     auto select_mode = authorization;
-    select_mode.set_request_id(2183397839ULL);
-    select_mode.set_request_seq(2183397839U);
-    select_mode.set_operation(1U);
+    select_mode.request_id()=(2183397839ULL);
+    select_mode.request_seq()=(2183397839U);
+    select_mode.operation()=(1U);
     auto pending_select = std::make_shared<DeviceManagementRequest>();
-    if (wire::DummyManageV2RequestCodec::encode(select_mode, pending_select->request.data(),
-          pending_select->request.size()) != wire::CodecResult::kOk) return 264;
+    if (((pending_select->request=select_mode),message_fields_present(select_mode)) != true) return 264;
     { std::lock_guard<std::mutex> lock(channel->mutex); channel->queued = pending_select; }
     if (!wait_for_management(pending_select)) return 265;
   }
@@ -5356,41 +4601,41 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   if (!wait_for([&] { return transport.statistics().invalidations > before_timeout; })) return 100;
   pollfd stop_response{stops_input, POLLIN, 0};
   if (::poll(&stop_response, 1, 3000) != 1) return 128;
-  Management::Request stop_request;
-  if (::read(stops_input, &stop_request, sizeof(stop_request)) != sizeof(stop_request) ||
-      stop_request.operation() != 10U ||
-      stop_request.expected_motion_epoch() != stop_authority_reply.motion_epoch() ||
-      stop_request.expected_management_epoch() != stop_authority_reply.management_epoch()) {
+  Management::Request stop_request=owned_fixture::request();
+  if ((root_fixture::read_value(stops_input,stop_request)==false) ||
+      (*stop_request.operation()) != 10U ||
+      (*stop_request.expected_motion_epoch()) != (*stop_authority_reply.motion_epoch()) ||
+      (*stop_request.expected_management_epoch()) != (*stop_authority_reply.management_epoch())) {
     std::fprintf(stderr, "stop tuple: motion=%u/%u management=%u/%u\n",
-        stop_request.expected_motion_epoch(), stop_authority_reply.motion_epoch(),
-        stop_request.expected_management_epoch(), stop_authority_reply.management_epoch());
+        (*stop_request.expected_motion_epoch()), (*stop_authority_reply.motion_epoch()),
+        (*stop_request.expected_management_epoch()), (*stop_authority_reply.management_epoch()));
     return 129;
   }
-  observed_stop_request_id = stop_request.request_id();
+  observed_stop_request_id = (*stop_request.request_id());
   if (sequence_rebase_mode &&
-      (stop_request.request_seq() != 2183397840U ||
-       stop_request.request_id() == 2183397839ULL ||
+      ((*stop_request.request_seq()) != 2183397840U ||
+       (*stop_request.request_id()) == 2183397839ULL ||
        !std::equal(parameters.client_instance_id.begin(), parameters.client_instance_id.end(),
-                   stop_request.client_instance_id()))) return 266;
+                   (stop_request.client_instance_id()->data())))) return 266;
   pollfd query_response{stops_input, POLLIN, 0};
   if (::poll(&query_response, 1, 3000) != 1) return 139;
   /**
    * @brief 查询必须指向原Stop request_id，Query自己的request_id独立且configured_mask相同。
    * 首个Pending与后续终态即使到了，未见匹配Idle也不能提前stop_requests_confirmed。
    */
-  Management::Request first_stop_query;
-  if (::read(stops_input, &first_stop_query, sizeof(first_stop_query)) != sizeof(first_stop_query) ||
-      first_stop_query.operation() != 12U ||
-      first_stop_query.configured_mask() != parameters.configured_mask ||
-      first_stop_query.queried_operation_id() != stop_request.request_id()) return 140;
+  Management::Request first_stop_query=owned_fixture::request();
+  if ((root_fixture::read_value(stops_input,first_stop_query)==false) ||
+      (*first_stop_query.operation()) != 12U ||
+      (*first_stop_query.configured_mask()) != parameters.configured_mask ||
+      (*first_stop_query.queried_operation_id()) != (*stop_request.request_id())) return 140;
   if (sequence_rebase_mode &&
-      (first_stop_query.request_seq() != stop_request.request_seq() + 1U ||
-       first_stop_query.request_id() == stop_request.request_id() ||
-       first_stop_query.expected_session_id() != stop_request.expected_session_id() ||
-       first_stop_query.expected_reference_epoch() != stop_request.expected_reference_epoch() ||
-       first_stop_query.expected_boot_epoch() != stop_request.expected_boot_epoch() ||
+      ((*first_stop_query.request_seq()) != (*stop_request.request_seq()) + 1U ||
+       (*first_stop_query.request_id()) == (*stop_request.request_id()) ||
+       (*first_stop_query.expected_session_id()) != (*stop_request.expected_session_id()) ||
+       (*first_stop_query.expected_reference_epoch()) != (*stop_request.expected_reference_epoch()) ||
+       (*first_stop_query.expected_boot_epoch()) != (*stop_request.expected_boot_epoch()) ||
        !std::equal(parameters.client_instance_id.begin(), parameters.client_instance_id.end(),
-                   first_stop_query.client_instance_id()))) return 267;
+                   (first_stop_query.client_instance_id()->data())))) return 267;
   if (transport.statistics().stop_requests_confirmed != 0U) return 141;
   /**
    * @brief 始终Pending的Stop在transport.stop收尾后仍应未确认。
@@ -5404,48 +4649,46 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   }
   if (!replayed_stop_host) {
     if (::poll(&query_response, 1, 3000) != 1) return 144;
-    Management::Request terminal_stop_query;
-    if (::read(stops_input, &terminal_stop_query, sizeof(terminal_stop_query)) !=
-            sizeof(terminal_stop_query) ||
-        terminal_stop_query.operation() != 12U ||
-        terminal_stop_query.queried_operation_id() != stop_request.request_id() ||
-        terminal_stop_query.request_id() == first_stop_query.request_id()) return 145;
+    Management::Request terminal_stop_query=owned_fixture::request();
+    if ((root_fixture::read_value(stops_input,terminal_stop_query)==false) ||
+        (*terminal_stop_query.operation()) != 12U ||
+        (*terminal_stop_query.queried_operation_id()) != (*stop_request.request_id()) ||
+        (*terminal_stop_query.request_id()) == (*first_stop_query.request_id())) return 145;
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     if (transport.statistics().stop_requests_confirmed != 0U) return 146;
   }
   if (!uncommitted_stop_mode && !replayed_stop_host) {
     auto disabling = valid;
     disabling.send_state = false;
-    disabling.status.set_motion_epoch(stop_request.expected_motion_epoch() + 1U);
-    disabling.status.set_management_epoch(stop_request.expected_management_epoch() + 1U);
-    disabling.status.set_core_state(8U);
+    disabling.status.motion_epoch()=((*stop_request.expected_motion_epoch()) + 1U);
+    disabling.status.management_epoch()=((*stop_request.expected_management_epoch()) + 1U);
+    disabling.status.core_state()=(8U);
     if (!send(disabling) || !wait_for([&] {
         std::lock_guard<std::mutex> lock(channel->mutex);
-        Status observed;
-        return wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-            channel->observation.status.size(), &observed) == wire::CodecResult::kOk &&
-            observed.core_state() == 8U;
+        Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+        return ((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) == true &&
+            (*observed.core_state()) == 8U;
       })) return 227;
   }
   auto stop_idle = valid;
-  stop_idle.status.set_session_id(0U);
-  stop_idle.status.set_reference_epoch(0U);
-  stop_idle.status.set_motion_epoch(stop_request.expected_motion_epoch() + 1U);
-  stop_idle.status.set_management_epoch(stop_request.expected_management_epoch() + 1U);
-  stop_idle.status.set_core_state(1U);
-  stop_idle.status.set_release_committed(true);
-  stop_idle.status.set_operation_id(exec_expected_stop_operation);
-  stop_idle.status.set_transaction_phase(3U);
-  stop_idle.state.set_motion_epoch(stop_idle.status.motion_epoch());
-  stop_idle.state.set_session_id(0U);
-  stop_idle.state.set_reference_epoch(0U);
-  stop_idle.state.set_management_epoch(stop_idle.status.management_epoch());
-  stop_idle.state.set_core_state(1U);
-  stop_idle.state.set_position_valid_mask(0U);
-  stop_idle.state.set_raw_position_valid_mask(parameters.configured_mask);
-  stop_idle.state.set_state_seq(stable_sequence + 1U);
+  stop_idle.status.session_id()=(0U);
+  stop_idle.status.reference_epoch()=(0U);
+  stop_idle.status.motion_epoch()=((*stop_request.expected_motion_epoch()) + 1U);
+  stop_idle.status.management_epoch()=((*stop_request.expected_management_epoch()) + 1U);
+  stop_idle.status.core_state()=(1U);
+  stop_idle.status.release_committed()=(true);
+  stop_idle.status.operation_id()=(exec_expected_stop_operation);
+  stop_idle.status.transaction_phase()=(3U);
+  stop_idle.state.motion_epoch()=((*stop_idle.status.motion_epoch()));
+  stop_idle.state.session_id()=(0U);
+  stop_idle.state.reference_epoch()=(0U);
+  stop_idle.state.management_epoch()=((*stop_idle.status.management_epoch()));
+  stop_idle.state.core_state()=(1U);
+  root_fixture::set_position_quality(stop_idle.state,0U);
+  root_fixture::set_raw_quality(stop_idle.state,parameters.configured_mask);
+  stop_idle.state.state_seq()=(stable_sequence + 1U);
   const double idle_raw[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-  stop_idle.state.set_raw_motor_position_rev(idle_raw);
+  root_fixture::set_raw_position(stop_idle.state,idle_raw);
   /**
    * @brief 跨exec复用路径读取raw文件，证明匹配Idle确已走实际回调并落盘。
    * 即使接纳层因先前Stop失败拒绝Idle，raw可见也不能把旧operation900回执关联到当前Stop；最终confirmed必须0。
@@ -5464,7 +4707,7 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
           if (!raw_file) return false;
           std::fseek(raw_file, 8L, SEEK_SET);
           bool idle_status_seen = false, idle_state_seen = false;
-          std::uint8_t header[39]{};
+          std::uint8_t header[kCaptureHeaderSize]{};
           std::array<std::uint8_t, RawEvidenceCollector::kMaxRawSize> bytes{};
           while (std::fread(header, 1U, sizeof(header), raw_file) == sizeof(header)) {
             const auto size = static_cast<unsigned>(header[1]) |
@@ -5474,20 +4717,18 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
             for (unsigned i = 0U; i < 8U; ++i)
               received_us |= static_cast<std::uint64_t>(header[3U + i]) << (8U * i);
             if (received_us < idle_sent_at) continue;
-            Status observed_status;
-            State observed_state;
-            if (header[0] == 3U && wire::DummyDeviceStatusV2Codec::decode(
-                    bytes.data(), size, &observed_status) == wire::CodecResult::kOk)
-              idle_status_seen = idle_status_seen || (observed_status.core_state() == 1U &&
-                  observed_status.operation_id() == 900U &&
-                  observed_status.motion_epoch() == stop_idle.status.motion_epoch() &&
-                  observed_status.management_epoch() == stop_idle.status.management_epoch());
-            if (header[0] == 2U && wire::DummyJointStateV2Codec::decode(
-                    bytes.data(), size, &observed_state) == wire::CodecResult::kOk)
-              idle_state_seen = idle_state_seen || (observed_state.core_state() == 1U &&
-                  observed_state.motion_epoch() == stop_idle.state.motion_epoch() &&
-                  observed_state.management_epoch() == stop_idle.state.management_epoch() &&
-                  observed_state.state_seq() == stop_idle.state.state_seq());
+            Status observed_status=owned_fixture::status();dp::comm::SourceId observed_status_source{};
+            State observed_state=owned_fixture::state();dp::comm::SourceId observed_state_source{};
+            if (header[0] == 3U && ((observed_status_source=root_fixture::capture_source(header)),dp::protocol::canonical::Traits<Status>::decode(bytes.data(),size,&observed_status)) == true)
+              idle_status_seen = idle_status_seen || ((*observed_status.core_state()) == 1U &&
+                  (*observed_status.operation_id()) == 900U &&
+                  (*observed_status.motion_epoch()) == (*stop_idle.status.motion_epoch()) &&
+                  (*observed_status.management_epoch()) == (*stop_idle.status.management_epoch()));
+            if (header[0] == 2U && ((observed_state_source=root_fixture::capture_source(header)),dp::protocol::canonical::Traits<State>::decode(bytes.data(),size,&observed_state)) == true)
+              idle_state_seen = idle_state_seen || ((*observed_state.core_state()) == 1U &&
+                  (*observed_state.motion_epoch()) == (*stop_idle.state.motion_epoch()) &&
+                  (*observed_state.management_epoch()) == (*stop_idle.state.management_epoch()) &&
+                  (*observed_state.state_seq()) == (*stop_idle.state.state_seq()));
           }
           std::fclose(raw_file);
           return idle_status_seen && idle_state_seen;
@@ -5505,28 +4746,24 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    * 核Status/State真实进入观测，仍须保持Stop未确认。
    */
   if (uncommitted_idle_status_mode) {
-    stop_idle.status.set_release_committed(false);
-    stop_idle.status.set_management_epoch(stop_idle.status.management_epoch() + 1U);
-    stop_idle.state.set_management_epoch(stop_idle.status.management_epoch());
+    stop_idle.status.release_committed()=(false);
+    stop_idle.status.management_epoch()=((*stop_idle.status.management_epoch()) + 1U);
+    stop_idle.state.management_epoch()=((*stop_idle.status.management_epoch()));
     const auto before = transport.statistics();
     if (!send(stop_idle) || !wait_for([&] {
           const auto after = transport.statistics();
           if (after.status_messages <= before.status_messages ||
               after.state_messages <= before.state_messages) return false;
           std::lock_guard<std::mutex> lock(channel->mutex);
-          Status observed_status;
-          State observed_state;
-          return wire::DummyDeviceStatusV2Codec::decode(
-                     channel->observation.status.data(), channel->observation.status.size(),
-                     &observed_status) == wire::CodecResult::kOk &&
-              wire::DummyJointStateV2Codec::decode(
-                     channel->observation.state.data(), channel->observation.state.size(),
-                     &observed_state) == wire::CodecResult::kOk &&
-              observed_status.core_state() == 1U &&
-              !observed_status.release_committed() &&
-              observed_status.management_epoch() == stop_idle.status.management_epoch() &&
-              observed_state.core_state() == 1U &&
-              observed_state.state_seq() == stop_idle.state.state_seq();
+          Status observed_status=owned_fixture::status();dp::comm::SourceId observed_status_source{};
+          State observed_state=owned_fixture::state();dp::comm::SourceId observed_state_source{};
+          return ((observed_status=channel->observation.status),(observed_status_source=channel->observation.status_source),message_fields_present(observed_status)) == true &&
+              ((observed_state=channel->observation.state),(observed_state_source=channel->observation.state_source),message_fields_present(observed_state)) == true &&
+              (*observed_status.core_state()) == 1U &&
+              !(*observed_status.release_committed()) &&
+              (*observed_status.management_epoch()) == (*stop_idle.status.management_epoch()) &&
+              (*observed_state.core_state()) == 1U &&
+              (*observed_state.state_seq()) == (*stop_idle.state.state_seq());
         })) return 273;
     transport.stop();
     const auto stats = transport.statistics();
@@ -5551,17 +4788,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
    */
   auto uncommitted_idle = stop_idle;
   uncommitted_idle.send_state = false;
-  uncommitted_idle.status.set_release_committed(false);
+  uncommitted_idle.status.release_committed()=(false);
   const auto before_uncommitted = transport.statistics().status_messages;
   if (!send(uncommitted_idle) || !wait_for([&] {
       return transport.statistics().status_messages > before_uncommitted;
     })) return 228;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
-    Status observed;
-    if (wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-        channel->observation.status.size(), &observed) != wire::CodecResult::kOk ||
-        observed.core_state() != 8U) return 229;
+    Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+    if (((observed=channel->observation.status),(observed_source=channel->observation.status_source),message_fields_present(observed)) != true ||
+        (*observed.core_state()) != 8U) return 229;
   }
   if (!wait_for([&] {
         send(stop_idle);
@@ -5581,17 +4817,16 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
     })) return 137;
   {
     std::lock_guard<std::mutex> lock(channel->mutex);
-    Status observed_status;
-    if (wire::DummyDeviceStatusV2Codec::decode(channel->observation.status.data(),
-        channel->observation.status.size(), &observed_status) != wire::CodecResult::kOk ||
-        observed_status.motion_epoch() != stop_idle.status.motion_epoch()) return 138;
+    Status observed_status=owned_fixture::status();dp::comm::SourceId observed_status_source{};
+    if (((observed_status=channel->observation.status),(observed_status_source=channel->observation.status_source),message_fields_present(observed_status)) != true ||
+        (*observed_status.motion_epoch()) != (*stop_idle.status.motion_epoch())) return 138;
   }
   auto status_only_after_timeout = valid;
   status_only_after_timeout.send_state = false;
-  status_only_after_timeout.status.set_session_id(0U);
-  status_only_after_timeout.status.set_reference_epoch(0U);
-  status_only_after_timeout.status.set_motion_epoch(stop_request.expected_motion_epoch() + 1U);
-  status_only_after_timeout.status.set_management_epoch(stop_request.expected_management_epoch() + 1U);
+  status_only_after_timeout.status.session_id()=(0U);
+  status_only_after_timeout.status.reference_epoch()=(0U);
+  status_only_after_timeout.status.motion_epoch()=((*stop_request.expected_motion_epoch()) + 1U);
+  status_only_after_timeout.status.management_epoch()=((*stop_request.expected_management_epoch()) + 1U);
   const auto before_rebind_status = transport.statistics().status_messages;
   if (!wait_for([&] {
         send(status_only_after_timeout);
@@ -5599,41 +4834,40 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       })) return 101;
   auto replay = valid;
   replay.send_status = false;
-  replay.state.set_state_seq(stable_sequence);
-  replay.state.set_produced_at_us(device_now_us());
+  replay.state.state_seq()=(stable_sequence);
+  replay.state.produced_at_us()=(device_now_us());
   if (!send_rejected_state(replay) || system.copy_state(&snapshot)) return 102;
-  replay.state.set_state_seq(stable_sequence + 1U);
-  replay.state.set_produced_at_us(accepted_produced_us);
+  replay.state.state_seq()=(stable_sequence + 1U);
+  replay.state.produced_at_us()=(accepted_produced_us);
   if (!send_rejected_state(replay) || system.copy_state(&snapshot)) return 107;
-  replay.state.set_state_seq(stable_sequence + 1U);
-  replay.state.set_produced_at_us(accepted_produced_us + 1U);
+  replay.state.state_seq()=(stable_sequence + 1U);
+  replay.state.produced_at_us()=(accepted_produced_us + 1U);
   if (!send_rejected_state(replay) || system.copy_state(&snapshot)) return 126;
-  valid.state.set_state_seq(++stable_sequence);
+  valid.state.state_seq()=(++stable_sequence);
   if (!send_rejected_state(valid) || system.copy_state(&snapshot)) return 103;
   if (six_axis) {
     auto released = valid;
     released.status = status_only_after_timeout.status;
-    released.status.set_core_state(1U);
-    released.state.set_core_state(1U);
-    released.state.set_session_id(0U);
-    released.state.set_reference_epoch(0U);
-    released.state.set_motion_epoch(stop_request.expected_motion_epoch() + 1U);
-    released.state.set_management_epoch(stop_request.expected_management_epoch() + 1U);
-    released.state.set_position_valid_mask(0U);
-    released.state.set_velocity_valid_mask(63U);
-    released.state.set_raw_position_valid_mask(63U);
-    released.state.set_state_seq(stable_sequence + 1U);
-    released.state.set_produced_at_us(device_now_us());
+    released.status.core_state()=(1U);
+    released.state.core_state()=(1U);
+    released.state.session_id()=(0U);
+    released.state.reference_epoch()=(0U);
+    released.state.motion_epoch()=((*stop_request.expected_motion_epoch()) + 1U);
+    released.state.management_epoch()=((*stop_request.expected_management_epoch()) + 1U);
+    root_fixture::set_position_quality(released.state,0U);
+    root_fixture::set_velocity_quality(released.state,63U);
+    root_fixture::set_raw_quality(released.state,63U);
+    released.state.state_seq()=(stable_sequence + 1U);
+    released.state.produced_at_us()=(device_now_us());
     const double raw_motor_rev[6]{0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
-    released.state.set_raw_motor_position_rev(raw_motor_rev);
+    root_fixture::set_raw_position(released.state,raw_motor_rev);
     if (!wait_for([&] {
           send(released);
           std::lock_guard<std::mutex> lock(channel->mutex);
-          State observed;
+          State observed=owned_fixture::state();dp::comm::SourceId observed_source{};
           return channel->observation.state_received_us != 0U &&
-              wire::DummyJointStateV2Codec::decode(channel->observation.state.data(),
-                channel->observation.state.size(), &observed) == wire::CodecResult::kOk &&
-              observed.core_state() == 1U && observed.state_seq() == released.state.state_seq();
+              ((observed=channel->observation.state),(observed_source=channel->observation.state_source),message_fields_present(observed)) == true &&
+              (*observed.core_state()) == 1U && (*observed.state_seq()) == (*released.state.state_seq());
         }) || system.copy_state(&snapshot)) return 97;
   }
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -5645,34 +4879,50 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
   const auto first_before_reboot=transport.diagnostic_snapshot();
   // 首拒发生在bootstrap之前时expected身份尚不可用，必须保留valid=false，不能伪造0身份。
   if(!first_before_reboot.first_present || first_before_reboot.first.host_us==0U ||
-     !first_before_reboot.first.observed.valid) return 480;
+     !first_before_reboot.first.observed.valid) {
+    std::fprintf(stderr,"first rejection present=%u observed=%u reason=%u detail=%s\n",unsigned(first_before_reboot.first_present),unsigned(first_before_reboot.first.observed.valid),unsigned(first_before_reboot.first.reason),first_before_reboot.first.detail.data());return 480;
+  }
   /**
    * @brief 新boot使旧状态/目标身份立即失效；旧boot后续到达也不能重建缓存。
    * Stop已锁存时即使新boot State seq1仍拒绝，不能把重启看成自动重新授权。
    */
   auto rebooted = valid;
-  rebooted.status.set_boot_epoch(11U);
-  rebooted.state.set_boot_epoch(11U);
-  rebooted.state.set_position_valid_mask(0U);
+  rebooted.root_generation=11U;
+  rebooted.status_source.boot_id=(11U);
+  rebooted.state_source.boot_id=(11U);
+  root_fixture::set_position_quality(rebooted.state,0U);
   const auto invalidations = transport.statistics().invalidations;
   send(rebooted);
-  if (!wait_for([&] {
+  const auto reboot_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(12);
+  bool reboot_observed=false;
+  while(std::chrono::steady_clock::now()<reboot_deadline && !reboot_observed) {
+    // 新实例订阅由正式SYSTEM异步建立；持续提供该代次heartbeat，直到目标样本真实接纳。
+    if(!send(rebooted))return 19;
+    reboot_observed=[&] {
         if (transport.statistics().invalidations <= invalidations) return false;
         std::lock_guard<std::mutex> lock(channel->mutex);
-        Status observed_status;
-        return wire::DummyDeviceStatusV2Codec::decode(
-            channel->observation.status.data(), channel->observation.status.size(),
-            &observed_status) == wire::CodecResult::kOk && observed_status.boot_epoch() == 11U;
-      }) ||
-      system.copy_state(&snapshot) || publish_control_update(positions, 1U, 0, nullptr) != 0U) return 19;
-  send(valid);
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  if (system.copy_state(&snapshot)) return 20;
+        Status observed_status=owned_fixture::status();dp::comm::SourceId observed_status_source{};
+        return ((observed_status=channel->observation.status),(observed_status_source=channel->observation.status_source),message_fields_present(observed_status)) == true && observed_status_source.boot_id == 11U;
+      }();
+    if(!reboot_observed)std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  if(!reboot_observed || system.copy_state(&snapshot) || publish_control_update(positions,1U,0,nullptr)!=0U) {
+    const auto stats=transport.statistics();const auto observation=channel->diagnostic_observation();Status observed=owned_fixture::status();dp::comm::SourceId observed_source{};
+    (void)((observed=observation.status),(observed_source=observation.status_source),message_fields_present(observed));
+    std::fprintf(stderr,"ROOT_REBOOT_FAILED observed=%u boot=%llu invalid=%llu before=%llu status=%llu\n",
+      unsigned(reboot_observed),(unsigned long long)observed_source.boot_id,(unsigned long long)stats.invalidations,
+      (unsigned long long)invalidations,(unsigned long long)stats.status_messages);
+    return 19;
+  }
+  auto late_old_source=valid;late_old_source.invalid_root_source_boot=7U;
+  late_old_source.status_source.boot_id=11U; // 处理屏障须为新owner合法Status，坏State仍明确携旧Source7。
+  late_old_source.state_source.boot_id=11U;
+  if(!reject_root_frame(late_old_source) || system.copy_state(&snapshot))return 20;
   auto post_stop = valid;
-  post_stop.status.set_boot_epoch(11U);
-  post_stop.state.set_boot_epoch(11U);
-  post_stop.state.set_state_seq(1U);
-  post_stop.state.set_produced_at_us(device_now_us());
+  post_stop.status_source.boot_id=(11U);
+  post_stop.state_source.boot_id=(11U);
+  post_stop.state.state_seq()=(1U);
+  post_stop.state.produced_at_us()=(device_now_us());
   if (!send_rejected_state(post_stop) || system.copy_state(&snapshot)) return 104;
   const auto diagnostics = transport.statistics();
   final_worker_diagnostic_snapshot=diagnostics.diagnostics;
@@ -5685,7 +4935,13 @@ int run_parent(const std::string &endpoint, int input, int output, int stops_inp
       diagnostics.state_identity_rejections == 0U ||
       diagnostics.state_authority_rejections == 0U ||
       diagnostics.state_sequence_rejections == 0U ||
-      diagnostics.stop_latched_state_rejections == 0U) return 136;
+      diagnostics.stop_latched_state_rejections == 0U) {
+    std::fprintf(stderr,"ROOT_FINAL_COUNTS callbacks=%llu messages=%llu identity=%llu authority=%llu sequence=%llu stop=%llu\n",
+      (unsigned long long)diagnostics.state_callbacks,(unsigned long long)diagnostics.state_messages,
+      (unsigned long long)diagnostics.state_identity_rejections,(unsigned long long)diagnostics.state_authority_rejections,
+      (unsigned long long)diagnostics.state_sequence_rejections,(unsigned long long)diagnostics.stop_latched_state_rejections);
+    return 136;
+  }
   transport.stop();
   std::printf("component_only: synthetic_peer axes=%u full identity, device/profile/mask/age/sequence rejection, authority/boot invalidation PASS\n",
               six_axis ? 6U : 1U);
@@ -5739,23 +4995,35 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
                        bool uncommitted_stop_mode = false,
                        bool uncommitted_idle_status_mode = false) {
   SerialBridge bridge;
-  if (!bridge.open_pair()) return 30;
+  if (!root_tcp_boot_case && !bridge.open_pair()) return 30;
+  const char* router=std::getenv("DUMMY_R11_TCP_ROUTER");
+  if(root_tcp_boot_case && (!router || std::strncmp(router,"tcp/127.0.0.1:",14)!=0))return 35;
+  const std::string peer_endpoint=root_tcp_boot_case?router:bridge.endpoint(0);
+  const std::string host_endpoint=root_tcp_boot_case?router:bridge.endpoint(1);
   int requests[2]{}, responses[2]{};
   int stops[2]{};
   if (::pipe(requests) != 0 || ::pipe(responses) != 0 || ::pipe(stops) != 0) return 31;
   const auto child = ::fork();
   if (child < 0) return 32;
   if (child == 0) {
-    bridge.close_child_fds();
+    if(!root_tcp_boot_case)bridge.close_child_fds();
     ::close(requests[1]); ::close(responses[0]); ::close(stops[0]);
-    ::_exit(run_peer(bridge.endpoint(0), requests[0], responses[1], stops[1],
-                     never_complete_stop, revoke_owner_before_stop_receipt,
-                     release_deactivate_mode == 7U, sequence_rebase_mode,
-                     uncommitted_stop_mode));
+#ifdef DUMMY_REF_ROOT_COMPONENT_PEER_PATH
+    char input_fd[16],output_fd[16],stop_fd[16],fault[16];
+    std::snprintf(input_fd,sizeof(input_fd),"%d",requests[0]);std::snprintf(output_fd,sizeof(output_fd),"%d",responses[1]);
+    std::snprintf(stop_fd,sizeof(stop_fd),"%d",stops[1]);std::snprintf(fault,sizeof(fault),"%u",release_receipt_fault);
+    ::execl(DUMMY_REF_ROOT_COMPONENT_PEER_PATH,DUMMY_REF_ROOT_COMPONENT_PEER_PATH,peer_endpoint.c_str(),input_fd,output_fd,stop_fd,
+      never_complete_stop?"1":"0",revoke_owner_before_stop_receipt?"1":"0",release_deactivate_mode==7U?"1":"0",
+      sequence_rebase_mode?"1":"0",uncommitted_stop_mode?"1":"0",source_cancel_fault?source_cancel_fault:"",fault,
+      inject_peer_state_queue_full_once?"1":"0",static_cast<char*>(nullptr));
+    ::_exit(33);
+#else
+    ::_exit(33); // 独立测试peer路径由本测试target提供；不在PIC角色内启动另一个资源ABI。
+#endif
   }
-  bridge.start();
+  if(!root_tcp_boot_case)bridge.start();
   ::close(requests[0]); ::close(responses[1]); ::close(stops[1]);
-  const auto result = run_parent(bridge.endpoint(1), responses[0], requests[1], stops[0],
+  const auto result = run_parent(host_endpoint, responses[0], requests[1], stops[0],
                                  six_axis, ack_timeout_mode, default_ack_age_mode,
                                  never_complete_stop, heartbeat_budget_mode, inactive_prime_mode,
                                  cold_idle_gap_mode, cold_fault_gap_mode,
@@ -5777,7 +5045,10 @@ int run_component_case(bool six_axis, bool ack_timeout_mode, bool default_ack_ag
  * @return 所选场景检查码；普通完整六轴成功后还跑default_ack_age负例。
  * @note 本入口不是严格枚举parser，未识别第三参数可落到默认ACK超时选择；应按已注册测试的确切参数调用。
  */
-int main(int argc, char **argv) {
+static int run_transport_test_cases(int argc, char **argv) {
+  // 正式Root重启场景固定六轴/mask63；普通无参J1场景仍保留独立用途。
+  if(argc==2 && std::strcmp(argv[1],"protocol_r11_tcp_boot")==0){root_tcp_boot_case=true;return run_component_case(true,false,false);}
+  if(argc==2 && std::strcmp(argv[1],"protocol_r11_presence")==0){root_presence_case=true;return run_component_case(false,false,false);}
   if(argc==2 && std::strcmp(argv[1],"owner_safety_stop")==0) {
     owner_safety_stop_case=true;
     return run_component_case(true,false,false,false,false,false,false,false,false,true);
@@ -6032,7 +5303,7 @@ int main(int argc, char **argv) {
    * 编号95：ACK State错boot，拒绝。
    * 编号96：Status Hold前public Stop，已失效上下文不能重建quiescent。
    */
-  const unsigned raw_order_case = argc == 3 && std::strcmp(argv[2],"hold_state_ack_before_status")==0 ?87U : argc == 3 && std::strcmp(argv[2],"hold_no_ACK")==0 ?88U : argc == 3 && std::strcmp(argv[2],"hold_partial_SENT")==0 ?89U : argc == 3 && std::strcmp(argv[2],"hold_wrong_epoch")==0 ?90U : argc == 3 && std::strcmp(argv[2],"hold_Run_ACK")==0 ?91U : argc == 3 && std::strcmp(argv[2],"hold_wrong_session")==0 ?92U : argc == 3 && std::strcmp(argv[2],"hold_stale_ACK")==0 ?93U : argc == 3 && std::strcmp(argv[2],"hold_wrong_reference")==0 ?94U : argc == 3 && std::strcmp(argv[2],"hold_wrong_boot")==0 ?95U : argc == 3 && std::strcmp(argv[2],"hold_Stop_before_status")==0 ?96U : argc == 3 && std::strcmp(argv[2],"raw_fault_no_RUN_anchor")==0 ?84U :
+  const unsigned raw_order_case = argc == 3 && std::strcmp(argv[2],"raw_complete_status_before_flush")==0 ? (complete_status_before_flush_case=true,43U) : argc == 3 && std::strcmp(argv[2],"hold_state_ack_before_status")==0 ?87U : argc == 3 && std::strcmp(argv[2],"hold_no_ACK")==0 ?88U : argc == 3 && std::strcmp(argv[2],"hold_partial_SENT")==0 ?89U : argc == 3 && std::strcmp(argv[2],"hold_wrong_epoch")==0 ?90U : argc == 3 && std::strcmp(argv[2],"hold_Run_ACK")==0 ?91U : argc == 3 && std::strcmp(argv[2],"hold_wrong_session")==0 ?92U : argc == 3 && std::strcmp(argv[2],"hold_stale_ACK")==0 ?93U : argc == 3 && std::strcmp(argv[2],"hold_wrong_reference")==0 ?94U : argc == 3 && std::strcmp(argv[2],"hold_wrong_boot")==0 ?95U : argc == 3 && std::strcmp(argv[2],"hold_Stop_before_status")==0 ?96U : argc == 3 && std::strcmp(argv[2],"raw_fault_no_RUN_anchor")==0 ?84U :
       argc == 3 && std::strcmp(argv[2],"raw_fault_wrong_boot")==0 ?85U :
       argc == 3 && std::strcmp(argv[2],"raw_fault_stale_produced")==0 ?86U : argc == 3 && std::strcmp(argv[2],"raw_fault_after_public_invalidate")==0 ? 83U : cancel_hold_status_variant ? cancel_hold_case-12U : argc == 3 && std::strcmp(argv[2], "raw_order") == 0 ? 1U :
       argc == 3 && std::strcmp(argv[2], "raw_order_bad_boot") == 0 ? 2U :
@@ -6281,4 +5552,20 @@ int main(int argc, char **argv) {
   }
   if (result != 0 || !six_axis || argc != 2) return result;
   return run_component_case(true, false, true);
+}
+
+/**
+ * @brief 将完整断言编号转换为可靠的进程退出状态，并输出唯一终态标记。
+ * @details POSIX 只保留退出码低八位，直接返回 256 会被误判成功。
+ * 原始断言编号仍完整输出；只有所有所选场景通过才返回零。
+ * @param argc 场景参数数量，原样交给场景分发器。
+ * @param argv 场景参数数组，分发器按原约定处理。
+ * @return 0 表示全部通过，1 表示任意断言失败。
+ */
+int main(int argc, char **argv) {
+  ::signal(SIGPIPE,SIG_IGN); // peer提前失败须报告场景断言，不能让测试因管道信号静默终止。
+  const int result = run_transport_test_cases(argc, argv);
+  std::fprintf(stderr, "TRANSPORT_COMPONENT_RESULT=%s assertion=%d\n",
+               result == 0 ? "PASS" : "FAIL", result);
+  return result == 0 ? 0 : 1;
 }

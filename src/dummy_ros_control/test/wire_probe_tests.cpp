@@ -1,178 +1,100 @@
-/**
- * @file wire_probe_tests.cpp
- * @brief 检查wire固定布局、整数精度、管理语义字段与本地service桥。
- *
- * 所有消息为合成夹具；编码/roundtrip成功不表示远端已接受命令或完成管理事务。固定size和接口ID的static_assert只在编译时检查生成类型形状。
- */
-#include <cstdint>
+/** @file wire_probe_tests.cpp
+ * @brief 真实Owned的中央Root/canonical往返、64位业务身份、展开角度及显式Source夹具。
+ * @details 纯内存测试；不调用已退役raw service bridge，不把合成Source称为认证或远端接纳。 */
+#include "owned_message_fixtures.hpp"
+#include "dummy_ref/root_transport.hpp"
+#include "canonical_records.h"
+#include <array>
+#include <cmath>
 #include <cstring>
-
-#include "dummy_ref/wire_contract.hpp"
-
 namespace {
-using ManageService = dp::protocol::services::DummyManageV2;
-
-/**
- * @brief 处理进程内monitor_snapshot服务并回显请求来源身份。
- * @par 未命名管理请求参数
- * 本用例不依赖其正文。
- * @param response 调用方提供的可写wire响应。
- * @param info dp_comm桥传入的请求来源元数据，用source_device填client ID。
- * @par 未命名上下文参数
- * void*上下文在本夹具中不使用。
- * @return kOk；写入的phase/run/session等仅是固定响应夹具。
- */
-dp::comm::Result monitor_snapshot(
-    const ManageService::Request &, ManageService::Response *response,
-    const dp::comm::RequestInfo &info, void *) {
-  std::uint8_t caller[16]{};
-  std::memcpy(caller, info.source_device.bytes, sizeof(caller));
-  response->set_schema_major(2U);
-  response->set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  response->set_client_instance_id(caller);
-  response->set_receipt(1U);
-  response->set_result_code(0U);
-  response->set_operation_id(9U);
-  response->set_transaction_phase(3U);
-  response->set_session_id(9007199254740995ULL);
-  return dp::comm::Result::kOk;
+namespace selected=dp::protocol::selection;
+namespace messages=dummy_ref::messages;
+using Result=flatbuffers::bounded::Status;
+/** @brief 通过正式Root traits验证正文和独立来源，所有位布局由SDK处理。 */
+template<class Descriptor>
+bool root_roundtrip(const typename Descriptor::Owned& input,typename Descriptor::Owned& output,dp::comm::SourceId* source_out=nullptr){
+ alignas(8) std::array<std::uint8_t,Descriptor::kWorkspaceSize> workspace{};
+ dp::comm::SourceId source{};source.device.bytes[0]=0xB2;source.boot_id=9007199254740993ULL;source.context_id=7;
+ flatbuffers::bounded::SdkMetadata metadata{},decoded{};
+ const auto policy=Descriptor::policy();
+ const auto role=policy.mode==flatbuffers::bounded::SdkMode::sample?dp::comm::detail::Role::Sample:
+  policy.mode==flatbuffers::bounded::SdkMode::request?dp::comm::detail::Role::Request:dp::comm::detail::Role::Response;
+ std::uint32_t token=0;if(!dp::comm::detail::encode_token(role,17,token))return false;
+ dp::comm::detail::RootMetadata input_metadata{};input_metadata.token=token;
+ if(policy.mode==flatbuffers::bounded::SdkMode::request)input_metadata.requester=dp::comm::detail::RootMetadata::Requester{source,9007199254740995ULL};
+ else input_metadata.source=source;
+ if(Descriptor::kTargetRequired)input_metadata.target=source;
+ metadata=dp::comm::detail::to_wire(input_metadata);
+ flatbuffers::bounded::BufferView bytes{};
+ if(Descriptor::Traits::encode(input,policy,metadata,workspace.data(),workspace.size(),bytes)!=Result::ok ||
+    Descriptor::Traits::decode(bytes.data,bytes.size,policy,output,decoded)!=Result::ok)return false;
+ const auto decoded_metadata=dp::comm::detail::from_wire(decoded);
+ if(!decoded_metadata.source&&!decoded_metadata.requester)return false;
+ const auto restored=decoded_metadata.source?*decoded_metadata.source:decoded_metadata.requester->source;
+ if(decoded_metadata.requester&&decoded_metadata.requester->client_instance!=9007199254740995ULL)return false;
+ if(source_out)*source_out=restored;
+ return restored.device.bytes[0]==0xB2&&restored.boot_id==source.boot_id&&restored.context_id==7;
 }
-}  // namespace
-
-/**
- * @brief 验证当前wire roundtrip、异常长度不覆盖输出和来源桥接。
- *
- * 身份/ticket刻意大于2^53，J6=3πrad；必须保留uint64与展开角度。Queued响应夹具填receipt=1/phase=1/result=8，但只断言选定解码字段，未检查result_code；不能把夹具填值当作完整roundtrip证明或Accepted/Committed。
- * @return 0 表示本文件全部检查通过；非零定位失败检查。
- */
-int main() {
-  namespace wire = dp::iface;
-  static_assert(wire::DummyJointCommandV2Codec::kEncodedSize == 133U);
-  static_assert(wire::DummyJointStateV2Codec::kEncodedSize == 350U);
-  static_assert(wire::DummyDeviceStatusV2Codec::kEncodedSize == 651U);
-  static_assert(wire::DummyAttemptEvidenceV2Codec::kEncodedSize == 372U);
-  static_assert(wire::DummyManageV2RequestCodec::kEncodedSize == 233U);
-  static_assert(wire::DummyManageV2ResponseCodec::kEncodedSize == 132U);
-  static_assert(dp::comm::MessageCodec<wire::DummyManageV2Request>::kInterfaceId == 4141U);
-  static_assert(dp::comm::MessageCodec<wire::DummyManageV2Response>::kInterfaceId == 4142U);
-
-  wire::DummyJointCommandV2 command;
-  command.set_schema_major(2U);
-  command.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  command.set_boot_epoch(9007199254740993ULL);
-  command.set_session_id(9007199254740995ULL);
-  command.set_freshness_ticket(9007199254740997ULL);
-  command.set_configured_mask(0x3FU);
-  const double positions[6]{0.1, -0.2, 0.7, -0.4, 0.5, 9.42477796076938};
-  command.set_position_rad(positions);
-  std::uint8_t command_bytes[wire::DummyJointCommandV2Codec::kEncodedSize]{};
-  wire::DummyJointCommandV2 decoded_command;
-  if (wire::DummyJointCommandV2Codec::encode(command, command_bytes, sizeof(command_bytes)) != wire::CodecResult::kOk) return 1;
-  if (wire::DummyJointCommandV2Codec::decode(command_bytes, sizeof(command_bytes), &decoded_command) != wire::CodecResult::kOk) return 2;
-  if (decoded_command.boot_epoch() != 9007199254740993ULL ||
-      decoded_command.session_id() != 9007199254740995ULL ||
-      decoded_command.freshness_ticket() != 9007199254740997ULL ||
-      decoded_command.position_rad()[5] != positions[5]) return 3;
-  /**
-   * @brief encode可承载minor=0原文，但decode必须拒绝不匹配schema。
-   * 因此编码Ok不能单独当作完整schema/业务验证通过。
-   */
-  command.set_schema_minor(0U);
-  if (wire::DummyJointCommandV2Codec::encode(command, command_bytes, sizeof(command_bytes)) != wire::CodecResult::kOk ||
-      wire::DummyJointCommandV2Codec::decode(command_bytes, sizeof(command_bytes), &decoded_command) == wire::CodecResult::kOk)
-    return 14;
-
-  /**
-   * @brief Status夹具包含能力位、策略hash、rad/rad/s/rad/s²限制及µs周期；下面只断言选定的hash/限额/周期等字段，未检查解码后的capabilities。
-   */
-  wire::DummyDeviceStatusV2 status;
-  status.set_schema_major(2U);
-  status.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  status.set_configured_mask(0x3FU);
-  status.set_capabilities(1ULL << 2U);
-  status.set_control_period_us(10000U);
-  status.set_state_publish_period_us(10000U);
-  std::uint8_t policy[32]{};
-  policy[0] = 1U;
-  status.set_compiled_policy_sha256(policy);
-  const double position_min[6]{-1, -1, -1, -1, -1, -1};
-  const double position_max[6]{1, 1, 1, 1, 1, 1};
-  const double velocity_max[6]{1, 1, 1, 1, 1, 1};
-  const double acceleration_max[6]{2, 2, 2, 2, 2, 2};
-  status.set_position_min_rad(position_min);
-  status.set_position_max_rad(position_max);
-  status.set_velocity_max_rad_s(velocity_max);
-  status.set_acceleration_max_rad_s(acceleration_max);
-  std::uint8_t status_bytes[wire::DummyDeviceStatusV2Codec::kEncodedSize]{};
-  wire::DummyDeviceStatusV2 decoded_status;
-  if (wire::DummyDeviceStatusV2Codec::encode(status, status_bytes, sizeof(status_bytes)) != wire::CodecResult::kOk ||
-      wire::DummyDeviceStatusV2Codec::decode(status_bytes, sizeof(status_bytes), &decoded_status) != wire::CodecResult::kOk ||
-      decoded_status.schema_minor() != dummy_ref::protocol::kSchemaMinor || decoded_status.compiled_policy_sha256()[0] != 1U ||
-      decoded_status.position_min_rad()[0] != -1.0 || decoded_status.position_max_rad()[5] != 1.0 ||
-      decoded_status.velocity_max_rad_s()[2] != 1.0 || decoded_status.acceleration_max_rad_s()[4] != 2.0 ||
-      decoded_status.control_period_us() != 10000U || decoded_status.state_publish_period_us() != 10000U) return 13;
-
-  wire::DummyManageV2Response queued;
-  queued.set_schema_major(2U);
-  queued.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  queued.set_request_id(9007199254740999ULL);
-  queued.set_receipt(1U);
-  queued.set_result_code(8U);
-  queued.set_transaction_phase(1U);
-  std::uint8_t response_bytes[wire::DummyManageV2ResponseCodec::kEncodedSize]{};
-  wire::DummyManageV2Response decoded_response;
-  if (wire::DummyManageV2ResponseCodec::encode(queued, response_bytes, sizeof(response_bytes)) != wire::CodecResult::kOk) return 4;
-  if (wire::DummyManageV2ResponseCodec::decode(response_bytes, sizeof(response_bytes), &decoded_response) != wire::CodecResult::kOk) return 5;
-  if (decoded_response.request_id() != 9007199254740999ULL ||
-      decoded_response.receipt() != 1U || decoded_response.transaction_phase() != 1U) return 6;
-
-  wire::DummyAttemptEvidenceV2 evidence;
-  evidence.set_schema_major(2U);
-  evidence.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  evidence.set_category(1U);
-  evidence.set_run_id(9007199254740993ULL);
-  evidence.set_evidence_seq(17U);
-  evidence.set_expected_mask(1U);
-  evidence.set_evidence_lost(true);
-  std::uint8_t evidence_bytes[wire::DummyAttemptEvidenceV2Codec::kEncodedSize]{};
-  wire::DummyAttemptEvidenceV2 decoded_evidence;
-  if (wire::DummyAttemptEvidenceV2Codec::encode(evidence, evidence_bytes, sizeof(evidence_bytes)) != wire::CodecResult::kOk ||
-      wire::DummyAttemptEvidenceV2Codec::decode(evidence_bytes, sizeof(evidence_bytes), &decoded_evidence) != wire::CodecResult::kOk ||
-      decoded_evidence.run_id() != evidence.run_id() || decoded_evidence.evidence_seq() != 17U ||
-      !decoded_evidence.evidence_lost()) return 15;
-
-  /**
-   * @brief raw-fixed service_invoke使用人工authenticated来源元数据。
-   * 回调回显source_device[0]=0xB2；这检查桥是否传递RequestInfo，不执行真实认证握手。
-   */
-  wire::DummyManageV2Request monitor;
-  monitor.set_schema_major(2U);
-  monitor.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  monitor.set_operation(0U);
-  std::uint8_t monitor_request[wire::DummyManageV2RequestCodec::kEncodedSize]{};
-  if (wire::DummyManageV2RequestCodec::encode(monitor, monitor_request, sizeof(monitor_request)) != wire::CodecResult::kOk) return 8;
-  std::uint8_t monitor_response[wire::DummyManageV2ResponseCodec::kEncodedSize]{};
-  std::uint16_t monitor_response_size = 0U;
-  dp::comm::RequestInfo request_info{};
-  request_info.authenticated = true;
-  request_info.source_session = 7U;
-  request_info.source_device.bytes[0] = 0xB2U;
-  dp::comm::ServiceCallback<ManageService> callback = monitor_snapshot;
-  if (dp::comm::service_invoke<ManageService>(
-          monitor_request, sizeof(monitor_request), wire::DummyManageV2RequestCodec::kEncodedSize,
-          &callback, nullptr, request_info,
-          monitor_response, sizeof(monitor_response), &monitor_response_size, nullptr) != dp::comm::Result::kOk) return 9;
-  wire::DummyManageV2Response snapshot;
-  if (wire::DummyManageV2ResponseCodec::decode(monitor_response, monitor_response_size, &snapshot) != wire::CodecResult::kOk) return 10;
-  if (snapshot.client_instance_id()[0] != 0xB2U || snapshot.operation_id() != 9U ||
-      snapshot.transaction_phase() != 3U || snapshot.result_code() != 0U ||
-      snapshot.session_id() != 9007199254740995ULL) return 11;
-
-  /**
-   * @brief 截短一字节应解码失败且保持原输出boot=42，不能留下半解码对象。
-   */
-  decoded_command.set_boot_epoch(42U);
-  if (wire::DummyJointCommandV2Codec::decode(command_bytes, sizeof(command_bytes) - 1U, &decoded_command) == wire::CodecResult::kOk ||
-      decoded_command.boot_epoch() != 42U) return 12;
-  return 0;
+/** @brief 本地记录只用中央canonical；实际长度不等于最大容量。 */
+template<class T>bool record_roundtrip(const T& value,T& output){
+ using Traits=dp::protocol::canonical::Traits<T>;std::array<std::uint8_t,Traits::kMaxEncodedSize> bytes{};std::size_t written=0;
+ return Traits::encode(value,bytes.data(),bytes.size(),&written)&&Traits::decode(bytes.data(),written,&output);
+}
+}
+int main(){
+ messages::Command command;
+ command.boot_epoch()=9007199254740993ULL;command.session_id()=9007199254740995ULL;
+ command.profile_id()=0;command.reference_epoch()=9;command.motion_epoch()=10;command.producer_seq()=11;command.operation_id()=0;
+ command.freshness_ticket()=9007199254740997ULL;
+ std::array<std::uint8_t,16> identity{};identity[0]=1;command.domain_device_id().emplace().assign(identity.data(),16);
+ identity[0]=2;command.client_instance_id().emplace().assign(identity.data(),16);
+ const double positions[6]{0.1,-0.2,0.7,-0.4,0.5,9.42477796076938};
+ auto& joints=command.joints().emplace();
+ for(unsigned a=0;a<6;++a){auto* joint=joints.emplace_back();joint->joint_id()=a;joint->configured()=true;joint->position_rad()=positions[a];}
+ messages::Command decoded;
+ if(!root_roundtrip<selected::dp_protocol_dummy_JointCommand>(command,decoded)||
+    !record_roundtrip(command,decoded))return 1;
+ if(*decoded.boot_epoch()!=9007199254740993ULL||*decoded.session_id()!=9007199254740995ULL||
+    *decoded.freshness_ticket()!=9007199254740997ULL||*(*decoded.joints())[5].position_rad()!=positions[5])return 3;
+ auto status=owned_fixture::status();status.configured_mask()=63;status.capabilities()=1ULL<<2;
+ status.control_period_us()=10000;status.state_publish_period_us()=10000;
+ std::array<std::uint8_t,32> hash{};hash[0]=1;status.compiled_policy_sha256().emplace().assign(hash.data(),32);
+ std::array<double,6> values{};values.fill(-1);status.position_min_rad().emplace().assign(values.data(),6);
+ values.fill(1);status.position_max_rad().emplace().assign(values.data(),6);status.velocity_max_rad_s().emplace().assign(values.data(),6);
+ values.fill(2);status.acceleration_max_rad_s().emplace().assign(values.data(),6);
+ messages::Status restored_status;
+ if(!root_roundtrip<selected::dp_protocol_dummy_DeviceStatus>(status,restored_status)||!record_roundtrip(status,restored_status)||
+    (*restored_status.compiled_policy_sha256())[0]!=1||(*restored_status.position_min_rad())[0]!=-1||
+    (*restored_status.position_max_rad())[5]!=1||(*restored_status.velocity_max_rad_s())[2]!=1||
+    (*restored_status.acceleration_max_rad_s())[4]!=2||*restored_status.control_period_us()!=10000||
+    *restored_status.state_publish_period_us()!=10000)return 13;
+ auto queued=owned_fixture::response();queued.request_id()=9007199254740999ULL;
+ queued.receipt()=1;queued.result_code()=8;queued.transaction_phase()=1;
+ messages::ManageResponse decoded_response;
+ if(!root_roundtrip<selected::dp_protocol_dummy_ManageResponse>(queued,decoded_response)||!record_roundtrip(queued,decoded_response))return 4;
+ if(*decoded_response.request_id()!=9007199254740999ULL||*decoded_response.receipt()!=1||*decoded_response.transaction_phase()!=1)return 6;
+ auto evidence=owned_fixture::evidence();evidence.category()=1;evidence.run_id()=9007199254740993ULL;
+ evidence.evidence_seq()=17;evidence.expected_mask()=1;evidence.evidence_lost()=true;
+ messages::Evidence decoded_evidence;
+ if(!root_roundtrip<selected::dp_protocol_dummy_AttemptEvidence>(evidence,decoded_evidence)||!record_roundtrip(evidence,decoded_evidence)||
+    *decoded_evidence.run_id()!=*evidence.run_id()||*decoded_evidence.evidence_seq()!=17||!*decoded_evidence.evidence_lost())return 15;
+ // 原monitor响应业务断言仍保留；实际RPC来源/回调另由真实Root PTY往返覆盖。
+ auto monitor=messages::make_manage_request();monitor.operation()=0;messages::ManageRequest decoded_request;dp::comm::SourceId caller{};
+ if(!root_roundtrip<selected::dp_protocol_dummy_ManageRequest>(monitor,decoded_request,&caller))return 8;
+ auto snapshot=owned_fixture::response();snapshot.client_instance_id().emplace().assign(caller.device.bytes,16);
+ snapshot.receipt()=1;snapshot.result_code()=0;snapshot.operation_id()=9;snapshot.transaction_phase()=3;snapshot.session_id()=9007199254740995ULL;
+ if(!root_roundtrip<selected::dp_protocol_dummy_ManageResponse>(snapshot,decoded_response)||
+    (*decoded_response.client_instance_id())[0]!=0xB2||*decoded_response.operation_id()!=9||
+    *decoded_response.transaction_phase()!=3||*decoded_response.result_code()!=0||*decoded_response.session_id()!=9007199254740995ULL)return 11;
+ using CommandRecord=dp::protocol::canonical::Traits<messages::Command>;
+ std::array<std::uint8_t,CommandRecord::kMaxEncodedSize> bytes{};std::size_t written=0;
+ if(!CommandRecord::encode(command,bytes.data(),bytes.size(),&written))return 12;
+ decoded.boot_epoch()=42;
+ if(CommandRecord::decode(bytes.data(),written-1,&decoded)||*decoded.boot_epoch()!=42)return 12;
+ // 退役业务schema号拒绝改为实际中央记录跨类型拒绝，同样不得部分改写输出。
+ std::array<std::uint8_t,dp::protocol::canonical::Traits<messages::Evidence>::kMaxEncodedSize> other{};
+ if(!dp::protocol::canonical::Traits<messages::Evidence>::encode(evidence,other.data(),other.size(),&written)||
+    CommandRecord::decode(other.data(),written,&decoded)||*decoded.boot_epoch()!=42)return 14;
+ return 0;
 }

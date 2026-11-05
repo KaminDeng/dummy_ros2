@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 /**
  * @file shared_management_channel_tests.cpp
  * @brief 核DeviceWorker facade与provider共享快照/排空/原证据状态及有限准入。
@@ -15,6 +16,18 @@
 #include <memory>
 #include <string>
 #include <unistd.h>
+#include <type_traits>
+#include <utility>
+
+/** @brief 独立消费方不能绕过验证方法篡改诊断缓存；读取API仍返回值副本。 */
+template<class T, class = void> struct ExposesDiagnosticStorage : std::false_type {};
+template<class T> struct ExposesDiagnosticStorage<T,
+    std::void_t<decltype(std::declval<T&>().diagnostic_observation_)>> : std::true_type {};
+static_assert(!ExposesDiagnosticStorage<dummy_ros_control::DeviceManagementChannel>::value,
+              "诊断缓存必须由唯一owner通过校验入口更新");
+static_assert(std::is_same_v<decltype(std::declval<const dummy_ros_control::DeviceManagementChannel&>().diagnostic_observation()),
+                             dummy_ros_control::DeviceManagementObservation>,
+              "公开读取不得泄漏缓存可变引用");
 
 /**
  * @brief 将一次正常返回动作的stderr重定向到tmpfile并读取最多512字节。
@@ -52,22 +65,18 @@ int main() {
   dummy_ros_control::TransportParameters parameters{"tcp/127.0.0.1:29999",{1},{2},2,1};
   dummy_motion_client::DpManagementTransport absent({parameters.endpoint,{1},{2},2,1},
       dummy_motion_client::DpManagementTransport::Connection::kDeviceWorker);
-  std::vector<std::uint8_t> bytes(dp::iface::DummyManageV2RequestCodec::kEncodedSize);
-  dummy_motion_client::ManageRequest request;
-  request.set_schema_major(2U);
-  request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  request.set_request_id(42U);
-  if (dp::iface::DummyManageV2RequestCodec::encode(
-          request, bytes.data(), bytes.size()) != dp::iface::CodecResult::kOk)
-    return 27;
-  const auto absent_log = capture_stderr([&] { (void)absent.send(bytes); });
+  auto request=owned_fixture::request();
+
+
+  request.request_id()=42U;
+  const auto absent_log = capture_stderr([&] { (void)absent.send(request); });
   if (absent_log.find("reason=not_ready request_id=42") == std::string::npos)
     return 24;
   dummy_ros_control::GuardedZenbeddedSystem system;
   auto provider=std::make_unique<dummy_ros_control::DeviceTransport>(system,parameters);
   auto channel=dummy_ros_control::DeviceTransport::management_channel(parameters);
   if(!channel) return 1;
-  if (capture_stderr([&] { (void)absent.send(bytes); }).find("reason=not_ready") == std::string::npos)
+  if (capture_stderr([&] { (void)absent.send(request); }).find("reason=not_ready") == std::string::npos)
     return 25;
   channel->ready=true; channel->observation.state_received_us=100; channel->observation.status_received_us=100;
   channel->observation.rejected_ack_boot_epoch=7U;
@@ -148,20 +157,20 @@ int main() {
   }
   if (capture_stderr([&] {
         std::lock_guard<std::mutex> lock(channel->mutex);
-        (void)facade.send(bytes);
+        (void)facade.send(request);
       }).find("reason=lock_busy") == std::string::npos) return 26;
-  auto first=facade.send(bytes);
-  if(!first || capture_stderr([&] { (void)facade.send(bytes); }).find("reason=queued") == std::string::npos)
+  auto first=facade.send(request);
+  if(!first || capture_stderr([&] { (void)facade.send(request); }).find("reason=queued") == std::string::npos)
     return 4;
-  first.reset(); if(!facade.send(bytes)) return 5;
+  first.reset(); if(!facade.send(request)) return 5;
   auto wrong=parameters; wrong.profile_id=3;
   if(dummy_ros_control::DeviceTransport::management_channel(wrong)) return 6;
   dummy_motion_client::WireManagementClient client(facade);
-  dummy_motion_client::ManageRequest query;
-  query.set_operation(dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::kQuery));
+  auto query=owned_fixture::request();
+  query.operation()=dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::GET_OPERATION);
   if(!client.submit(query,100)) return 8;
   auto cancel=query;
-  cancel.set_operation(dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::kCancel));
+  cancel.operation()=dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::CANCEL_MOTION);
   if(client.submit(cancel,101)!=0U || !channel->queued) return 9;
   first.reset();
   channel->queued.reset();
@@ -195,20 +204,10 @@ int main() {
   if(!channel->queued) return 11;
   const auto admitted_pending=channel->queued;
   const auto original_bytes=admitted_pending->request;
-  dummy_motion_client::ManageRequest admitted_request;
-  if(dp::iface::DummyManageV2RequestCodec::decode(
-      original_bytes.data(),original_bytes.size(),&admitted_request)!=
-      dp::iface::CodecResult::kOk ||
-      admitted_request.request_id()!=busy_id || admitted_request.request_seq()==0U ||
-      admitted_request.operation()!=dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::kQuery)) return 11;
-  auto expected_request=query; expected_request.set_schema_major(2U); expected_request.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  expected_request.set_request_id(busy_id);expected_request.set_request_seq(admitted_request.request_seq());
-  std::array<std::uint8_t,dp::iface::DummyManageV2RequestCodec::kEncodedSize> expected_bytes{};
-  if(dp::iface::DummyManageV2RequestCodec::encode(
-      expected_request,expected_bytes.data(),expected_bytes.size())!=
-      dp::iface::CodecResult::kOk || expected_bytes!=original_bytes ||
-      busy_client.poll(busy_id) || channel->queued!=admitted_pending ||
-      admitted_pending->request!=original_bytes) return 11;
+  const auto& admitted_request=original_bytes;
+  if(*admitted_request.request_id()!=busy_id || *admitted_request.request_seq()==0U || *admitted_request.operation()!=dummy_motion_client::wire_value(dummy_motion_client::ManageOperation::GET_OPERATION))return 11;
+  auto expected_request=query;expected_request.request_id()=busy_id;expected_request.request_seq()=*admitted_request.request_seq();
+  if(typed_management_fixture::canonical_record(expected_request)!=typed_management_fixture::canonical_record(original_bytes) || busy_client.poll(busy_id) || channel->queued!=admitted_pending || typed_management_fixture::canonical_record(admitted_pending->request)!=typed_management_fixture::canonical_record(original_bytes))return 11;
   channel->queued.reset();
   /**
    * @brief 共享请求seq水位必须跨client保留：见2183397839后新client用2183397840。
@@ -218,11 +217,8 @@ int main() {
   channel->observe_request_sequence(2183397839U);
   dummy_motion_client::WireManagementClient resumed_client(facade);
   if (!resumed_client.submit(query, 201U) || !channel->queued) return 28;
-  dummy_motion_client::ManageRequest resumed_request;
-  if (dp::iface::DummyManageV2RequestCodec::decode(
-          channel->queued->request.data(), channel->queued->request.size(),
-          &resumed_request) != dp::iface::CodecResult::kOk ||
-      resumed_request.request_seq() != 2183397840U) return 29;
+  const auto& resumed_request=channel->queued->request;
+  if(*resumed_request.request_seq()!=2183397840U)return 29;
   channel->observe_request_sequence(2183397839U);
   if (channel->reserve_request_sequence() != 2183397841U) return 31;
   channel->observe_request_sequence(UINT32_MAX);

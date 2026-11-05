@@ -34,6 +34,13 @@ template <class Bytes> std::string hex(const Bytes &b) {
     s << std::hex << std::setfill('0') << std::setw(2) << unsigned(v);
   return s.str();
 }
+/** @brief 审计边界使用中央规范记录，不引入第二业务布局。 */
+template<class Message>std::vector<std::uint8_t> canonical_record(const Message& value){
+  using Traits=dp::protocol::canonical::Traits<Message>;
+  std::vector<std::uint8_t> bytes(Traits::kMaxEncodedSize);std::size_t written=0U;
+  if(!Traits::encode(value,bytes.data(),bytes.size(),&written))throw std::runtime_error("canonical record encode failed");
+  bytes.resize(written);return bytes;
+}
 struct Log {
   std::FILE *file = nullptr;
   explicit Log(const std::string &path) {
@@ -67,38 +74,35 @@ struct RecordedTransport final : ManagementTransport {
     Log &log;
     Handle(std::unique_ptr<RequestHandle> p, Log &l)
         : inner(std::move(p)), log(l) {}
-    std::optional<std::vector<std::uint8_t>> poll() override {
+    std::optional<ManagementResponse> poll() override {
       auto data = inner->poll();
       if (data)
-        log.write("RPC_RX hex=" + hex(*data));
+        log.write("RPC_RX canonical_hex="+hex(canonical_record(data->first))+" source_device="+hex(data->second.device.bytes)+" source_boot="+std::to_string(data->second.boot_id)+" source_context="+std::to_string(data->second.context_id));
       return data;
     }
   };
   RecordedTransport(DpManagementTransport &p, Log &l) : port(p), log(l) {}
   std::unique_ptr<RequestHandle>
-  send(const std::vector<std::uint8_t> &bytes) override {
-    ManageRequest r;
-    if (dummy_wire::DummyManageV2RequestCodec::decode(
-            bytes.data(), bytes.size(), &r) != dummy_wire::CodecResult::kOk)
-      throw std::runtime_error("request decode");
-    if (std::find(prior_ids.begin(), prior_ids.end(), r.request_id()) !=
+  send(const ManageRequest& r) override {
+    if(!dummy_ros_control::message_fields_present(r))throw std::runtime_error("request missing fields");
+    if (std::find(prior_ids.begin(), prior_ids.end(), *r.request_id()) !=
         prior_ids.end())
       throw std::runtime_error("新恢复RPC root碰撞原件ID");
-    if (r.operation() != 12) {
-      if (r.operation() == 10 && allow_release && !release_sent &&
+    if (*r.operation() != 12) {
+      if (*r.operation() == 10 && allow_release && !release_sent &&
           release_validator && release_validator(r))
         release_sent = true;
-      else if (r.operation() == 11 && allow_clear && !clear_sent)
+      else if (*r.operation() == 11 && allow_clear && !clear_sent)
         clear_sent = true;
       else
         throw std::runtime_error(
             "恢复请求不属于唯一受证D10/原终页后Clear/Query路径");
     }
-    log.write("RPC_TX operation=" + std::to_string(r.operation()) +
-              " request=" + std::to_string(r.request_id()) +
-              " query_operation=" + std::to_string(r.queried_operation_id()) +
-              " hex=" + hex(bytes));
-    auto h = port.send(bytes);
+    log.write("RPC_TX operation=" + std::to_string(*r.operation()) +
+              " request=" + std::to_string(*r.request_id()) +
+              " query_operation=" + (r.queried_operation_id()?std::to_string(*r.queried_operation_id()):"absent") +
+              " canonical_hex=" + hex(canonical_record(r)));
+    auto h = port.send(r);
     return h ? std::make_unique<Handle>(std::move(h), log) : nullptr;
   }
   std::uint32_t reserve_sequence(std::uint32_t n) noexcept override {
@@ -198,8 +202,9 @@ void exclusive_worker_fd(const std::string &path) {
   throw std::runtime_error("未找到本工具worker串口FD");
 }
 struct Samples {
-  dummy_wire::DummyDeviceStatusV2 status;
-  dummy_wire::DummyJointStateV2 state;
+  dummy_ref::messages::Status status;
+  dummy_ref::messages::State state;
+  dp::comm::SourceId status_source{},state_source{};
   std::uint64_t state_at{}, status_at{}, first_at{}, last_source_at{};
   std::uint32_t seq{};
   std::uint64_t produced{};
@@ -210,38 +215,32 @@ struct Samples {
     if (raw.state_received_us == state_at &&
         raw.status_received_us == status_at)
       return false;
-    if (dummy_wire::DummyJointStateV2Codec::decode(raw.state.data(),
-                                                   raw.state.size(), &state) !=
-            dummy_wire::CodecResult::kOk ||
-        dummy_wire::DummyDeviceStatusV2Codec::decode(
-            raw.status.data(), raw.status.size(), &status) !=
-            dummy_wire::CodecResult::kOk)
-      return false;
+    if(!dummy_ros_control::message_fields_present(raw.state) || !dummy_ros_control::message_fields_present(raw.status))return false;
+    for(const auto& joint:*raw.state.joints())if(!*joint.position_rad())return false;
+    state=raw.state;status=raw.status;state_source=raw.state_source;status_source=raw.status_source;
     log.write("OBS state_received_us=" + std::to_string(raw.state_received_us) +
               " status_received_us=" + std::to_string(raw.status_received_us) +
-              " state_hex=" + hex(raw.state) +
-              " status_hex=" + hex(raw.status));
+              " state_canonical_hex=" + hex(canonical_record(raw.state)) +
+              " status_canonical_hex=" + hex(canonical_record(raw.status)));
     state_at = raw.state_received_us;
     status_at = raw.status_received_us;
-    bool progress = count == 0 || (std::int32_t(state.state_seq() - seq) > 0 &&
-                                   state.produced_at_us() > produced);
+    bool progress = count == 0 || (std::int32_t(*state.state_seq() - seq) > 0 &&
+                                   *state.produced_at_us() > produced);
     for (unsigned i = 0; i < 6; ++i)
-      if (count && std::int32_t(state.feedback_seq()[i] - axes[i]) <= 0)
+      if (count && std::int32_t(*dummy_ros_control::joint_for_id(state,i)->feedback_seq() - axes[i]) <= 0)
         progress = false;
     if (progress) {
-      seq = state.state_seq();
-      produced = state.produced_at_us();
-      std::copy(std::begin(state.feedback_seq()),
-                std::end(state.feedback_seq()), axes.begin());
+      seq = *state.state_seq();
+      produced = *state.produced_at_us();
+      for(const auto& joint:*state.joints())axes[*joint.joint_id()]=*joint.feedback_seq();
       if (!count) {
         first_at = state_at;
-        std::copy(std::begin(state.position_rad()),
-                  std::end(state.position_rad()), minimum.begin());
+        for(const auto& joint:*state.joints())minimum[*joint.joint_id()]=*joint.position_rad();
         maximum = minimum;
       }
       for (unsigned i = 0; i < 6; ++i) {
-        minimum[i] = std::min(minimum[i], state.position_rad()[i]);
-        maximum[i] = std::max(maximum[i], state.position_rad()[i]);
+        minimum[i] = std::min(minimum[i], *dummy_ros_control::joint_for_id(state,i)->position_rad());
+        maximum[i] = std::max(maximum[i], *dummy_ros_control::joint_for_id(state,i)->position_rad());
       }
       last_source_at = state_at;
       ++count;
@@ -250,9 +249,9 @@ struct Samples {
   }
   bool stationary() const {
     for (unsigned i = 0; i < 6; ++i)
-      if (!std::isfinite(state.position_rad()[i]) ||
-          !std::isfinite(state.estimated_velocity_rad_s()[i]) ||
-          std::abs(state.estimated_velocity_rad_s()[i]) > 0.001 ||
+      if (!std::isfinite(*dummy_ros_control::joint_for_id(state,i)->position_rad()) ||
+          !dummy_ros_control::joint_for_id(state,i)->estimated_velocity_rad_s() || !std::isfinite(*dummy_ros_control::joint_for_id(state,i)->estimated_velocity_rad_s()) ||
+          std::abs(*dummy_ros_control::joint_for_id(state,i)->estimated_velocity_rad_s()) > 0.001 ||
           maximum[i] - minimum[i] > 0.00017453292519943296)
         return false;
     return true;
@@ -385,21 +384,20 @@ int main(int argc, char **argv) {
       }
       auto raw = transport.observe();
       if (raw && samples.observe(*raw, log)) {
-        if (!expected.boot && samples.status.boot_epoch())
-          expected.boot = samples.status.boot_epoch();
+        if (!expected.boot && samples.status_source.boot_id)
+          expected.boot = samples.status_source.boot_id;
         const auto shape =
             interrupted ? ManualRecoveryShape::kInterruptedRestFault
             : clear     ? ManualRecoveryShape::kKnownRestTimeoutFault
-                        : (samples.status.core_state() == 9
+                        : (*samples.status.core_state() == 9
                                ? ManualRecoveryShape::kKnownRestTimeoutFault
                                : ManualRecoveryShape::kRetainedDisabledIdle);
         const bool valid =
             exclusive &&
-            validate_manual_recovery(samples.status, samples.state, expected,
+            validate_manual_recovery(samples.status,samples.state,samples.status_source,samples.state_source, expected,
                                      now_us(), samples.state_at,
                                      samples.status_at, shape, why) &&
-            (!interrupted || interrupted_rest_live_matches(
-                                 proof, samples.status, samples.state));
+            (!interrupted || interrupted_rest_live_matches(proof,samples.status,samples.state,samples.status_source,samples.state_source));
         if (!valid)
           samples.count = 0;
         else if (samples.independent(now_us()) &&
@@ -409,30 +407,30 @@ int main(int argc, char **argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (!exclusive || !samples.independent(now_us()) ||
-        !validate_manual_recovery(
-            samples.status, samples.state, expected, now_us(), samples.state_at,
+        !validate_manual_recovery(samples.status,samples.state,samples.status_source,samples.state_source, expected, now_us(), samples.state_at,
             samples.status_at,
             interrupted ? ManualRecoveryShape::kInterruptedRestFault
             : clear     ? ManualRecoveryShape::kKnownRestTimeoutFault
-                        : (samples.status.core_state() == 9
+                        : (*samples.status.core_state() == 9
                                ? ManualRecoveryShape::kKnownRestTimeoutFault
                                : ManualRecoveryShape::kRetainedDisabledIdle),
             why))
       throw std::runtime_error("只读前置不满足: " + why);
     if (interrupted &&
-        (!interrupted_rest_live_matches(proof, samples.status, samples.state) ||
+        (!interrupted_rest_live_matches(proof,samples.status,samples.state,samples.status_source,samples.state_source) ||
          !samples.stationary()))
       throw std::runtime_error("原件与当前独立静止Fault身份不匹配");
     auto before = samples.state;
+    auto before_source=samples.state_source;
     log.write("DISABLED_BEFORE boot=" + std::to_string(expected.boot) +
-              " ref=" + std::to_string(before.reference_epoch()) +
-              " source_seq=" + std::to_string(before.state_seq()) +
-              " motion=" + std::to_string(before.motion_epoch()) +
-              " management=" + std::to_string(before.management_epoch()) +
+              " ref=" + std::to_string(*before.reference_epoch()) +
+              " source_seq=" + std::to_string(*before.state_seq()) +
+              " motion=" + std::to_string(*before.motion_epoch()) +
+              " management=" + std::to_string(*before.management_epoch()) +
               " state_received_us=" + std::to_string(samples.state_at) +
               " status_received_us=" + std::to_string(samples.status_at) +
               " formal_release_committed=" +
-              std::to_string(samples.status.release_committed()) +
+              std::to_string(*samples.status.release_committed()) +
               " 不证明独立motor_error_mask为0");
     if (!clear) {
       RCLCPP_INFO(logger,
@@ -450,48 +448,47 @@ int main(int argc, char **argv) {
     }
 
     WireManagementClient client(recorded, 0, now_us());
-    ManageRequest request;
+    auto request=dummy_ref::messages::make_manage_request();
     std::uint8_t device[16], client_id[16], policy[32];
     std::copy(params.device.begin(), params.device.end(), device);
     std::copy(params.client.begin(), params.client.end(), client_id);
     std::copy(deployed.profile.policy_hash.begin(),
               deployed.profile.policy_hash.end(), policy);
-    request.set_device_id(device);
-    request.set_client_instance_id(client_id);
-    request.set_operation(11);
-    request.set_operator_confirmed(true);
-    request.set_expected_boot_epoch(expected.boot);
-    request.set_expected_session_id(0);
-    request.set_expected_reference_epoch(before.reference_epoch());
-    request.set_expected_motion_epoch(before.motion_epoch());
-    request.set_expected_management_epoch(before.management_epoch());
-    request.set_expected_profile_id(params.profile);
-    request.set_configured_mask(63);
-    request.set_freshness_ticket(before.freshness_ticket());
-    request.set_compiled_policy_sha256(policy);
+    request.domain_device_id().emplace().assign(device,16U);
+    request.client_instance_id().emplace().assign(client_id,16U);
+    request.operation()=11;
+    request.operator_confirmed()=true;
+    request.expected_boot_epoch()=expected.boot;
+    request.expected_session_id()=0;
+    request.expected_reference_epoch()=*before.reference_epoch();
+    request.expected_motion_epoch()=*before.motion_epoch();
+    request.expected_management_epoch()=*before.management_epoch();
+    request.expected_profile_id()=params.profile;
+    request.configured_mask()=63;
+    request.freshness_ticket()=*before.freshness_ticket();
+    request.compiled_policy_sha256().emplace().assign(policy,32U);
     if (interrupted) {
       const auto origin_state = samples.state;
       const auto origin_status = samples.status;
-      recorded.release_validator = [proof, origin_status, origin_state](
+      const auto origin_status_source=samples.status_source,origin_state_source=samples.state_source;
+      recorded.release_validator = [proof,origin_status,origin_state,origin_status_source,origin_state_source](
                                        const ManageRequest &candidate) {
         return interrupted_release_request_matches(candidate, proof,
-                                                   origin_status, origin_state);
+                                                   origin_status,origin_state,origin_status_source,origin_state_source);
       };
       // 这里expected_session是原安全账本owner，当前公开State/Status仍必须为session0。
-      request.set_operation(10);
-      request.set_expected_session_id(proof.session);
+      request.operation()=10;
+      request.expected_session_id()=proof.session;
       InterruptedRestReleaseEvidence fresh_evidence(proof);
       while (auto old = transport.take_attempt_evidence()) {
-        dummy_wire::DummyAttemptEvidenceV2 page;
-        if (dummy_wire::DummyAttemptEvidenceV2Codec::decode(
-                old->bytes.data(), old->bytes.size(), &page) !=
-                dummy_wire::CodecResult::kOk ||
-            page.run_id() != proof.run || page.evidence_seq() != 0 ||
+        const auto& page=old->value;
+        if(!dummy_ros_control::message_fields_present(page) ||
+            *page.run_id() != proof.run || *page.evidence_seq() != 0 ||
             !std::equal(proof.chain.begin(), proof.chain.end(),
-                        page.chain_sha256()))
+                        page.chain_sha256()->begin()))
           throw std::runtime_error("D10前出现未绑定的新原页");
         log.write("ORIGINAL_PAGE_REPLAY received_us=" +
-                  std::to_string(old->received_us) + " hex=" + hex(old->bytes));
+                  std::to_string(old->received_us) + " canonical_hex=" + hex(canonical_record(old->value)));
       }
       if (transport.attempt_evidence_overflowed())
         throw std::runtime_error("原页FIFO溢出");
@@ -502,7 +499,7 @@ int main(int argc, char **argv) {
       log.write("RELEASE_ROOT request=" + std::to_string(release_root));
       bool release_committed = false, release_confirmed = false;
       std::uint64_t release_reply_at = 0, release_operation = 0;
-      const auto old_sequence = samples.state.state_seq();
+      const auto old_sequence = *samples.state.state_seq();
       samples.count = 0;
       while (rclcpp::ok() && now_us() - release_at < 8000000) {
         if (auto raw = transport.observe())
@@ -510,8 +507,8 @@ int main(int argc, char **argv) {
         while (auto raw = transport.take_attempt_evidence()) {
           log.write(
               "NEW_EVIDENCE received_us=" + std::to_string(raw->received_us) +
-              " hex=" + hex(raw->bytes));
-          if (!fresh_evidence.consume(raw->bytes, raw->received_us, why))
+              " canonical_hex=" + hex(canonical_record(raw->value)));
+          if (!fresh_evidence.consume(raw->value,raw->source,raw->received_us,why))
             throw std::runtime_error("新D10原页拒绝: " + why);
         }
         if (transport.attempt_evidence_overflowed())
@@ -544,15 +541,14 @@ int main(int argc, char **argv) {
             samples.status_at >=
                 std::max(release_reply_at,
                          fresh_evidence.terminal_received_us) &&
-            std::int32_t(samples.state.state_seq() - old_sequence) > 0 &&
-            samples.state.reference_epoch() == proof.reference &&
-            samples.state.motion_epoch() == proof.motion + 1 &&
-            samples.state.management_epoch() == proof.management + 1 &&
-            samples.status.run_id() == proof.run &&
-            samples.status.parent_run_id() == proof.parent &&
-            samples.status.group_count() == 2 &&
-            validate_manual_recovery(
-                samples.status, samples.state, expected, now_us(),
+            std::int32_t(*samples.state.state_seq() - old_sequence) > 0 &&
+            *samples.state.reference_epoch() == proof.reference &&
+            *samples.state.motion_epoch() == proof.motion + 1 &&
+            *samples.state.management_epoch() == proof.management + 1 &&
+            *samples.status.run_id() == proof.run &&
+            *samples.status.parent_run_id() == proof.parent &&
+            *samples.status.group_count() == 2 &&
+            validate_manual_recovery(samples.status,samples.state,samples.status_source,samples.state_source, expected, now_us(),
                 samples.state_at, samples.status_at,
                 ManualRecoveryShape::kInterruptedReleasedFault, why) &&
             samples.independent(now_us()) && samples.stationary()) {
@@ -574,12 +570,12 @@ int main(int argc, char **argv) {
                 " state_received_us=" + std::to_string(samples.state_at) +
                 " status_received_us=" + std::to_string(samples.status_at));
       recorded.allow_clear = true;
-      before = samples.state;
-      request.set_operation(11);
-      request.set_expected_session_id(0);
-      request.set_expected_motion_epoch(before.motion_epoch());
-      request.set_expected_management_epoch(before.management_epoch());
-      request.set_freshness_ticket(before.freshness_ticket());
+      before = samples.state;before_source=samples.state_source;
+      request.operation()=11;
+      request.expected_session_id()=0;
+      request.expected_motion_epoch()=*before.motion_epoch();
+      request.expected_management_epoch()=*before.management_epoch();
+      request.freshness_ticket()=*before.freshness_ticket();
     }
     const auto submitted = now_us();
     const auto root_id = client.submit(request, submitted);
@@ -602,7 +598,7 @@ int main(int argc, char **argv) {
         if (reply->result_valid && reply->succeeded &&
             reply->request_id == root_id && reply->operation_id &&
             reply->transaction_phase == 3 && reply->result_code == 0) {
-          if (reply->reference_epoch != before.reference_epoch() ||
+          if (reply->reference_epoch != *before.reference_epoch() ||
               reply->session_id != 0)
             throw std::runtime_error("ClearFault结果改变参考或session");
           committed = true;
@@ -618,19 +614,18 @@ int main(int argc, char **argv) {
     if (!committed)
       throw std::runtime_error(
           "ClearFault有界Query未确认COMMITTED；不重发mutation");
-    const auto prior_sequence = samples.state.state_seq();
+    const auto prior_sequence = *samples.state.state_seq();
     samples.count = 0;
     bool confirmed = false;
     while (rclcpp::ok() && now_us() - submitted < 8000000) {
       if (auto raw = transport.observe(); raw && samples.observe(*raw, log)) {
         if (samples.state_at >= committed_at &&
             samples.status_at >= committed_at &&
-            std::int32_t(samples.state.state_seq() - prior_sequence) > 0 &&
-            samples.state.reference_epoch() == before.reference_epoch() &&
-            samples.state.motion_epoch() == confirmed_motion &&
-            samples.state.management_epoch() == confirmed_management &&
-            validate_manual_recovery(
-                samples.status, samples.state, expected, now_us(),
+            std::int32_t(*samples.state.state_seq() - prior_sequence) > 0 &&
+            *samples.state.reference_epoch() == *before.reference_epoch() &&
+            *samples.state.motion_epoch() == confirmed_motion &&
+            *samples.state.management_epoch() == confirmed_management &&
+            validate_manual_recovery(samples.status,samples.state,samples.status_source,samples.state_source, expected, now_us(),
                 samples.state_at, samples.status_at,
                 ManualRecoveryShape::kRetainedDisabledIdle, why) &&
             samples.independent(now_us())) {
@@ -646,7 +641,7 @@ int main(int argc, char **argv) {
     log.write("RECOVERED_DISABLED root=" + std::to_string(root_id) +
               " operation=" + std::to_string(operation) +
               " boot=" + std::to_string(expected.boot) +
-              " ref=" + std::to_string(before.reference_epoch()) +
+              " ref=" + std::to_string(*before.reference_epoch()) +
               " state_received_us=" + std::to_string(samples.state_at) +
               " status_received_us=" + std::to_string(samples.status_at) +
               " 不证明独立motor_error_mask为0");

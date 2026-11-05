@@ -22,6 +22,6 @@ inline bool bootstrap_tick_required(bool observation_ready, bool observation_los
   // 只继续已发送的本次Release管理事务；不建立观测或授予运动。
   return observation_ready || observation_lost || release_transition_pending ||
       (release_stage==2 && phase==BootstrapPhase::kReleasePending &&
-       operation==ManageOperation::kDisableAndRelease && request_inflight);
+       operation==ManageOperation::DISABLE_AND_RELEASE && request_inflight);
 }
 }

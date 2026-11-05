@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 #include "dummy_motion_client/manual_reference_coordinator.hpp"
 #include "dummy_motion_client/dp_management_transport.hpp"
 #include <cassert>
@@ -12,14 +13,14 @@ struct ManualClient final: ManagementClient {
   std::optional<ManageReply> poll(std::uint64_t id) override {
     if(!complete)return {};
     ManageReply r;r.request_id=id;r.operation_id=id;r.result_valid=true;
-    r.release_committed=!sent.empty() && sent.back().operation()==10;
+    r.release_committed=!sent.empty() && *sent.back().operation()==10;
     r.succeeded=!denied;r.rejected=denied;r.transaction_phase=denied?4:3;r.result_code=denied?10:0;return r;
   }
 };
 // 使用真实20ms反馈与设备finalSENT+3秒窗口，不能把Host估时当完成。
 void dynamic_rest_case(int kind) {
   const bool long_path=kind==1 || kind==2;
-  ManualClient client;ManageRequest identity;identity.set_expected_session_id(3);
+  ManualClient client;auto identity=owned_fixture::request();identity.expected_boot_epoch()=0;identity.expected_session_id()=3;
   std::array<std::uint8_t,32> digest{};digest[0]=1;
   BootstrapCoordinator boot(client,identity,digest,1000000);
   ManualReferenceOptions options;options.deployment_sha256=digest;
@@ -44,47 +45,47 @@ void dynamic_rest_case(int kind) {
   snap.control_mode=1;++snap.management_epoch;step();
   snap.session_id=3;++snap.management_epoch;step();
   if(kind==3) {
-    while(client.sent.back().operation()!=5 && manual.active())step();
-    assert(client.sent.back().operation()==5);
-    for(const auto& request:client.sent)assert(request.operation()!=16 && request.operation()!=17);
+    while(*client.sent.back().operation()!=5 && manual.active())step();
+    assert(*client.sent.back().operation()==5);
+    for(const auto& request:client.sent)assert(*request.operation()!=16 && *request.operation()!=17);
     return;
   }
-  while(client.sent.back().operation()!=17 && manual.active())step();
-  assert(client.sent.back().operation()==17);
+  while(*client.sent.back().operation()!=17 && manual.active())step();
+  assert(*client.sent.back().operation()==17);
   ++snap.motion_epoch;++snap.management_epoch;step();const auto anchor=now;
   // 长轨迹提前出现容差内反馈，Host仍必须等待五次轨迹完整估时。
   if(kind!=3)position[1]=options.rest_position[1];
   position[2]=(kind==2 || kind==3)?initial_j3:options.rest_position[2];
   while(now-anchor<(long_path?(kind==2?11000000U:14000000U):300000U)) {
-    step();if(long_path)assert(client.sent.back().operation()==17);
+    step();if(long_path)assert(*client.sent.back().operation()==17);
   }
-  while(client.sent.back().operation()==17 && now-anchor<18000000U)step();
-  assert(client.sent.back().operation()==18);
+  while(*client.sent.back().operation()==17 && now-anchor<18000000U)step();
+  assert(*client.sent.back().operation()==18);
   const auto elapsed=now-anchor;
   if(long_path)assert(elapsed>=(kind==2?11000000U:14000000U) && elapsed<(kind==2?14000000U:17000000U));
   else assert(elapsed<3000000U);
-  ++snap.management_epoch;step();assert(client.sent.back().operation()==19);
-  ++snap.management_epoch;step();assert(client.sent.back().operation()==5);
-  for(const auto& request:client.sent)assert(request.operation()!=16);
+  ++snap.management_epoch;step();assert(*client.sent.back().operation()==19);
+  ++snap.management_epoch;step();assert(*client.sent.back().operation()==5);
+  for(const auto& request:client.sent)assert(*request.operation()!=16);
 }
 int main() {
   for(int kind=0;kind<4;++kind)dynamic_rest_case(kind);
-  dummy_wire::DummyDeviceStatusV2 released_status;
-  dummy_wire::DummyJointStateV2 released_state;
-  released_status.set_boot_epoch(7);released_state.set_boot_epoch(7);
-  released_status.set_reference_epoch(9);released_state.set_reference_epoch(9);
-  released_status.set_core_state(2);released_state.set_core_state(2);
-  released_status.set_release_committed(true);
-  assert(retained_reference_released_idle_observation(released_status,released_state,9));
-  assert(!released_idle_status_confirmed(released_status,released_state));
-  assert(!retained_reference_released_idle_observation(released_status,released_state,8));
-  assert(!retained_reference_released_idle_observation(released_status,released_state,0));
-  released_state.set_management_epoch(1);
-  assert(!retained_reference_released_idle_observation(released_status,released_state,9));
-  released_state.set_management_epoch(0);released_state.set_boot_epoch(8);
-  assert(!retained_reference_released_idle_observation(released_status,released_state,9));
+  auto released_status=owned_fixture::status();dp::comm::SourceId released_status_source{};
+  auto released_state=owned_fixture::state();dp::comm::SourceId released_state_source{};
+  released_status_source.boot_id=7;released_state_source.boot_id=7;
+  released_status.reference_epoch()=9;released_state.reference_epoch()=9;
+  released_status.core_state()=2;released_state.core_state()=2;
+  released_status.release_committed()=true;
+  assert(retained_reference_released_idle_observation(released_status,released_state,9,released_status_source,released_state_source));
+  assert(!released_idle_status_confirmed(released_status,released_state,released_status_source,released_state_source));
+  assert(!retained_reference_released_idle_observation(released_status,released_state,8,released_status_source,released_state_source));
+  assert(!retained_reference_released_idle_observation(released_status,released_state,0,released_status_source,released_state_source));
+  released_state.management_epoch()=1;
+  assert(!retained_reference_released_idle_observation(released_status,released_state,9,released_status_source,released_state_source));
+  released_state.management_epoch()=0;released_state_source.boot_id=8;
+  assert(!retained_reference_released_idle_observation(released_status,released_state,9,released_status_source,released_state_source));
 
-  ManualClient client; ManageRequest identity; identity.set_expected_session_id(3);
+  ManualClient client; auto identity=owned_fixture::request();identity.expected_boot_epoch()=0; identity.expected_session_id()=3;
   std::array<std::uint8_t,32> digest{};digest[0]=1;
   BootstrapCoordinator bootstrap(client,identity,digest,1000000);
   ManualReferenceOptions options; options.deployment_sha256=digest;
@@ -117,7 +118,7 @@ int main() {
   observe(true);assert(chain_client.requests==1);
   chain_client.complete=true;observe(true);assert(chain_client.requests==1);
   snapshot.control_mode=1;++snapshot.management_epoch;observe(true);
-  assert(chain_client.sent.back().operation()==2);
+  assert(*chain_client.sent.back().operation()==2);
   snapshot.session_id=3;++snapshot.management_epoch;observe(true);
   observe(true);
   const auto raw_request_count=chain_client.requests;
@@ -125,26 +126,26 @@ int main() {
   chain.observe_raw(snapshot,{},seq,now+2);chain.tick(now+2);
   assert(chain_client.requests==raw_request_count);
   observe(true);
-  assert(chain_client.sent.back().operation()==16);
-  assert(chain_client.sent.back().operator_confirmed());
+  assert(*chain_client.sent.back().operation()==16);
+  assert(*chain_client.sent.back().operator_confirmed());
   assert(chain.qualified_reference_epoch()==0);
   snapshot.reference_epoch=1;snapshot.reference_kind=1;++snapshot.management_epoch;observe(false);
   // 第一次calibrated State在16完成前不计入新窗。
   observe(false);observe(false);
-  assert(chain_client.sent.back().operation()==17);
+  assert(*chain_client.sent.back().operation()==17);
   snapshot.motion_epoch=1;snapshot.core_state=2;snapshot.state_core_state=2;
   ++snapshot.management_epoch;observe(false);
   const auto before=chain_client.requests;
   observe(false);
   assert(chain_client.requests==before);
-  observe(false);assert(chain_client.sent.back().operation()==18);
+  observe(false);assert(*chain_client.sent.back().operation()==18);
   // 明确PolicyDenied必须等下一独立State，且不重发17。
   chain_client.denied=true;chain_boot.tick(now+1);chain.tick(now+1);
   const auto denied_count=chain_client.requests;chain.tick(now+2);
   assert(chain_client.requests==denied_count);
-  chain_client.denied=false;observe(false);assert(chain_client.sent.back().operation()==18);
-  ++snapshot.management_epoch;observe(false);assert(chain_client.sent.back().operation()==19);
-  ++snapshot.management_epoch;observe(false);assert(chain_client.sent.back().operation()==5);
+  chain_client.denied=false;observe(false);assert(*chain_client.sent.back().operation()==18);
+  ++snapshot.management_epoch;observe(false);assert(*chain_client.sent.back().operation()==19);
+  ++snapshot.management_epoch;observe(false);assert(*chain_client.sent.back().operation()==5);
   assert(chain.qualified_reference_epoch()==snapshot.reference_epoch);
   if(permit_failure) {
     chain_client.denied=true;chain_boot.tick(now+1);chain.tick(now+1);
@@ -155,7 +156,7 @@ int main() {
   snapshot.real_motion_permitted=true;snapshot.permit_remaining_us=1000000;
   ++snapshot.management_epoch;observe(false);
   assert(chain.phase()==ManualReferencePhase::kReady);assert(chain.authorization());
-  for(const auto& r:chain_client.sent)assert(r.operation()!=3);
+  for(const auto& r:chain_client.sent)assert(*r.operation()!=3);
   }
 
 
@@ -197,7 +198,7 @@ int main() {
     };
     observed();assert(reuse_client.requests==1);
     reuse_client.complete=true;retained.control_mode=1;++retained.management_epoch;observed();
-    assert(reuse_client.sent.back().operation()==2);
+    assert(*reuse_client.sent.back().operation()==2);
     retained.session_id=3;++retained.management_epoch;observed();
     if(reuse_case==1 || reuse_case==3) {
       if(reuse_case==1)retained.reference_epoch=12;else retained.reference_kind=0;
@@ -209,7 +210,7 @@ int main() {
       assert(reuse.qualified_reference_epoch()==11);
       reuse.request_release(at+1);
       assert(reuse.phase()==ManualReferencePhase::kReleasing);
-      assert(reuse_client.sent.back().operation()==10);
+      assert(*reuse_client.sent.back().operation()==10);
       retained.session_id=0;++retained.management_epoch;observed();
       assert(reuse.phase()==ManualReferencePhase::kReleased);
       assert(reuse.qualified_reference_epoch()==11);
@@ -221,34 +222,34 @@ int main() {
     assert(reuse_client.requests==2);observed();
     if(reuse_case==4) {
       // Home保留参考：普通工作区直接许可，不重新退让、采零或伪造Enable完成。
-      assert(reuse_client.sent.back().operation()==5);
+      assert(*reuse_client.sent.back().operation()==5);
       retained.real_motion_permitted=true;retained.permit_remaining_us=1000000;
       ++retained.management_epoch;observed();
       assert(reuse.phase()==ManualReferencePhase::kReady && reuse.authorization());
-      for(const auto& request:reuse_client.sent)assert(request.operation()!=16 && request.operation()!=17 && request.operation()!=18 && request.operation()!=19);
+      for(const auto& request:reuse_client.sent)assert(*request.operation()!=16 && *request.operation()!=17 && *request.operation()!=18 && *request.operation()!=19);
       continue;
     }
     if(reuse_case==5) {
       assert(reuse.phase()==ManualReferencePhase::kFault);
       assert(reuse_client.requests==2);continue;
     }
-    assert(reuse_client.sent.back().operation()==17);
+    assert(*reuse_client.sent.back().operation()==17);
     if(reuse_case==6) {
       reuse.tick(at+reuse_options.max_feedback_age_us+1);
       assert(reuse.phase()==ManualReferencePhase::kFault);
-      for(const auto& request:reuse_client.sent)assert(request.operation()!=5);continue;
+      for(const auto& request:reuse_client.sent)assert(*request.operation()!=5);continue;
     }
     retained.motion_epoch=1;++retained.management_epoch;observed();
     for(int i=0;i<5;++i)observed();
-    assert(reuse_client.sent.back().operation()==18);
-    ++retained.management_epoch;observed();assert(reuse_client.sent.back().operation()==19);
-    ++retained.management_epoch;observed();assert(reuse_client.sent.back().operation()==5);
+    assert(*reuse_client.sent.back().operation()==18);
+    ++retained.management_epoch;observed();assert(*reuse_client.sent.back().operation()==19);
+    ++retained.management_epoch;observed();assert(*reuse_client.sent.back().operation()==5);
     retained.real_motion_permitted=true;retained.permit_remaining_us=1000000;
     ++retained.management_epoch;observed();
     assert(reuse.phase()==ManualReferencePhase::kReady);
     assert(reuse.qualified_reference_epoch()==11);
     assert(reuse.authorization());
-    for(const auto& request:reuse_client.sent)assert(request.operation()!=16 && request.operation()!=3);
+    for(const auto& request:reuse_client.sent)assert(*request.operation()!=16 && *request.operation()!=3);
   }
   // 显式标记不放宽session/reference kind/双Idle/permit门槛。
   for(int bad=0;bad<10;++bad) {

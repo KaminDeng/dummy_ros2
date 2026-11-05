@@ -8,6 +8,7 @@
 #include "dummy_motion_client/action_gate.hpp"
 #include "dummy_motion_client/deadline.hpp"
 #include "dummy_ros_control/diagnostic_scope.hpp"
+#include "dummy_ros_control/message_presence.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -283,36 +284,36 @@ ActionGate::ActionGate(ManagementClient &client, ActionPort &port, JointProfile 
  * @note 仅Complete和无错误的正常用户Cancel可等待占槽续租；不是任意Busy请求都可延期。
  */
 bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t existing_deadline) {
-  if (operation==ManageOperation::kBegin && !valid_begin_trajectory(*prepared_trajectory_,now)) {
+  if (operation==ManageOperation::START_MOTION && !valid_begin_trajectory(*prepared_trajectory_,now)) {
     // Begin尚未提交：不发Stop/Cancel、不撤现有Hold，不制造新的设备事务。
     terminal_=Terminal::kAborted; request_=0; deadline_=0; hold_drain_pending_=false;
     return false;
   }
-  auto request=authorization_.identity; request.set_expected_motion_epoch(epoch_);
-  request.set_operation(static_cast<std::uint16_t>(operation));
-  if (operation==ManageOperation::kComplete) {
-    request.set_terminal_producer_seq(frozen_seq_);
+  auto request=authorization_.identity; request.expected_motion_epoch()=epoch_;
+  request.operation()=static_cast<std::uint16_t>(operation);
+  if (operation==ManageOperation::COMPLETE_MOTION) {
+    request.terminal_producer_seq()=frozen_seq_;
     double positions[6]{};
     std::copy_n(frozen_q_.begin(),profile_.joints.size(),positions);
-    request.set_terminal_position_rad(positions);
+    request.terminal_position_rad().emplace().assign(positions,6U);
   }
   operation_=operation;
   deadline_=existing_deadline ? existing_deadline : saturating_deadline(now,timeout_);
   request_=client_.submit(request,now);
   management_evidence_={}; state_evidence_={};
-  cancel_request_id_=(operation==ManageOperation::kCancel && cancel_terminal_) ? request_ : 0U;
+  cancel_request_id_=(operation==ManageOperation::CANCEL_MOTION && cancel_terminal_) ? request_ : 0U;
   /**
    * @brief 尚未提交的Complete可保留原根等待同tuple续租；不重启deadline，不把返回true当设备已经收到。
    */
-  if (!request_ && operation==ManageOperation::kComplete) {
+  if (!request_ && operation==ManageOperation::COMPLETE_MOTION) {
     completing_after_renewal_=client_.matching_inflight_renewal(request);
     if(completing_after_renewal_!=0U) { deferred_complete_request_=request; return true; }
   }
-  if (!request_ && operation==ManageOperation::kCancel && cancel_terminal_ && error_.empty()) {
+  if (!request_ && operation==ManageOperation::CANCEL_MOTION && cancel_terminal_ && error_.empty()) {
     canceling_after_renewal_=client_.matching_inflight_renewal(request);
     if(canceling_after_renewal_!=0U) { deferred_cancel_request_=request; return true; }
   }
-  if (!request_) { fail(operation==ManageOperation::kCancel ? "STOP_FAILED" : "TRANSPORT_UNAVAILABLE"); return false; }
+  if (!request_) { fail(operation==ManageOperation::CANCEL_MOTION ? "STOP_FAILED" : "TRANSPORT_UNAVAILABLE"); return false; }
   return true;
 }
 /**
@@ -323,13 +324,13 @@ bool ActionGate::issue(ManageOperation operation,std::uint64_t now,std::uint64_t
 std::optional<CancelReceipt> ActionGate::confirmed_cancel_receipt() const noexcept {
   const auto &reply=management_evidence_;
   if(terminal_!=Terminal::kCanceled || phase_!=Phase::kHold || request_!=0U ||
-     operation_!=ManageOperation::kCancel || !cancel_terminal_ || cancel_request_id_==0U ||
+     operation_!=ManageOperation::CANCEL_MOTION || !cancel_terminal_ || cancel_request_id_==0U ||
      reply.request_id!=cancel_request_id_ || reply.operation_id==0U ||
      !reply.accepted || !reply.result_valid || !reply.succeeded ||
-     reply.transaction_phase!=wire_value(WireTransactionPhase::kCommitted) ||
-     reply.result_code!=wire_value(WireResult::kOk) || reply.motion_epoch!=epoch_ ||
-     reply.session_id!=authorization_.identity.expected_session_id() ||
-     reply.reference_epoch!=authorization_.identity.expected_reference_epoch())
+     reply.transaction_phase!=wire_value(WireTransactionPhase::COMMITTED) ||
+     reply.result_code!=wire_value(WireResult::OK) || reply.motion_epoch!=epoch_ ||
+     reply.session_id!=*authorization_.identity.expected_session_id() ||
+     reply.reference_epoch!=*authorization_.identity.expected_reference_epoch())
     return std::nullopt;
   return CancelReceipt{cancel_request_id_,reply.operation_id};
 }
@@ -341,10 +342,10 @@ std::optional<CancelReceipt> ActionGate::confirmed_cancel_receipt() const noexce
  */
 bool ActionGate::enable(const Authorization &authorization,std::uint64_t now) {
   if (phase_!=Phase::kIdle || request_ || !authorization.session || !authorization.reference ||
-      !authorization.permit || authorization.identity.expected_session_id()==0) return false;
+      !authorization.permit || *authorization.identity.expected_session_id()==0) return false;
   authorization_=authorization;
-  epoch_=authorization.identity.expected_motion_epoch();
-  return issue(ManageOperation::kEnable,now);
+  epoch_=*authorization.identity.expected_motion_epoch();
+  return issue(ManageOperation::PREPARE_HOLD,now);
 }
 /**
  * @brief 空闲Hold中替换同设备/会话/参考的已验证permit快照。
@@ -356,14 +357,14 @@ bool ActionGate::renew_permit(const Authorization &authorization) {
   const auto &next=authorization.identity;
   if (phase_!=Phase::kHold || request_!=0U || !authorization.session ||
       !authorization.reference || !authorization.permit ||
-      current.expected_boot_epoch()!=next.expected_boot_epoch() ||
-      current.expected_session_id()!=next.expected_session_id() ||
-      current.expected_reference_epoch()!=next.expected_reference_epoch() ||
-      current.expected_profile_id()!=next.expected_profile_id() ||
-      current.configured_mask()!=next.configured_mask() ||
-      !std::equal(std::begin(current.device_id()),std::end(current.device_id()),std::begin(next.device_id())) ||
-      !std::equal(std::begin(current.client_instance_id()),std::end(current.client_instance_id()),
-                  std::begin(next.client_instance_id()))) return false;
+      *current.expected_boot_epoch()!=*next.expected_boot_epoch() ||
+      *current.expected_session_id()!=*next.expected_session_id() ||
+      *current.expected_reference_epoch()!=*next.expected_reference_epoch() ||
+      *current.expected_profile_id()!=*next.expected_profile_id() ||
+      *current.configured_mask()!=*next.configured_mask() ||
+      !std::equal(current.domain_device_id()->begin(),current.domain_device_id()->end(),next.domain_device_id()->begin()) ||
+      !std::equal(current.client_instance_id()->begin(),current.client_instance_id()->end(),
+                  next.client_instance_id()->begin())) return false;
   authorization_=authorization;
   return true;
 }
@@ -378,8 +379,8 @@ bool ActionGate::valid_begin_trajectory(const PreparedTrajectory &prepared,std::
   // 上层transport另核源序号/CAN年龄；本层仍不准以旧Hold位置启动新的纯位置路径。
   if (!hold_state_observed_us_ || now<hold_state_observed_us_ ||
       now-hold_state_observed_us_>250000U ||
-      hold_submitted_mask_!=authorization_.identity.configured_mask() ||
-      hold_sent_mask_!=authorization_.identity.configured_mask()) {
+      hold_submitted_mask_!=*authorization_.identity.configured_mask() ||
+      hold_sent_mask_!=*authorization_.identity.configured_mask()) {
     error_="FRESH_HOLD_START_REQUIRED";
     return false;
   }
@@ -433,7 +434,7 @@ bool ActionGate::submit_prepared(std::shared_ptr<const PreparedTrajectory> prepa
   /**
    * @brief 端口不提供冻结时直接提交Begin；支持冻结则保存宿主代/线序号，等待worker处理水位和新State的提交/SENT水位。
    */
-  if (!port_.freeze_hold()) return issue(ManageOperation::kBegin,now);
+  if (!port_.freeze_hold()) return issue(ManageOperation::START_MOTION,now);
   frozen_seq_=last_seq_; frozen_generation_=last_producer_generation_;
   drained_generation_=0; drained_committed_seq_=0;
   drain_worker_ready_=false; drain_state_fresh_=false; hold_drain_pending_=true;
@@ -516,45 +517,46 @@ void ActionGate::observe(const ManageReply &reply,std::uint64_t now) {
  * @return false拒帧；true表示消费，可能引发故障或停止。
  * @note 本层不估算设备produced时钟或原始年龄；调用方须先保证流的新鲜性/源时序，不能把此返回值当全部transport校验。
  */
-bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::uint64_t now) {
-  namespace wire=dp::iface;
-  wire::DummyJointStateV2 state;
-  if (wire::DummyJointStateV2Codec::decode(bytes,size,&state)!=wire::CodecResult::kOk ||
-      state.schema_major()!=2 ||
-      (!state_seen_ && state.state_seq()==0U) ||
-      (state_seen_ && !sequence_newer(state.state_seq(),state_seq_)) ||
-      state.boot_epoch()!=authorization_.identity.expected_boot_epoch() ||
-      state.session_id()!=authorization_.identity.expected_session_id() ||
-      state.reference_epoch()!=authorization_.identity.expected_reference_epoch() ||
-      state.profile_id()!=authorization_.identity.expected_profile_id() ||
-      state.configured_mask()!=authorization_.identity.configured_mask() ||
-      (state.position_valid_mask() & state.configured_mask())!=state.configured_mask() ||
-      !std::equal(std::begin(state.device_id()),std::end(state.device_id()),std::begin(authorization_.identity.device_id()))) {
+bool ActionGate::observe_state(const dummy_ref::messages::State& state,const dp::comm::SourceId& source,std::uint64_t now) {
+  using namespace dummy_ros_control;
+  if(!message_fields_present(state) ||
+     !fields_present(authorization_.identity.expected_boot_epoch(),authorization_.identity.expected_session_id(),
+       authorization_.identity.expected_reference_epoch(),authorization_.identity.expected_profile_id(),authorization_.identity.configured_mask()) ||
+     !vector_size(authorization_.identity.domain_device_id(),16U) ||
+      (!state_seen_ && *state.state_seq()==0U) ||
+      (state_seen_ && !sequence_newer(*state.state_seq(),state_seq_)) ||
+      source.boot_id!=*authorization_.identity.expected_boot_epoch() ||
+      *state.session_id()!=*authorization_.identity.expected_session_id() ||
+      *state.reference_epoch()!=*authorization_.identity.expected_reference_epoch() ||
+      *state.profile_id()!=*authorization_.identity.expected_profile_id() ||
+      configured_joint_mask(state)!=*authorization_.identity.configured_mask() ||
+      (position_valid_joint_mask(state) & configured_joint_mask(state))!=configured_joint_mask(state) ||
+      !std::equal(state.domain_device_id()->begin(),state.domain_device_id()->end(),authorization_.identity.domain_device_id()->begin())) {
     return false;
   }
-  const bool hold_valid=state.hold_ready() && state.configured_mask()!=0 &&
-      (state.position_valid_mask() & state.configured_mask())==state.configured_mask();
+  const bool hold_valid=*state.hold_ready() && configured_joint_mask(state)!=0 &&
+      (position_valid_joint_mask(state) & configured_joint_mask(state))==configured_joint_mask(state);
   for (std::size_t axis=0;axis<6;++axis) {
-    if (!(state.configured_mask() & (1U<<axis))) continue;
-    if (!std::isfinite(state.position_rad()[axis])) return false;
+    if (!(configured_joint_mask(state) & (1U<<axis))) continue;
+    if (!joint_for_id(state,axis) || !joint_for_id(state,axis)->position_rad() || !std::isfinite(*joint_for_id(state,axis)->position_rad())) return false;
   }
-  state_seq_=state.state_seq(); state_seen_=true;
+  state_seq_=*state.state_seq(); state_seen_=true;
   hold_state_observed_us_=0;
   /**
    * @brief 接纳帧后更新票据及管理epoch；hold证据只在当前motion且core Hold/位置有效时记录，不把任意State当排空确认。
    */
-  authorization_.identity.set_expected_management_epoch(state.management_epoch());
-  authorization_.identity.set_freshness_ticket(state.freshness_ticket());
-  if (state.motion_epoch()==epoch_ &&
-      state.core_state()==wire_value(WireCoreState::kHold) && hold_valid) {
-    hold_committed_seq_=state.committed_producer_seq();
-    hold_submitted_mask_=state.can_submitted_mask();
-    hold_sent_mask_=state.can_sent_mask();
+  authorization_.identity.expected_management_epoch()=*state.management_epoch();
+  authorization_.identity.freshness_ticket()=*state.freshness_ticket();
+  if (*state.motion_epoch()==epoch_ &&
+      *state.core_state()==wire_value(WireCoreState::kHold) && hold_valid) {
+    hold_committed_seq_=*state.committed_producer_seq();
+    hold_submitted_mask_=*state.can_submitted_mask();
+    hold_sent_mask_=*state.can_sent_mask();
     hold_state_observed_us_=now;
-    std::copy(std::begin(state.position_rad()),std::end(state.position_rad()),measured_hold_q_.begin());
+    for(std::size_t axis=0;axis<6;++axis)measured_hold_q_[axis]=(configured_joint_mask(state)&(1U<<axis))?*joint_for_id(state,axis)->position_rad():0.0;
     if (hold_drain_pending_) drain_state_fresh_=true;
   }
-  if (hold_drain_pending_ && state.core_state()==wire_value(WireCoreState::kFault)) {
+  if (hold_drain_pending_ && *state.core_state()==wire_value(WireCoreState::kFault)) {
     fail("DEVICE_FAULT");
     return true;
   }
@@ -566,41 +568,41 @@ bool ActionGate::observe_state(const std::uint8_t *bytes,std::size_t size,std::u
    * @brief Begin排空同时要求worker水位和新到Hold State完整submitted/sent掩码及commit覆盖；复用原截止提交Begin，不能因等待结束续预算。
    */
   if (hold_drain_pending_ && drain_worker_ready_ && drain_state_fresh_ &&
-      state.motion_epoch()==epoch_ &&
-      state.core_state()==wire_value(WireCoreState::kHold) && hold_valid &&
-      state.can_submitted_mask()==state.configured_mask() &&
-      state.can_sent_mask()==state.configured_mask() &&
-      state.committed_producer_seq()!=0U &&
-      sequence_at_or_after(state.committed_producer_seq(),drained_committed_seq_)) {
+      *state.motion_epoch()==epoch_ &&
+      *state.core_state()==wire_value(WireCoreState::kHold) && hold_valid &&
+      *state.can_submitted_mask()==configured_joint_mask(state) &&
+      *state.can_sent_mask()==configured_joint_mask(state) &&
+      *state.committed_producer_seq()!=0U &&
+      sequence_at_or_after(*state.committed_producer_seq(),drained_committed_seq_)) {
     const auto begin_deadline=deadline_;
     hold_drain_pending_=false;
-    issue(ManageOperation::kBegin,now,begin_deadline);
+    issue(ManageOperation::START_MOTION,now,begin_deadline);
     return true;
   }
   if (!request_) return true;
-  if (state.core_state()==wire_value(WireCoreState::kFault)) { fail("DEVICE_FAULT"); return true; }
+  if (*state.core_state()==wire_value(WireCoreState::kFault)) { fail("DEVICE_FAULT"); return true; }
   /**
    * @brief State提供实测位置与core接受现场，RPC提供result_valid/succeeded；两来源保留独立性，Queued本身不提供实际状态。
    */
   ManageReply evidence; evidence.request_id=request_; evidence.snapshot_valid=true;
-  evidence.motion_epoch=state.motion_epoch(); evidence.accepted_seq=state.committed_producer_seq();
-  const bool enabling_hold=state.core_state()==wire_value(WireCoreState::kEnablingHold);
-  evidence.hold_ready=state.hold_ready() && hold_valid;
+  evidence.motion_epoch=*state.motion_epoch(); evidence.accepted_seq=*state.committed_producer_seq();
+  const bool enabling_hold=*state.core_state()==wire_value(WireCoreState::kEnablingHold);
+  evidence.hold_ready=*state.hold_ready() && hold_valid;
   evidence.hold_available=enabling_hold ||
-      (hold_valid && state.core_state()==wire_value(WireCoreState::kHold));
+      (hold_valid && *state.core_state()==wire_value(WireCoreState::kHold));
   // A fresh, identity-checked state transition is core acceptance evidence; QUEUED alone is not.
   evidence.accepted=(evidence.motion_epoch>epoch_ &&
-      ((operation_==ManageOperation::kBegin && state.core_state()==wire_value(WireCoreState::kRunning)) ||
-       (operation_!=ManageOperation::kBegin && evidence.hold_available))) ||
+      ((operation_==ManageOperation::START_MOTION && *state.core_state()==wire_value(WireCoreState::kRunning)) ||
+       (operation_!=ManageOperation::START_MOTION && evidence.hold_available))) ||
       (evidence.motion_epoch==epoch_ && phase_!=Phase::kIdle && phase_!=Phase::kHold);
-  std::copy(std::begin(state.position_rad()),std::end(state.position_rad()),evidence.position.begin());
+  for(std::size_t axis=0;axis<6;++axis)evidence.position[axis]=(configured_joint_mask(state)&(1U<<axis))?*joint_for_id(state,axis)->position_rad():0.0;
   evidence.hold_position=evidence.position;
   evidence.result_valid=management_evidence_.result_valid; evidence.succeeded=management_evidence_.succeeded;
   state_evidence_=evidence; advance(evidence,now);
   // prime() may have advanced the epoch while handling this very State.
-  if(state.motion_epoch()==epoch_ && state.core_state()==wire_value(WireCoreState::kHold) && hold_valid) {
-    hold_committed_seq_=state.committed_producer_seq();
-    hold_submitted_mask_=state.can_submitted_mask(); hold_sent_mask_=state.can_sent_mask();
+  if(*state.motion_epoch()==epoch_ && *state.core_state()==wire_value(WireCoreState::kHold) && hold_valid) {
+    hold_committed_seq_=*state.committed_producer_seq();
+    hold_submitted_mask_=*state.can_submitted_mask(); hold_sent_mask_=*state.can_sent_mask();
     hold_state_observed_us_=now;
   }
   try_completion_hold(now); return true;
@@ -616,9 +618,9 @@ void ActionGate::observe_hold_drain(const HoldDrainEvidence &evidence,std::uint6
   try_completion_hold(now);
   if (!hold_drain_pending_ || !evidence.processed_generation || !evidence.committed_seq ||
       evidence.processed_generation<frozen_generation_ ||
-      evidence.boot_epoch!=authorization_.identity.expected_boot_epoch() ||
-      evidence.session_id!=authorization_.identity.expected_session_id() ||
-      evidence.reference_epoch!=authorization_.identity.expected_reference_epoch() ||
+      evidence.boot_epoch!=*authorization_.identity.expected_boot_epoch() ||
+      evidence.session_id!=*authorization_.identity.expected_session_id() ||
+      evidence.reference_epoch!=*authorization_.identity.expected_reference_epoch() ||
       evidence.motion_epoch!=epoch_ || (deadline_ && now>=deadline_)) return;
   if (!drain_worker_ready_)
     if(auto* journal=dummy_ros_control::current_host_diagnostics) {
@@ -644,17 +646,17 @@ void ActionGate::observe_hold_drain(const HoldDrainEvidence &evidence,std::uint6
  */
 void ActionGate::try_completion_hold(std::uint64_t now) {
   const auto &worker=completion_worker_;
-  const auto mask=authorization_.identity.configured_mask();
-  if(phase_!=Phase::kPrimeCompletionHold || operation_!=ManageOperation::kComplete ||
+  const auto mask=*authorization_.identity.configured_mask();
+  if(phase_!=Phase::kPrimeCompletionHold || operation_!=ManageOperation::COMPLETE_MOTION ||
      !request_ || !sampled_ || !prime_producer_generation_ ||
      (deadline_ && now>=deadline_) || !management_evidence_.result_valid ||
      !management_evidence_.succeeded || management_evidence_.request_id!=request_ ||
      management_evidence_.motion_epoch!=epoch_ ||
      !worker.quiescent || (worker.disposition!=1U && worker.disposition!=2U) ||
      worker.processed_generation<prime_producer_generation_ || !worker.committed_seq ||
-     worker.boot_epoch!=authorization_.identity.expected_boot_epoch() ||
-     worker.session_id!=authorization_.identity.expected_session_id() ||
-     worker.reference_epoch!=authorization_.identity.expected_reference_epoch() ||
+     worker.boot_epoch!=*authorization_.identity.expected_boot_epoch() ||
+     worker.session_id!=*authorization_.identity.expected_session_id() ||
+     worker.reference_epoch!=*authorization_.identity.expected_reference_epoch() ||
      worker.motion_epoch!=epoch_ || !worker.observed_us || !worker.max_state_age_us ||
      now<worker.observed_us || now-worker.observed_us>worker.max_state_age_us ||
      !hold_state_observed_us_ || now<hold_state_observed_us_ ||
@@ -681,23 +683,23 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
   if (!request_ || reply.request_id!=request_ || phase_==Phase::kFault) return;
   if (reply.rejected || (reply.result_valid && !reply.succeeded)) {
     if (phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold) fail("STOP_FAILED");
-    else if (operation_==ManageOperation::kEnable) fail("ENABLE_FAILED");
+    else if (operation_==ManageOperation::PREPARE_HOLD) fail("ENABLE_FAILED");
     else stop(false,"OPERATION_FAILED",now);
     return;
   }
   if (reply.queued || !reply.accepted || !reply.snapshot_valid) return;
-  if (phase_==Phase::kCompleting && frozen_ && operation_==ManageOperation::kBegin) {
-    if (reply.motion_epoch==epoch_ && reply.accepted_seq==frozen_seq_) issue(ManageOperation::kComplete,now);
+  if (phase_==Phase::kCompleting && frozen_ && operation_==ManageOperation::START_MOTION) {
+    if (reply.motion_epoch==epoch_ && reply.accepted_seq==frozen_seq_) issue(ManageOperation::COMPLETE_MOTION,now);
     return;
   }
-  if (operation_==ManageOperation::kEnable && phase_==Phase::kIdle && reply.motion_epoch>epoch_ && reply.hold_available) {
+  if (operation_==ManageOperation::PREPARE_HOLD && phase_==Phase::kIdle && reply.motion_epoch>epoch_ && reply.hold_available) {
     if (!prime(reply,Phase::kPrimeHold,now)) return;
-  } else if (operation_==ManageOperation::kBegin && phase_==Phase::kHold && reply.motion_epoch>epoch_) {
+  } else if (operation_==ManageOperation::START_MOTION && phase_==Phase::kHold && reply.motion_epoch>epoch_) {
     if (!prime(reply,Phase::kPrimeMotion,now)) return;
     authorization_.permit=false;
-  } else if (operation_==ManageOperation::kComplete && phase_==Phase::kCompleting && reply.motion_epoch>epoch_ && reply.hold_available) {
+  } else if (operation_==ManageOperation::COMPLETE_MOTION && phase_==Phase::kCompleting && reply.motion_epoch>epoch_ && reply.hold_available) {
     if (!prime(reply,Phase::kPrimeCompletionHold,now)) return;
-  } else if (operation_==ManageOperation::kCancel && phase_==Phase::kStopping && reply.motion_epoch>epoch_ && reply.hold_available) {
+  } else if (operation_==ManageOperation::CANCEL_MOTION && phase_==Phase::kStopping && reply.motion_epoch>epoch_ && reply.hold_available) {
     if (!prime(reply,Phase::kPrimeStopHold,now)) return;
   }
   if (!handshake(reply)) return;
@@ -716,13 +718,13 @@ void ActionGate::advance(const ManageReply &reply,std::uint64_t now) {
 bool ActionGate::deferred_complete_matches_authority() const noexcept {
   const auto &r=deferred_complete_request_; const auto &a=authorization_.identity;
   return authorization_.session && authorization_.reference &&
-      r.expected_boot_epoch()==a.expected_boot_epoch() &&
-      r.expected_session_id()==a.expected_session_id() &&
-      r.expected_reference_epoch()==a.expected_reference_epoch() &&
-      r.expected_motion_epoch()==epoch_ && r.expected_management_epoch()==a.expected_management_epoch() &&
-      r.expected_profile_id()==a.expected_profile_id() && r.configured_mask()==a.configured_mask() &&
-      std::equal(std::begin(r.device_id()),std::end(r.device_id()),std::begin(a.device_id())) &&
-      std::equal(std::begin(r.client_instance_id()),std::end(r.client_instance_id()),std::begin(a.client_instance_id()));
+      *r.expected_boot_epoch()==*a.expected_boot_epoch() &&
+      *r.expected_session_id()==*a.expected_session_id() &&
+      *r.expected_reference_epoch()==*a.expected_reference_epoch() &&
+      *r.expected_motion_epoch()==epoch_ && *r.expected_management_epoch()==*a.expected_management_epoch() &&
+      *r.expected_profile_id()==*a.expected_profile_id() && *r.configured_mask()==*a.configured_mask() &&
+      std::equal(r.domain_device_id()->begin(),r.domain_device_id()->end(),a.domain_device_id()->begin()) &&
+      std::equal(r.client_instance_id()->begin(),r.client_instance_id()->end(),a.client_instance_id()->begin());
 }
 /**
  * @brief 识别本目标已冻结且设备commit覆盖终序号的有限完成意图。
@@ -740,20 +742,20 @@ bool ActionGate::bounded_completion_intent(const ManageRequest &live, std::uint3
      !frozen_seq_ || frozen_seq_!=last_seq_ || !committed_seq ||
      !sequence_at_or_after(committed_seq,frozen_seq_) || !deadline_ || now>=deadline_ ||
      !authorization_.session || !authorization_.reference || !trajectory_ || trajectory_->points.empty() ||
-     (operation_!=ManageOperation::kBegin && operation_!=ManageOperation::kComplete) ||
-     (operation_==ManageOperation::kBegin && !request_) ||
-     (operation_==ManageOperation::kComplete && !request_ && !completing_after_renewal_) ||
-     !live.expected_boot_epoch() || !live.expected_session_id() ||
-     !live.expected_reference_epoch() || !live.expected_profile_id() || !live.configured_mask() ||
-     live.expected_boot_epoch()!=identity.expected_boot_epoch() ||
-     live.expected_session_id()!=identity.expected_session_id() ||
-     live.expected_reference_epoch()!=identity.expected_reference_epoch() ||
-     live.expected_motion_epoch()!=epoch_ ||
-     live.expected_management_epoch()!=identity.expected_management_epoch() ||
-     live.expected_profile_id()!=identity.expected_profile_id() ||
-     live.configured_mask()!=identity.configured_mask() ||
-     !std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(identity.device_id())) ||
-     !std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(identity.client_instance_id())))
+     (operation_!=ManageOperation::START_MOTION && operation_!=ManageOperation::COMPLETE_MOTION) ||
+     (operation_==ManageOperation::START_MOTION && !request_) ||
+     (operation_==ManageOperation::COMPLETE_MOTION && !request_ && !completing_after_renewal_) ||
+     !*live.expected_boot_epoch() || !*live.expected_session_id() ||
+     !*live.expected_reference_epoch() || !*live.expected_profile_id() || !*live.configured_mask() ||
+     *live.expected_boot_epoch()!=*identity.expected_boot_epoch() ||
+     *live.expected_session_id()!=*identity.expected_session_id() ||
+     *live.expected_reference_epoch()!=*identity.expected_reference_epoch() ||
+     *live.expected_motion_epoch()!=epoch_ ||
+     *live.expected_management_epoch()!=*identity.expected_management_epoch() ||
+     *live.expected_profile_id()!=*identity.expected_profile_id() ||
+     *live.configured_mask()!=*identity.configured_mask() ||
+     !std::equal(live.domain_device_id()->begin(),live.domain_device_id()->end(),identity.domain_device_id()->begin()) ||
+     !std::equal(live.client_instance_id()->begin(),live.client_instance_id()->end(),identity.client_instance_id()->begin()))
     return false;
   const auto &target=trajectory_->points.back().positions;
   if(target.size()!=profile_.joints.size() || trajectory_->goal_tolerance.size()!=target.size()) return false;
@@ -776,22 +778,22 @@ bool ActionGate::bounded_cancel_intent(const ManageRequest &live, std::uint64_t 
   // RUN续租预约；不授权新的续租或延长停止期限。
   const auto &identity=authorization_.identity;
   return phase_==Phase::kStopping && terminal_==Terminal::kNone && frozen_ &&
-      cancel_terminal_ && error_.empty() && operation_==ManageOperation::kCancel &&
+      cancel_terminal_ && error_.empty() && operation_==ManageOperation::CANCEL_MOTION &&
       request_!=0U && cancel_request_id_==request_ && deadline_!=0U && now<deadline_ &&
       authorization_.session && authorization_.reference &&
-      live.operation()==wire_value(ManageOperation::kCancel) &&
-      live.expected_boot_epoch()!=0U && live.expected_session_id()!=0U &&
-      live.expected_reference_epoch()!=0U && live.expected_profile_id()!=0U &&
-      live.configured_mask()!=0U &&
-      live.expected_boot_epoch()==identity.expected_boot_epoch() &&
-      live.expected_session_id()==identity.expected_session_id() &&
-      live.expected_reference_epoch()==identity.expected_reference_epoch() &&
-      live.expected_motion_epoch()==epoch_ &&
-      live.expected_management_epoch()==identity.expected_management_epoch() &&
-      live.expected_profile_id()==identity.expected_profile_id() &&
-      live.configured_mask()==identity.configured_mask() &&
-      std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(identity.device_id())) &&
-      std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(identity.client_instance_id()));
+      *live.operation()==wire_value(ManageOperation::CANCEL_MOTION) &&
+      *live.expected_boot_epoch()!=0U && *live.expected_session_id()!=0U &&
+      *live.expected_reference_epoch()!=0U && *live.expected_profile_id()!=0U &&
+      *live.configured_mask()!=0U &&
+      *live.expected_boot_epoch()==*identity.expected_boot_epoch() &&
+      *live.expected_session_id()==*identity.expected_session_id() &&
+      *live.expected_reference_epoch()==*identity.expected_reference_epoch() &&
+      *live.expected_motion_epoch()==epoch_ &&
+      *live.expected_management_epoch()==*identity.expected_management_epoch() &&
+      *live.expected_profile_id()==*identity.expected_profile_id() &&
+      *live.configured_mask()==*identity.configured_mask() &&
+      std::equal(live.domain_device_id()->begin(),live.domain_device_id()->end(),identity.domain_device_id()->begin()) &&
+      std::equal(live.client_instance_id()->begin(),live.client_instance_id()->end(),identity.client_instance_id()->begin());
 }
 /**
  * @brief 查询尚未提交的冻结Complete是否被精确同根在途Renew暂占槽。
@@ -800,7 +802,7 @@ bool ActionGate::bounded_cancel_intent(const ManageRequest &live, std::uint64_t 
  */
 bool ActionGate::completion_waiting_for_renewal(std::uint64_t now) const noexcept {
   return phase_==Phase::kCompleting && terminal_==Terminal::kNone &&
-      operation_==ManageOperation::kComplete && request_==0U && frozen_ && frozen_seq_!=0U &&
+      operation_==ManageOperation::COMPLETE_MOTION && request_==0U && frozen_ && frozen_seq_!=0U &&
       completing_after_renewal_!=0U && deadline_!=0U && now<deadline_ &&
       deferred_complete_matches_authority() &&
       client_.matching_inflight_renewal(deferred_complete_request_)==completing_after_renewal_;
@@ -811,14 +813,14 @@ bool ActionGate::completion_waiting_for_renewal(std::uint64_t now) const noexcep
  */
 bool ActionGate::deferred_cancel_matches_authority() const noexcept {
   const auto &r=deferred_cancel_request_; const auto &a=authorization_.identity;
-  return r.operation()==wire_value(ManageOperation::kCancel) && authorization_.session && authorization_.reference &&
-      r.expected_boot_epoch()==a.expected_boot_epoch() &&
-      r.expected_session_id()==a.expected_session_id() &&
-      r.expected_reference_epoch()==a.expected_reference_epoch() &&
-      r.expected_motion_epoch()==epoch_ && r.expected_management_epoch()==a.expected_management_epoch() &&
-      r.expected_profile_id()==a.expected_profile_id() && r.configured_mask()==a.configured_mask() &&
-      std::equal(std::begin(r.device_id()),std::end(r.device_id()),std::begin(a.device_id())) &&
-      std::equal(std::begin(r.client_instance_id()),std::end(r.client_instance_id()),std::begin(a.client_instance_id()));
+  return *r.operation()==wire_value(ManageOperation::CANCEL_MOTION) && authorization_.session && authorization_.reference &&
+      *r.expected_boot_epoch()==*a.expected_boot_epoch() &&
+      *r.expected_session_id()==*a.expected_session_id() &&
+      *r.expected_reference_epoch()==*a.expected_reference_epoch() &&
+      *r.expected_motion_epoch()==epoch_ && *r.expected_management_epoch()==*a.expected_management_epoch() &&
+      *r.expected_profile_id()==*a.expected_profile_id() && *r.configured_mask()==*a.configured_mask() &&
+      std::equal(r.domain_device_id()->begin(),r.domain_device_id()->end(),a.domain_device_id()->begin()) &&
+      std::equal(r.client_instance_id()->begin(),r.client_instance_id()->end(),a.client_instance_id()->begin());
 }
 /**
  * @brief 核正常用户Cancel尚未发出且仅等待同身份Renew。
@@ -828,20 +830,20 @@ bool ActionGate::deferred_cancel_matches_authority() const noexcept {
  */
 bool ActionGate::cancel_waiting_for_renewal(const ManageRequest &live, std::uint64_t now) const noexcept {
   return phase_==Phase::kStopping && terminal_==Terminal::kNone && frozen_ &&
-      cancel_terminal_ && error_.empty() && operation_==ManageOperation::kCancel &&
+      cancel_terminal_ && error_.empty() && operation_==ManageOperation::CANCEL_MOTION &&
       request_==0U && cancel_request_id_==0U && canceling_after_renewal_!=0U &&
       deadline_!=0U && now<deadline_ && authorization_.session && authorization_.reference &&
       deferred_cancel_matches_authority() &&
-      live.operation()==wire_value(ManageOperation::kCancel) &&
-      live.expected_boot_epoch()==deferred_cancel_request_.expected_boot_epoch() &&
-      live.expected_session_id()==deferred_cancel_request_.expected_session_id() &&
-      live.expected_reference_epoch()==deferred_cancel_request_.expected_reference_epoch() &&
-      live.expected_motion_epoch()==deferred_cancel_request_.expected_motion_epoch() &&
-      live.expected_management_epoch()==deferred_cancel_request_.expected_management_epoch() &&
-      live.expected_profile_id()==deferred_cancel_request_.expected_profile_id() &&
-      live.configured_mask()==deferred_cancel_request_.configured_mask() &&
-      std::equal(std::begin(live.device_id()),std::end(live.device_id()),std::begin(deferred_cancel_request_.device_id())) &&
-      std::equal(std::begin(live.client_instance_id()),std::end(live.client_instance_id()),std::begin(deferred_cancel_request_.client_instance_id())) &&
+      *live.operation()==wire_value(ManageOperation::CANCEL_MOTION) &&
+      *live.expected_boot_epoch()==*deferred_cancel_request_.expected_boot_epoch() &&
+      *live.expected_session_id()==*deferred_cancel_request_.expected_session_id() &&
+      *live.expected_reference_epoch()==*deferred_cancel_request_.expected_reference_epoch() &&
+      *live.expected_motion_epoch()==*deferred_cancel_request_.expected_motion_epoch() &&
+      *live.expected_management_epoch()==*deferred_cancel_request_.expected_management_epoch() &&
+      *live.expected_profile_id()==*deferred_cancel_request_.expected_profile_id() &&
+      *live.configured_mask()==*deferred_cancel_request_.configured_mask() &&
+      std::equal(live.domain_device_id()->begin(),live.domain_device_id()->end(),deferred_cancel_request_.domain_device_id()->begin()) &&
+      std::equal(live.client_instance_id()->begin(),live.client_instance_id()->end(),deferred_cancel_request_.client_instance_id()->begin()) &&
       client_.matching_inflight_renewal(deferred_cancel_request_)==canceling_after_renewal_;
 }
 /**
@@ -856,7 +858,7 @@ void ActionGate::tick(std::uint64_t now) {
    */
   if(canceling_after_renewal_!=0U) {
     if(phase_!=Phase::kStopping || terminal_!=Terminal::kNone || !frozen_ || !cancel_terminal_ ||
-       !error_.empty() || operation_!=ManageOperation::kCancel || request_!=0U || cancel_request_id_!=0U ||
+       !error_.empty() || operation_!=ManageOperation::CANCEL_MOTION || request_!=0U || cancel_request_id_!=0U ||
        deadline_==0U || !deferred_cancel_matches_authority()) {
       canceling_after_renewal_=0U; fail("STOP_FAILED"); return;
     }
@@ -866,7 +868,7 @@ void ActionGate::tick(std::uint64_t now) {
     if(renewal==RenewalCompletion::kPending) return;
     canceling_after_renewal_=0U;
     if(renewal!=RenewalCompletion::kCommitted || !deferred_cancel_matches_authority()) { fail("STOP_FAILED"); return; }
-    deferred_cancel_request_.set_freshness_ticket(authorization_.identity.freshness_ticket());
+    deferred_cancel_request_.freshness_ticket()=*authorization_.identity.freshness_ticket();
     request_=client_.submit(deferred_cancel_request_,now);cancel_request_id_=request_;
     if(!request_) { fail("STOP_FAILED"); return; }
   }
@@ -883,7 +885,7 @@ void ActionGate::tick(std::uint64_t now) {
     if(renewal!=RenewalCompletion::kCommitted || !deferred_complete_matches_authority()) {
       stop(false,"RESULT_UNCONFIRMED",now); return;
     }
-    deferred_complete_request_.set_freshness_ticket(authorization_.identity.freshness_ticket());
+    deferred_complete_request_.freshness_ticket()=*authorization_.identity.freshness_ticket();
     request_=client_.submit(deferred_complete_request_,now);
     if(!request_) { fail("TRANSPORT_UNAVAILABLE"); return; }
   }
@@ -892,7 +894,7 @@ void ActionGate::tick(std::uint64_t now) {
     if(auto* journal=dummy_ros_control::current_host_diagnostics) {
     const auto observed=journal->context().first;
     const auto& identity=authorization_.identity;
-    const dummy_ros_control::DiagnosticIdentity expected{identity.expected_boot_epoch(),identity.expected_session_id(),identity.expected_reference_epoch(),epoch_,last_seq_,identity.expected_management_epoch(),authorization_.session && authorization_.reference};
+    const dummy_ros_control::DiagnosticIdentity expected{*identity.expected_boot_epoch(),*identity.expected_session_id(),*identity.expected_reference_epoch(),epoch_,last_seq_,*identity.expected_management_epoch(),authorization_.session && authorization_.reference};
     journal->reject(dummy_ros_control::DiagnosticReason::kActionHoldDrainTimeout,observed,expected,now,"HOLD_DRAIN_TIMEOUT",0U,{frozen_seq_,frozen_generation_,last_seq_,drained_generation_,drained_committed_seq_,hold_committed_seq_,state_seq_,epoch_,hold_submitted_mask_,hold_sent_mask_});
     journal->detail(
                  "GATE_HOLD_DRAIN_TIMEOUT_DIAG frozen=%u generation=%llu local=%u processed=%llu target=%u committed=%u state=%u epoch=%u submitted=%u sent=%u\n",
@@ -912,7 +914,7 @@ void ActionGate::tick(std::uint64_t now) {
   }
   if (request_ && deadline_ && now>=deadline_) {
     if (phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold) fail("STOP_FAILED");
-    else if (operation_==ManageOperation::kEnable) fail("FIRST_SAMPLE_TIMEOUT");
+    else if (operation_==ManageOperation::PREPARE_HOLD) fail("FIRST_SAMPLE_TIMEOUT");
     else stop(false,"RESULT_UNCONFIRMED",now);
     return;
   }
@@ -922,7 +924,7 @@ void ActionGate::tick(std::uint64_t now) {
     if (phase_==Phase::kStopping || phase_==Phase::kPrimeStopHold) fail("STOP_FAILED");
     else if (phase_==Phase::kRunning || phase_==Phase::kCompleting || phase_==Phase::kPrimeMotion)
       stop(false,"RESULT_UNCONFIRMED",now);
-    else if (operation_==ManageOperation::kEnable) fail("ENABLE_FAILED");
+    else if (operation_==ManageOperation::PREPARE_HOLD) fail("ENABLE_FAILED");
     else fail("RESULT_UNCONFIRMED");
   }
 }
@@ -1006,7 +1008,7 @@ void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) 
   if(auto* journal=dummy_ros_control::current_host_diagnostics) {
     const auto observed=journal->context().first;
     const auto& identity=authorization_.identity;
-    const dummy_ros_control::DiagnosticIdentity expected{identity.expected_boot_epoch(),identity.expected_session_id(),identity.expected_reference_epoch(),epoch_,last_seq_,identity.expected_management_epoch(),authorization_.session && authorization_.reference};
+    const dummy_ros_control::DiagnosticIdentity expected{*identity.expected_boot_epoch(),*identity.expected_session_id(),*identity.expected_reference_epoch(),epoch_,last_seq_,*identity.expected_management_epoch(),authorization_.session && authorization_.reference};
     journal->reject(dummy_ros_control::DiagnosticReason::kActionStop,observed,expected,now,error.c_str(),0U,{static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),request_,now},!canceled || !error.empty());
     journal->detail("GATE_STOP_DIAG phase=%u operation=%u reason=%s request=%llu now=%llu\n",
                static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),
@@ -1016,7 +1018,7 @@ void ActionGate::stop(bool canceled,const std::string &error,std::uint64_t now) 
                static_cast<unsigned long long>(request_),static_cast<unsigned long long>(now));
   port_.disable(); ++generation_; port_.cancel(); cancel_terminal_=canceled;
   error_=error; phase_=Phase::kStopping; frozen_=true; hold_drain_pending_=false;
-  issue(ManageOperation::kCancel,now);
+  issue(ManageOperation::CANCEL_MOTION,now);
 }
 /**
  * @brief 对当前管理/排空/延期完成请求发正常用户取消，已在停止态不重启流程。
@@ -1056,7 +1058,7 @@ void ActionGate::fail(const std::string &error) {
     if(auto* journal=dummy_ros_control::current_host_diagnostics) {
     const auto observed=journal->context().first;
     const auto& identity=authorization_.identity;
-    const dummy_ros_control::DiagnosticIdentity expected{identity.expected_boot_epoch(),identity.expected_session_id(),identity.expected_reference_epoch(),epoch_,last_seq_,identity.expected_management_epoch(),authorization_.session && authorization_.reference};
+    const dummy_ros_control::DiagnosticIdentity expected{*identity.expected_boot_epoch(),*identity.expected_session_id(),*identity.expected_reference_epoch(),epoch_,last_seq_,*identity.expected_management_epoch(),authorization_.session && authorization_.reference};
     journal->reject(dummy_ros_control::DiagnosticReason::kActionFail,observed,expected,dummy_ros_control::host_diagnostic_now_us(),error.c_str(),0U,{static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),request_});
     journal->detail("GATE_FAIL_DIAG phase=%u operation=%u reason=%s request=%llu\n",
                  static_cast<unsigned>(phase_),static_cast<unsigned>(operation_),error.c_str(),

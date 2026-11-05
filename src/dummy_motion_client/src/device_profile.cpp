@@ -7,8 +7,6 @@
  * 不枚举实际设备、不发送许可；SOFTWARE_ONLY/NO_LOAD_DEV/UNQUALIFIED保持各自范围。
  */
 #include "dummy_motion_client/device_profile.hpp"
-#include "dummy_ref/wire_validation.hpp"
-#include "dp_protocol_wire_contract.h"
 #ifndef DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256
 #define DUMMY_INSTALLED_ROBOT_MANIFEST_SHA256 ""
 #endif
@@ -258,6 +256,13 @@ bool regular_unlinked_payload(const fs::path &root, const fs::path &relative) {
  * @return 自洽VerifiedBundle；任何缺失/路径/摘要/重复/顺序错误均拒绝。
  * @note 不从待验manifest自身推导运行许可；普通SIL另比固定可信聚合，bench另核外部activation pin。
  */
+bool same_metadata(const YAML::Node& left,const YAML::Node& right){
+  if(left.Type()!=right.Type() || left.size()!=right.size())return false;
+  if(left.IsScalar())return left.as<std::string>()==right.as<std::string>();
+  if(left.IsSequence()){for(std::size_t i=0;i<left.size();++i)if(!same_metadata(left[i],right[i]))return false;}
+  else if(left.IsMap()){for(const auto& field:left){const auto key=field.first.as<std::string>();if(!right[key] || !same_metadata(field.second,right[key]))return false;}}
+  return true;
+}
 VerifiedBundle verify_bundle(const std::string &bundle_root) {
     const fs::path root = fs::weakly_canonical(fs::path(bundle_root));
     if (!fs::is_directory(root)) invalid("bundle root unavailable");
@@ -267,11 +272,9 @@ VerifiedBundle verify_bundle(const std::string &bundle_root) {
     /**
      * @brief release_id必须匹配本次编译wire schema major/minor，防止拿旧codec目录拼接当前runtime。
      */
-    const std::string expected_release = "dummy-wire-v" +
-        std::to_string(dummy_ref::protocol::kSchemaMajor) + "." +
-        std::to_string(dummy_ref::protocol::kSchemaMinor);
-    if (require(manifest, "format").as<std::string>() != "dummy_wire_release_v2" ||
-        require(manifest, "release_id").as<std::string>() != expected_release) invalid("unsupported bundle release");
+    if(require(manifest,"format").as<std::string>()!="dummy_robot_contract" ||
+       require(manifest,"format_version").as<unsigned>()!=1U ||
+       require(manifest,"release_id").as<std::string>()!="dummy-root")invalid("unsupported robot contract format");
     const YAML::Node payloads = require(manifest, "payloads");
     if (!payloads.IsSequence() || payloads.size() == 0U) invalid("invalid bundle payload list");
     std::unordered_map<std::string, std::string> verified;
@@ -293,62 +296,37 @@ VerifiedBundle verify_bundle(const std::string &bundle_root) {
     }
     const std::string aggregate = require(manifest, "payload_sorted_sha256").as<std::string>();
     if (aggregate != sha256_text(listing)) invalid("bundle aggregate hash mismatch");
-    const bool protocol_payload = std::any_of(verified.begin(), verified.end(), [](const auto& item) {
-      return item.first.rfind("protocol/", 0U) == 0U;
-    });
-    if (manifest["contract_sha256"] || manifest["runtime_contract_sha256"] ||
-        manifest["protocol_release"] || manifest["wire_contract"] || protocol_payload) {
-      if (require(manifest, "schema_major").as<unsigned>() != dummy_ref::protocol::kSchemaMajor ||
-          require(manifest, "schema_minor").as<unsigned>() != dummy_ref::protocol::kSchemaMinor)
-        invalid("current protocol wrapper schema mismatch");
-      const auto contract = require(manifest, "contract_sha256").as<std::string>();
-      if (manifest["runtime_contract_sha256"] &&
-          manifest["runtime_contract_sha256"].as<std::string>() != contract)
-        invalid("current protocol runtime identity mismatch");
-      const auto reference = require(manifest, "protocol_release");
-      const auto wire = require(manifest, "wire_contract");
-      const std::string release_path = "protocol/manifest.json";
-      const std::string wire_path = "protocol/include/wire_contract.json";
-      if (contract != DP_PROTOCOL_WIRE_CONTRACT_SHA256 ||
-          require(reference, "path").as<std::string>() != release_path ||
-          verified.find(release_path) == verified.end() ||
-          require(reference, "sha256").as<std::string>() != verified.at(release_path) ||
-          require(wire, "path").as<std::string>() != wire_path ||
-          verified.find(wire_path) == verified.end() ||
-          require(wire, "sha256").as<std::string>() != contract)
-        invalid("current protocol release identity mismatch");
-      const auto release = detail::load_pinned_yaml(root/release_path, verified.at(release_path), {});
-      const auto descriptor = detail::load_pinned_yaml(root/wire_path, verified.at(wire_path), {});
-      const auto selected = release;
-      const auto declared = require(reference, "selection");
-      if (require(release, "wire_contract_sha256").as<std::string>() != contract ||
-          require(descriptor, "sha256").as<std::string>() != contract ||
-          require(selected, "protocol_set").as<std::string>() != "dummy" ||
-          require(selected, "codec").as<std::string>() != "raw-fixed")
-        invalid("current protocol codec/wire identity mismatch");
-      for (const char* field : {"protocol_set", "profile", "codec"})
-        if (require(selected, field).as<std::string>() != require(declared, field).as<std::string>())
-          invalid("current protocol selection mismatch");
-      const auto actual_source = require(release, "source_snapshot");
-      const auto declared_source = require(reference, "source_snapshot");
-      if (!actual_source.IsMap() || actual_source.size() == 0U || !declared_source.IsMap() ||
-          actual_source.size() != declared_source.size())
-        invalid("current protocol source snapshot mismatch");
-      for (const auto& field : actual_source) {
-        const auto key = field.first.as<std::string>();
-        if (!field.second.IsScalar() ||
-            field.second.as<std::string>() != require(declared_source, key.c_str()).as<std::string>())
-          invalid("current protocol source snapshot mismatch");
-      }
-      const auto release_payloads = require(release, "payloads");
-      if (!release_payloads.IsSequence() || release_payloads.size() == 0U)
-        invalid("current protocol payload list missing");
-      for (const auto& item : release_payloads) {
-        const auto path = "protocol/" + require(item, "path").as<std::string>();
-        if (verified.find(path) == verified.end() ||
-            verified.at(path) != require(item, "sha256").as<std::string>())
-          invalid("current protocol payload binding mismatch");
-      }
+    const auto contract=require(manifest,"contract_sha256").as<std::string>();
+    if(manifest["runtime_contract_sha256"] && manifest["runtime_contract_sha256"].as<std::string>()!=contract)
+      invalid("current protocol runtime identity mismatch");
+    const auto reference=require(manifest,"protocol_release"),wire=require(manifest,"wire_contract");
+    const std::string release_path="protocol/release_manifest.json",wire_path="protocol/metadata/generation_manifest.json";
+    if(require(reference,"path").as<std::string>()!=release_path || !verified.count(release_path) ||
+       require(reference,"sha256").as<std::string>()!=verified.at(release_path) ||
+       require(wire,"path").as<std::string>()!=wire_path || !verified.count(wire_path) ||
+       require(wire,"sha256").as<std::string>()!=contract)invalid("current protocol release identity mismatch");
+    const auto release=detail::load_pinned_yaml(root/release_path,verified.at(release_path),{});
+    const auto generation=detail::load_pinned_yaml(root/wire_path,verified.at(wire_path),{});
+    const auto selected=require(release,"selection"),declared=require(reference,"selection");
+    if(require(release,"version").as<unsigned>()!=1U || require(generation,"schema_version").as<unsigned>()!=1U ||
+       require(selected,"protocol_set").as<std::string>()!="dummy_managed" ||
+       require(selected,"profile").as<std::string>()!="dummy" || require(selected,"codec").as<std::string>()!="flatbuffers")
+      invalid("current Root release format/selection mismatch");
+    for(const char* field:{"protocol_set","profile","codec"})
+      if(require(selected,field).as<std::string>()!=require(declared,field).as<std::string>() ||
+         require(selected,field).as<std::string>()!=require(require(generation,"selection"),field).as<std::string>())
+        invalid("current protocol selection mismatch");
+    const auto source=require(reference,"source_snapshot");
+    if(require(source,"kind").as<std::string>()!="bounded_input_hashes_v1" ||
+       require(source,"generator_sha256").as<std::string>()!=require(generation,"generator_sha256").as<std::string>() ||
+       !same_metadata(require(source,"inputs"),require(generation,"sources")) ||
+       !same_metadata(require(source,"tool"),require(generation,"tool")) ||
+       !same_metadata(require(release,"tool"),require(generation,"tool")))invalid("current protocol source/tool mismatch");
+    const auto files=require(release,"files");
+    if(!files.IsMap() || !files.size())invalid("current Root payload list missing");
+    for(const auto& item:files){
+      const auto path="protocol/"+item.first.as<std::string>();
+      if(!verified.count(path) || verified.at(path)!=item.second.as<std::string>())invalid("current protocol payload binding mismatch");
     }
     return {root, manifest, sha256_text(manifest_bytes), std::move(verified), aggregate};
 }

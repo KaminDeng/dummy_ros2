@@ -47,6 +47,7 @@ rosbag2_*/
 /tmp/
 /temp/
 .cache/
+/.codegraph/
 *.tmp
 *.temp
 
@@ -68,3 +69,6 @@ id_ecdsa
 id_ed25519
 *.p12
 *.pfx
+
+# 本机安装过程生成的符号链接清单，含绝对路径。
+/symlink_install_manifest.txt

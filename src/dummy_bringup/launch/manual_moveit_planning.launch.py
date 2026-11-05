@@ -62,7 +62,7 @@ def build_nodes(context):
             'has_velocity_limits': True,
             'max_velocity': math.radians(cfg['motion_speed_max_deg_s']),
             'has_acceleration_limits': True,
-            'max_acceleration': cfg['motion_acceleration_max_rad_s2'],
+            'max_acceleration': helper.planning_acceleration_limit(cfg['motion_acceleration_max_rad_s2']),
         }
     return [Node(package='moveit_ros_move_group', executable='move_group',
                  name='manual_move_group', output='screen',

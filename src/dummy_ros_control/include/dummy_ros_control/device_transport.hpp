@@ -4,7 +4,7 @@
  * ROS实时read/write不直接创建Context/节点或做网络I/O；DeviceTransport私有worker拥有dp_comm上下文和执行器。源设备produced_at_us与宿主steady_us分域，worker先校正队列年龄再向硬件提供有截止的状态；重连不续用旧命令意图。
  */
 #pragma once
-#include "dp_protocol_constants.h"
+#include "dummy_ref/message_contract.hpp"
 #include "dummy_ref/manual_reference_policy.hpp"
 #include "dummy_ros_control/diagnostic_journal.hpp"
 
@@ -22,23 +22,6 @@
 namespace dummy_ros_control {
 class GuardedZenbeddedSystem;
 struct DeviceManagementChannel;
-
-/** @brief
- * 管理RPC显式键与wire请求绑定；同wire重试保持键，避免重连时复用SDK自动计数缓存。
- */
-template <typename Request>
-std::uint32_t management_rpc_correlation_id(const Request &request) noexcept {
-  return dummy_ref::host::management_rpc_correlation_id(request);
-}
-/** @brief SDK纯策略转发；保留Native
- * Query特例及稳定零值回退，不触发SDK自动分配。 */
-template <typename Request>
-std::uint32_t management_rpc_idempotency_key(const Request &request) noexcept {
-  return dummy_ref::host::management_rpc_idempotency_key(
-      request,
-      request.operation() ==
-          DP_PROTOCOL_DPSDK_INTERFACES_MSG_DUMMYPROTOCOLV2_MESSAGE_MANAGEMENT_OPERATION_GET_OPERATION);
-}
 
 /**
  * @brief 传输配置值：身份是16/32字节定长数组，位置rad、速度rad/s、加速度rad/s²，所有*_us为µs；raw路径仅诊断采集，不授予运动。
@@ -101,44 +84,44 @@ struct HistoricalIdleBaselineContext {
  */
 template <typename Status>
 bool historical_released_idle_baseline(const Status &value,
-                                       const HistoricalIdleBaselineContext &context) noexcept {
+                                       const HistoricalIdleBaselineContext &context,const dp::comm::SourceId& source) noexcept {
   const bool released_attempt =
-      (value.attempt_kind() == 1U && value.parent_run_id() == 0U &&
-       value.final_state() == 2U) ||
-      (value.attempt_kind() == 3U && value.run_id() > 1U &&
-       value.parent_run_id() == value.run_id()-1U && value.final_state() == 8U);
+      (*value.attempt_kind() == 1U && *value.parent_run_id() == 0U &&
+       *value.final_state() == 2U) ||
+      (*value.attempt_kind() == 3U && *value.run_id() > 1U &&
+       *value.parent_run_id() == *value.run_id()-1U && *value.final_state() == 8U);
   // 与Native一致：显式ClearFault只清当前故障，历史Fault及原因保留。
   // 仅接纳合法已释放谱系的只读冷基线，不按历史故障源枚举，也不验收旧原件或恢复授权。
   const bool fault_lineage =
-      (value.attempt_kind()==1U && value.parent_run_id()==0U) ||
-      ((value.attempt_kind()==2U || value.attempt_kind()==3U) && value.run_id()>1U &&
-       value.parent_run_id()==value.run_id()-1U);
+      (*value.attempt_kind()==1U && *value.parent_run_id()==0U) ||
+      ((*value.attempt_kind()==2U || *value.attempt_kind()==3U) && *value.run_id()>1U &&
+       *value.parent_run_id()==*value.run_id()-1U);
   const bool cleared_fault_history =
-      context.manual_reference_mode && fault_lineage && value.final_state()==4U &&
-      value.core_state()==2U && value.reference_epoch()!=0U &&
-      value.cleanup_state()==3U && value.first_failure_reason()==0U &&
-      value.can_failed_mask()==0U && value.failure_source()!=0U;
+      context.manual_reference_mode && fault_lineage && *value.final_state()==4U &&
+      *value.core_state()==2U && *value.reference_epoch()!=0U &&
+      *value.cleanup_state()==3U && *value.first_failure_reason()==0U &&
+      *value.can_failed_mask()==0U && *value.failure_source()!=0U;
   const bool clean_idle =
-      value.boot_epoch() != 0U && value.run_id() != 0U &&
-      value.session_id() == 0U &&
-      ((value.reference_epoch() == 0U && value.core_state() == 1U) ||
-       (context.manual_reference_mode && value.reference_epoch() != 0U &&
-        value.core_state() == 2U)) &&
-      value.release_committed() && !value.real_motion_permitted() &&
-      value.permit_remaining_us() == 0U && !value.evidence_lost();
+      source.boot_id != 0U && *value.run_id() != 0U &&
+      *value.session_id() == 0U &&
+      ((*value.reference_epoch() == 0U && *value.core_state() == 1U) ||
+       (context.manual_reference_mode && *value.reference_epoch() != 0U &&
+        *value.core_state() == 2U)) &&
+      *value.release_committed() && !*value.real_motion_permitted() &&
+      *value.permit_remaining_us() == 0U && !*value.evidence_lost();
   const bool cold_start = context.current_boot == 0U &&
       context.historical_run_boot == 0U && context.historical_run_id == 0U &&
       context.last_status_run_id == 0U &&
       context.pages_written == 0U && context.terminal_written_run_id == 0U;
   const bool same_historical_run =
       context.historical_run_id != 0U &&
-      context.historical_run_boot == value.boot_epoch() &&
-      context.historical_run_id == value.run_id() &&
+      context.historical_run_boot == source.boot_id &&
+      context.historical_run_id == *value.run_id() &&
       (!context.manual_reference_mode ||
-       context.historical_reference_epoch == value.reference_epoch()) &&
+       context.historical_reference_epoch == *value.reference_epoch()) &&
       std::equal(context.historical_chain.begin(),
                  context.historical_chain.end(),
-                 std::begin(value.evidence_chain_sha256()));
+                 value.evidence_chain_sha256()->begin());
   return (released_attempt || cleared_fault_history) &&
          clean_idle && context.pages_written == 0U &&
          context.terminal_written_run_id == 0U &&

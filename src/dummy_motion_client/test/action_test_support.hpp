@@ -8,6 +8,7 @@
 #pragma once
 #include "dummy_motion_client/action_gate.hpp"
 #include <stdexcept>
+#include "typed_management_fixture.hpp"
 namespace action_test {
 using namespace dummy_motion_client;
 /**
@@ -99,8 +100,8 @@ struct Harness {
    * @return 无；只建立内存夹具授权，不是现场许可。
    */
   void enable() {
-    Authorization auth; auth.session=auth.reference=auth.permit=true;
-    auth.identity.set_expected_session_id(1); require(gate.enable(auth,1));
+    Authorization auth;auth.identity=owned_fixture::request();auth.identity.expected_boot_epoch()=0; auth.session=auth.reference=auth.permit=true;
+    auth.identity.expected_session_id()=1; require(gate.enable(auth,1));
     ++epoch; gate.observe(response(),2); require(gate.record_update(gate.generation(),epoch,1,Position{}));
     gate.observe(response(true),3); require(gate.ready());
   }
@@ -123,12 +124,12 @@ struct Harness {
     require(gate.terminal()==Terminal::kNone);
     require(!gate.record_update(gate.generation(),epoch,18,end));
     gate.observe(response(true,17),14);
-    require(client.requests.back().terminal_producer_seq()==17);
+    require(*client.requests.back().terminal_producer_seq()==17);
     ++epoch; gate.observe(response(),15); require(gate.terminal()==Terminal::kNone);
     require(gate.record_update(gate.generation(),epoch,1,Position{}));
     gate.observe(response(true),16); require(!gate.ready());
-    Authorization renewed; renewed.session=renewed.reference=renewed.permit=true;
-    renewed.identity.set_expected_session_id(1);
+    Authorization renewed;renewed.identity=owned_fixture::request();renewed.identity.expected_boot_epoch()=0; renewed.session=renewed.reference=renewed.permit=true;
+    renewed.identity.expected_session_id()=1;
     require(gate.renew_permit(renewed));
     require(gate.ready());
   }

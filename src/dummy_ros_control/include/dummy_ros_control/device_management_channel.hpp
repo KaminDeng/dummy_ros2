@@ -11,7 +11,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include "dummy_ros_control/wire_types.hpp"
+#include <type_traits>
+#include "dummy_ref/message_contract.hpp"
+#include "dp_comm/receive_info.hpp"
+#include "dummy_ros_control/message_presence.hpp"
 #include "dummy_ros_control/device_transport.hpp"
 #include "dummy_ref/manual_reference_policy.hpp"
 #include "dummy_ref/session_lifecycle_policy.hpp"
@@ -20,20 +23,23 @@
 namespace dummy_ros_control {
 // One pending request and one latest observation: capacity is independent of traffic rate.
 /**
- * @brief 一个管理事务的定长请求/响应codec字节及原子canceled/failed/complete；响应先写字节再发布complete，调用方负责按协议同步观察。
+ * @brief 一个管理事务的生成Owned请求/响应与真实Source值及原子canceled/failed/complete；响应先写字节再发布complete，调用方负责按协议同步观察。
  */
 struct DeviceManagementRequest {
   std::uint64_t connection_generation=0U; // worker发送时固定，拒绝旧连接迟到回执。
-  std::array<std::uint8_t, dummy_wire::DummyManageV2RequestCodec::kEncodedSize> request{};
-  std::array<std::uint8_t, dummy_wire::DummyManageV2ResponseCodec::kEncodedSize> response{};
+  dummy_ref::messages::ManageRequest request{};
+  dummy_ref::messages::ManageResponse response{};
+  dp::comm::SourceId response_source{};
   std::atomic<bool> canceled{false}, failed{false}, complete{false};
 };
 /**
- * @brief 最新原始State/Status字节及HOST_TRANSPORT_STEADY_US接收时刻；rejected_ack_*记录同身份拒绝命令的独立水位，不能当作成功ACK。
+ * @brief 最新生成Owned State/Status及固定Source值及HOST_TRANSPORT_STEADY_US接收时刻；rejected_ack_*记录同身份拒绝命令的独立水位，不能当作成功ACK。
  */
 struct DeviceManagementObservation {
-  std::array<std::uint8_t, dummy_wire::DummyJointStateV2Codec::kEncodedSize> state{};
-  std::array<std::uint8_t, dummy_wire::DummyDeviceStatusV2Codec::kEncodedSize> status{};
+  dummy_ref::messages::State state{};
+  dp::comm::SourceId state_source{};
+  dummy_ref::messages::Status status{};
+  dp::comm::SourceId status_source{};
   std::uint64_t state_received_us=0, status_received_us=0;
   std::uint64_t rejected_ack_boot_epoch=0, rejected_ack_session_id=0, rejected_ack_received_us=0;
   std::uint32_t rejected_ack_reference_epoch=0, rejected_ack_motion_epoch=0,
@@ -97,68 +103,58 @@ struct DeviceManagementChannel {
       : parameters(std::move(value)),
         raw_evidence_capture_enabled(!parameters.raw_evidence_path.empty()) {}
   // 独立UI诊断lane：不写normal observation、不生成writer/cleanup证明。
-  bool publish_diagnostic_status(const dummy_wire::DummyDeviceStatusV2& value,std::uint64_t received) noexcept {
-    if(!ready.load(std::memory_order_acquire) || received==0U || value.boot_epoch()==0U ||
-       value.schema_major()!=2U || value.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
-       value.profile_id()!=parameters.profile_id || value.configured_mask()!=parameters.configured_mask ||
-       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),value.device_id()) ||
-       !std::equal(parameters.contract_hash.begin(),parameters.contract_hash.end(),value.contract_sha256()) ||
-       !std::equal(parameters.model_hash.begin(),parameters.model_hash.end(),value.model_sha256()) ||
-       !std::equal(parameters.profile_hash.begin(),parameters.profile_hash.end(),value.profile_sha256()) ||
-       !std::equal(parameters.firmware_hash.begin(),parameters.firmware_hash.end(),value.firmware_sha256()) ||
-       !std::equal(parameters.policy_hash.begin(),parameters.policy_hash.end(),value.compiled_policy_sha256()))return false;
-    std::array<std::uint8_t,dummy_wire::DummyDeviceStatusV2Codec::kEncodedSize> raw{};
-    if(dummy_wire::DummyDeviceStatusV2Codec::encode(value,raw.data(),raw.size())!=dummy_wire::CodecResult::kOk)return false;
+  bool publish_diagnostic_status(const dummy_ref::messages::Status& value,const dp::comm::SourceId& source,std::uint64_t received) noexcept {
+    if(!message_fields_present(value) || !ready.load(std::memory_order_acquire) || received==0U || source.boot_id==0U ||
+       (*value.profile_id())!=parameters.profile_id || (*value.configured_mask())!=parameters.configured_mask ||
+       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),(*value.domain_device_id()).begin()) ||
+       !std::equal(parameters.contract_hash.begin(),parameters.contract_hash.end(),(*value.contract_sha256()).begin()) ||
+       !std::equal(parameters.model_hash.begin(),parameters.model_hash.end(),(*value.model_sha256()).begin()) ||
+       !std::equal(parameters.profile_hash.begin(),parameters.profile_hash.end(),(*value.profile_sha256()).begin()) ||
+       !std::equal(parameters.firmware_hash.begin(),parameters.firmware_hash.end(),(*value.firmware_sha256()).begin()) ||
+       !std::equal(parameters.policy_hash.begin(),parameters.policy_hash.end(),(*value.compiled_policy_sha256()).begin()))return false;
     std::lock_guard<std::mutex> lock(diagnostic_observation_mutex_);
     if(!ready.load(std::memory_order_acquire) || received<diagnostic_observation_.status_received_us)return false;
-    for(std::size_t i=0;i<diagnostic_retired_count_;++i)if(diagnostic_retired_boots_[i]==value.boot_epoch())return false;
-    if(diagnostic_status_.boot_epoch()!=0U && diagnostic_status_.boot_epoch()!=value.boot_epoch()) {
+    for(std::size_t i=0;i<diagnostic_retired_count_;++i)if(diagnostic_retired_boots_[i]==source.boot_id)return false;
+    if(diagnostic_observation_.status_source.boot_id!=0U && diagnostic_observation_.status_source.boot_id!=source.boot_id) {
       if(diagnostic_retired_count_==diagnostic_retired_boots_.size())return false;
-      diagnostic_retired_boots_[diagnostic_retired_count_++]=diagnostic_status_.boot_epoch();
+      diagnostic_retired_boots_[diagnostic_retired_count_++]=diagnostic_observation_.status_source.boot_id;
       diagnostic_observation_={};diagnostic_clock_={};diagnostic_anchor_received_=0U;
-    } else if(diagnostic_status_.boot_epoch()!=0U &&
-       (static_cast<std::int32_t>(value.management_epoch()-diagnostic_status_.management_epoch())<0 ||
-        static_cast<std::int32_t>(value.motion_epoch()-diagnostic_status_.motion_epoch())<0))return false;
-    if(value.session_id()!=diagnostic_status_.session_id() || value.reference_epoch()!=diagnostic_status_.reference_epoch() ||
-       value.motion_epoch()!=diagnostic_status_.motion_epoch() || value.management_epoch()!=diagnostic_status_.management_epoch() ||
-       value.core_state()!=diagnostic_status_.core_state())diagnostic_observation_.state_received_us=0U;
-    diagnostic_observation_.status=raw;
-    diagnostic_status_=value;diagnostic_observation_.status_received_us=received;return true;
+    } else if(diagnostic_observation_.status_source.boot_id!=0U &&
+       (static_cast<std::int32_t>((*value.management_epoch())-(*diagnostic_observation_.status.management_epoch()))<0 ||
+        static_cast<std::int32_t>((*value.motion_epoch())-(*diagnostic_observation_.status.motion_epoch()))<0))return false;
+    if(diagnostic_observation_.status_received_us!=0U && ((*value.session_id())!=(*diagnostic_observation_.status.session_id()) || (*value.reference_epoch())!=(*diagnostic_observation_.status.reference_epoch()) ||
+       (*value.motion_epoch())!=(*diagnostic_observation_.status.motion_epoch()) || (*value.management_epoch())!=(*diagnostic_observation_.status.management_epoch()) ||
+       (*value.core_state())!=(*diagnostic_observation_.status.core_state())))diagnostic_observation_.state_received_us=0U;
+    diagnostic_observation_.status=value;diagnostic_observation_.status_source=source;
+    diagnostic_observation_.status_received_us=received;return true;
   }
-  bool publish_diagnostic_state(const dummy_wire::DummyJointStateV2& value,std::uint64_t received) noexcept {
-    if(!ready.load(std::memory_order_acquire) || received==0U || value.produced_at_us()==0U || value.state_seq()==0U ||
-       received>static_cast<std::uint64_t>(INT64_MAX) || value.produced_at_us()>static_cast<std::uint64_t>(INT64_MAX) ||
-       value.schema_major()!=2U || value.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
-       value.profile_id()!=parameters.profile_id || value.configured_mask()!=parameters.configured_mask ||
-       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),value.device_id()))return false;
-    for(std::size_t axis=0;axis<6;++axis) {
-      if((value.position_valid_mask()&(1U<<axis)) && !std::isfinite(value.position_rad()[axis]))return false;
-      if((value.raw_position_valid_mask()&(1U<<axis)) && !std::isfinite(value.raw_motor_position_rev()[axis]))return false;
-    }
-    std::array<std::uint8_t,dummy_wire::DummyJointStateV2Codec::kEncodedSize> raw{};
-    if(dummy_wire::DummyJointStateV2Codec::encode(value,raw.data(),raw.size())!=dummy_wire::CodecResult::kOk)return false;
+  bool publish_diagnostic_state(const dummy_ref::messages::State& value,const dp::comm::SourceId& source,std::uint64_t received) noexcept {
+    if(!message_fields_present(value) || !source.boot_id || !ready.load(std::memory_order_acquire) || received==0U || (*value.produced_at_us())==0U || (*value.state_seq())==0U ||
+       received>static_cast<std::uint64_t>(INT64_MAX) || (*value.produced_at_us())>static_cast<std::uint64_t>(INT64_MAX) ||
+       (*value.profile_id())!=parameters.profile_id || configured_joint_mask(value)!=parameters.configured_mask ||
+       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),(*value.domain_device_id()).begin()))return false;
     std::lock_guard<std::mutex> lock(diagnostic_observation_mutex_);
     if(!ready.load(std::memory_order_acquire) || diagnostic_observation_.status_received_us==0U ||
        received<diagnostic_observation_.status_received_us ||
        received-diagnostic_observation_.status_received_us>dummy_ref::host::kManualReferenceStatusMaxAgeUs ||
-       value.boot_epoch()!=diagnostic_status_.boot_epoch() || value.session_id()!=diagnostic_status_.session_id() ||
-       value.reference_epoch()!=diagnostic_status_.reference_epoch() || value.motion_epoch()!=diagnostic_status_.motion_epoch() ||
-       value.management_epoch()!=diagnostic_status_.management_epoch() || value.core_state()!=diagnostic_status_.core_state())return false;
-    const auto offset=static_cast<std::int64_t>(received)-static_cast<std::int64_t>(value.produced_at_us());
+       source.boot_id!=diagnostic_observation_.status_source.boot_id || (*value.session_id())!=(*diagnostic_observation_.status.session_id()) ||
+       (*value.reference_epoch())!=(*diagnostic_observation_.status.reference_epoch()) || (*value.motion_epoch())!=(*diagnostic_observation_.status.motion_epoch()) ||
+       (*value.management_epoch())!=(*diagnostic_observation_.status.management_epoch()) || (*value.core_state())!=(*diagnostic_observation_.status.core_state()))return false;
+    const auto offset=static_cast<std::int64_t>(received)-static_cast<std::int64_t>((*value.produced_at_us()));
     auto next_clock=diagnostic_clock_;
-    if(diagnostic_anchor_received_!=0U && !raw_fault_producer_sample_valid(received,value.produced_at_us(),value.state_seq(),true,
+    if(diagnostic_anchor_received_!=0U && !raw_fault_producer_sample_valid(received,(*value.produced_at_us()),(*value.state_seq()),true,
        diagnostic_clock_.last_sequence,diagnostic_clock_.last_produced,diagnostic_minimum_offset_,
        diagnostic_anchor_offset_,diagnostic_anchor_received_,next_clock,parameters.max_state_age_us))return false;
-    diagnostic_observation_.state=raw;
+    diagnostic_observation_.state=value;diagnostic_observation_.state_source=source;
     if(diagnostic_anchor_received_==0U) {
       diagnostic_anchor_received_=received;diagnostic_anchor_offset_=diagnostic_minimum_offset_=offset;
     } else diagnostic_minimum_offset_=std::min(diagnostic_minimum_offset_,offset);
-    diagnostic_clock_={value.state_seq(),value.produced_at_us(),received};
+    diagnostic_clock_={(*value.state_seq()),(*value.produced_at_us()),received};
     diagnostic_observation_.state_received_us=received;return true;
   }
   void reset_diagnostic_observation() noexcept {
     std::lock_guard<std::mutex> lock(diagnostic_observation_mutex_);
-    diagnostic_observation_={};diagnostic_status_={};diagnostic_clock_={};
+    diagnostic_observation_={};diagnostic_clock_={};
     diagnostic_anchor_received_=0U;diagnostic_retired_count_=0U;
   }
   DeviceManagementObservation diagnostic_observation() const noexcept {
@@ -261,19 +257,17 @@ struct DeviceManagementChannel {
        now<current.state_received_us || now<current.status_received_us ||
        now-current.state_received_us>parameters.max_state_age_us ||
        now-current.status_received_us>dummy_ref::host::kManualReferenceStatusMaxAgeUs)return false;
-    dummy_wire::DummyJointStateV2 state;dummy_wire::DummyDeviceStatusV2 status;
-    if(dummy_wire::DummyJointStateV2Codec::decode(current.state.data(),current.state.size(),&state)!=dummy_wire::CodecResult::kOk ||
-       dummy_wire::DummyDeviceStatusV2Codec::decode(current.status.data(),current.status.size(),&status)!=dummy_wire::CodecResult::kOk)return false;
-    if(state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=0U || status.session_id()!=0U ||
-       state.reference_epoch()!=reference || status.reference_epoch()!=reference || state.core_state()!=9U || status.core_state()!=9U ||
-       root.motion==UINT32_MAX || state.motion_epoch()!=root.motion+1U || status.motion_epoch()!=root.motion+1U ||
-       state.management_epoch()!=root.management || status.management_epoch()!=root.management ||
-       state.operation_id()!=root.operation || status.operation_id()!=root.operation ||
-       status.run_id()<=root.run || status.attempt_id()!=status.run_id() || status.attempt_kind()!=2U || status.parent_run_id()!=root.run ||
-       status.final_state()!=4U || status.failure_source()!=0x1002U || status.failure_axis_mask()!=63U ||
-       status.cleanup_state()!=3U || !status.release_committed() || status.evidence_lost() ||
-       status.real_motion_permitted() || status.permit_remaining_us()!=0U || status.can_failed_mask()!=0U ||
-       state.raw_position_valid_mask()!=63U)return false;
+    const auto& state=current.state;const auto& status=current.status;
+    if(current.state_source.boot_id!=boot || current.status_source.boot_id!=boot || (*state.session_id())!=0U || (*status.session_id())!=0U ||
+       (*state.reference_epoch())!=reference || (*status.reference_epoch())!=reference || (*state.core_state())!=9U || (*status.core_state())!=9U ||
+       root.motion==UINT32_MAX || (*state.motion_epoch())!=root.motion+1U || (*status.motion_epoch())!=root.motion+1U ||
+       (*state.management_epoch())!=root.management || (*status.management_epoch())!=root.management ||
+       (*state.operation_id())!=root.operation || (*status.operation_id())!=root.operation ||
+       (*status.run_id())<=root.run || (*status.attempt_id())!=(*status.run_id()) || (*status.attempt_kind())!=2U || (*status.parent_run_id())!=root.run ||
+       (*status.final_state())!=4U || (*status.failure_source())!=0x1002U || (*status.failure_axis_mask())!=63U ||
+       (*status.cleanup_state())!=3U || !(*status.release_committed()) || (*status.evidence_lost()) ||
+       (*status.real_motion_permitted()) || (*status.permit_remaining_us())!=0U || (*status.can_failed_mask())!=0U ||
+       raw_position_joint_mask(state)!=63U)return false;
     return root.generation==worker_connection_generation_.load() && ready;
   }
 
@@ -298,24 +292,22 @@ struct DeviceManagementChannel {
        now<current.state_received_us || now<current.status_received_us ||
        now-current.state_received_us>parameters.max_state_age_us ||
        now-current.status_received_us>dummy_ref::host::kManualReferenceStatusMaxAgeUs)return false;
-    dummy_wire::DummyJointStateV2 state;dummy_wire::DummyDeviceStatusV2 status;
-    if(dummy_wire::DummyJointStateV2Codec::decode(current.state.data(),current.state.size(),&state)!=dummy_wire::CodecResult::kOk ||
-       dummy_wire::DummyDeviceStatusV2Codec::decode(current.status.data(),current.status.size(),&status)!=dummy_wire::CodecResult::kOk)return false;
-    // 诊断发布入口已经独立核完整设备/五hash、schema及源时钟；这里核同一终态现场。
-    if(state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=0U || status.session_id()!=0U ||
-       state.reference_epoch()!=reference || status.reference_epoch()!=reference || state.core_state()!=9U || status.core_state()!=9U ||
-       state.motion_epoch()!=terminal.owner_retirement_motion_epoch || status.motion_epoch()!=state.motion_epoch() ||
-       state.management_epoch()!=status.management_epoch() || state.operation_id()!=status.operation_id() ||
-       status.run_id()!=run || status.attempt_id()!=run || status.attempt_kind()!=1U || status.parent_run_id()!=0U ||
-       status.final_state()!=4U || status.failure_source()!=terminal.first_failure_source ||
-       status.failure_axis_mask()!=terminal.first_failure_axis_mask || status.cleanup_state()!=3U ||
-       !status.release_committed() || status.evidence_lost() || status.real_motion_permitted() ||
-       status.permit_remaining_us()!=0U || status.can_failed_mask()!=0U ||
-       status.group_count()!=terminal.terminal_group_count)return false;
+    const auto& state=current.state;const auto& status=current.status;
+    // 诊断发布入口已经独立核完整设备/五hash、字段组及源时钟；这里核同一终态现场。
+    if(current.state_source.boot_id!=boot || current.status_source.boot_id!=boot || (*state.session_id())!=0U || (*status.session_id())!=0U ||
+       (*state.reference_epoch())!=reference || (*status.reference_epoch())!=reference || (*state.core_state())!=9U || (*status.core_state())!=9U ||
+       (*state.motion_epoch())!=terminal.owner_retirement_motion_epoch || (*status.motion_epoch())!=(*state.motion_epoch()) ||
+       (*state.management_epoch())!=(*status.management_epoch()) || (*state.operation_id())!=(*status.operation_id()) ||
+       (*status.run_id())!=run || (*status.attempt_id())!=run || (*status.attempt_kind())!=1U || (*status.parent_run_id())!=0U ||
+       (*status.final_state())!=4U || (*status.failure_source())!=terminal.first_failure_source ||
+       (*status.failure_axis_mask())!=terminal.first_failure_axis_mask || (*status.cleanup_state())!=3U ||
+       !(*status.release_committed()) || (*status.evidence_lost()) || (*status.real_motion_permitted()) ||
+       (*status.permit_remaining_us())!=0U || (*status.can_failed_mask())!=0U ||
+       (*status.group_count())!=terminal.terminal_group_count)return false;
     // Status可在终页链发布前生成零摘要；非零摘要必须与本代已刷出的终页完全一致。
-    const auto chain=status.evidence_chain_sha256();
-    const bool nonzero=std::any_of(chain,chain+32,[](auto x){return x!=0U;});
-    if(nonzero && !std::equal(terminal.terminal_chain.begin(),terminal.terminal_chain.end(),chain))return false;
+    const auto chain=(*status.evidence_chain_sha256());
+    const bool nonzero=std::any_of(chain.begin(),chain.end(),[](auto x){return x!=0U;});
+    if(nonzero && !std::equal(terminal.terminal_chain.begin(),terminal.terminal_chain.end(),chain.begin()))return false;
     return ready && generation==worker_connection_generation_.load();
   }
 
@@ -324,30 +316,28 @@ struct DeviceManagementChannel {
     std::uint32_t reference=0,motion=0,management=0,ticket=0;
   };
   // 只有本client真实COMMITTED成功回执可以绑定owner；Status中的任意非零会话不能自封所有者。
-  bool observe_owned_management_commit(const dummy_wire::DummyManageV2Request& request,
-      const dummy_wire::DummyManageV2Response& reply,std::uint64_t generation) noexcept {
-    if(!ready || !generation || generation!=worker_connection_generation_.load() ||
-       request.schema_major()!=2U || request.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
-       reply.schema_major()!=2U || reply.schema_minor()!=dummy_wire_schema::kSchemaMinor ||
-       !request.request_id() || request.request_id()!=reply.request_id() ||
-       !request.expected_boot_epoch() || reply.boot_epoch()!=request.expected_boot_epoch() ||
-       !request.expected_session_id() || reply.session_id()!=request.expected_session_id() ||
-       request.expected_profile_id()!=parameters.profile_id || reply.profile_id()!=parameters.profile_id ||
-       request.configured_mask()!=parameters.configured_mask || reply.receipt()!=1U ||
-       reply.transaction_phase()!=3U || reply.result_code()!=0U || !reply.operation_id() ||
-       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),request.device_id()) ||
-       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),reply.device_id()) ||
-       !std::equal(parameters.client_instance_id.begin(),parameters.client_instance_id.end(),request.client_instance_id()) ||
-       !std::equal(parameters.client_instance_id.begin(),parameters.client_instance_id.end(),reply.client_instance_id()))return false;
+  bool observe_owned_management_commit(const dummy_ref::messages::ManageRequest& request,
+      const dummy_ref::messages::ManageResponse& reply,const dp::comm::SourceId& source,std::uint64_t generation) noexcept {
+    if(!message_fields_present(request) || !message_fields_present(reply) || !ready || !generation || generation!=worker_connection_generation_.load() ||
+       !(*request.request_id()) || (*request.request_id())!=(*reply.request_id()) ||
+       !(*request.expected_boot_epoch()) || source.boot_id!=(*request.expected_boot_epoch()) ||
+       !(*request.expected_session_id()) || (*reply.session_id())!=(*request.expected_session_id()) ||
+       (*request.expected_profile_id())!=parameters.profile_id || (*reply.profile_id())!=parameters.profile_id ||
+       (*request.configured_mask())!=parameters.configured_mask || (*reply.receipt())!=1U ||
+       (*reply.transaction_phase())!=3U || (*reply.result_code())!=0U || !(*reply.operation_id()) ||
+       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),(*request.domain_device_id()).begin()) ||
+       !std::equal(parameters.device_id.begin(),parameters.device_id.end(),(*reply.domain_device_id()).begin()) ||
+       !std::equal(parameters.client_instance_id.begin(),parameters.client_instance_id.end(),(*request.client_instance_id()).begin()) ||
+       !std::equal(parameters.client_instance_id.begin(),parameters.client_instance_id.end(),(*reply.client_instance_id()).begin()))return false;
     std::lock_guard<std::mutex> lock(worker_release_mutex_);
     if(!ready || generation!=worker_connection_generation_.load())return false;
     if(owned_session_commit_.session &&
-       (owned_session_commit_.boot!=reply.boot_epoch() || owned_session_commit_.session!=reply.session_id() ||
-        reply.reference_epoch()<owned_session_commit_.reference || reply.motion_epoch()<owned_session_commit_.motion ||
-        reply.management_epoch()<owned_session_commit_.management || reply.operation_id()<owned_session_commit_.operation))return false;
-    attempted_boot_=reply.boot_epoch();ownership_attempted_=true;
-    owned_session_commit_={reply.boot_epoch(),reply.session_id(),generation,reply.run_id(),reply.operation_id(),
-      reply.reference_epoch(),reply.motion_epoch(),reply.management_epoch()};return true;
+       (owned_session_commit_.boot!=source.boot_id || owned_session_commit_.session!=(*reply.session_id()) ||
+        (*reply.reference_epoch())<owned_session_commit_.reference || (*reply.motion_epoch())<owned_session_commit_.motion ||
+        (*reply.management_epoch())<owned_session_commit_.management || (*reply.operation_id())<owned_session_commit_.operation))return false;
+    attempted_boot_=source.boot_id;ownership_attempted_=true;
+    owned_session_commit_={source.boot_id,(*reply.session_id()),generation,(*reply.run_id()),(*reply.operation_id()),
+      (*reply.reference_epoch()),(*reply.motion_epoch()),(*reply.management_epoch())};return true;
   }
   // 本地退休不证明设备已失能，也不清除审计错误。
   void note_management_attempt(std::uint64_t boot) noexcept {
@@ -366,16 +356,14 @@ struct DeviceManagementChannel {
        now<current.state_received_us || now<current.status_received_us ||
        now-current.state_received_us>parameters.max_state_age_us ||
        now-current.status_received_us>dummy_ref::host::kManualReferenceStatusMaxAgeUs)return false;
-    dummy_wire::DummyJointStateV2 state;dummy_wire::DummyDeviceStatusV2 status;
-    if(dummy_wire::DummyJointStateV2Codec::decode(current.state.data(),current.state.size(),&state)!=dummy_wire::CodecResult::kOk ||
-       dummy_wire::DummyDeviceStatusV2Codec::decode(current.status.data(),current.status.size(),&status)!=dummy_wire::CodecResult::kOk)return false;
+    const auto& state=current.state;const auto& status=current.status;
     // 新boot只使旧owner失效；不冒充原D10回执、失能证明或运动成功。
-    return status.boot_epoch()!=0U && status.boot_epoch()!=old_boot && state.boot_epoch()==status.boot_epoch() &&
-      status.session_id()==0U && state.session_id()==0U && !status.real_motion_permitted() && status.permit_remaining_us()==0U &&
-      status.reference_epoch()==state.reference_epoch() && status.core_state()==(status.reference_epoch()==0U?1U:2U) &&
-      state.core_state()==status.core_state() && status.first_failure_reason()==0U && state.first_failure_reason()==0U &&
-      status.motion_epoch()==state.motion_epoch() && status.management_epoch()==state.management_epoch() &&
-      status.operation_id()==state.operation_id();
+    return current.status_source.boot_id!=0U && current.status_source.boot_id!=old_boot && current.state_source.boot_id==current.status_source.boot_id &&
+      (*status.session_id())==0U && (*state.session_id())==0U && !(*status.real_motion_permitted()) && (*status.permit_remaining_us())==0U &&
+      (*status.reference_epoch())==(*state.reference_epoch()) && (*status.core_state())==((*status.reference_epoch())==0U?1U:2U) &&
+      (*state.core_state())==(*status.core_state()) && (*status.first_failure_reason())==0U && (*state.first_failure_reason())==0U &&
+      (*status.motion_epoch())==(*state.motion_epoch()) && (*status.management_epoch())==(*state.management_epoch()) &&
+      (*status.operation_id())==(*state.operation_id());
   }
   std::atomic<bool> ownership_attempted_{false};
   std::atomic<std::uint64_t> attempted_boot_{0U};
@@ -391,21 +379,19 @@ struct DeviceManagementChannel {
     if(!current.state_received_us || !current.status_received_us || now<current.state_received_us || now<current.status_received_us ||
        now-current.state_received_us>parameters.max_state_age_us ||
        now-current.status_received_us>dummy_ref::host::kManualReferenceStatusMaxAgeUs)return false;
-    dummy_wire::DummyJointStateV2 state;dummy_wire::DummyDeviceStatusV2 status;
-    if(dummy_wire::DummyJointStateV2Codec::decode(current.state.data(),current.state.size(),&state)!=dummy_wire::CodecResult::kOk ||
-       dummy_wire::DummyDeviceStatusV2Codec::decode(current.status.data(),current.status.size(),&status)!=dummy_wire::CodecResult::kOk)return false;
-    const bool lineage=(status.attempt_kind()==1U && status.parent_run_id()==0U && status.final_state()==2U) ||
-      (status.attempt_kind()==3U && status.run_id()>1U && status.parent_run_id()==status.run_id()-1U && status.final_state()==8U);
-    if(!dummy_ref::host::session_release_observed({true,true,true,status.boot_epoch(),status.core_state()==2U,
-          state.core_state()==2U,status.session_id(),status.cleanup_state(),status.permit_remaining_us()}) ||
-       state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=0U ||
-       state.reference_epoch()!=reference || status.reference_epoch()!=reference ||
-       state.motion_epoch()!=status.motion_epoch() || state.management_epoch()!=status.management_epoch() ||
-       state.operation_id()!=status.operation_id() || status.motion_epoch()<owner.motion ||
-       status.management_epoch()<owner.management || status.operation_id()<owner.operation ||
-       !status.run_id() || status.run_id()<min_root_run || status.run_id()<owner.run || status.attempt_id()!=status.run_id() || !lineage ||
-       !status.release_committed() || status.evidence_lost() || status.real_motion_permitted() || status.can_failed_mask()!=0U ||
-       status.first_failure_reason()!=0U || status.failure_source()!=0U)return false;
+    const auto& state=current.state;const auto& status=current.status;
+    const bool lineage=((*status.attempt_kind())==1U && (*status.parent_run_id())==0U && (*status.final_state())==2U) ||
+      ((*status.attempt_kind())==3U && (*status.run_id())>1U && (*status.parent_run_id())==(*status.run_id())-1U && (*status.final_state())==8U);
+    if(!dummy_ref::host::session_release_observed({true,true,true,current.status_source.boot_id,(*status.core_state())==2U,
+          (*state.core_state())==2U,(*status.session_id()),(*status.cleanup_state()),(*status.permit_remaining_us())}) ||
+       current.state_source.boot_id!=boot || current.status_source.boot_id!=boot || (*state.session_id())!=0U ||
+       (*state.reference_epoch())!=reference || (*status.reference_epoch())!=reference ||
+       (*state.motion_epoch())!=(*status.motion_epoch()) || (*state.management_epoch())!=(*status.management_epoch()) ||
+       (*state.operation_id())!=(*status.operation_id()) || (*status.motion_epoch())<owner.motion ||
+       (*status.management_epoch())<owner.management || (*status.operation_id())<owner.operation ||
+       !(*status.run_id()) || (*status.run_id())<min_root_run || (*status.run_id())<owner.run || (*status.attempt_id())!=(*status.run_id()) || !lineage ||
+       !(*status.release_committed()) || (*status.evidence_lost()) || (*status.real_motion_permitted()) || (*status.can_failed_mask())!=0U ||
+       (*status.first_failure_reason())!=0U || (*status.failure_source())!=0U)return false;
     return ready && generation==worker_connection_generation_.load();
   }
 
@@ -421,22 +407,19 @@ struct DeviceManagementChannel {
     if(!current.state_received_us || !current.status_received_us || !normal.state_received_us || !normal.status_received_us ||
        now<current.state_received_us || now<current.status_received_us ||
        now-current.state_received_us>parameters.max_state_age_us || now-current.status_received_us>dummy_ref::host::kManualReferenceStatusMaxAgeUs)return {};
-    dummy_wire::DummyJointStateV2 state,normal_state;dummy_wire::DummyDeviceStatusV2 status,normal_status;
-    if(dummy_wire::DummyJointStateV2Codec::decode(current.state.data(),current.state.size(),&state)!=dummy_wire::CodecResult::kOk ||
-       dummy_wire::DummyJointStateV2Codec::decode(normal.state.data(),normal.state.size(),&normal_state)!=dummy_wire::CodecResult::kOk ||
-       dummy_wire::DummyDeviceStatusV2Codec::decode(current.status.data(),current.status.size(),&status)!=dummy_wire::CodecResult::kOk ||
-       dummy_wire::DummyDeviceStatusV2Codec::decode(normal.status.data(),normal.status.size(),&normal_status)!=dummy_wire::CodecResult::kOk)return {};
-    if(state.boot_epoch()!=boot || status.boot_epoch()!=boot || state.session_id()!=session || status.session_id()!=session ||
-       state.reference_epoch()!=reference || status.reference_epoch()!=reference ||
-       state.motion_epoch()!=status.motion_epoch() || state.management_epoch()!=status.management_epoch() ||
-       state.operation_id()!=status.operation_id() || state.motion_epoch()<owner.motion || state.management_epoch()<owner.management ||
-       normal_state.boot_epoch()!=boot || normal_status.boot_epoch()!=boot || normal_state.session_id()!=session || normal_status.session_id()!=session ||
-       normal_state.reference_epoch()!=reference || normal_status.reference_epoch()!=reference ||
-       normal_state.motion_epoch()!=state.motion_epoch() || normal_status.motion_epoch()!=state.motion_epoch() ||
-       normal_state.management_epoch()!=state.management_epoch() || normal_status.management_epoch()!=state.management_epoch() ||
-       normal_state.operation_id()!=state.operation_id() || normal_status.operation_id()!=state.operation_id() ||
-       !state.freshness_ticket() || normal_state.freshness_ticket()!=state.freshness_ticket())return {};
-    owner.motion=state.motion_epoch();owner.management=state.management_epoch();owner.operation=state.operation_id();owner.ticket=state.freshness_ticket();
+    const auto& state=current.state;const auto& status=current.status;
+    const auto& normal_state=normal.state;const auto& normal_status=normal.status;
+    if(current.state_source.boot_id!=boot || current.status_source.boot_id!=boot || (*state.session_id())!=session || (*status.session_id())!=session ||
+       (*state.reference_epoch())!=reference || (*status.reference_epoch())!=reference ||
+       (*state.motion_epoch())!=(*status.motion_epoch()) || (*state.management_epoch())!=(*status.management_epoch()) ||
+       (*state.operation_id())!=(*status.operation_id()) || (*state.motion_epoch())<owner.motion || (*state.management_epoch())<owner.management ||
+       normal.state_source.boot_id!=boot || normal.status_source.boot_id!=boot || (*normal_state.session_id())!=session || (*normal_status.session_id())!=session ||
+       (*normal_state.reference_epoch())!=reference || (*normal_status.reference_epoch())!=reference ||
+       (*normal_state.motion_epoch())!=(*state.motion_epoch()) || (*normal_status.motion_epoch())!=(*state.motion_epoch()) ||
+       (*normal_state.management_epoch())!=(*state.management_epoch()) || (*normal_status.management_epoch())!=(*state.management_epoch()) ||
+       (*normal_state.operation_id())!=(*state.operation_id()) || (*normal_status.operation_id())!=(*state.operation_id()) ||
+       !(*state.freshness_ticket()) || (*normal_state.freshness_ticket())!=(*state.freshness_ticket()))return {};
+    owner.motion=(*state.motion_epoch());owner.management=(*state.management_epoch());owner.operation=(*state.operation_id());owner.ticket=(*state.freshness_ticket());
     return owner;
   }
   // 返回true仅表示排入一次停止意图，不表示RPC接纳、D10已发或物理失能。
@@ -498,23 +481,37 @@ struct DeviceManagementChannel {
    * @param producer_valid 仅State使用，源时钟校验失败时其接收水位置0。
    * @param generation 入collector时捕获的cleanup代。
    */
-  void publish_raw_cleanup_observation(bool state,const std::uint8_t* raw,std::size_t size,std::uint64_t received,bool producer_valid,std::uint64_t generation) noexcept {
+  template<class Message>
+  void publish_raw_cleanup_observation(const Message& value,const dp::comm::SourceId& source,
+      std::uint64_t received,bool producer_valid,std::uint64_t generation) noexcept {
+    if(!message_fields_present(value) || !source.boot_id)return;
     std::lock_guard<std::mutex> lock(raw_cleanup_mutex_);
     if(!ready.load(std::memory_order_acquire) || generation==0U || generation!=raw_cleanup_generation_.load(std::memory_order_acquire))return;
-    if(state && size==raw_cleanup_.state.size()) {std::copy_n(raw,size,raw_cleanup_.state.begin());raw_cleanup_.state_received_us=producer_valid?received:0U;}
-    if(!state && size==raw_cleanup_.status.size()) {std::copy_n(raw,size,raw_cleanup_.status.begin());raw_cleanup_.status_received_us=received;}
+    if constexpr(std::is_same_v<Message,dummy_ref::messages::State>) {
+      raw_cleanup_.state=value;raw_cleanup_.state_source=source;
+      raw_cleanup_.state_received_us=producer_valid?received:0U;
+    } else {
+      static_assert(std::is_same_v<Message,dummy_ref::messages::Status>);
+      raw_cleanup_.status=value;raw_cleanup_.status_source=source;raw_cleanup_.status_received_us=received;
+    }
   }
   /**
    * @brief 冻结配置用于注册表身份匹配；普通mutex保护单槽事务组合。ready与inactive_prime_allowed等原子只给局部可见性，不代替会话校验。
    */
+ private:
+  /**
+   * @brief 诊断缓存仅由本对象经过字段/来源/时序校验的方法更新。
+   * 外部只通过diagnostic_observation()取得值副本，不能绕过锁伪造非零接收水位；
+   * 正常控制observation仍保持其既有独立owner与同步路径。
+   */
   mutable std::mutex diagnostic_observation_mutex_;
   DeviceManagementObservation diagnostic_observation_{};
-  dummy_wire::DummyDeviceStatusV2 diagnostic_status_{};
   RawFaultProducerClock diagnostic_clock_{};
   std::uint64_t diagnostic_anchor_received_=0U;
   std::int64_t diagnostic_anchor_offset_=0,diagnostic_minimum_offset_=0;
   std::array<std::uint64_t,4> diagnostic_retired_boots_{};
   std::size_t diagnostic_retired_count_=0;
+ public:
   const TransportParameters parameters;
   mutable std::mutex mutex;
   std::atomic<bool> ready{false};

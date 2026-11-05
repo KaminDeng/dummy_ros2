@@ -1,3 +1,4 @@
+#include "typed_management_fixture.hpp"
 /**
  * @file review_boundary_tests.cpp
  * @brief 按模式核枚举协议值、饱和期限、末点容差和单轴State边界。
@@ -8,27 +9,25 @@
 #include <limits>
 #include <iostream>
 using namespace action_test;
-namespace wire=dp::iface;
+
 /**
  * @brief 构造J1 State，检查未使用轴NaN与Hold缺发送掩码的不同语义。
  * @param partial_hold_mask false为EnablingHold3且J6 NaN（未配置轴允许），应prime一次；true为Hold4但组mask不足，不得prime。
  * @return State接纳且prime计数符合所选条件。
  */
 bool state_case(bool partial_hold_mask) {
-  Harness harness; Authorization auth; auth.session=auth.reference=auth.permit=true;
-  auth.identity.set_expected_session_id(1); auth.identity.set_configured_mask(1);
+  Harness harness; Authorization auth;auth.identity=owned_fixture::request();auth.identity.expected_boot_epoch()=0; auth.session=auth.reference=auth.permit=true;
+  auth.identity.expected_session_id()=1; auth.identity.configured_mask()=1;
   require(harness.gate.enable(auth,1));
-  wire::DummyJointStateV2 state; state.set_schema_major(2); state.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-  state.set_state_seq(1);
-  state.set_session_id(1); state.set_configured_mask(1); state.set_position_valid_mask(1);
-  state.set_hold_ready(!partial_hold_mask); state.set_motion_epoch(1);
-  state.set_core_state(partial_hold_mask?4:3);
+  auto state=owned_fixture::state();dp::comm::SourceId state_source{};
+  state.state_seq()=1;
+  state.session_id()=1; for(auto& joint:*state.joints())joint.configured_quality()=(1&(1U<<*joint.joint_id()))!=0U; for(auto& joint:*state.joints())joint.position_valid_quality()=(1&(1U<<*joint.joint_id()))!=0U;
+  state.hold_ready()=!partial_hold_mask; state.motion_epoch()=1;
+  state.core_state()=partial_hold_mask?4:3;
   double positions[6]{};
   if (!partial_hold_mask) positions[5]=std::numeric_limits<double>::quiet_NaN();
-  state.set_position_rad(positions);
-  std::vector<std::uint8_t> bytes(wire::DummyJointStateV2Codec::kEncodedSize);
-  require(wire::DummyJointStateV2Codec::encode(state,bytes.data(),bytes.size())==wire::CodecResult::kOk);
-  const bool observed=harness.gate.observe_state(bytes.data(),bytes.size(),2);
+  for(auto& joint:*state.joints())joint.position_rad()=positions[*joint.joint_id()];
+  const bool observed=harness.gate.observe_state(state,state_source,2);
   return observed && harness.port.primes==(partial_hold_mask?0U:1U);
 }
 /**
@@ -42,21 +41,21 @@ bool state_case(bool partial_hold_mask) {
 int main(int argc,char **argv) {
   if (argc!=2) return 2; const std::string scenario=argv[1];
   if (scenario=="enum") {
-    require(static_cast<unsigned>(ManageOperation::kEnable)==6);
-    require(static_cast<unsigned>(ManageOperation::kBegin)==7);
-    require(static_cast<unsigned>(ManageOperation::kCancel)==9);
-    require(static_cast<unsigned>(ManageOperation::kDisableAndRelease)==10);
-    require(static_cast<unsigned>(ManageOperation::kQuery)==12);
-    require(static_cast<unsigned>(ManageOperation::kComplete)==8);
+    require(static_cast<unsigned>(ManageOperation::PREPARE_HOLD)==6);
+    require(static_cast<unsigned>(ManageOperation::START_MOTION)==7);
+    require(static_cast<unsigned>(ManageOperation::CANCEL_MOTION)==9);
+    require(static_cast<unsigned>(ManageOperation::DISABLE_AND_RELEASE)==10);
+    require(static_cast<unsigned>(ManageOperation::GET_OPERATION)==12);
+    require(static_cast<unsigned>(ManageOperation::COMPLETE_MOTION)==8);
     require(wire_value(WireReceipt::kQueued)==1);
-    require(wire_value(WireResult::kPending)==23);
+    require(wire_value(WireResult::PENDING)==23);
     require(wire_value(WireCoreState::kEnablingHold)==3);
     require(wire_value(WireCoreState::kHold)==4);
     require(wire_value(WireCoreState::kRunning)==5);
     require(wire_value(WireCoreState::kFault)==9);
   } else if (scenario=="deadline") {
-    Harness harness; Authorization auth; auth.session=auth.reference=auth.permit=true;
-    auth.identity.set_expected_session_id(1);
+    Harness harness; Authorization auth;auth.identity=owned_fixture::request();auth.identity.expected_boot_epoch()=0; auth.session=auth.reference=auth.permit=true;
+    auth.identity.expected_session_id()=1;
     const auto maximum=std::numeric_limits<std::uint64_t>::max();
     require(harness.gate.enable(auth,maximum-5)); harness.gate.tick(maximum-4);
     require(harness.gate.terminal()==Terminal::kNone);

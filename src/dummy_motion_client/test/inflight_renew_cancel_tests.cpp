@@ -46,10 +46,10 @@ int main(int argc,char **argv) {
   const std::string mode=argc>1?argv[1]:"positive";
   Transport transport;WireManagementClient client(transport);CompletionPort port;
   ActionGate gate(client,port,{{"Joint1"},{-1},{1},{1},{1},{0.1},{0.1}},2000000);
-  Authorization auth;auth.session=auth.reference=auth.permit=true;
-  auth.identity.set_expected_boot_epoch(7);auth.identity.set_expected_session_id(9);
-  auth.identity.set_expected_reference_epoch(1);auth.identity.set_expected_profile_id(201);
-  auth.identity.set_expected_management_epoch(1);auth.identity.set_configured_mask(1);
+  Authorization auth;auth.identity=owned_fixture::request();auth.session=auth.reference=auth.permit=true;
+  auth.identity.expected_boot_epoch()=7;auth.identity.expected_session_id()=9;
+  auth.identity.expected_reference_epoch()=1;auth.identity.expected_profile_id()=201;
+  auth.identity.expected_management_epoch()=1;auth.identity.configured_mask()=1;
   /**
    * @par 内部commit回调
    * epoch为合成新motion代次；从Transport最后实际请求取request_id，构造固定boot7/session9/ref1/management1/profile201的Committed响应并poll原请求。
@@ -57,12 +57,12 @@ int main(int argc,char **argv) {
    */
   auto commit=[&](std::uint32_t epoch) {
     const auto request=transport.requests.back();
-    wire::DummyManageV2Response response;response.set_schema_major(2);response.set_schema_minor(dummy_ref::protocol::kSchemaMinor);
-    response.set_request_id(request.request_id());response.set_boot_epoch(7);response.set_session_id(9);
-    response.set_reference_epoch(1);response.set_motion_epoch(epoch);response.set_management_epoch(1);
-    response.set_profile_id(201);response.set_receipt(1);response.set_result_code(0);
-    response.set_operation_id(request.request_id()+100);response.set_transaction_phase(3);
-    transport.respond(response);return client.poll(request.request_id());
+    ManagementResponse response{owned_fixture::response(),typed_management_fixture::source()};
+    response.first.request_id()=*request.request_id();response.second.boot_id=7;response.first.session_id()=9;
+    response.first.reference_epoch()=1;response.first.motion_epoch()=epoch;response.first.management_epoch()=1;
+    response.first.profile_id()=201;response.first.receipt()=1;response.first.result_code()=0;
+    response.first.operation_id()=*request.request_id()+100;response.first.transaction_phase()=3;
+    transport.respond(response);return client.poll(*request.request_id());
   };
   /**
    * @brief 通过Enable首样本及Begin首样本双屏障到J1 Running，保留当前完整身份供随后续租/完成/取消匹配。
@@ -75,42 +75,42 @@ int main(int argc,char **argv) {
   reply->snapshot_valid=true;reply->hold_available=true;reply->hold_ready=false;gate.observe(*reply,11);
   assert(gate.record_update(gate.generation(),2,1,Position{}));reply->hold_ready=true;reply->accepted_seq=1;gate.observe(*reply,12);
   assert(gate.phase()==Phase::kRunning);
-  auto renew=auth.identity;renew.set_operation(wire_value(ManageOperation::kRenewLease));renew.set_expected_motion_epoch(2);renew.set_requested_session_lease_us(30000000);
+  auto renew=auth.identity;renew.operation()=wire_value(ManageOperation::RENEW_LEASE);renew.expected_motion_epoch()=2;renew.requested_session_lease_us()=30000000;
   /**
    * @brief wrong_boot/session/ref/motion/management/profile/mask/device/client逐项改变在途续租身份；gate取消必须不能借错根续租等待而延缓失败。
    * 这些模式预期STOP_FAILED且cancel_waiting_for_renewal=false，不证明任何设备已经停止。
    */
-  if(mode=="wrong_boot")renew.set_expected_boot_epoch(8);
-  if(mode=="wrong_session")renew.set_expected_session_id(10);
-  if(mode=="wrong_ref")renew.set_expected_reference_epoch(2);
-  if(mode=="wrong_motion")renew.set_expected_motion_epoch(3);
-  if(mode=="wrong_management")renew.set_expected_management_epoch(2);
-  if(mode=="wrong_profile")renew.set_expected_profile_id(202);
-  if(mode=="wrong_mask")renew.set_configured_mask(3);
-  if(mode=="wrong_device"){uint8_t bytes[16]{};bytes[0]=3;renew.set_device_id(bytes);}
-  if(mode=="wrong_client"){uint8_t bytes[16]{};bytes[0]=4;renew.set_client_instance_id(bytes);}
-  auto rid=client.submit(renew,20);assert(rid!=0 && transport.requests.back().operation()==20);
+  if(mode=="wrong_boot")renew.expected_boot_epoch()=8;
+  if(mode=="wrong_session")renew.expected_session_id()=10;
+  if(mode=="wrong_ref")renew.expected_reference_epoch()=2;
+  if(mode=="wrong_motion")renew.expected_motion_epoch()=3;
+  if(mode=="wrong_management")renew.expected_management_epoch()=2;
+  if(mode=="wrong_profile")renew.expected_profile_id()=202;
+  if(mode=="wrong_mask")renew.configured_mask()=3;
+  if(mode=="wrong_device"){uint8_t bytes[16]{};bytes[0]=3;renew.domain_device_id().emplace().assign(bytes,16U);}
+  if(mode=="wrong_client"){uint8_t bytes[16]{};bytes[0]=4;renew.client_instance_id().emplace().assign(bytes,16U);}
+  auto rid=client.submit(renew,20);assert(rid!=0 && *transport.requests.back().operation()==20);
   /**
    * @par 内部replywire回调
    * q给当前Query request_id，phase选择Prepared/Committed/Failed；固定响应op=原rid+100及当前tuple，不自动接受所有传入请求身份。
    */
-  auto replywire=[&](const ManageRequest&q,std::uint8_t phase){wire::DummyManageV2Response r;r.set_schema_major(2);r.set_schema_minor(dummy_ref::protocol::kSchemaMinor);r.set_request_id(q.request_id());r.set_boot_epoch(7);r.set_session_id(9);r.set_reference_epoch(1);r.set_motion_epoch(2);r.set_management_epoch(1);r.set_profile_id(201);r.set_receipt(1);r.set_operation_id(rid+100);r.set_transaction_phase(phase);r.set_result_code(0);return r;};
+  auto replywire=[&](const ManageRequest&q,std::uint8_t phase){ManagementResponse r{owned_fixture::response(),typed_management_fixture::source()};r.first.request_id()=*q.request_id();r.second.boot_id=7;r.first.session_id()=9;r.first.reference_epoch()=1;r.first.motion_epoch()=2;r.first.management_epoch()=1;r.first.profile_id()=201;r.first.receipt()=1;r.first.operation_id()=rid+100;r.first.transaction_phase()=phase;r.first.result_code()=0;return r;};
   if(mode.rfind("wrong_",0)==0){ gate.cancel(25);assert(gate.error()=="STOP_FAILED");assert(!gate.cancel_waiting_for_renewal(renew,26));return 0;}
   transport.respond(replywire(transport.requests.back(),2));auto prepared=client.poll(rid);
   assert(prepared);
-  assert(transport.requests.back().operation()==12);
+  assert(*transport.requests.back().operation()==12);
   auto query=transport.requests.back();transport.respond(replywire(query,3));
   assert(transport.responses.size()==1);const auto wirebefore=transport.requests.size();
   /**
    * @brief no_cancel没有gate.cancel，不能凭匹配Renew就宣称有取消等待；abort是生产者丢失故障，不享受取消延后例外。
    */
-  if(mode=="no_cancel"){auto x=auth.identity;x.set_operation(wire_value(ManageOperation::kCancel));x.set_expected_motion_epoch(2);assert(!gate.cancel_waiting_for_renewal(x,25));return 0;}
+  if(mode=="no_cancel"){auto x=auth.identity;x.operation()=wire_value(ManageOperation::CANCEL_MOTION);x.expected_motion_epoch()=2;assert(!gate.cancel_waiting_for_renewal(x,25));return 0;}
   if(mode=="abort"){gate.abort("REAL_PRODUCER_LOST",25);assert(gate.error()=="STOP_FAILED");return 0;}
   gate.cancel(25);
 
-  std::cerr<<"REAL_WIRE_COMMITTED_UNCONSUMED_CANCEL renewrid="<<rid<<" queryrid="<<query.request_id()<<" bufferedCommitted="<<transport.responses.size()<<" phase="<<unsigned(gate.phase())<<" error="<<gate.error()<<" wirebefore="<<wirebefore<<" wireafter="<<transport.requests.size()<<" portexecuting="<<port.executing<<"\n";
+  std::cerr<<"REAL_WIRE_COMMITTED_UNCONSUMED_CANCEL renewrid="<<rid<<" queryrid="<<*query.request_id()<<" bufferedCommitted="<<transport.responses.size()<<" phase="<<unsigned(gate.phase())<<" error="<<gate.error()<<" wirebefore="<<wirebefore<<" wireafter="<<transport.requests.size()<<" portexecuting="<<port.executing<<"\n";
   assert(gate.error().empty());
-  auto live=auth.identity;live.set_expected_motion_epoch(2);live.set_operation(wire_value(ManageOperation::kCancel));
+  auto live=auth.identity;live.expected_motion_epoch()=2;live.operation()=wire_value(ManageOperation::CANCEL_MOTION);
   assert(gate.cancel_waiting_for_renewal(live,26));
   /**
    * @brief 已等待续租时再abort(EVIDENCE_INCOMPLETE)，晚到续租结果不得触发Cancel发送或覆盖首错。
@@ -131,14 +131,14 @@ int main(int argc,char **argv) {
    * 坏键false、原键true；仅已在途且bounded意图可临时保留producer资格，普通producer_active=false仍不可开启新续租；2s边界后原键也false。
    */
   if(mode.rfind("guard_",0)==0){auto bad=live;
-    if(mode=="guard_boot")bad.set_expected_boot_epoch(8);
-    if(mode=="guard_session")bad.set_expected_session_id(10);
-    if(mode=="guard_ref")bad.set_expected_reference_epoch(2);
-    if(mode=="guard_motion")bad.set_expected_motion_epoch(3);
-    if(mode=="guard_management")bad.set_expected_management_epoch(2);
-    if(mode=="guard_profile")bad.set_expected_profile_id(202);
-    if(mode=="guard_mask")bad.set_configured_mask(3);
-    if(mode=="guard_operation")bad.set_operation(20);
+    if(mode=="guard_boot")bad.expected_boot_epoch()=8;
+    if(mode=="guard_session")bad.expected_session_id()=10;
+    if(mode=="guard_ref")bad.expected_reference_epoch()=2;
+    if(mode=="guard_motion")bad.expected_motion_epoch()=3;
+    if(mode=="guard_management")bad.expected_management_epoch()=2;
+    if(mode=="guard_profile")bad.expected_profile_id()=202;
+    if(mode=="guard_mask")bad.configured_mask()=3;
+    if(mode=="guard_operation")bad.operation()=20;
     assert(!gate.cancel_waiting_for_renewal(bad,26));assert(gate.cancel_waiting_for_renewal(live,26));
     assert(!run_lease_eligible(run_lease_continuation_inputs({true,true,true,true,false,true,true},true,false)));
     assert(run_lease_eligible(run_lease_continuation_inputs({true,true,true,true,false,true,true},true,gate.cancel_waiting_for_renewal(live,26))));
@@ -150,12 +150,12 @@ int main(int argc,char **argv) {
    * 两负例与正例分开，不以“响应字节已到队列”代替Host已解析强结果。
    */
   if(mode=="expired"){gate.tick(2000025);assert(gate.error()=="STOP_FAILED");return 0;}
-  if(mode=="failed_renew"){transport.responses.clear();auto bad=replywire(query,4);bad.set_result_code(10);transport.respond(bad);}
+  if(mode=="failed_renew"){transport.responses.clear();auto bad=replywire(query,4);bad.first.result_code()=10;transport.respond(bad);}
   auto committed=client.poll(rid);assert(committed);
   if(mode=="failed_renew"){gate.tick(26);assert(gate.error()=="STOP_FAILED");return 0;}
   gate.tick(26);
-  assert(transport.requests.back().operation()==9);
-  auto cancelrid=transport.requests.back().request_id();assert(cancelrid!=rid && cancelrid!=query.request_id());
+  assert(*transport.requests.back().operation()==9);
+  auto cancelrid=*transport.requests.back().request_id();assert(cancelrid!=rid && cancelrid!=*query.request_id());
   assert(!gate.cancel_waiting_for_renewal(live,27));
   std::cerr<<"CANCEL_AFTER_RENEW_COMMITTED cancelRID="<<cancelrid<<" oldrenewRID="<<rid<<" no_new_renew=1\n";
   assert(gate.phase()==Phase::kStopping);return 0;

@@ -9,6 +9,23 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
 
+def root_feedback(*, session=0, core=2):
+    """用实际生成Root建立UI反馈，Source不借用已退役的boot平行字段。"""
+    from copy import deepcopy
+    from test_manual_panel_root import state as make_state
+    from dpsdk_interfaces.msg import DummyDeviceStatus
+    state=make_state();state.reference_epoch=7;state.state_seq=1
+    state.session_id=session;state.core_state=core
+    for row in state.joints:
+        row.position_rad=0.;row.hold_position_rad=0.
+    status=DummyDeviceStatus()
+    for name in status.get_fields_and_field_types():
+        if name.startswith('has_'):setattr(status,name,True)
+    status.source=deepcopy(state.source);status.profile_id=state.profile_id
+    status.reference_epoch=state.reference_epoch;status.session_id=session;status.core_state=core
+    return state,status
+
+
 def test_ros_panel_readonly_without_native(tmp_path, monkeypatch):
     import manual_panel_ros_backend
     from manual_joint_panel import JointPanel
@@ -41,7 +58,7 @@ def test_ros_panel_readonly_without_native(tmp_path, monkeypatch):
         assert 'auto_calibrate_and_test' not in panel.ros_backend.transport.requests
         assert not panel.motor_parameter_tab.allowed()
         assert panel.ros_runtime.state == 'Starting'
-        panel.ros_status_received(NS(boot_epoch=1, reference_epoch=1))
+        panel.ros_status_received(root_feedback()[1])
         assert panel.ros_runtime.state == 'ReadOnly'
         # Native忙期留下的按钮状态不能锁住已返回只读的ROS连接。
         panel.reconnect.setEnabled(False)
@@ -163,10 +180,13 @@ def test_status_buttons_wait_for_cpp_parameter_and_use_returned_budget(tmp_path,
     node = rclpy.create_node('ros_parameter_ui_test')
     panel = JointPanel(config,tmp_path/'report',None,node)
     try:
-        panel.last_state = dict(boot_epoch=1,reference_epoch=7,session_id=0,position_valid_mask=63,core_state=2)
+        state,status=root_feedback()
+        # 现场参考已建立的近双限位姿态：恢复入口不能被MoveIt内侧规划余量误封。
+        state.joints[1].position_rad=__import__('math').radians(-72.913)
+        state.joints[2].position_rad=__import__('math').radians(179.878)
+        panel.ros_state_received(state)
         panel.fresh = lambda: True  # 本例只刺激Status参数源，State另有独立测试。
-        panel.ros_status_received(NS(boot_epoch=1,reference_epoch=7,session_id=0,core_state=2,
-                                     real_motion_permitted=False,permit_remaining_us=0))
+        panel.ros_status_received(status)
         panel.ros_status_ns = time.monotonic_ns() - 600_000_000
         panel.ros_tick()
         assert not panel.resume.isEnabled() and not panel.zero.isEnabled()
@@ -174,6 +194,16 @@ def test_status_buttons_wait_for_cpp_parameter_and_use_returned_budget(tmp_path,
         panel.ros_backend.transport.status_max_age_ms = 731  # 假C++有效参数，非产品默认值。
         panel.ros_tick()
         assert panel.resume.isEnabled() and panel.zero.isEnabled()
+        # 同boot但不同上下文/设备不得让旧反馈打开恢复按钮。
+        for field in ('context_id','boot_hi'):
+            previous=getattr(status.source,field);setattr(status.source,field,previous+1)
+            panel.ros_tick();assert not panel.resume.isEnabled()
+            setattr(status.source,field,previous)
+        previous=list(status.source.device);status.source.device=list(reversed(previous))
+        panel.ros_tick();assert not panel.resume.isEnabled();status.source.device=previous
+        status.profile_id+=1;panel.ros_tick();assert not panel.resume.isEnabled();status.profile_id-=1
+        status.has_reference_epoch=False;panel.ros_tick();assert not panel.resume.isEnabled()
+        status.has_reference_epoch=True;panel.ros_tick();assert panel.resume.isEnabled()
         assert '731ms' in panel.status.text()
         panel.ros_status_ns = time.monotonic_ns() - 800_000_000
         panel.ros_tick()
@@ -221,7 +251,6 @@ def test_ros_actual_model_requires_cpp_ready_and_fresh_matched_feedback(tmp_path
     import time
     import manual_panel_ros_backend
     from manual_joint_panel import JointPanel
-    from dpsdk_interfaces.msg import DummyJointStateV2
     class Transport:
         def __init__(self, *args, **kwargs): self.status_max_age_ms=1000
         def control_graph_error(self): return ''
@@ -235,16 +264,15 @@ def test_ros_actual_model_requires_cpp_ready_and_fresh_matched_feedback(tmp_path
     rclpy.init(args=[]);node=rclpy.create_node('readonly_model_visibility_test')
     panel=JointPanel(config,tmp_path/'report',None,node)
     try:
-        state=DummyJointStateV2();state.boot_epoch=1;state.reference_epoch=7;state.state_seq=1
-        state.position_valid_mask=63;state.position_rad=[0.]*6;state.can_rx_age_us=[0]*6
-        state.core_state=2
-        panel.ros_status_received(NS(boot_epoch=1,reference_epoch=7,session_id=0,core_state=2,
-            real_motion_permitted=False,permit_remaining_us=0))
+        state,status=root_feedback()
+        state.joints[2].position_rad=1.57;state.joints[2].hold_position_rad=1.57
+        panel.ros_status_received(status)
         panel.ros_state_received(state);panel.ros_tick()
-        assert panel.actual_q==[0.]*6 and not panel.description_visible
+        assert panel.actual_q==[0.,0.,1.57,0.,0.,0.] and not panel.description_visible
         state.state_seq=2;state.session_id=9;state.core_state=4
-        panel.ros_status_received(NS(boot_epoch=1,reference_epoch=7,session_id=9,core_state=4,
-            real_motion_permitted=True,permit_remaining_us=1000000))
+        status.session_id=9;status.core_state=4
+        status.real_motion_permitted=True;status.permit_remaining_us=1000000
+        panel.ros_status_received(status)
         panel.ros_state_received(state);panel.ros_backend.manual_ready=True
         panel.ros_event('manual_ready','MANUAL_CONTROL_READY');panel.ros_tick()
         assert panel.description_visible and panel.publisher is None
@@ -253,6 +281,20 @@ def test_ros_actual_model_requires_cpp_ready_and_fresh_matched_feedback(tmp_path
         panel.ros_status.real_motion_permitted=False;panel.ros_status.permit_remaining_us=0
         panel.ros_tick()
         assert panel.authorized and panel.move.isEnabled()
+        # 真Qt面板回调→Root UI投影→真实MoveItTab准入；场景服务在本例独立隔离。
+        from manual_moveit_tab import MoveItTab
+        tab=MoveItTab(panel);tab.scene_ready=lambda:True
+        assert tab.ready()
+        state.state_seq+=1;state.joints[2].hold_valid_quality=False
+        state.joints[2].hold_position_rad=float('nan')
+        panel.ros_state_received(state);panel.ros_tick();assert not tab.ready()
+        state.state_seq+=1;state.joints[2].hold_valid_quality=True
+        state.joints[2].hold_position_rad=state.joints[2].position_rad
+        panel.ros_state_received(state);panel.ros_tick();assert tab.ready()
+        state.state_seq+=1;state.joints[2].velocity_valid_quality=False
+        panel.ros_state_received(state);panel.ros_tick();assert not tab.ready()
+        state.state_seq+=1;state.joints[2].velocity_valid_quality=True
+        panel.ros_state_received(state);panel.ros_tick();assert tab.ready()
         panel.ros_backend.manual_ready=False;panel.ros_tick()
         assert not panel.authorized
         panel.ros_backend.manual_ready=True
@@ -355,3 +397,40 @@ def test_ros_target_selection_cancels_already_queued_reconnect():
     panel.ros_reconnect_pending=False
     app.processEvents()
     assert calls==[]
+
+
+def test_failed_owned_fault_cleanup_retires_runtime_only_after_actual_fresh_root_pair(monkeypatch):
+    """Qt退出通知保留业务失败，只在权威故障释放双消息成立后退出本测试拥有的进程。"""
+    import manual_panel_ros_backend as module
+    from manual_panel_runtime import PanelRuntime
+    from manual_joint_panel import JointPanel
+    from test_manual_panel_ros_backend import actual_release_feedback
+    app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    clock=[10.];monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    calls=[]
+    class Process:
+        def __init__(self):self.returncode=None
+        def poll(self):return self.returncode
+        def terminate(self):calls.append('terminate-owned');self.returncode=0
+        def wait(self,timeout):return self.returncode
+    runtime=PanelRuntime(spawn=lambda *args,**kwargs:None)
+    runtime.process=Process();runtime.state='Active'
+    t=object.__new__(module.RosTransport);t.owns_control_node=True
+    t.latest_state,t.latest_status=actual_release_feedback(core=9,reason=0x1008)
+    t.state_at=t.status_at=9.99;t.feedback_max_age_ms=250;t.status_max_age_ms=1000
+    failure='MANUAL_CONTROL_FAILED: 原参考失效 cleanup=RELEASED_FAULT'
+    replies=[NS(success=False,message=failure),NS(success=False,message='EVIDENCE_INCOMPLETE;RELEASED_FAULT')]
+    t.request=lambda name,cb:cb(replies.pop(0));t.close=lambda:calls.append('close-observer')
+    panel=NS(backend='ros',closing=False,busy=True,ros_runtime=runtime,
+        message=lambda value:calls.append(('log',value)),apply_backend_change=lambda:calls.append('rebuild-readonly'))
+    panel.request_reconnect=lambda:JointPanel.request_reconnect(panel)
+    b=module.RosBackend(t,lambda *event:JointPanel.ros_event(panel,*event));panel.ros_backend=b
+    b.operation='manual';b.manual_ready=b.admitting=True
+    b.poll();app.processEvents()
+    assert runtime.state=='Error' and runtime.error==failure and 'terminate-owned'not in calls
+    t.latest_state.state_seq+=1;t.state_at=t.status_at=10.1;clock[0]=10.2
+    b.poll();app.processEvents()
+    assert calls[-3:]==['terminate-owned','close-observer','rebuild-readonly']
+    assert runtime.state=='Disconnected' and runtime.error==failure
+    assert b.can_close and not b.manual_ready and not b.admitting
+    assert not any('ROS completed:' in str(value)for value in calls)

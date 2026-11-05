@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 import sys
 
@@ -36,13 +37,16 @@ def test_deploy_copies_artifacts_and_rejects_unmatched_identity(tmp_path, monkey
     # 协议输入显式携带已有缓存；部署必须排除缓存，不能改动实际SDK。
     selected=os.environ.get('DPSDK_PROTOCOL_RELEASE')
     if not selected:
-        selected=str(Path(os.environ['DPSDK_HOST_SDK_PREFIX'])/'lib/cmake/DpProtocol')
+        prefix=Path(os.environ['DPSDK_HOST_SDK_PREFIX'])
+        selected=str(prefix/'lib/dp_protocol' if (prefix/'lib/dp_protocol/release_manifest.json').is_file() else prefix/'lib/cmake/DpProtocol')
     input_protocol=tmp_path/'protocol-fixture'
     shutil.copytree(selected,input_protocol)
     cache=input_protocol/'include/__pycache__/fixture.pyc'
     cache.parent.mkdir(parents=True,exist_ok=True);cache.write_bytes(b'input-cache')
     (input_protocol/'include/fixture.pyo').write_bytes(b'input-cache')
     monkeypatch.setenv('DPSDK_PROTOCOL_RELEASE',str(input_protocol))
+    # 本例显式选择可搬迁副本，非将另一SDK前缀混入；混prefix另有独立负例。
+    monkeypatch.delenv('DPSDK_HOST_SDK_PREFIX', raising=False)
     config_path=module.deploy(native,firmware,identity,description)
     assert config_path==tmp_path/'data/dummy_ros/manual_panel/current/panel-config.json'
     native.unlink();firmware.unlink()
@@ -58,22 +62,29 @@ def test_deploy_copies_artifacts_and_rejects_unmatched_identity(tmp_path, monkey
     assert not any('__pycache__' in name or name.endswith(('.pyc','.pyo')) for name in deployment['files'])
     for relative, digest in deployment['files'].items():
         assert hashlib.sha256((config_path.parent/relative).read_bytes()).hexdigest()==digest
-    assert callable(manual_panel_config.load_decoder(config))
-    # 独立进程在源码/外部发布不可用时仍使用部署自带公共reader实际解码。
-    from scripts.dummy.selected_protocol import current_layout
-    layout=current_layout('DummyJointStateV2')
-    raw=layout.encode({'schema_major':layout.constant('SCHEMA_MAJOR'),
-                       'schema_minor':layout.constant('SCHEMA_MINOR')})
-    code="""import importlib.util, pathlib, sys
-p=pathlib.Path(sys.argv[1])/'join_real_6dof_evidence.py'
-s=importlib.util.spec_from_file_location('isolated_panel_decoder',p)
-m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-assert m._decode('DummyJointStateV2',bytes.fromhex(sys.argv[2]))['schema_minor']==5
-"""
-    env={**os.environ,'DPSDK_PROTOCOL_RELEASE':'/missing-release',
-         'DPSDK_PROTOCOL_SOURCE_ROOT':'/missing-source','PYTHONPATH':''}
-    subprocess.run([sys.executable,'-c',code,config['decoder_directory'],raw.hex()],
-                   cwd=tmp_path,env=env,check=True)
+    if (deployed_protocol/'release_manifest.json').is_file():
+        # Root部署保留Native/ROS，状态来自C++已接纳语义；不伪造旧offset解码成功。
+        assert config['native_state_format']=='accepted-state-json-v1'
+        assert config['evidence_decoder_supported'] is False
+        assert manual_panel_config.load_decoder(config) is None
+    else:
+        assert callable(manual_panel_config.load_decoder(config))
+        # 独立进程在源码/外部发布不可用时仍使用部署自带公共reader实际解码。
+        from scripts.dummy.selected_protocol import current_layout
+        layout=current_layout('DummyJointStateV2')
+        raw=layout.encode({'schema_major':layout.constant('SCHEMA_MAJOR'),
+                           'schema_minor':layout.constant('SCHEMA_MINOR')})
+        code="""
+    import importlib.util, pathlib, sys
+    p=pathlib.Path(sys.argv[1])/'join_real_6dof_evidence.py'
+    s=importlib.util.spec_from_file_location('isolated_panel_decoder',p)
+    m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+    assert m._decode('DummyJointStateV2',bytes.fromhex(sys.argv[2]))['schema_minor']==5
+    """
+        env={**os.environ,'DPSDK_PROTOCOL_RELEASE':'/missing-release',
+             'DPSDK_PROTOCOL_SOURCE_ROOT':'/missing-source','PYTHONPATH':''}
+        subprocess.run([sys.executable,'-c',textwrap.dedent(code),config['decoder_directory'],raw.hex()],
+                       cwd=tmp_path,env=env,check=True)
     assert not list((Path(config['decoder_directory'])/'protocol').rglob('__pycache__'))
     Path(config['native_binary']).write_bytes(b'corrupted')
     with pytest.raises(ValueError,match='校验'):

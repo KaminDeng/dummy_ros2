@@ -1964,6 +1964,9 @@ def test_one_shot_cannot_report_success_without_confirmed_release():
 @pytest.mark.parametrize("activate_controller", [True, False])
 @pytest.mark.parametrize("accepted", [True, False])
 def test_successful_capture_releases_before_return(monkeypatch, activate_controller, accepted):
+    # 本例单测捕获/释放及完整诊断字段，人工语义向量并非静止起止的可执行计划。
+    # 独立真实JTC回归覆盖retimer；此处显式隔离该前置阶段，保留全部原诊断断言。
+    monkeypatch.setattr(movej, "retime_moveit_trajectory", lambda value: (value, {}))
     target = (0.0, 0.0, 1.59, 0.0, 0.0, 0.0)
     trajectory = SimpleNamespace(
         header=SimpleNamespace(stamp=SimpleNamespace(sec=0, nanosec=0), frame_id=""),

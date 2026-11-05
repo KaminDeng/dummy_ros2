@@ -5,6 +5,8 @@
  */
 #pragma once
 
+
+#include "dummy_ref/message_contract.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -123,7 +125,7 @@ class GuardedZenbeddedSystem final : public hardware_interface::SystemInterface 
    * @param expectation 已经建立源时钟域关系的期望。
    * @return 解码与ingest都成功为true；无效速度置NaN。
    */
-  bool ingest_wire_state(const std::uint8_t *bytes, std::size_t size,
+  bool ingest_message_state(const dummy_ref::messages::State& message,const dp::comm::SourceId& source,
                          const StateExpectation &expectation) noexcept;
   /**
    * @brief 非阻塞复制可用于控制/激活的有效状态。
